@@ -566,6 +566,93 @@ scenarios don't yet fire cues at wall-clock times. The starter library was
 migrated to relative demos, so nothing depends on it today; build absolute-live
 cue resolution when a real time-of-day scenario needs it.
 
+** D. Downstream-app end-to-end testing in CI
+
+Ship switchyard as a standalone binary (and Docker image) so a downstream
+app's CI can spin it up as a high-fidelity fake microgrid, drive a scenario,
+and gate on the result — exercising the app end-to-end through the real
+frequenz gRPC API rather than a hand-rolled mock. The app under test runs as a
+separate process talking gRPC; switchyard drives the environment and records
+the assertions (=scenario-expect= → =swctl scenario report --assert=).
+
+*** TODO D1. Embed the scenario DSL prelude in the binary             :rust:dsl:
+
+Precondition for binary-only distribution. The section wrappers (=at= / =check= /
+=controller= / =drive-meter= / =drive-solar= / =timeline=, plus
+=define-controller=) live in =sim/scenarios.lisp= + =sim/common.lisp=, loaded by
+the config today — so a binary shipping no lisp can't use them. =include_str!=
+both at compile time and auto-load them at boot, so a downstream app ships only
+its own topology + scenarios and never writes =(load "sim/…")=. (=define-scenario=
+/ =scenario-expect= / =set-*= are already Rust defuns; only the lisp wrappers
+need embedding.)
+
+*** TODO D2. Machine-readable readiness handshake                     :rust:cli:
+
+CI currently scrapes the "gRPC listening" log line to know when to start the app
+and drive the scenario. Emit the chosen endpoints as one JSON line on stdout
+(=--emit-endpoints=) and/or expose a readiness check (gRPC health, or
+=--wait-ready=), so a CI script — or =docker-compose depends_on:
+service_healthy= — can block cleanly. Pairs with ephemeral ports (=:0=) so
+parallel jobs don't collide.
+
+*** TODO D3. Configurable bind address (+ pre-bind hardening)  :rust:ui:hardening:
+
+gRPC binds =[::1]= and the UI is hardcoded =127.0.0.1:8801= (loopback). Host-
+process CI on loopback works today; containers / compose need a routable
+=--grpc-bind= / =--ui-bind=. Fold in the CORS + body-limit hardening already
+recorded in the 2026-06-05 backlog (the =--ui-bind= item) — same change gates
+both.
+
+*** TODO D4. One-shot CI verb + structured gate               :rust:cli:testing:
+
+=switchyard ci --config X.lisp --scenario NAME --assert --timeout 5m= that boots,
+waits ready, runs the scenario live, gates on =scenario report --assert=, and
+exits — collapsing the switchyard side of a CI run to one command (the app boot
+stays the consumer's). Add =--format junit= on the report so per-check pass/fail
+surfaces in CI, and dump the recorded CSVs + a run summary as artifacts on
+failure.
+
+*** TODO D5. Binary / Docker distribution; publish the tulisp family   :packaging:
+
+Distribute switchyard + swctl as release binaries and a Docker image
+(GPL) that consumers run in CI — no source, no linking. crates.io publishing (if
+wanted) first needs the whole tulisp family (=tulisp=, =tulisp-async=,
+=tulisp-fmt=, all GPL) and the proto build published — git deps aren't allowed on
+crates.io. Also: switchyard has no =license= field / =LICENSE= file yet — set
+=GPL-3.0-or-later= + add the licence text before any publish.
+
+*** TODO D6. Document the recommended E2E test structure                  :docs:
+
+Guidance for consumers: one fixture file per graph (topology defined once + that
+graph's scenarios as =define-scenario= forms); parallelize across cases at the
+CI-job/matrix level — one isolated switchyard + app process pair per
+(graph, scenario) — for true isolation, independent retry, and parallelism over
+the wall-clock-bound (real-time) runs. Sequential-in-one-boot (=scenario run A;
+report --assert; scenario run B; …=, safe because =scenario-start= resets the
+journal per run) is the simpler-infra fallback. Reserve
+multiple-microgrids-in-one-file for genuinely multi-microgrid scenarios, not for
+parallelizing independent cases — see D7.
+
+*** TODO D7. Per-microgrid scenario scope                            :scenarios:
+
+Today a scenario is enterprise-wide: =scenario-start= fans out to every site and
+resets all journals, and the report endpoint reads the current site — so two
+scenarios can't run concurrently on two microgrids in one process, and
+multi-microgrid assertions all land in one site's report. Scope a scenario (and
+its journal/report) to a single microgrid so independent cases — or several apps
+under test — can run in parallel inside one switchyard. Enables the in-process
+multi-microgrid option D6 sets aside; until then, CI-job parallelism covers it.
+
+*** TODO D8. Deterministic clock-sync with the app under test          :testing:
+
+E2E with an external app is necessarily real-time + wall-clock (the app is a
+black box on its own clock), so checks must assert settled-state invariants with
+tolerance and a run costs minutes. A shared virtual-time contract —
+switchyard's stepped clock advancing in lockstep with the app — would make E2E
+fast and bit-reproducible, but needs the app to honour an external tick. Worth it
+only if a consumer opts in; the absolute-schedule live-cue gap (J-era) belongs
+here too.
+
 * Review backlog — 2026-06-01
 
 Whole-codebase review (8-agent subsystem fan-out + clippy/fmt; clippy
