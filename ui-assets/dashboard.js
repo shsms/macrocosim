@@ -27,6 +27,11 @@ export const dashboardTiles = (() => {
   // yet full).
   const SPARK_LEN = 900;
   const sparkBuf = new Map(); // stream -> { values: Float32Array, cursor: int }
+  // Handles for the auto-reseed timer + visibility listener, so a
+  // second startAutoReseed() (a re-init / reconnect) doesn't stack a
+  // duplicate interval and listener that would multiply the polling.
+  let reseedTimer = null;
+  let reseedVisHandler = null;
   function buf(stream) {
     let b = sparkBuf.get(stream);
     if (!b) {
@@ -158,16 +163,30 @@ export const dashboardTiles = (() => {
     // Cheap — one small JSON fetch; the sparklines and per-component
     // rows stay on the WS hot path.
     startAutoReseed(periodMs = 5000) {
+      // Idempotent: tear down any prior timer/listener first so a
+      // repeated call (re-init, reconnect) replaces rather than stacks.
+      this.stopAutoReseed();
       const onDashboard = () =>
         document.body.dataset.mode === "microgrids" &&
         document.body.dataset.mgView === "selected" &&
         document.body.dataset.subview === "dashboard";
-      setInterval(() => {
+      reseedTimer = setInterval(() => {
         if (onDashboard()) reseedLatest();
       }, periodMs);
-      document.addEventListener("visibilitychange", () => {
+      reseedVisHandler = () => {
         if (!document.hidden && onDashboard()) reseedLatest();
-      });
+      };
+      document.addEventListener("visibilitychange", reseedVisHandler);
+    },
+    stopAutoReseed() {
+      if (reseedTimer !== null) {
+        clearInterval(reseedTimer);
+        reseedTimer = null;
+      }
+      if (reseedVisHandler !== null) {
+        document.removeEventListener("visibilitychange", reseedVisHandler);
+        reseedVisHandler = null;
+      }
     },
     async backfill() {
       // Past 15 min of samples per stream, server-side. Pre-populate

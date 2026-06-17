@@ -718,6 +718,20 @@ overrides-text, and the =BulkRemoveBody.indices= vec (unbounded). The
 body-limit gap and the snapshot-save/load ambient-scope hazard are already
 recorded (2026-06-01) — fold them into the same hardening pass.
 
+*** TODO [#C] Re-emit latest snapshot over WS on a lagged Sample bus :ui:ws:robustness:
+The dashboard guards against dropped =Sample= WS frames client-side
+(=dashboard.js startAutoReseed=: a 5s =/microgrid/latest= poll +
+=visibilitychange= reseed). The deeper fix is server-side: when a
+per-mg Sample forwarder hits =RecvError::Lagged= (=src/ui/events_ws.rs=,
+the =spawn_forwarder= loop just logs + =continue=s), re-emit the
+loopback slot's =latest= cache so every connected client converges from
+one server action — the registered/registry forwarders already do this
+on their own =Lagged=. Deferred because the forwarder only holds the
+=MicrogridSite= bus receiver, not the =loopbacks= map (=slot.latest=
+lives in =src/ui/loopback.rs=), so it needs the loopbacks threaded into
+=event_pump= + synthesised =SiteEvent::Sample= frames — a cross-subsystem
+change. The client-side poll covers it until then.
+
 ** Low / minor (new)
 
 - =runtime_modes.rs= =From<Health/…> for TulispObject= emits a *string*,
