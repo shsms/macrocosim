@@ -728,22 +728,6 @@ needs no =(load "sim/…")=. Two independent follow-ups, neither urgent:
   deliberate dev-workflow call, not a freebie; left as-is until that tradeoff is
   worth making.
 
-*** TODO D10. UI cross-origin hardening (loopback)              :rust:ui:hardening:
-
-Independent of any routable bind (D3): defend the loopback UI against a malicious
-web page POSTing to =localhost:8801= (cross-origin-to-localhost / DNS-rebinding).
-=/api/eval= takes its body as a bare =String=, so it accepts a =text/plain=
-"simple" POST — which a cross-origin page can fire (the eval side-effect runs
-even though CORS blocks reading the response). Fixes:
-- Require =application/json= on the mutators (=/api/eval=, =/api/format=, the
-  per-mg eval, overrides-text writes) so the browser must preflight; reject
-  =text/plain=. Update the SPA (=repl.js= etc.) to send JSON.
-- Add a =tower-http= =CorsLayer= (not yet a dep) restricting cross-origin.
-- =DefaultBodyLimit::max(N)= on the router — bounds =/api/eval= / =/api/format= /
-  overrides-text / the =BulkRemoveBody.indices= vec.
-Supersedes the 2026-06-05 backlog item "Add CORS + confirm body limits before
---ui-bind" — the hardening stands on its own, ahead of (and independent of) D3.
-
 * Review backlog — 2026-06-01
 
 Whole-codebase review (8-agent subsystem fan-out + clippy/fmt; clippy
