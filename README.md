@@ -74,8 +74,9 @@ swctl stream 1001 --samples 5
 swctl set-power 1001 -- -5000 --lifetime 30                 # negative = discharge
 swctl augment-bounds 1001 --lower -1000 --upper 5000        # TTL-limited bounds
 swctl pool battery                                          # loopback BatteryPool snapshot
-swctl scenario report                                       # ad-hoc journal verbs
-swctl scenarios start sunny                                 # registered multi-stage
+swctl scenario report                                       # journal report / CI gate
+swctl scenario list                                         # registered scenarios
+swctl scenario run cloud-fade --wait --assert              # run one live + gate
 swctl snapshot save before-test                             # persist overrides
 swctl dashboard --tail                                      # one-line/sec pulse bar
 swctl dispatch list 1                                       # dispatch API CRUD
@@ -89,10 +90,11 @@ at the first microgrid; for additional microgrids pass
 (`scenario*`, `snapshot`, `dashboard`). `--json` swaps any
 human table for the raw JSON.
 
-The singular `scenario` subcommand drives an ad-hoc session
-(start / stop / event / load / report / events / list); the
-plural `scenarios` controls registered multi-stage scenarios
-from `(define-scenario …)`.
+The `scenario` subcommand covers both the ad-hoc journal verbs
+(start / stop / event / load / report / events / summary) and the
+registered scenarios from `(define-scenario …)`: `list` them and
+`run NAME` — live (`--wait`) or headless deterministic (`--stepped`),
+with `--assert` to gate CI.
 
 ## Configuration knobs
 
