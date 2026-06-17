@@ -91,8 +91,13 @@ defaults to `[::1]:8800` and subsequent microgrids step by ten
 (`:8810`, `:8820`, …). Override via `:grpc-port` on
 `(make-microgrid …)`. swctl's `--addr` points the gRPC client at
 the first microgrid by default; pass `--addr http://[::1]:8810`
-etc. to reach others. The UI server binds `127.0.0.1:8801`
-(hardcoded for now — `--ui-bind` / `--ui-port` is on the roadmap).
+etc. to reach others. The UI server binds `127.0.0.1:8801` by
+default; override the port with `--ui-port N`, or pass
+`--ephemeral-ports` to bind the UI and every gRPC / assets / dispatch
+listener on OS-chosen ports (parallel CI instances). A routable
+`--ui-bind` host is still on the roadmap. Add `--emit-endpoints=PATH`
+to write the resolved addresses as one JSON line once bound (the
+readiness signal).
 
 `PlatformAssets` and `MicrogridDispatchService` each bind a single
 shared listener (they're enterprise-wide, keyed by `microgrid_id` per
