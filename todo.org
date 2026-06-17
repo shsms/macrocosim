@@ -577,14 +577,33 @@ the assertions (=scenario-expect= → =swctl scenario report --assert=).
 
 *** TODO D1. Embed the scenario DSL prelude in the binary             :rust:dsl:
 
-Precondition for binary-only distribution. The section wrappers (=at= / =check= /
-=controller= / =drive-meter= / =drive-solar= / =timeline=, plus
-=define-controller=) live in =sim/scenarios.lisp= + =sim/common.lisp=, loaded by
-the config today — so a binary shipping no lisp can't use them. =include_str!=
-both at compile time and auto-load them at boot, so a downstream app ships only
-its own topology + scenarios and never writes =(load "sim/…")=. (=define-scenario=
-/ =scenario-expect= / =set-*= are already Rust defuns; only the lisp wrappers
-need embedding.)
+Precondition for binary-only distribution. The vocabulary a downstream config
+needs lives in three lisp files loaded by the config today (~478 lines / 21 KB):
+=sim/common.lisp= (=every= / =define-controller= / =reset-state=),
+=sim/defaults.lisp= (the =make-*= wrappers over =%make-*=), and
+=sim/scenarios.lisp= (=timeline= / the section wrappers / the =scenario--run=
+runner). A binary shipping no lisp can't use them, so embed all three.
+
+Mirror tulisp's own prelude (=src/builtin/prelude.lisp=, =include_str!= +
+eval at =TulispContext::new=): rename the trio to *the prelude* and relocate
+to =src/lisp/prelude/{common,defaults,scenarios}.lisp= (embedded crate source,
+distinct from the user-facing =config.lisp= / =scenarios/library/= samples),
+=include_str!= each and eval them at the end of =new_inner=, after the Rust
+defuns + tulisp-async are wired (so =every=/=run-with-timer= exist) and before
+the user config loads. Order: common → scenarios (the runner calls
+=define-controller=); defaults anywhere after the =%make-*= defuns. =define-
+scenario= / =scenario-expect= / =set-*= are already Rust defuns — only the lisp
+wrappers embed. Then drop the =(load "sim/…")= lines from the shipped
+=config.lisp=; keep file-load working as a dev override (re-=defun= on top).
+
+Dependency — getting the spans right: an embedded (no-file-on-disk) prelude
+must eval an in-memory string *under its real filename* so a parse/eval error
+cites =…/prelude/scenarios.lisp=, not =<eval_string>=. tulisp's public eval
+surface today is =eval_string= (no filename) and =eval_file= (reads disk), so
+accurate spans need tulisp to support embedding files — an eval-with-filename
+path. Once it does, pair =concat!(env!("CARGO_MANIFEST_DIR"), "/…")= with
+=include_str!=, per file, as literals (a small macro over literal path tokens —
+not a runtime loop, since =concat!= needs literals).
 
 *** TODO D2. Machine-readable readiness handshake                     :rust:cli:
 
