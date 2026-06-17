@@ -672,6 +672,28 @@ fast and bit-reproducible, but needs the app to honour an external tick. Worth i
 only if a consumer opts in; the absolute-schedule live-cue gap (J-era) belongs
 here too.
 
+*** TODO D9. Embedded-prelude follow-ups (optional, non-blocking)      :rust:dsl:
+
+The minimal embed (D1) is in and is the accepted long-term shape:
+=Config::new_inner= bakes the three =sim/*.lisp= files into the binary via
+=include_str!= + =eval_string= and loads them before the user config, so a config
+needs no =(load "sim/…")=. Two independent follow-ups, neither urgent:
+
+- *Accurate error spans — gated on tulisp, not expected soon.* =eval_string= has
+  no filename, so a prelude parse/eval error cites =<eval_string>= rather than
+  the real file. If tulisp ever grows embedding-files support (an
+  eval-with-filename path), swap the embed to evaluate each file under its real
+  path (a =concat!=-based macro over literal path tokens — no runtime loop). Low
+  value: the prelude is stable in-tree code, so such errors are rare and
+  dev-time only — fine to live with =<eval_string>= indefinitely.
+
+- *Relocate to =src/lisp/prelude/= — independent of tulisp; do it anytime.* Moves
+  the three files out of the user-facing samples into embedded crate source. But
+  it forces the =config.lisp= cleanup — the =(load "sim/…")= / =watch-file= lines
+  break once the files move — which retires prelude hot-reload. So it's a
+  deliberate dev-workflow call, not a freebie; left as-is until that tradeoff is
+  worth making.
+
 * Review backlog — 2026-06-01
 
 Whole-codebase review (8-agent subsystem fan-out + clippy/fmt; clippy
