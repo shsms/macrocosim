@@ -648,14 +648,22 @@ with a "trusted networks only" startup warning + a lockdown decision (e.g.
 =--no-eval= when bound non-loopback). The cross-origin hardening that used to
 live here is now D10 (worth doing on loopback regardless).
 
-*** TODO D4. One-shot CI verb + structured gate               :rust:cli:testing:
+*** DONE D4. Live scenario run --wait (CI gate ergonomics)    :rust:cli:testing:
 
-=switchyard ci --config X.lisp --scenario NAME --assert --timeout 5m= that boots,
-waits ready, runs the scenario live, gates on =scenario report --assert=, and
-exits — collapsing the switchyard side of a CI run to one command (the app boot
-stays the consumer's). Add =--format junit= on the report so per-check pass/fail
-surfaces in CI, and dump the recorded CSVs + a run summary as artifacts on
-failure.
+A standalone =switchyard ci= verb turned out redundant: the *stepped*
+one-shot already exists (=swctl scenario run --stepped --config --assert=, J3,
+boots headless in-process and gates), and a *live* one-shot can't fold in the
+external app boot (that's the consumer's). So D4 added only the genuinely-
+missing live ergonomic.
+
+Done: =swctl scenario run NAME --wait [--until S] [--assert]= — starts the
+scenario on the running server, blocks until it finishes (its =:length=, or
+=--until=), stops it, and with =--assert= gates on the report (exit non-zero on
+any failed check). Collapses the live CI recipe to:
+=switchyard <cfg> --emit-endpoints &= ; <boot the app> ; =swctl scenario run
+NAME --wait --assert=. (Dropped the planned =--format junit=: the exit-code gate
++ the human-readable FAIL lines cover CI, and per-check JUnit is the consumer's
+own test-runner's job, not switchyard's.)
 
 *** TODO D5. Binary / Docker distribution; publish the tulisp family   :packaging:
 

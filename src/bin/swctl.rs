@@ -318,11 +318,17 @@ enum ScenarioCmd {
         /// `--stepped` clock step in milliseconds (default 100).
         #[arg(long)]
         step: Option<u64>,
-        /// `--stepped` run length override in seconds; defaults to the
-        /// scenario's `:length`.
+        /// Seconds: the `--stepped` run length, or the `--wait` cap for
+        /// a live run. Defaults to the scenario's `:length`.
         #[arg(long)]
         until: Option<u64>,
+        /// Live runs only: block until the scenario finishes (its
+        /// `:length`, or `--until`), then stop it — so `--assert` can
+        /// gate on the result.
+        #[arg(long)]
+        wait: bool,
         /// Exit non-zero if any `(scenario-expect …)` check failed.
+        /// Needs `--stepped` or `--wait` (a bare live run is async).
         #[arg(long)]
         assert: bool,
     },
@@ -942,6 +948,32 @@ async fn build_dashboard_line(
     ))
 }
 
+/// Fetch `/api/scenario/report`, print it, and — with `assert` — return
+/// an error when any check failed. Shared by the live `--wait` gate and
+/// the standalone `scenario report` command so the two stay in lockstep.
+async fn fetch_print_assert_report(
+    http: &reqwest::Client,
+    ui_addr: &str,
+    json: bool,
+    assert: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let r: serde_json::Value = http
+        .get(format!("{ui_addr}/api/scenario/report"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    print_report(&r, json);
+    if assert {
+        let failed = r["checks_failed"].as_u64().unwrap_or(0);
+        if failed > 0 {
+            return Err(format!("{failed} scenario check(s) failed").into());
+        }
+    }
+    Ok(())
+}
+
 async fn run_scenario(
     cmd: ScenarioCmd,
     ui_addr: &str,
@@ -969,6 +1001,7 @@ async fn run_scenario(
             config,
             step,
             until,
+            wait,
             assert,
         } => {
             if stepped {
@@ -1003,14 +1036,45 @@ async fn run_scenario(
                     return Err(format!("{failed} scenario check(s) failed").into());
                 }
             } else {
-                // Live: fire-and-forget against the running server's wall
-                // clock. --assert is meaningless here (the run hasn't
-                // finished when start returns) — steer to --stepped.
-                if assert {
+                // Live: start on the running server's wall clock.
+                if assert && !wait {
                     return Err(
-                        "`--assert` requires `--stepped` (a live run is fire-and-forget)".into(),
+                        "`--assert` on a live run needs `--wait` (or use `--stepped`)".into(),
                     );
                 }
+                // Resolve the wait length BEFORE starting, so a --wait on
+                // a scenario with no :length and no --until fails fast
+                // instead of leaving the run orphaned server-side with
+                // nothing to stop it.
+                let wait_secs = if wait {
+                    Some(match until {
+                        Some(s) => s,
+                        None => {
+                            // Default to the scenario's declared :length.
+                            let list: serde_json::Value = http
+                                .get(format!("{ui_addr}/api/scenarios"))
+                                .send()
+                                .await?
+                                .json()
+                                .await?;
+                            let len = list
+                                .as_array()
+                                .and_then(|a| a.iter().find(|s| s["name"] == name.as_str()))
+                                .and_then(|s| s["length_s"].as_f64());
+                            match len {
+                                Some(l) => l.ceil() as u64,
+                                None => {
+                                    return Err(
+                                        "live `--wait` needs `--until` for a scenario with no :length"
+                                            .into(),
+                                    );
+                                }
+                            }
+                        }
+                    })
+                } else {
+                    None
+                };
                 let resp = http
                     .post(format!("{ui_addr}/api/scenarios/{name}/start"))
                     .send()
@@ -1020,7 +1084,58 @@ async fn run_scenario(
                     let body = resp.text().await.unwrap_or_default();
                     return Err(format!("{status}: {body}").into());
                 }
-                println!("scenario run {name} (live)");
+                if !wait {
+                    // Fire-and-forget; the run continues server-side.
+                    println!("scenario run {name} (live)");
+                    return Ok(());
+                }
+                // --wait: block until the scenario finishes (the journal
+                // reports ended, or elapsed reaches the run length), then
+                // stop it so the report freezes + any CSV sinks flush.
+                let wait_secs = wait_secs.expect("wait ⇒ wait_secs resolved above");
+                eprintln!("waiting up to {wait_secs}s for {name} to finish…");
+                let deadline = wait_secs + 5; // small grace past the run length
+                let mut waited = 0u64;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    waited += 1;
+                    // Tolerate a transient poll hiccup (a momentary
+                    // non-2xx while the loopback rebuilds): treat it as
+                    // "not done yet" rather than aborting the run — the
+                    // deadline below still bounds the wait.
+                    let done = match http
+                        .get(format!("{ui_addr}/api/scenario"))
+                        .send()
+                        .await
+                        .and_then(|r| r.error_for_status())
+                    {
+                        Ok(resp) => match resp.json::<serde_json::Value>().await {
+                            Ok(s) => {
+                                let ended = !s["ended_at"].is_null();
+                                let elapsed = s["elapsed_s"].as_f64().unwrap_or(0.0);
+                                ended || elapsed >= wait_secs as f64
+                            }
+                            Err(_) => false,
+                        },
+                        Err(_) => false,
+                    };
+                    if done || waited >= deadline {
+                        break;
+                    }
+                }
+                // Freeze the report + flush any CSV sinks. A failed stop
+                // means the report may still be mutating, so surface it
+                // rather than asserting on a half-frozen run.
+                let stop = http
+                    .post(format!("{ui_addr}/api/scenarios/stop"))
+                    .send()
+                    .await?;
+                if !stop.status().is_success() {
+                    let status = stop.status();
+                    let body = stop.text().await.unwrap_or_default();
+                    return Err(format!("failed to stop scenario: {status}: {body}").into());
+                }
+                fetch_print_assert_report(&http, ui_addr, json, assert).await?;
             }
         }
         ScenarioCmd::Start { name } => {
@@ -1065,19 +1180,7 @@ async fn run_scenario(
             print_summary(&s, json);
         }
         ScenarioCmd::Report { assert } => {
-            let r: serde_json::Value = http
-                .get(format!("{ui_addr}/api/scenario/report"))
-                .send()
-                .await?
-                .json()
-                .await?;
-            print_report(&r, json);
-            if assert {
-                let failed = r["checks_failed"].as_u64().unwrap_or(0);
-                if failed > 0 {
-                    return Err(format!("{failed} scenario check(s) failed").into());
-                }
-            }
+            fetch_print_assert_report(&http, ui_addr, json, assert).await?;
         }
         ScenarioCmd::Events { since, limit } => {
             let e: serde_json::Value = http
