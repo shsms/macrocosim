@@ -575,7 +575,10 @@ frequenz gRPC API rather than a hand-rolled mock. The app under test runs as a
 separate process talking gRPC; switchyard drives the environment and records
 the assertions (=scenario-expect= → =swctl scenario report --assert=).
 
-*** TODO D1. Embed the scenario DSL prelude in the binary             :rust:dsl:
+*** DONE D1. Embed the scenario DSL prelude in the binary          :rust:dsl:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-06-17 Mi 12:38]
+:END:
 
 Precondition for binary-only distribution. The vocabulary a downstream config
 needs lives in three lisp files loaded by the config today (~478 lines / 21 KB):
@@ -605,7 +608,16 @@ path. Once it does, pair =concat!(env!("CARGO_MANIFEST_DIR"), "/…")= with
 =include_str!=, per file, as literals (a small macro over literal path tokens —
 not a runtime loop, since =concat!= needs literals).
 
-*** TODO D2. Machine-readable readiness handshake                     :rust:cli:
+Done: =Config::new_inner= embeds =sim/{common,defaults,scenarios}.lisp= via
+=include_str!= + =eval_string=, loaded before the user config — a binary with no
+lisp on disk still has the full vocabulary. Minimal + additive (a config that
+still =(load …)=s these files just redefines them on top). Span accuracy +
+=src/lisp/prelude/= relocation are the D9 follow-ups.
+
+*** DONE D2. Machine-readable readiness handshake                  :rust:cli:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-06-17 Mi 12:38]
+:END:
 
 CI currently scrapes the "gRPC listening" log line to know when to start the app
 and drive the scenario. Emit the chosen endpoints as one JSON line on stdout
@@ -613,6 +625,15 @@ and drive the scenario. Emit the chosen endpoints as one JSON line on stdout
 =--wait-ready=), so a CI script — or =docker-compose depends_on:
 service_healthy= — can block cleanly. Pairs with ephemeral ports (=:0=) so
 parallel jobs don't collide.
+
+Done: clap parser + bind-then-serve restructure in the =switchyard= bin.
+=--ephemeral-ports= binds the UI + every gRPC listener (per-microgrid, assets,
+dispatch) on an OS-chosen port; =--ui-port= sets a fixed UI port;
+=--emit-endpoints[=PATH]= writes one JSON line of the resolved addresses — the
+readiness signal. gRPC moved to =serve_with_incoming= on pre-bound listeners;
+loopback clients use the resolved gRPC port. Verified: two =--ephemeral-ports=
+instances run in parallel with no clashes, and swctl reaches the ephemeral gRPC
+port. Hosts stay loopback — routable =--*-bind= + its hardening is D3.
 
 *** TODO D3. Configurable bind address (+ pre-bind hardening)  :rust:ui:hardening:
 
