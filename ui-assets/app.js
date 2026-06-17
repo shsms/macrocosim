@@ -419,6 +419,10 @@ async function init() {
     // the next sample-flow tick overwrites the displayed numbers.
     setTimeout(() => dashboardTiles.backfill(), 800);
   });
+  // Periodically re-seed the dashboard tile values from the cached
+  // latest sample, so a dropped/throttled WS frame can't leave a tile
+  // frozen on a stale number between topology-driven backfills.
+  dashboardTiles.startAutoReseed();
   setupRepl();
 }
 

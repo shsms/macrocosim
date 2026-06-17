@@ -118,11 +118,56 @@ export const dashboardTiles = (() => {
     pushSample(stream, snap.value);
     renderSpark(stream);
   }
+  // Re-paint the tile value boxes from the server's cached latest
+  // sample. Value-only on purpose: no pushSample (the sparkline ring
+  // stays aligned to the WS / history-backfill sample flow) and no
+  // history / formula refetch (neither drifts per tick). The WS
+  // Sample stream is the primary live path, but it drops frames on
+  // lag (events_ws `Lagged(_) => continue`) and a backgrounded tab
+  // throttles its receiver — so a tile can otherwise freeze on a
+  // stale value (e.g. producer_power and pv_power ride different
+  // component streams, so one can stall while the other tracks).
+  async function reseedLatest() {
+    try {
+      const res = await fetch(mgPath("microgrid/latest"));
+      if (!res.ok) return;
+      const map = await res.json();
+      for (const [stream, snap] of Object.entries(map)) {
+        for (const el of findEls(stream)) {
+          el.textContent = fmt(snap.quantity, snap.unit, snap.value);
+          el.classList.toggle("muted", snap.value == null);
+        }
+      }
+    } catch (_) {
+      // Best-effort. If the loopback isn't up yet (503 elsewhere),
+      // the tiles stay on their last value until the next tick.
+    }
+  }
   return {
     applySample(ev) {
       // WS frame shape matches the snapshot shape, minus the kind
       // discriminator. Pass straight through.
       paint(ev.stream, ev);
+    },
+    // Safety net against dropped WS frames: re-seed the tile values
+    // on a slow timer, and immediately whenever the tab returns to
+    // the foreground (where the WS receiver was throttled and most
+    // likely missed samples). Scoped to a visible dashboard — the
+    // same gate applyMode() uses for backfill() — so we don't poll or
+    // repaint while another subview shows or no microgrid is selected.
+    // Cheap — one small JSON fetch; the sparklines and per-component
+    // rows stay on the WS hot path.
+    startAutoReseed(periodMs = 5000) {
+      const onDashboard = () =>
+        document.body.dataset.mode === "microgrids" &&
+        document.body.dataset.mgView === "selected" &&
+        document.body.dataset.subview === "dashboard";
+      setInterval(() => {
+        if (onDashboard()) reseedLatest();
+      }, periodMs);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && onDashboard()) reseedLatest();
+      });
     },
     async backfill() {
       // Past 15 min of samples per stream, server-side. Pre-populate
@@ -152,23 +197,7 @@ export const dashboardTiles = (() => {
       } catch (_) {
         // Best-effort. WS frames will fill the ring forward from here.
       }
-      try {
-        const res = await fetch(mgPath("microgrid/latest"));
-        if (!res.ok) return;
-        const map = await res.json();
-        // Paint the latest readouts in the tile value boxes — but
-        // don't append again (the history backfill above already
-        // included the most recent sample).
-        for (const [stream, snap] of Object.entries(map)) {
-          for (const el of findEls(stream)) {
-            el.textContent = fmt(snap.quantity, snap.unit, snap.value);
-            el.classList.toggle("muted", snap.value == null);
-          }
-        }
-      } catch (_) {
-        // Best-effort. If the loopback isn't up yet (503 elsewhere),
-        // the tiles stay on "—" until the first WS tick lands.
-      }
+      await reseedLatest();
       // Same path picks up the rendered formula strings for each
       // tile's hover tooltip. Static across samples (the formula
       // doesn't change per tick), so one fetch per mode-enter is
