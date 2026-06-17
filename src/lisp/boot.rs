@@ -155,6 +155,35 @@ impl Config {
             None => tulisp_async::register(&mut ctx, executor),
         };
 
+        // Embedded scenario DSL prelude. The vocabulary a config needs —
+        // `at` / `check` / `controller` / `drive-*` / `timeline` /
+        // `define-controller`, the `make-*` defaults, and the `scenario--run`
+        // runner — lives in three lisp files that config.lisp `(load …)`s
+        // today; bake them in so a binary shipping no lisp still has them.
+        // Loaded after the Rust defuns + tulisp-async (so `every` /
+        // `run-with-timer` exist) and before the user config, so its
+        // `(define-scenario …)` / `(make-* …)` forms resolve. Order matters:
+        // common before scenarios (the runner calls `define-controller`).
+        // Additive — a config that still `(load …)`s these files just
+        // redefines them on top.
+        //
+        // TODO: once tulisp supports embedding files (an eval-with-filename
+        // path), evaluate each file under its real path so a prelude error
+        // cites the real source file rather than the shared `<eval_string>`
+        // bucket (todo §D9).
+        for src in [
+            include_str!("../../sim/common.lisp"),
+            include_str!("../../sim/defaults.lisp"),
+            include_str!("../../sim/scenarios.lisp"),
+        ] {
+            if let Err(e) = ctx.eval_string(src) {
+                return Err(format!(
+                    "embedded prelude failed to load: {}",
+                    e.format(&ctx)
+                ));
+            }
+        }
+
         // One-per-process loop that walks every registered
         // MicrogridSite's TimeoutTracker and calls reset_setpoint on
         // each elapsed entry. Both gRPC's SetElectricalComponentPower
