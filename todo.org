@@ -674,7 +674,10 @@ wanted) first needs the whole tulisp family (=tulisp=, =tulisp-async=,
 crates.io. Also: switchyard has no =license= field / =LICENSE= file yet — set
 =GPL-3.0-or-later= + add the licence text before any publish.
 
-*** TODO D6. Document the recommended E2E test structure                  :docs:
+*** DONE D6. Document the recommended E2E test structure               :docs:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-06-17 Mi 13:17]
+:END:
 
 Guidance for consumers: one fixture file per graph (topology defined once + that
 graph's scenarios as =define-scenario= forms); parallelize across cases at the
@@ -685,6 +688,13 @@ report --assert; scenario run B; …=, safe because =scenario-start= resets the
 journal per run) is the simpler-infra fallback. Reserve
 multiple-microgrids-in-one-file for genuinely multi-microgrid scenarios, not for
 parallelizing independent cases — see D7.
+
+Done: =docs/e2e-testing.md= (linked from README) — consumer guide covering the
+two modes (headless stepped gate; live end-to-end with the app over gRPC), the
+live CI recipe (=--ephemeral-ports= + =--emit-endpoints= readiness → boot the
+app → =scenario run --wait --assert=), fixture structure (one file per graph,
+CI-matrix parallelism, sequential + multi-mg notes), and the real-time
+determinism guidance.
 
 *** TODO D7. Per-microgrid scenario scope                            :scenarios:
 
