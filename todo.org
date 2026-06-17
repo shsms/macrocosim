@@ -635,13 +635,18 @@ loopback clients use the resolved gRPC port. Verified: two =--ephemeral-ports=
 instances run in parallel with no clashes, and swctl reaches the ephemeral gRPC
 port. Hosts stay loopback — routable =--*-bind= + its hardening is D3.
 
-*** TODO D3. Configurable bind address (+ pre-bind hardening)  :rust:ui:hardening:
+*** TODO D3. Routable bind address (deferred — only if cross-container)     :rust:ui:
 
-gRPC binds =[::1]= and the UI is hardcoded =127.0.0.1:8801= (loopback). Host-
-process CI on loopback works today; containers / compose need a routable
-=--grpc-bind= / =--ui-bind=. Fold in the CORS + body-limit hardening already
-recorded in the 2026-06-05 backlog (the =--ui-bind= item) — same change gates
-both.
+Routable =--ui-bind= / =--grpc-bind <host>= (vs today's loopback) so two
+*separate* containers — switchyard + the app — can talk by service name over a
+bridge network. Deferred: that's the *only* deployment that needs it, and it
+exposes =/api/eval= (arbitrary Lisp = RCE) to the network. Every other E2E shape
+runs on loopback, which D1+D2 already cover: host-process CI, a single container
+with both binaries, or =docker run --network host=. Pick this up only when a
+consumer concretely needs bridge-networked / cross-host separation — and pair it
+with a "trusted networks only" startup warning + a lockdown decision (e.g.
+=--no-eval= when bound non-loopback). The cross-origin hardening that used to
+live here is now D10 (worth doing on loopback regardless).
 
 *** TODO D4. One-shot CI verb + structured gate               :rust:cli:testing:
 
@@ -714,6 +719,22 @@ needs no =(load "sim/…")=. Two independent follow-ups, neither urgent:
   break once the files move — which retires prelude hot-reload. So it's a
   deliberate dev-workflow call, not a freebie; left as-is until that tradeoff is
   worth making.
+
+*** TODO D10. UI cross-origin hardening (loopback)              :rust:ui:hardening:
+
+Independent of any routable bind (D3): defend the loopback UI against a malicious
+web page POSTing to =localhost:8801= (cross-origin-to-localhost / DNS-rebinding).
+=/api/eval= takes its body as a bare =String=, so it accepts a =text/plain=
+"simple" POST — which a cross-origin page can fire (the eval side-effect runs
+even though CORS blocks reading the response). Fixes:
+- Require =application/json= on the mutators (=/api/eval=, =/api/format=, the
+  per-mg eval, overrides-text writes) so the browser must preflight; reject
+  =text/plain=. Update the SPA (=repl.js= etc.) to send JSON.
+- Add a =tower-http= =CorsLayer= (not yet a dep) restricting cross-origin.
+- =DefaultBodyLimit::max(N)= on the router — bounds =/api/eval= / =/api/format= /
+  overrides-text / the =BulkRemoveBody.indices= vec.
+Supersedes the 2026-06-05 backlog item "Add CORS + confirm body limits before
+--ui-bind" — the hardening stands on its own, ahead of (and independent of) D3.
 
 * Review backlog — 2026-06-01
 
