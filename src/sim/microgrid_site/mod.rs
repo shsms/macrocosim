@@ -282,7 +282,7 @@ impl MicrogridSite {
     ///
     /// The scenario reporter tracks this meter's active-power peak, and
     /// the UI's frequency tile samples its `frequency_hz` history — the
-    /// latter a workaround for frequenz-microgrid 0.4.1's LogicalMeter
+    /// latter a workaround for frequenz-microgrid 0.5.0's LogicalMeter
     /// not carrying a `Sample<Frequency>` formula through its actor.
     pub fn main_meter_id(&self) -> Option<u64> {
         let by_id = self.inner.by_id.read();

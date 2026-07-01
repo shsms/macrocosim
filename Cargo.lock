@@ -440,9 +440,9 @@ dependencies = [
 
 [[package]]
 name = "frequenz-microgrid"
-version = "0.4.1"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae98015ebe90659e3e85ab4daec0352db29f288f4011518ca6abdf99d5553aca"
+checksum = "ded561f31f8cd94d07fc5e8c0dcc6c40fd164ec216903ace9091d575d9d3b041"
 dependencies = [
  "async-trait",
  "chrono",

@@ -217,13 +217,14 @@ async fn subscribe_power_forwarders(
         }
     }
     // Grid frequency via `lm.grid::<metric::AcFrequency>()` would
-    // be the natural way to feed a "Grid frequency" tile, but
-    // frequenz-microgrid 0.4.1's LogicalMeterActor's
-    // `TypedFormulaResponseSender` branches only on Power /
-    // Voltage / ReactivePower / Current — calling `.subscribe()`
-    // on the Frequency formula returns `Internal: Can't create
-    // TypedFormulaResponseSender for ...Frequency` (reported
-    // upstream). Until that lands, frequency stays on the
+    // be the natural way to feed a "Grid frequency" tile, but the
+    // LogicalMeterActor's `TypedFormulaResponseSender` branches only
+    // on Power / Voltage / ReactivePower / Current — calling
+    // `.subscribe()` on the Frequency formula returns `Internal:
+    // Can't create TypedFormulaResponseSender for ...Frequency`.
+    // Still true as of frequenz-microgrid 0.5.0: it declares the
+    // `AcFrequency` metric (a CoalesceFormula) but never wires a
+    // Frequency sender arm. Until that lands, frequency stays on the
     // per-component /api/history?metric=frequency_hz path.
     // BatteryPool takes &mut self for power() / power_bounds() (it
     // caches subscriber refs); build it once and let it go out of
