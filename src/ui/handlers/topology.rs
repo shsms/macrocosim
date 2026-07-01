@@ -31,8 +31,9 @@ pub(in crate::ui) struct TopologySnapshot {
     /// human-readable error string. The pulse-bar graph pill
     /// flips between ✓ and ⚠ on this field.
     graph_status: Option<String>,
-    /// Id of the meter flagged `:main t` in the topology, if any.
-    /// The SPA's Grid-frequency tile pulls history from this id.
+    /// Id of the derived main / PCC meter (the grid connection point's
+    /// sole meter child), if any. The SPA's Grid-frequency tile pulls
+    /// history from this id.
     main_meter_id: Option<u64>,
 }
 

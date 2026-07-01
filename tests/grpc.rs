@@ -33,7 +33,7 @@ const TINY_TOPOLOGY: &str = r#"
 (set-microgrid-id 7)
 (%make-grid-connection-point :id 1
             :successors
-            (list (%make-meter :id 2 :main t
+            (list (%make-meter :id 2
                                :successors
                                (list (%make-battery-inverter
                                       :id 4
@@ -110,7 +110,7 @@ const ERRORED_INVERTER_TOPOLOGY: &str = r#"
 (set-microgrid-id 7)
 (%make-grid-connection-point :id 1
             :successors
-            (list (%make-meter :id 2 :main t
+            (list (%make-meter :id 2
                                :successors
                                (list (%make-battery-inverter
                                       :id 4 :health 'error
@@ -130,7 +130,7 @@ const NARROW_BATTERY_TOPOLOGY: &str = r#"
 (set-microgrid-id 7)
 (%make-grid-connection-point :id 1
             :successors
-            (list (%make-meter :id 2 :main t
+            (list (%make-meter :id 2
                                :successors
                                (list (%make-battery-inverter
                                       :id 4

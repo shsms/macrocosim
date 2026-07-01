@@ -117,16 +117,18 @@ unchanged.
 | `soc_stats`                    | `{ mean_pct, median_pct, mode_pct }` over current SoCs   |
 | `main_meter_window_peaks`      | `[{ window_start, peak_w }]`, 15-min UTC-aligned, ≤ 96   |
 
-For peak tracking to work, the main / point-of-common-coupling
-meter must be flagged at construction:
+Peak tracking needs a main / point-of-common-coupling meter, which
+is derived from the topology: the grid connection point's sole child,
+when that child is a meter.
 
 ```lisp
-(make-meter :id 2 :main t :successors …)
+(make-grid-connection-point :id 1
+  :successors (list (make-meter :id 2 :successors …)))
 ```
 
-The sample `config.lisp` already does this. Multiple `:main t`
-flags is a config error — the second `(%make-meter)` call
-returns an error.
+The sample `config.lisp` already has this shape. If the grid has no
+child, more than one child, or a single non-meter child, there is no
+unambiguous main meter and peak tracking stays idle.
 
 ## Recording CSVs
 

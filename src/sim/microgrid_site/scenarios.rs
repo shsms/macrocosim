@@ -313,7 +313,7 @@ impl MicrogridSite {
         ScenarioReport {
             scenario_elapsed_s: self.inner.scenario.read().elapsed_s(now),
             peak_main_meter_w: self.inner.scenario.read().peak_main_meter_active_w(),
-            main_meter_id: *self.inner.main_meter_id.read(),
+            main_meter_id: self.main_meter_id(),
             total_battery_charged_wh: total_charged,
             total_battery_discharged_wh: total_discharged,
             total_pv_produced_wh: total_pv,

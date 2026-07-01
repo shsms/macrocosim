@@ -17,7 +17,6 @@ const TOPOLOGY: &str = r#"
             :successors
             (list (%make-meter
                    :id 2
-                   :main t
                    :successors
                    (list (%make-battery-inverter
                           :id 4

@@ -17,8 +17,7 @@
     :successors
     (list
      (make-meter
-      :id 2
-      :main t                       ;; flagged for scenario-report peak tracking
+      :id 2                          ;; grid's sole child → derived as the main/PCC meter
       :successors
       (list
        ;; Battery branch — every knob (SCADA delay, ramp, jitter,

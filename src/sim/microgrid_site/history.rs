@@ -113,7 +113,7 @@ impl MicrogridSite {
         // unflagged ids and unwatched metrics. Integrals advance
         // the cursor at the end so the next snapshot's dt is
         // measured from now.
-        let main_id = *self.inner.main_meter_id.read();
+        let main_id = self.main_meter_id();
         {
             let mut journal = self.inner.scenario.write();
             for (id, metric, value) in &emitted {

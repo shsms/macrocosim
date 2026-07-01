@@ -98,8 +98,9 @@ with `--assert` to gate CI.
 
 ## Configuration knobs
 
-- **`(make-meter :main t …)`** — flag the point-of-common-coupling
-  meter; the scenario reporter tracks its peak.
+- **Main / point-of-common-coupling meter** — derived from the
+  topology, not flagged: it's the grid connection point's sole child
+  when that child is a meter. The scenario reporter tracks its peak.
 - **`(make-meter :power N | (lambda () …) | 'symbol)`** — drive the
   meter's published power from a constant, a lambda, or a global
   symbol. Same on solar inverters via `:sunlight%`.

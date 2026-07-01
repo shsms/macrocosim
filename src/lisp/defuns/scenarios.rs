@@ -978,15 +978,18 @@ mod tests {
         assert_eq!(r.per_battery[0].id, 100);
     }
 
-    /// `:main t` on a meter wires it as the scenario reporter's
-    /// peak source. record_history_snapshot updates the journal's
-    /// peak each tick; scenario_start resets it.
+    /// The meter fronting the grid connection point is the scenario
+    /// reporter's peak source — derived from the topology, no flag.
+    /// record_history_snapshot updates the journal's peak each tick;
+    /// scenario_start resets it.
     #[test]
     fn main_meter_peak_tracks_active_power() {
         use chrono::Utc;
         let (cfg, _dir) = config_with(
             "(set-microgrid-id 9)
-             (%make-meter :id 1 :main t :power 1000.0)",
+             (%make-grid-connection-point
+               :id 1
+               :successors (list (%make-meter :id 2 :power 1000.0)))",
         );
         // Pre-start, sampling shouldn't update the peak — the
         // scenario hasn't begun.
@@ -997,23 +1000,23 @@ mod tests {
         );
 
         cfg.eval("(scenario-start \"power\")").unwrap();
-        cfg.eval("(set-meter-power 1 2500.0)").unwrap();
+        cfg.eval("(set-meter-power 2 2500.0)").unwrap();
         cfg.site().record_history_snapshot(Utc::now());
         let r = cfg.site().scenario_report(Utc::now());
         assert!((r.peak_main_meter_w - 2500.0).abs() < 1e-3);
 
         // A higher value lifts the peak; a later lower one
         // doesn't.
-        cfg.eval("(set-meter-power 1 7800.0)").unwrap();
+        cfg.eval("(set-meter-power 2 7800.0)").unwrap();
         cfg.site().record_history_snapshot(Utc::now());
-        cfg.eval("(set-meter-power 1 1100.0)").unwrap();
+        cfg.eval("(set-meter-power 2 1100.0)").unwrap();
         cfg.site().record_history_snapshot(Utc::now());
         let r = cfg.site().scenario_report(Utc::now());
         assert!((r.peak_main_meter_w - 7800.0).abs() < 1e-3);
 
         // scenario-start resets the peak.
         cfg.eval("(scenario-start \"again\")").unwrap();
-        cfg.eval("(set-meter-power 1 500.0)").unwrap();
+        cfg.eval("(set-meter-power 2 500.0)").unwrap();
         cfg.site().record_history_snapshot(Utc::now());
         assert!((cfg.site().scenario_report(Utc::now()).peak_main_meter_w - 500.0).abs() < 1e-3,);
     }

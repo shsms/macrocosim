@@ -748,7 +748,7 @@ mod tests {
 (make-microgrid :id 9 :grpc-port 18901 :topology
   (lambda ()
     (%make-grid-connection-point :id 1
-      :successors (list (%make-meter :id 2 :main t
+      :successors (list (%make-meter :id 2
         :successors (list (%make-battery-inverter :id 3 :rated-lower -5000.0 :rated-upper 5000.0
           :successors (list (%make-battery :id 4 :rated-lower -5000.0 :rated-upper 5000.0
             :capacity 1000.0 :initial-soc 50.0)))))))))
@@ -847,7 +847,7 @@ mod tests {
 (make-microgrid :id 9 :grpc-port 18903 :topology
   (lambda ()
     (%make-grid-connection-point :id 1
-      :successors (list (%make-meter :id 2 :main t :power 0.0)))))
+      :successors (list (%make-meter :id 2 :power 0.0)))))
 (define-scenario :name \"ramp\"
   :schedule 'relative :clock 'stepped :length \"60s\" :seed 7
   :drive (list (drive-meter 2 (timeline (hold 1000.0 :for 30)

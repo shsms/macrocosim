@@ -445,9 +445,11 @@ async fn scenario_endpoints_round_trip_lifecycle_and_events() {
 async fn scenario_report_endpoint_returns_main_meter_peak() {
     let cfg = config_with(
         "(set-microgrid-id 9)
-         (%make-meter :id 1 :main t)
+         (%make-grid-connection-point
+           :id 1
+           :successors (list (%make-meter :id 2)))
          (scenario-start \"smoke\")
-         (set-meter-power 1 4500.0)",
+         (set-meter-power 2 4500.0)",
     )
     .await;
     // Drive the sampler so the reporter sees a peak.
@@ -456,7 +458,8 @@ async fn scenario_report_endpoint_returns_main_meter_peak() {
     let (status, body) = call(cfg, get("/api/scenario/report")).await;
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["main_meter_id"], 1);
+    // The grid meter (fronting the connection point) is derived as main.
+    assert_eq!(v["main_meter_id"], 2);
     let peak = v["peak_main_meter_w"].as_f64().unwrap();
     assert!((peak - 4500.0).abs() < 1e-3, "got peak {peak}");
 }

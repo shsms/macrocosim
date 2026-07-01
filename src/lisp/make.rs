@@ -60,11 +60,6 @@ AsPlist! {
         power: Option<LispValue> {= None},
         successors: Option<Vec<ComponentHandle>> {= None},
         hidden: Option<bool> {= None},
-        /// Mark this meter as the microgrid's main / point-of-
-        /// common-coupling meter. The scenario reporter tracks its
-        /// active-power peak; at most one meter per microgrid may
-        /// carry the flag.
-        main: Option<bool> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
@@ -248,23 +243,6 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 .power
                 .as_ref()
                 .and_then(|v| DynamicScalar::from_lisp(v.as_inner(), 0.0));
-            // Probe the main-meter slot BEFORE registering. The
-            // previous shape registered first and only checked at
-            // `set_main_meter` time — a `:main t` collision left a
-            // half-registered meter (in the components vec + named
-            // + reachable via get) without the main flag, since the
-            // Err from set_main_meter propagated past the in-progress
-            // construction. Failing the eval before any registry
-            // mutation keeps the world consistent on rejection.
-            let wants_main = a.main.unwrap_or(false);
-            if wants_main
-                && let Some(existing) = w.main_meter_id()
-                && existing != id
-            {
-                return Err(Error::invalid_argument(format!(
-                    "main meter already set to {existing}; can't claim {id}"
-                )));
-            }
             let meter = Meter::new(
                 id,
                 interval,
@@ -274,9 +252,6 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             );
             let h = register_with_modes(&w, meter, a.health, a.telemetry_mode, a.command_mode)?;
             apply_initial_name(&w, id, a.name);
-            if wants_main {
-                w.set_main_meter(id).map_err(Error::invalid_argument)?;
-            }
             connect_successors(&w, id, &a.successors);
             Ok::<_, Error>(h)
         },
@@ -893,52 +868,6 @@ mod tests {
         assert!(
             auto_id > first,
             "skipped past the pinned {first}, got {auto_id}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod main_meter_tests {
-    //! End-to-end tests for the `:main t` slot on `%make-meter`,
-    //! driven through `Config` so the failure modes are exactly
-    //! the ones a real config would see.
-    use crate::lisp::test_support::config_with;
-
-    /// Two meters with `:main t` is a config error. The first one
-    /// claims the slot; the second's `(%make-meter)` returns an
-    /// error rather than silently overwriting.
-    #[test]
-    fn duplicate_main_meter_rejects() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-meter :id 1 :main t)",
-        );
-        let res = cfg.eval("(%make-meter :id 2 :main t)");
-        assert!(res.is_err(), "expected duplicate-main error");
-        assert!(res.unwrap_err().contains("main meter"));
-    }
-
-    /// The rejection from `duplicate_main_meter_rejects` shouldn't
-    /// leave a half-registered meter behind: the failing
-    /// `(%make-meter :main t)` must not land in `world.components()`
-    /// or `world.get(id)`. Regressed once when the slot check fired
-    /// AFTER `register_with_modes`.
-    #[test]
-    fn duplicate_main_meter_rejection_doesnt_register() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-meter :id 1 :main t)",
-        );
-        let before = cfg.site().components().len();
-        let _ = cfg.eval("(%make-meter :id 2 :main t)");
-        let after = cfg.site().components().len();
-        assert_eq!(
-            before, after,
-            "rejected :main meter leaked into the components list",
-        );
-        assert!(
-            cfg.site().get(2).is_none(),
-            "rejected :main meter is still reachable via get(2)"
         );
     }
 }

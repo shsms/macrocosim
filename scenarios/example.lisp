@@ -13,7 +13,7 @@
 ;;
 ;; Component ids referenced below match the sample config.lisp:
 ;;
-;;   id 2    main meter (flagged :main t for peak tracking)
+;;   id 2    main meter (grid's sole child → derived for peak tracking)
 ;;   id 100  hidden consumer meter (driven by consumer-curve)
 ;;   id 200  solar inverter
 ;;   id 1000 battery, 1001 battery-inverter (auto-allocated; verify with `swctl tree`)
