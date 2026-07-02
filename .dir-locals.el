@@ -14,7 +14,8 @@
   . ((eval . (progn
                (setq-local etags-regen-program "cargo")
                (setq-local etags-regen-program-options
-                           '("run" "-q" "--bin" "switchyard-etags"
+                           '("run" "-q" "--features" "etags"
+                             "--bin" "switchyard-etags"
                              "config.lisp" "scenarios/example.lisp"))
                (setq-local etags-regen-file-extensions
                            '("lisp" "rs" "el")))))))

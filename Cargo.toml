@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 default-run = "switchyard"
 
+[features]
+# Gates the dev-only `switchyard-etags` binary out of default builds (and
+# the distribution wheel). The emacs tags workflow enables it explicitly
+# (see .dir-locals.el).
+etags = []
+
 [dependencies]
 tonic-prost = "0.14"
 tonic = "0.14.0"
@@ -11,9 +17,9 @@ prost = "0.14.0"
 prost-types = "0.14.0"
 tokio = { version = "1.43.1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = "0.1.15"
-tulisp = { git = "https://github.com/shsms/tulisp", features = ["sync", "etags"] }
-tulisp-fmt = { git = "https://github.com/tulisp/tulisp-fmt" }
-tulisp-async = { git = "https://github.com/tulisp/tulisp-async" }
+tulisp = { version = "0.29", features = ["sync", "etags"] }
+tulisp-fmt = "0.1"
+tulisp-async = "0.1"
 notify = "6.1.1"
 futures = "0.3.30"
 # DAG validation + formula generation for the Dashboard's aggregated
@@ -74,3 +80,4 @@ path = "src/bin/swctl.rs"
 [[bin]]
 name = "switchyard-etags"
 path = "src/bin/switchyard-etags.rs"
+required-features = ["etags"]
