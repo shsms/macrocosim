@@ -733,7 +733,10 @@ impl microgrid_server::Microgrid for MicrogridServer {
         &self,
         _request: tonic::Request<ListSensorRequest>,
     ) -> Result<tonic::Response<ListSensorsResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented("sensors are not modeled"))
+        // switchyard does not model sensors; report an empty inventory.
+        Ok(tonic::Response::new(ListSensorsResponse {
+            sensors: Vec::new(),
+        }))
     }
     async fn receive_sensor_telemetry_stream(
         &self,
