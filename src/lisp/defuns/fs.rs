@@ -60,11 +60,12 @@ pub(super) fn register(ctx: &mut TulispContext, load_dir: PathBuf) {
                 .collect();
             paths.sort();
             for path in paths {
-                let escaped = path
-                    .to_string_lossy()
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"");
-                ctx.eval_string(&format!("(load \"{escaped}\")"))?;
+                // Evaluate each per-mg config file directly instead of
+                // re-entering `eval_string` with a `(load …)` form: a
+                // re-entrant `eval_string` underflows tulisp 0.29.0's
+                // eval-depth counter (fixed upstream; avoided here
+                // meanwhile). `path` is already a full path.
+                ctx.eval_file(&path.to_string_lossy())?;
             }
             Ok(true)
         },
