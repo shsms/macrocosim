@@ -191,7 +191,7 @@ fine for the current category count.
 ** P. Physics realism upgrades
 
 The electrical layer is deliberately behavioral (no power flow, no
-losses) — see the architecture notes in CLAUDE.md. The two items
+losses) — see the architecture notes in AGENTS.md. The two items
 below are the cheapest upgrades that a downstream control app's own
 accounting would actually notice; island-mode frequency coupling
 (swing equation) was considered and deferred — not needed while
@@ -234,338 +234,6 @@ soc_upper), keeping =:voltage-v= as the nominal for backward
 compatibility. Telemetry-only change — power physics stays on W, so
 no setpoint / bounds behaviour shifts.
 
-** I. Testing apps that drive bounds (closed-loop)
-
-Surfaced while using switchyard to test an external GCP active-power
-limiter — an app whose whole job is to push
-=AugmentElectricalComponentBounds= and watch =power_bounds= react. It
-ran against a 2-PV microgrid; the gaps below are what made that
-harder than it should be.
-
-*** DONE I2. Scenario-level assertions (expect / assert)            :testing:
-:LOGBOOK:
-- State "DONE"       from "INPROGRESS" [2026-06-15 Mo 21:38]
-- State "INPROGRESS" from "TODO"       [2026-06-09 Di 15:59]
-:END:
-
-Scenarios drive perturbations and journal events but can't *assert*
-expected state — so verifying a run means eyeballing logs (or, for an
-external app, scraping the app's own logs). Add an assertion verb that
-checks a component's power / bounds or grid state and records pass/fail
-into =/api/scenario/report= + =swctl scenario report=, turning
-scenarios into self-checking integration tests. eg.
-=(scenario-expect :component 200 :metric active-power-bounds-lower
-:approx -15000.0 :tol 500.0)=.
-
-Done: =(scenario-expect :component ID :metric M (:approx V :tol T | :min L :max U))=
-reads the live metric (power, soc, frequency, and the active/reactive
-power-bounds-lower/upper family) and records a pass/fail check into the report;
-=swctl scenario report= prints them and, with =--assert=, exits non-zero on any
-failure — a CI gate. (The =--assert= flag was the remaining piece.)
-
-*** DONE I3. Disambiguate health vs availability vs output   :telemetry:docs:
-:LOGBOOK:
-- State "DONE"       from "INPROGRESS" [2026-06-15 Mo 23:30]
-- State "INPROGRESS" from "TODO"       [2026-06-09 Di 15:59]
-:END:
-
-Partly resolved by =27e079d=: a non-Ok inverter now trips to zero output
-(the "outage mode that zeroes output" option), so a "downed" inverter
-*does* change the grid. What remains is the telemetry state axis —
-=component_state= is still derived from power sign, so an errored
-inverter reports *idle* (not ERROR) unless =TelemetryMode::ErrorEmpty=
-is also set (see the 2026-06-04 review's "state-code decoupled from
-health" item). Decide whether health should drive an ERROR state
-snapshot or stay an orthogonal knob, and document the three axes (stream
-health, bounds-availability, physical output).
-
-Done: Health::state_label() drives the ERROR/STANDBY state snapshot when health is
-non-Ok (server.rs telemetry path overrides the physics-derived component_state);
-physics labels apply when Ok. The three axes (stream health, command/bounds
-handling, physical output) are documented at the top of sim/runtime.rs.
-
-*** DONE I4. Record a component's bounds + received setpoints over time :testing:
-:LOGBOOK:
-- State "DONE"       from "INPROGRESS" [2026-06-15 Mo 23:30]
-- State "INPROGRESS" from "TODO"       [2026-06-09 Di 15:59]
-:END:
-
-=scenario-record-csv= captures telemetry, but for testing a bound-
-setting app you also want the *inputs it pushed*: a per-component log of
-AugmentBounds / SetPower requests received (value + ttl + arrival time)
-and the effective-bounds timeline. Lets a scenario replay-assert "the
-app held a stable cap" vs "it oscillated" without an external log scrape.
-
-Done: scenario-record-csv now also writes <id>-setpoints.csv (each SetPower /
-SetReactive / AugmentBounds received — value + resolved TTL + arrival + outcome)
-and <id>-bounds.csv (the effective active-power envelope over time), so a run is
-replay-assertable without scraping the app's logs.
-
-*** DONE I5. First-class in-sim controllers / actors                :testing:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-15 Mo 20:51]
-:END:
-
-Scenarios are open-loop: they perturb the environment but can't model
-an agent that *reacts* to live state. Testing a bound-setting app
-against a realistic dispatcher (e.g. "charge the battery at the max the
-limiter currently allows") is impossible — the DSL can fire
-=set-active-power= but it errors once the cap drops below the request,
-there's no =ignore-errors= in this tulisp, and a script can't read back
-effective bounds to clamp its own command.
-
-Add a registered per-tick callback with read access to telemetry +
-effective bounds and write access to setpoints, e.g.
-=(define-controller :id 'ems :on-tick (lambda (mg) …))=. Needs two
-small DSL primitives: =component-bound-upper/lower= (read effective
-bounds) and a clamping =set-active-power= variant that never errors on
-an over-bound request. Turns the sim genuinely closed-loop and lets a
-scenario mock other controllers too.
-
-Done: =component-active-power= / =component-bound-lower= / =component-bound-upper=
-expose live power + effective bounds (rated ∩ augmentations); =set-active-power=
-gained a CLAMP arg that clamps into the live envelope instead of erroring; and
-=define-controller= schedules an :on-tick lambda on the refresh loop. A
-controller is now =(define-controller :on-tick (lambda () (set-active-power ID
-(component-bound-upper ID) MS t)))=. Caveat: re-commanding resets the
-command-delay, so :every-ms must exceed the target's :command-delay-ms.
-
-*** DONE I6. Declarative signal profiles for environment drivers    :testing:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-15 Mo 20:56]
-:END:
-
-Driving a load curve means hand-rolling a =cond= on =(scenario-elapsed)=
-inside a =set-meter-power= lambda. Add a small composable vocabulary —
-=hold= / =ramp= / =pulse= over a timeline — so intent reads directly:
-=(drive-meter 100 (timeline (hold 2kW :for 60s) (ramp :to 60kW :over 10s)
-(ramp :to 2kW :over 10s)))=. Resolves once per tick like today's dynamic
-sources; far more readable than the imperative form for multi-segment
-profiles.
-
-Done in =sim/scenarios.lisp=: =(timeline (hold V :for S) (ramp :to V :over S [:from A]) …)=
-returns a dynamic source (lambda over scenario time) for set-meter-power /
-set-solar-sunlight; a ramp without :from chains from the previous segment's end.
-
-*** DONE I7. Seeded RNG for scenarios                               :testing:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-15 Mo 21:02]
-:END:
-
-Scenario randomness (=random-outage=, =random-uniform=, =random-pick=)
-drew from the OS RNG, so a run couldn't be replayed. Add a seedable
-generator behind =(random)= so a scenario is reproducible.
-
-Done in =src/lisp/defuns/log.rs=: =(set-random-seed N)= installs a SplitMix64
-behind =(random)= (verified reproducible); =(clear-random-seed)= reverts to the
-OS RNG. Full run-to-run determinism still needs sim-time — see I8.
-
-*** DONE I8. Sim-time for scenarios                                 :testing:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-15 Mo 22:28]
-:END:
-
-Scenario timers fire on the 100 ms refresh loop and =(scenario-elapsed)=
-is wall-clock, with per-stream jitter on top — fine for eyeballing, bad
-for asserting a timed ramp race or running in CI, and the reason seeded
-randomness (I7) still isn't *fully* deterministic run-to-run: the seed
-fixes the draw *values*, but wall-clock timer ordering can still vary
-the order/count of draws between events. Drive scenarios on simulated
-time so a run is reproducible and can go faster-than-real-time. Pairs
-with I2 to make =scenario-expect= pass/fail meaningful.
-
-Deferred: =run-with-timer= / =every= are wall-clock timers from the
-external =tulisp-async= crate, and =(scenario-elapsed)= reads
-=Utc::now()= — virtualizing both (a sim clock threaded through the
-refresh loop + a timer wheel on sim-time) is a large cross-cutting
-change touching a dependency, not a contained add.
-
-Done: a pluggable Clock landed in tulisp-async (ManualClock + register_with_clock),
-and switchyard grew Config::new_headless + sim_step / sim_run — a headless runner
-that advances one sim clock driving timers, scenario time, and physics integration
-together, so a scenario runs deterministically and faster than real time (with I7's
-seeded RNG, fully reproducible) and scenario-expect (I2) makes it a CI gate. Live
-mode is unchanged (wall-clock). tulisp-async change is on a local checkout pending
-upstream; switchyard pins it via a Cargo [patch].
-
-** J. Scenarios revamp — one unified model                          :scenarios:
-Full design write-up in =scenarios/DESIGN.md=. No back-compat: rewrite,
-delete the old day-stage model.
-
-Problem: two unrelated scenario systems that don't compose —
-=define-scenario= (registered 24-h day-stages, the only thing the UI /
-Start button drives) and ad-hoc =(load …)= driver scripts (the
-expressive ones: timeline / define-controller / scenario-expect, but
-invisible to the UI). Plus three implicit clocks. "Wall vs relative vs
-instant" is a fork in *which system* you use, not a knob.
-
-Target: one scenario abstraction on two orthogonal axes —
-- *schedule reference*: =relative= (offsets, the general case) or
-  =absolute= (calendar / =HH:MM=; today's day-stages become sugar).
-- *clock driver*: =real= (wall clock; needs real timing / live demos) or
-  =stepped= (the headless ManualClock; deterministic + fast; the home of
-  the "instant" clock — keep it for replaying a day into the reporting
-  API once that lands).
-Authoring is identical across the matrix; the runner picks the clock,
-the schedule ref only changes how cue times resolve.
-
-A scenario = name + schedule + clock + length + seed + sections, every
-section optional, any value may be a lambda (escape hatch):
-=setup= (once at start) · =drive= (continuous sources: timeline on a
-meter/sunlight) · =agents= (in-sim controllers) · =cues= (timed actions)
-· =expect= (assertions) · =record= (CSV). Day-stages are sugar over
-=drive=/=cues=; old driver scripts are =setup=+=drive=+=agents=+=cues=+
-=expect=.
-
-Key implementation insight: a scenario *compiles to* =scenario-start= +
-funcalled setup/drive/agents + =run-with-timer= cues/checks. So the two
-runners are just the existing live refresh loop (real clock) and
-headless =sim_run= (stepped clock) — almost no new runner code.
-
-Already built (on the =scenario-support= work this stacks on): =timeline=
-/ =hold= / =ramp= (I6), =define-controller= + read primitives + clamping
-=set-active-power= (I5), =scenario-expect= + =swctl scenario report
---assert= (I2), =NowSource= / =ManualClock= / =Config::new_headless= /
-=sim_run= (I8), seeded RNG (I7), and the =parse-offset= / =parse-time-of-
-day= helpers. The revamp is the authoring + registry + runner + UI layer
-over this.
-
-*** DONE J1. Unified scenario model + DSL                    :scenarios:rust:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-16 Di 15:11]
-:END:
-
-New =define-scenario= data model (schedule / clock / length / seed +
-setup / drive / agents / cues / expect / record) parsed into a registry
-entry; the section wrappers (=drive-solar= / =drive-meter= / =controller=
-/ =at= / =check= / =event=, resolving human times via =parse-offset= /
-=parse-time-of-day=). Compiles to the existing primitives. Delete the
-=Stage= / =ScenarioDef= day model. Tests.
-
-Done: =define-scenario= now parses the unified two-axis model — =:schedule=
-(=relative=/=absolute=) × =:clock= (=real=/=stepped=) plus =:length= / =:seed=
-and the six optional sections (=setup= / =drive= / =agents= / =cues= / =expect= /
-=record=), each kept as raw forms in =ScenarioDef= for the runner. Section
-wrappers =drive-meter= / =drive-solar= / =controller= / =at= / =check= / =event=
-(=sim/scenarios.lisp=) build that data and resolve human times via a =resolve-time=
-defun (auto-detects =60s= offsets vs =14:00= clock times — tulisp has no
-stringp/numberp to branch on in Lisp). The day-stage =Stage= / =ScenarioDef= /
-auto-advance model and its prev/next/jump endpoints + swctl verbs are deleted;
-=ScenarioView= now reports schedule/clock/length + per-section counts. Running a
-registered scenario is intentionally unwired — that's J2.
-
-*** DONE J2. Runners off the registry                        :scenarios:rust:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-16 Di 15:24]
-:END:
-
-=scenarios::start NAME= compiles a scenario to scenario-start + funcalled
-setup/drive/agents + scheduled run-with-timer cues/checks. Live runner =
-the existing refresh loop fires them in real time; stepped runner =
-headless =sim_run= over the registry (deterministic). Replace the
-stage-advance / jump / prev / next / auto-advance machinery (and drop
-=spawn_auto_advance= from =Config::new=). Tests.
-
-Done: a scenario *compiles* to the existing primitives — no separate runner
-machinery. =scenario--run= (=sim/scenarios.lisp=) emits =scenario-start= +
-funcalled setup/drive/agents + =run-with-timer= cue/check timers; the Rust
-=scenarios::start= reads a registered scenario and evals a quoted
-=(scenario--run …)= call (record-kind resolved Rust-side — tulisp Lisp has no
-stringp/symbolp). The same compile path serves both runners; only the clock
-differs. =Config::run_scenario_stepped= drives it on the headless sim clock for
-the scenario's =:length= (deterministic + faster than real time, the CI gate —
-end-to-end test: a =timeline= drive + two timed =check=s fire as sim-time timers
-and pass in <5 s wall). The live runner is =POST /api/scenarios/{name}/start= on
-the wall clock (timers fire on the refresh loop). =swctl scenario run= is J3; UI
-is J5.
-
-*** DONE J3. swctl + report integration                           :scenarios:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-16 Di 15:37]
-:END:
-
-=swctl scenario run NAME [--stepped] [--until] [--step] [--assert]= and
-=scenario list= over the new registry; keep =scenario report --assert=
-as the CI gate.
-
-Done: =swctl scenario run NAME --stepped --config FILE [--until S] [--step MS]
-[--assert]= boots a headless Config in-process and runs the scenario
-deterministically on a sim clock for its =:length= (or =--until=), prints the
-report, and with =--assert= exits non-zero on a failed check — a serverless CI
-gate (=--stepped= runs locally, since a wall-clock server can't be
-deterministic). Without =--stepped= it fires the scenario on a running server
-(=POST /api/scenarios/{name}/start=). =scenario list= moved onto the singular
-=scenario= subcommand over the new registry; the leftover plural =scenarios=
-group is gone; =scenario report --assert= stays. Config grew a public
-=scenario_report_json= so the out-of-crate runner reads + asserts without
-exposing the internal report type. Known gap: stepped report *aggregate* metrics
-(peak / charged Wh) read 0 — =sim_step= doesn't sample history; =scenario-expect=
-checks read live telemetry so the gate is unaffected.
-
-*** DONE J4. Migrate scenarios + delete old                  :scenarios:rust:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-16 Di 15:55]
-:END:
-
-Rewrite the day-stage scenarios to one =define-scenario= each; remove
-the old stage code, defuns, and the load-to-run path.
-
-Done: the seven day-stage =:stages= library scenarios (which the new
-=define-scenario= rejects — default =config.lisp= boot was broken) are rewritten
-as relative scenarios — opening state in =:setup=, stage transitions as =:cues=
-one a minute via the =at= wrapper (=index.lisp= loads =sim/scenarios.lisp= for
-it). They run as UI-dropdown demos; true time-of-day (absolute-clock) scheduling
-is deferred (J6). A boot test asserts the shipped config registers the library.
-A load-to-run driver script moved from the imperative pattern to a registered
-=define-scenario= (run via =swctl scenario run=). Absolute-schedule live cue
-firing is the remaining runner gap.
-
-*** DONE J5. UI revamp                                         :scenarios:ui:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-17 Mi 08:24]
-:END:
-
-Scenarios mode lists every registered scenario (name / schedule / clock /
-length / last-run pass-fail); per scenario Run-live / Run-headless / Stop;
-a run view with a cue + expectation timeline (fired / passed / failed),
-live metrics, and CSV links. Retire the separate "load a driver file"
-concept.
-
-Done: Scenarios mode rewritten for the unified registry. A list of every
-registered scenario (schedule/clock/length + section counts + a derived last-run
-pass/fail badge) with per-row Run (live) / Stop, and a run view — a
-cue+check timeline coloured fired/passed/failed off the exposed timeline + the
-report ledger, live metrics, the scenario-expect check ledger, an events feed,
-and download links for any recorded CSVs (=GET /api/scenario/csv[/{file}]=,
-traversal-safe). =ScenarioView= gained the cue/check timeline; a name-less
-=POST /api/scenarios/stop= was added. Run-headless stays a swctl/CI concern
-(a live wall-clock server can't be deterministic); the load-a-driver concept is
-retired. biome-clean.
-
-*** DONE J6. Decisions deferred                                   :scenarios:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-17 Mi 08:24]
-:END:
-
-- Absolute+stepped ("replay a day instantly") precise contract — settle
-  once the reporting API (S1) lands.
-- Human-time parser scope — start =ms/s/min/h= + =HH:MM=, grow as needed.
-
-Resolved:
-- Human-time parser scope — *settled and shipped*: =parse-offset= (=ms/s/min/h=,
-  bare number = seconds), =parse-time-of-day= (=HH:MM=), and =resolve-time=
-  (auto-detects offset vs clock time). Grow the grammar only if a scenario needs
-  it.
-- Absolute+stepped ("replay a day instantly") contract — *remains deferred* until
-  the reporting API (S1) lands; the model accommodates it but the precise
-  semantics wait for a real consumer.
-
-Remaining runner gap (not a decision — an implementation follow-up): the runner
-schedules cues/checks as *relative* offsets only, so =:schedule 'absolute= live
-scenarios don't yet fire cues at wall-clock times. The starter library was
-migrated to relative demos, so nothing depends on it today; build absolute-live
-cue resolution when a real time-of-day scenario needs it.
-
 ** D. Downstream-app end-to-end testing in CI
 
 Ship switchyard as a standalone binary (and Docker image) so a downstream
@@ -574,66 +242,6 @@ and gate on the result — exercising the app end-to-end through the real
 frequenz gRPC API rather than a hand-rolled mock. The app under test runs as a
 separate process talking gRPC; switchyard drives the environment and records
 the assertions (=scenario-expect= → =swctl scenario report --assert=).
-
-*** DONE D1. Embed the scenario DSL prelude in the binary          :rust:dsl:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-17 Mi 12:38]
-:END:
-
-Precondition for binary-only distribution. The vocabulary a downstream config
-needs lives in three lisp files loaded by the config today (~478 lines / 21 KB):
-=sim/common.lisp= (=every= / =define-controller= / =reset-state=),
-=sim/defaults.lisp= (the =make-*= wrappers over =%make-*=), and
-=sim/scenarios.lisp= (=timeline= / the section wrappers / the =scenario--run=
-runner). A binary shipping no lisp can't use them, so embed all three.
-
-Mirror tulisp's own prelude (=src/builtin/prelude.lisp=, =include_str!= +
-eval at =TulispContext::new=): rename the trio to *the prelude* and relocate
-to =src/lisp/prelude/{common,defaults,scenarios}.lisp= (embedded crate source,
-distinct from the user-facing =config.lisp= / =scenarios/library/= samples),
-=include_str!= each and eval them at the end of =new_inner=, after the Rust
-defuns + tulisp-async are wired (so =every=/=run-with-timer= exist) and before
-the user config loads. Order: common → scenarios (the runner calls
-=define-controller=); defaults anywhere after the =%make-*= defuns. =define-
-scenario= / =scenario-expect= / =set-*= are already Rust defuns — only the lisp
-wrappers embed. Then drop the =(load "sim/…")= lines from the shipped
-=config.lisp=; keep file-load working as a dev override (re-=defun= on top).
-
-Dependency — getting the spans right: an embedded (no-file-on-disk) prelude
-must eval an in-memory string *under its real filename* so a parse/eval error
-cites =…/prelude/scenarios.lisp=, not =<eval_string>=. tulisp's public eval
-surface today is =eval_string= (no filename) and =eval_file= (reads disk), so
-accurate spans need tulisp to support embedding files — an eval-with-filename
-path. Once it does, pair =concat!(env!("CARGO_MANIFEST_DIR"), "/…")= with
-=include_str!=, per file, as literals (a small macro over literal path tokens —
-not a runtime loop, since =concat!= needs literals).
-
-Done: =Config::new_inner= embeds =sim/{common,defaults,scenarios}.lisp= via
-=include_str!= + =eval_string=, loaded before the user config — a binary with no
-lisp on disk still has the full vocabulary. Minimal + additive (a config that
-still =(load …)=s these files just redefines them on top). Span accuracy +
-=src/lisp/prelude/= relocation are the D9 follow-ups.
-
-*** DONE D2. Machine-readable readiness handshake                  :rust:cli:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-17 Mi 12:38]
-:END:
-
-CI currently scrapes the "gRPC listening" log line to know when to start the app
-and drive the scenario. Emit the chosen endpoints as one JSON line on stdout
-(=--emit-endpoints=) and/or expose a readiness check (gRPC health, or
-=--wait-ready=), so a CI script — or =docker-compose depends_on:
-service_healthy= — can block cleanly. Pairs with ephemeral ports (=:0=) so
-parallel jobs don't collide.
-
-Done: clap parser + bind-then-serve restructure in the =switchyard= bin.
-=--ephemeral-ports= binds the UI + every gRPC listener (per-microgrid, assets,
-dispatch) on an OS-chosen port; =--ui-port= sets a fixed UI port;
-=--emit-endpoints[=PATH]= writes one JSON line of the resolved addresses — the
-readiness signal. gRPC moved to =serve_with_incoming= on pre-bound listeners;
-loopback clients use the resolved gRPC port. Verified: two =--ephemeral-ports=
-instances run in parallel with no clashes, and swctl reaches the ephemeral gRPC
-port. Hosts stay loopback — routable =--*-bind= + its hardening is D3.
 
 *** TODO D3. Routable bind address (deferred — only if cross-container)     :rust:ui:
 
@@ -648,53 +256,23 @@ with a "trusted networks only" startup warning + a lockdown decision (e.g.
 =--no-eval= when bound non-loopback). The cross-origin hardening that used to
 live here is now D10 (worth doing on loopback regardless).
 
-*** DONE D4. Live scenario run --wait (CI gate ergonomics)    :rust:cli:testing:
+*** TODO D5. Distribution + crates.io publish                        :packaging:
 
-A standalone =switchyard ci= verb turned out redundant: the *stepped*
-one-shot already exists (=swctl scenario run --stepped --config --assert=, J3,
-boots headless in-process and gates), and a *live* one-shot can't fold in the
-external app boot (that's the consumer's). So D4 added only the genuinely-
-missing live ergonomic.
+Binary distribution DONE: the Python client ships as a =maturin= platform
+wheel bundling =switchyard= + =swctl= (python/, on python-client), so
+=pip install switchyard= needs no separate binary download. The tulisp family
+is now published to crates.io (=tulisp= 0.29.0, =tulisp-async= / =tulisp-fmt=
+0.1.0) and switchyard depends on them there — the old git-deps blocker is
+cleared.
 
-Done: =swctl scenario run NAME --wait [--until S] [--assert]= — starts the
-scenario on the running server, blocks until it finishes (its =:length=, or
-=--until=), stops it, and with =--assert= gates on the report (exit non-zero on
-any failed check). Collapses the live CI recipe to:
-=switchyard <cfg> --emit-endpoints &= ; <boot the app> ; =swctl scenario run
-NAME --wait --assert=. (Dropped the planned =--format junit=: the exit-code gate
-+ the human-readable FAIL lines cover CI, and per-check JUnit is the consumer's
-own test-runner's job, not switchyard's.)
-
-*** TODO D5. Binary / Docker distribution; publish the tulisp family   :packaging:
-
-Distribute switchyard + swctl as release binaries and a Docker image
-(GPL) that consumers run in CI — no source, no linking. crates.io publishing (if
-wanted) first needs the whole tulisp family (=tulisp=, =tulisp-async=,
-=tulisp-fmt=, all GPL) and the proto build published — git deps aren't allowed on
-crates.io. Also: switchyard has no =license= field / =LICENSE= file yet — set
-=GPL-3.0-or-later= + add the licence text before any publish.
-
-*** DONE D6. Document the recommended E2E test structure               :docs:
-:LOGBOOK:
-- State "DONE"       from "TODO"       [2026-06-17 Mi 13:17]
-:END:
-
-Guidance for consumers: one fixture file per graph (topology defined once + that
-graph's scenarios as =define-scenario= forms); parallelize across cases at the
-CI-job/matrix level — one isolated switchyard + app process pair per
-(graph, scenario) — for true isolation, independent retry, and parallelism over
-the wall-clock-bound (real-time) runs. Sequential-in-one-boot (=scenario run A;
-report --assert; scenario run B; …=, safe because =scenario-start= resets the
-journal per run) is the simpler-infra fallback. Reserve
-multiple-microgrids-in-one-file for genuinely multi-microgrid scenarios, not for
-parallelizing independent cases — see D7.
-
-Done: =docs/e2e-testing.md= (linked from README) — consumer guide covering the
-two modes (headless stepped gate; live end-to-end with the app over gRPC), the
-live CI recipe (=--ephemeral-ports= + =--emit-endpoints= readiness → boot the
-app → =scenario run --wait --assert=), fixture structure (one file per graph,
-CI-matrix parallelism, sequential + multi-mg notes), and the real-time
-determinism guidance.
+Remaining before a public release:
+- Set =GPL-3.0-or-later= + add a =LICENSE= file (Cargo + pyproject); the wheel
+  bundles GPL binaries, so this gates a PyPI *and* a crates.io publish.
+- A per-OS/arch wheel CI matrix (maturin / cibuildwheel) + a Python test/lint
+  job; today only a hand-built linux-x86_64 wheel exists.
+- Optional: a Docker image (GPL) consumers run in CI — no source, no linking.
+- A crates.io publish of switchyard itself also needs the vendored proto build
+  buildable from the published crate (git submodule today).
 
 *** TODO D7. Per-microgrid scenario scope                            :scenarios:
 
@@ -737,6 +315,29 @@ needs no =(load "sim/…")=. Two independent follow-ups, neither urgent:
   break once the files move — which retires prelude hot-reload. So it's a
   deliberate dev-workflow call, not a freebie; left as-is until that tradeoff is
   worth making.
+
+** Y. Python integration-testing library (PyPI)                :python:testing:api:
+
+IMPLEMENTED — on the =python-client= branch (see =python/README.md= and
+=python/src/switchyard/=). A synchronous, pytest-first client that drives
+switchyard the way a downstream control app would: build a topology (nested
+=successors= → =(make-*)= Lisp), launch + manage the process, drive the
+environment, inject faults, read component telemetry over gRPC and graph
+aggregates over the HTTP formulas, and assert settle-aware — plus author
+scenarios in Python and a deterministic serverless gate
+(=run_scenario_stepped=).
+
+Phases Y0–Y8 done: process lifecycle, gRPC + HTTP transport, config builder,
+runtime mutation (=set= / =drive=), settle-aware assertions, scenarios + a
+pytest plugin, and packaging. Shipped as a =maturin= platform wheel bundling
+the =switchyard= + =swctl= binaries (=pip install switchyard= just works);
+uv-native dev; the tulisp family is on crates.io (0.29.0 / 0.1.0).
+
+Deferred follow-ups: an async surface (sync-only today); a per-OS/arch wheel
+CI matrix + PyPI publish (needs =GPL-3.0-or-later= set first — see D5); a
+library↔binary version-compat check; typed wrappers for the dispatch / assets
+APIs and a =timeline(hold/ramp)= drive helper; and deterministic
+app-in-the-loop (a clock-step RPC, ties to D8).
 
 * Review backlog — 2026-06-01
 
