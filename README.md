@@ -126,7 +126,7 @@ gateway intersects bounds for setpoint validation.
 
 - [`docs/e2e-testing.md`](docs/e2e-testing.md) — drive switchyard from a
   downstream app's CI for end-to-end integration tests.
-- [`CLAUDE.md`](CLAUDE.md) — developer notes for this repo.
+- [`AGENTS.md`](AGENTS.md) — developer notes for this repo.
 - [`todo.org`](todo.org) — roadmap + open design questions.
 - [`scenarios/README.md`](scenarios/README.md) — scenario framework
   reference.
