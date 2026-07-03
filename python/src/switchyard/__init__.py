@@ -33,6 +33,14 @@ from .build import (
 from .enums import CommandMode, Health, Metric, Schedule, TelemetryMode
 from .errors import SetpointRejected, SwitchyardError
 from .runtime import MicrogridEndpoint, Site, connect, launch
+from .scenarios import (
+    Check,
+    JournalEvent,
+    Scenario,
+    ScenarioReport,
+    ScenarioRun,
+    run_scenario_stepped,
+)
 
 __all__ = [
     # process + transport
@@ -65,4 +73,11 @@ __all__ = [
     "CommandMode",
     "Metric",
     "Schedule",
+    # scenarios
+    "Scenario",
+    "Check",
+    "ScenarioRun",
+    "ScenarioReport",
+    "JournalEvent",
+    "run_scenario_stepped",
 ]
