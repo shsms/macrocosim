@@ -1,0 +1,44 @@
+name: python
+
+# Lint, format-check, and type-check the Python client under python/.
+# Kept separate from the Rust `ci` workflow and path-filtered so it only
+# runs when the Python package changes.
+on:
+  push:
+    branches: [main]
+    paths: ['python/**', '.github/workflows/python.yml']
+  pull_request:
+    branches: [main]
+    paths: ['python/**', '.github/workflows/python.yml']
+
+defaults:
+  run:
+    working-directory: python
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: python/uv.lock
+
+      # Dev tools + dependencies only. `--no-install-project` skips building
+      # the maturin (Rust) wheel — ruff and ty analyze the source and only
+      # need the dependencies resolvable, so the job stays fast (no cargo,
+      # protoc, or submodules).
+      - name: Sync dev tools
+        run: uv sync --no-install-project
+
+      - name: Ruff lint
+        run: uv run ruff check src tests examples
+
+      - name: Ruff format
+        run: uv run ruff format --check src tests examples
+
+      - name: Type check (ty, all rules as errors)
+        run: uv run ty check --error all src

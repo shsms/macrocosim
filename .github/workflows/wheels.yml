@@ -1,0 +1,103 @@
+name: wheels
+
+# Build the platform wheels (switchyard + swctl bundled via maturin) and an
+# sdist, on demand and on version tags. BUILD-ONLY — no PyPI publish yet: that
+# needs a license (GPL-3.0-or-later) + a PyPI trusted publisher (see todo.org
+# D5). Add a `publish` job gated on `id-token: write` once those are in place.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      # Packaging + Rust manifests — a change here can break the wheel build.
+      # Widen with 'src/**' and 'build.rs' for full build-breakage coverage on
+      # every code PR (at more CI cost: each entry is a full build).
+      - 'python/pyproject.toml'
+      - 'python/uv.lock'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/wheels.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: wheel (${{ matrix.os }} ${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: auto, smoke: true }
+          # Cross-built in an emulated aarch64 manylinux container; the binary
+          # can't run on the x86 host, so skip the smoke there.
+          - { os: ubuntu-latest, target: aarch64, manylinux: auto, smoke: false }
+          - { os: macos-14, target: aarch64, smoke: true }
+          - { os: macos-13, target: x86_64, smoke: true }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive # vendored proto roots
+
+      - name: Install protoc (macOS host)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+          # protoc INSIDE the manylinux container (the host's isn't visible
+          # there) — curl the release, as frequenz-api-microgrid's CI does.
+          before-script-linux: |
+            PB=28.3
+            command -v unzip >/dev/null || { dnf -y install unzip || yum -y install unzip; }
+            curl -sSL -o /tmp/protoc.zip \
+              "https://github.com/protocolbuffers/protobuf/releases/download/v${PB}/protoc-${PB}-linux-$(uname -m).zip"
+            unzip -o /tmp/protoc.zip -d /usr/local
+
+      - name: Set up Python (for the smoke test)
+        if: matrix.smoke
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Smoke-test the wheel
+        if: matrix.smoke
+        run: |
+          python -m pip install --find-links python/dist 'switchyard[grpc]'
+          python - <<'EOF'
+          import switchyard  # noqa: F401
+          from switchyard.runtime import which_binary
+          assert which_binary("switchyard") and which_binary("swctl"), (
+              "bundled binaries not found on PATH"
+          )
+          print("wheel OK: switchyard + swctl bundled and discoverable")
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: python/dist/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: python/dist/*.tar.gz
