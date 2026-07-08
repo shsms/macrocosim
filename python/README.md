@@ -97,7 +97,8 @@ Or use an existing config: `sw.launch("topology.lisp")`.
 
 ```python
 with sw.launch(mg) as site:
-    site.grpc          # first microgrid's gRPC address
+    site.grpc          # first microgrid's gRPC address ("host:port")
+    site.grpc_url      # ... as a "grpc://host:port" URL a client connects with
     site.eval("(...)") # raw Lisp escape hatch
 ```
 
@@ -109,6 +110,27 @@ site.active_power(3)      # Power | None       (component, gRPC)
 site.soc(4)               # Percentage | None  (battery SoC, gRPC)
 site.grid_power()         # Power | None       (/ pv_power() / consumer_power() / …)
 ```
+
+**Energy** — the simulator integrates each power aggregate into a cumulative
+energy stream (server-side), so you can judge what an app *did* over a run:
+
+```python
+site.grid_energy()        # Energy | None  (cumulative, import positive)
+site.battery_energy()     # Energy | None  (/ consumer_energy() / pv_energy())
+```
+
+Assert on them through `expect` (a one-shot check — energy accumulates, so it
+isn't a settling value to poll):
+
+```python
+site.expect.grid_energy(max=Energy.from_kilowatt_hours(15))   # held import down
+site.expect.battery_energy(approx=Energy.from_kilowatt_hours(-8),
+                           tol=Energy.from_kilowatt_hours(1))  # discharge total
+```
+
+Per-component energy is a first-class metric too, assertable from Lisp and the
+scenario framework: `(check "15m" :component 2 :metric 'energy :max 15000.0)` or
+`metric=sw.Metric.ENERGY` on a Python `Scenario.check`.
 
 **Mutate** — reach a component with `site[id]` (or `site.component(id)`), then
 act by *intent*:

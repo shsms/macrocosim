@@ -24,7 +24,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from frequenz.quantities import Percentage, Power
+from frequenz.quantities import Energy, Percentage, Power
 
 from ._http import EvalResult, HttpClient
 from .build import ConfigSource, LaunchConfig, LispRenderable
@@ -74,8 +74,21 @@ class Site:
 
     @property
     def grpc(self) -> str:
-        """gRPC address of the first (default) microgrid."""
+        """``host:port`` of the first (default) microgrid's gRPC API."""
         return next(iter(self.microgrids.values())).grpc
+
+    @property
+    def grpc_url(self) -> str:
+        """The default microgrid's gRPC API as a ``grpc://host:port`` URL.
+
+        The scheme-prefixed form a gRPC client connects with — e.g.
+        ``microgrid.initialize(server_url=site.grpc_url)``.
+        """
+        return f"grpc://{self.grpc}"
+
+    def microgrid_grpc_url(self, mg_id: int) -> str:
+        """A specific microgrid's gRPC API as a ``grpc://host:port`` URL."""
+        return f"grpc://{self.microgrids[mg_id].grpc}"
 
     def _resolve_mg(self, mg_id: int | None) -> int:
         if mg_id is not None:
@@ -94,7 +107,7 @@ class Site:
         if client is None:
             from ._grpc import GrpcClient
 
-            client = GrpcClient(f"grpc://{self.microgrids[mg].grpc}")
+            client = GrpcClient(self.microgrid_grpc_url(mg))
             self._grpc_clients[mg] = client
         return client
 
@@ -213,6 +226,34 @@ class Site:
 
     def battery_power(self, mg_id: int | None = None) -> Power | None:
         return self._power_formula("battery_pool_power", mg_id)
+
+    # --- reads: cumulative energy (integrated server-side from the power
+    # aggregates; signed like the power, so net across the bus) ------------
+
+    def _energy_formula(self, name: str, mg_id: int | None) -> Energy | None:
+        value = self.formula(name, mg_id)
+        return None if value is None else Energy.from_watt_hours(value)
+
+    def grid_energy(self, mg_id: int | None = None) -> Energy | None:
+        """Cumulative net grid energy for the current run (import positive).
+
+        A config hot-reload resets the site and starts a new run, so the
+        total restarts at zero there — not only at launch.
+        """
+        return self._energy_formula("grid_energy", mg_id)
+
+    def consumer_energy(self, mg_id: int | None = None) -> Energy | None:
+        """Cumulative consumer (load) energy for the current run."""
+        return self._energy_formula("consumer_energy", mg_id)
+
+    def pv_energy(self, mg_id: int | None = None) -> Energy | None:
+        """Cumulative PV energy for the current run (production negative)."""
+        return self._energy_formula("pv_energy", mg_id)
+
+    def battery_energy(self, mg_id: int | None = None) -> Energy | None:
+        """Cumulative net battery-pool energy for the current run (discharge
+        negative)."""
+        return self._energy_formula("battery_pool_energy", mg_id)
 
     def eval(self, expr: str, mg_id: int | None = None) -> EvalResult:
         """Evaluate a raw Lisp form on the running interpreter."""

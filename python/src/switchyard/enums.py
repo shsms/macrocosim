@@ -48,6 +48,7 @@ class Metric(StrEnum):
     REACTIVE_POWER = "reactive-power"
     DC_POWER = "dc-power"
     SOC = "soc"
+    ENERGY = "energy"
     FREQUENCY = "frequency"
     ACTIVE_POWER_BOUNDS_LOWER = "active-power-bounds-lower"
     ACTIVE_POWER_BOUNDS_UPPER = "active-power-bounds-upper"

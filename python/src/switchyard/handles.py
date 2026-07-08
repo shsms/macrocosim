@@ -26,11 +26,11 @@ from typing import TYPE_CHECKING, TypeVar
 
 from frequenz.quantities import Quantity
 
-from .assertions import Assertion
+from .assertions import Assertion, _predicate
 from .build import RawLisp, to_lisp_atom
 
 if TYPE_CHECKING:
-    from frequenz.quantities import Percentage, Power
+    from frequenz.quantities import Energy, Percentage, Power
 
     from .build import Component
     from .enums import CommandMode, Health, TelemetryMode
@@ -339,6 +339,107 @@ class MicrogridExpect:
             for_,
             timeout,
             poll,
+        )
+
+    # --- energy assertions (cumulative — a one-shot check, not settling) ---
+
+    def _energy(
+        self,
+        name: str,
+        read: Callable[[], Energy | None],
+        within: tuple[Energy, Energy] | None,
+        approx: Energy | None,
+        tol: Energy | None,
+        max: Energy | None,
+        min: Energy | None,
+    ) -> Energy | None:
+        # Energy accumulates monotonically, so (unlike the power expects) it
+        # isn't a settling signal to poll — read the running total once and
+        # assert the matcher on it.
+        pred, desc = _predicate(within, approx, tol, max, min)
+        value = read()
+        if not pred(value):
+            raise AssertionError(f"{name}: expected {desc}; measured {value}")
+        return value
+
+    def grid_energy(
+        self,
+        *,
+        within: tuple[Energy, Energy] | None = None,
+        approx: Energy | None = None,
+        tol: Energy | None = None,
+        max: Energy | None = None,
+        min: Energy | None = None,
+    ) -> Energy | None:
+        """Assert on cumulative net grid energy (import positive)."""
+        return self._energy(
+            "grid_energy",
+            lambda: self._site.grid_energy(self._mg),
+            within,
+            approx,
+            tol,
+            max,
+            min,
+        )
+
+    def consumer_energy(
+        self,
+        *,
+        within: tuple[Energy, Energy] | None = None,
+        approx: Energy | None = None,
+        tol: Energy | None = None,
+        max: Energy | None = None,
+        min: Energy | None = None,
+    ) -> Energy | None:
+        """Assert on cumulative consumer (load) energy."""
+        return self._energy(
+            "consumer_energy",
+            lambda: self._site.consumer_energy(self._mg),
+            within,
+            approx,
+            tol,
+            max,
+            min,
+        )
+
+    def pv_energy(
+        self,
+        *,
+        within: tuple[Energy, Energy] | None = None,
+        approx: Energy | None = None,
+        tol: Energy | None = None,
+        max: Energy | None = None,
+        min: Energy | None = None,
+    ) -> Energy | None:
+        """Assert on cumulative PV energy (production negative)."""
+        return self._energy(
+            "pv_energy",
+            lambda: self._site.pv_energy(self._mg),
+            within,
+            approx,
+            tol,
+            max,
+            min,
+        )
+
+    def battery_energy(
+        self,
+        *,
+        within: tuple[Energy, Energy] | None = None,
+        approx: Energy | None = None,
+        tol: Energy | None = None,
+        max: Energy | None = None,
+        min: Energy | None = None,
+    ) -> Energy | None:
+        """Assert on cumulative net battery-pool energy (discharge negative)."""
+        return self._energy(
+            "battery_energy",
+            lambda: self._site.battery_energy(self._mg),
+            within,
+            approx,
+            tol,
+            max,
+            min,
         )
 
 
