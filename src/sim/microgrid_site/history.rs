@@ -70,6 +70,11 @@ impl MicrogridSite {
                 (c, snap, bounds)
             })
             .collect();
+        // Snapshot the physics-tick energy integrals (this read lock is
+        // released before `histories` is taken) so the sampler records the
+        // current cumulative total into each component's `EnergyWh` ring
+        // for the UI charts. The integration itself lives in `tick_once`.
+        let energy_totals = self.inner.component_energy.read().clone();
         {
             let mut histories = self.inner.histories.write();
             let mut csv_sinks = self.inner.scenario_csv.write();
@@ -104,6 +109,11 @@ impl MicrogridSite {
                     .or_insert_with(|| ComponentHistory::new(HISTORY_CAPACITY));
                 for (m, v) in entry.push_snapshot(now, snap) {
                     emitted.push((c.id(), m, v));
+                }
+                if let Some(e) = energy_totals.get(&c.id()) {
+                    let wh = e.total_wh as f32;
+                    entry.record(now, Metric::EnergyWh, wh);
+                    emitted.push((c.id(), Metric::EnergyWh, wh));
                 }
             }
         }
@@ -175,6 +185,39 @@ mod tests {
     use crate::sim::component::SimulatedComponent;
     use crate::sim::events::SiteEvent;
     use crate::sim::history::Metric;
+
+    /// A stub reporting a fixed AC active power every tick — enough to
+    /// drive `integrate_energy` without a full component model.
+    struct ConstPower {
+        id: u64,
+        watts: f32,
+    }
+    impl std::fmt::Display for ConstPower {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "const-{}", self.id)
+        }
+    }
+    impl SimulatedComponent for ConstPower {
+        fn id(&self) -> u64 {
+            self.id
+        }
+        fn category(&self) -> crate::sim::Category {
+            crate::sim::Category::Meter
+        }
+        fn name(&self) -> &str {
+            "const"
+        }
+        fn stream_interval(&self) -> Duration {
+            Duration::from_secs(1)
+        }
+        fn tick(&self, _: &MicrogridSite, _: DateTime<Utc>, _: Duration) {}
+        fn telemetry(&self, _: &MicrogridSite) -> crate::sim::Telemetry {
+            crate::sim::Telemetry {
+                active_power_w: Some(self.watts),
+                ..Default::default()
+            }
+        }
+    }
 
     /// Driving `record_history_snapshot` directly populates the
     /// per-component ring buffers. Verified across multiple ticks via
@@ -273,13 +316,19 @@ mod tests {
         w.register(PVStub);
         let mut rx = w.subscribe_events();
         let now = Utc.timestamp_opt(1_000, 0).unwrap();
+        // Integrate energy on the physics tick first so the sampler has a
+        // running EnergyWh total to snapshot into the ring.
+        w.tick_once(now, Duration::from_secs(1));
         w.record_history_snapshot(now);
 
         // Drain the receiver until we've seen one event per emitted
         // metric. There's no inter-event ordering guarantee so we
         // collect into a set keyed by metric.
+        // active_power_w and soc_pct come straight off the snapshot;
+        // energy_wh is the running integral, accrued on the physics tick
+        // above and snapshotted into the ring here — so three events.
         let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
-        for _ in 0..2 {
+        for _ in 0..3 {
             match rx.recv().await.unwrap() {
                 SiteEvent::Sample {
                     id,
@@ -296,5 +345,145 @@ mod tests {
         }
         assert!(seen.contains("active_power_w"));
         assert!(seen.contains("soc_pct"));
+        assert!(seen.contains("energy_wh"));
+    }
+
+    /// Energy integrates on the physics tick, so `component_energy_wh` is
+    /// populated in a headless stepped run that never calls the 1 Hz
+    /// `record_history_snapshot`. (Regression: energy assertions used to
+    /// read an unpopulated history layer under `--stepped`.)
+    #[test]
+    fn tick_integrates_component_energy_without_the_sampler() {
+        let w = MicrogridSite::new();
+        w.register(ConstPower {
+            id: 4,
+            watts: 3600.0,
+        });
+        let t = |s| Utc.timestamp_opt(s, 0).unwrap();
+        // First tick only seeds the integral — no interval yet.
+        w.tick_once(t(0), Duration::from_secs(0));
+        assert_eq!(w.component_energy_wh(4), Some(0.0));
+        // +1 h at a constant 3600 W → 3600 Wh, no history sampler involved.
+        w.tick_once(t(3600), Duration::from_secs(3600));
+        let wh = w.component_energy_wh(4).unwrap();
+        assert!((wh - 3600.0).abs() < 1e-6, "{wh}");
+    }
+
+    /// A battery (no AC active power) never starts integrating, so it has
+    /// no per-component energy — matching the sparse `EnergyWh` metric.
+    #[test]
+    fn battery_without_active_power_has_no_energy() {
+        struct DcOnly;
+        impl std::fmt::Display for DcOnly {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "dc")
+            }
+        }
+        impl SimulatedComponent for DcOnly {
+            fn id(&self) -> u64 {
+                9
+            }
+            fn category(&self) -> crate::sim::Category {
+                crate::sim::Category::Battery
+            }
+            fn name(&self) -> &str {
+                "dc"
+            }
+            fn stream_interval(&self) -> Duration {
+                Duration::from_secs(1)
+            }
+            fn tick(&self, _: &MicrogridSite, _: DateTime<Utc>, _: Duration) {}
+            fn telemetry(&self, _: &MicrogridSite) -> crate::sim::Telemetry {
+                crate::sim::Telemetry {
+                    dc_power_w: Some(5000.0),
+                    ..Default::default()
+                }
+            }
+        }
+        let w = MicrogridSite::new();
+        w.register(DcOnly);
+        let t = |s| Utc.timestamp_opt(s, 0).unwrap();
+        w.tick_once(t(0), Duration::from_secs(0));
+        w.tick_once(t(3600), Duration::from_secs(3600));
+        assert_eq!(w.component_energy_wh(9), None);
+    }
+
+    /// `Health::Error` pauses energy integration: the faulted span is not
+    /// counted (the cursor is dropped and re-seeds on recovery), while the
+    /// healthy spans on either side accrue normally.
+    #[test]
+    fn error_health_pauses_energy_integration() {
+        use crate::sim::runtime::Health;
+        let w = MicrogridSite::new();
+        w.register(ConstPower {
+            id: 4,
+            watts: 3600.0,
+        });
+        let t = |s| Utc.timestamp_opt(s, 0).unwrap();
+        w.tick_once(t(0), Duration::from_secs(0)); // seed
+        w.tick_once(t(3600), Duration::from_secs(3600)); // +3600 Wh
+        // Fault the component: the next span must not be integrated.
+        w.set_health(4, Health::Error);
+        w.tick_once(t(7200), Duration::from_secs(3600)); // cursor dropped
+        // Recover: the first healthy tick re-seeds, so nothing accrued
+        // across the faulted window.
+        w.set_health(4, Health::Ok);
+        w.tick_once(t(10800), Duration::from_secs(3600)); // re-seed
+        w.tick_once(t(14400), Duration::from_secs(3600)); // +3600 Wh
+        let wh = w.component_energy_wh(4).unwrap();
+        assert!((wh - 7200.0).abs() < 1e-6, "{wh}");
+    }
+
+    /// Energy scenario checks read the accrual since `scenario_start`:
+    /// the baseline snapshotted at start is subtracted from the running
+    /// total, so a long-running live server behaves like a fresh
+    /// stepped run.
+    #[test]
+    fn scenario_energy_counts_from_scenario_start() {
+        let w = MicrogridSite::new();
+        w.register(ConstPower {
+            id: 4,
+            watts: 3600.0,
+        });
+        let t = |s| Utc.timestamp_opt(s, 0).unwrap();
+        w.tick_once(t(0), Duration::from_secs(0));
+        w.tick_once(t(3600), Duration::from_secs(3600)); // 3600 Wh pre-scenario
+
+        w.scenario_start("s".into(), t(3600));
+        assert_eq!(w.component_energy_since_scenario_wh(4), Some(0.0));
+
+        w.tick_once(t(7200), Duration::from_secs(3600)); // +3600 Wh during
+        let wh = w.component_energy_since_scenario_wh(4).unwrap();
+        assert!((wh - 3600.0).abs() < 1e-6, "{wh}");
+        // The boot total still carries the full history.
+        let total = w.component_energy_wh(4).unwrap();
+        assert!((total - 7200.0).abs() < 1e-6, "{total}");
+    }
+
+    /// Removing a component mid-scenario drops its energy baseline too:
+    /// a component re-registered under the same id restarts at zero, and
+    /// subtracting the stale baseline would read negative energy.
+    #[test]
+    fn removed_component_drops_its_scenario_energy_baseline() {
+        let w = MicrogridSite::new();
+        w.register(ConstPower {
+            id: 4,
+            watts: 3600.0,
+        });
+        let t = |s| Utc.timestamp_opt(s, 0).unwrap();
+        w.tick_once(t(0), Duration::from_secs(0));
+        w.tick_once(t(3600), Duration::from_secs(3600)); // 3600 Wh
+        w.scenario_start("s".into(), t(3600)); // baseline: 3600 Wh
+
+        w.remove_component(4);
+        w.register(ConstPower {
+            id: 4,
+            watts: 3600.0,
+        });
+        w.tick_once(t(7200), Duration::from_secs(3600)); // seed only
+        w.tick_once(t(10800), Duration::from_secs(3600)); // +3600 Wh
+        let wh = w.component_energy_since_scenario_wh(4).unwrap();
+        assert!(wh >= 0.0, "stale baseline read negative energy: {wh}");
+        assert!((wh - 3600.0).abs() < 1e-6, "{wh}");
     }
 }

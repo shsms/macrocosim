@@ -5,12 +5,15 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use frequenz_microgrid::{Microgrid, MicrogridClientHandle};
 use parking_lot::{Mutex, RwLock};
 use rust_embed::Embed;
 use serde::Serialize;
 use tokio::task::JoinHandle;
+
+use crate::sim::EnergyAccum;
 
 /// Embedded SPA assets. In debug builds rust-embed reads from the
 /// `ui-assets/` folder live (so `cargo run` picks up edits without
@@ -85,6 +88,18 @@ pub struct MicrogridState {
     /// actor stays alive and the forwarders keep recv'ing
     /// indefinitely without explicit abort.
     pub forwarders: Mutex<Vec<JoinHandle<()>>>,
+    /// Running energy integral per aggregate stream (`grid_energy`,
+    /// …). Kept here, *not* in `latest`, precisely because it must
+    /// survive rebuilds: a topology mutation (e.g. `set-meter-power`)
+    /// clears `latest`, but the cumulative energy the run has moved so
+    /// far must not reset to zero. The latest cache re-derives its
+    /// `*_energy` snapshot from this on the next forwarded sample.
+    pub energy: RwLock<HashMap<&'static str, EnergyAccum>>,
+    /// The site run generation the `energy` totals belong to (see
+    /// `MicrogridSite::run_generation`). A rebuild seeing a different
+    /// generation clears the totals: the site was reset by a config
+    /// reload, so they belong to a previous run.
+    pub energy_generation: AtomicU64,
 }
 
 pub type SharedMicrogrid = Arc<MicrogridState>;
@@ -96,6 +111,8 @@ pub fn new_microgrid_slot() -> SharedMicrogrid {
         latest: RwLock::new(HashMap::new()),
         history: RwLock::new(HashMap::new()),
         forwarders: Mutex::new(Vec::new()),
+        energy: RwLock::new(HashMap::new()),
+        energy_generation: AtomicU64::new(0),
     })
 }
 

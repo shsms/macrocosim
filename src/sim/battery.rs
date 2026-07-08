@@ -181,11 +181,21 @@ impl SimulatedComponent for Battery {
         s.power_w = total_p.min(s.effective_upper_w).max(s.effective_lower_w);
         s.reactive_var = total_q;
 
-        // 3. SoC update from settled P. ΔSoC = P · dt / capacity, in %.
+        // 3. SoC update from settled P. First the energy moved this tick:
+        //    the P·dt integral in Wh — related to the per-component
+        //    `EnergyWh` history metric (see history.rs `push_snapshot`), but
+        //    a different quadrature: rectangular over this one fixed physics
+        //    tick's `dt` here, versus trapezoidal over the variable sample
+        //    gap there. Deliberately not the shared `EnergyAccum` — the
+        //    per-tick rectangle is what clamps SoC each step. SoC is that
+        //    energy as a fraction of capacity:
+        //        ΔE[Wh]   = P[W] · dt[s] / 3600
+        //        ΔSoC[%]  = ΔE[Wh] / capacity[Wh] · 100
         //    Clamp at boundaries so unphysical "extra" charge can't
         //    accumulate when the protective taper is disabled.
         if self.cfg.capacity_wh > 0.0 {
-            let delta_soc = s.power_w * dt.as_secs_f32() / 3600.0 / self.cfg.capacity_wh * 100.0;
+            let delta_wh = s.power_w * dt.as_secs_f32() / 3600.0;
+            let delta_soc = delta_wh / self.cfg.capacity_wh * 100.0;
             s.soc_pct = (s.soc_pct + delta_soc).clamp(0.0, 100.0);
         }
     }

@@ -795,6 +795,16 @@ mod tests {
             "t",
             "battery SoC should integrate on sim-time to ~56%",
         );
+        // Energy accrues on the physics tick too, so an energy
+        // scenario-expect resolves in a headless stepped run (regression:
+        // it used to read the never-populated history layer and always
+        // fail). Meter 2 imports 3600 W for ~60 s -> ~60 Wh.
+        assert_eq!(
+            cfg.eval_silent("(scenario-expect :component 2 :metric 'energy :min 40.0 :max 70.0)")
+                .unwrap(),
+            "t",
+            "meter energy should integrate on sim-time in a stepped run",
+        );
     }
 
     /// The shipped `config.lisp` boots cleanly and its starter library

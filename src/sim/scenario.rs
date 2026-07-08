@@ -131,6 +131,12 @@ pub struct ScenarioJournal {
     checks: VecDeque<ScenarioCheck>,
     checks_passed: u64,
     checks_failed: u64,
+    /// Per-component cumulative-energy totals (Wh) snapshotted when the
+    /// scenario started (`MicrogridSite::scenario_start` fills it in).
+    /// Energy checks subtract this baseline, so a check reads energy
+    /// accrued during the scenario, not since boot — a live server that
+    /// ran for hours beforehand behaves like a fresh stepped run.
+    pub energy_baseline_wh: BTreeMap<u64, f64>,
 }
 
 impl ScenarioJournal {
@@ -150,6 +156,7 @@ impl ScenarioJournal {
         self.checks.clear();
         self.checks_passed = 0;
         self.checks_failed = 0;
+        self.energy_baseline_wh.clear();
         // Seed the integration cursor at start so the first
         // snapshot's dt covers `now → snapshot_ts`.
         self.prev_sample_ts = Some(now);

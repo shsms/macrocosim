@@ -23,6 +23,7 @@ use parking_lot::RwLock;
 
 use tokio::sync::broadcast;
 
+use crate::sim::EnergyAccum;
 use crate::sim::component::{Category, ComponentHandle, FIRST_AUTO_ID, SimulatedComponent};
 use crate::sim::events::{EVENT_BUS_CAPACITY, SiteEvent};
 use crate::sim::history::ComponentHistory;
@@ -122,6 +123,16 @@ struct MicrogridSiteInner {
     /// endpoint. Cleared on `reset()` so a hot-reload starts charts
     /// fresh.
     histories: RwLock<HashMap<u64, ComponentHistory>>,
+    /// Per-component cumulative-energy accumulators, advanced on every
+    /// physics `tick_once` from the power the component settled on (so
+    /// `EnergyWh` accrues in both the live server and the headless
+    /// stepped runner, unlike the 1 Hz history sampler). A component in
+    /// `Health::Error` has its cursor dropped so the faulted span isn't
+    /// integrated; a healthy-but-telemetry-silent component keeps
+    /// accruing. Only AC-active-power components get an entry — batteries
+    /// (dc_power only) stay absent, matching the sparse `EnergyWh` metric.
+    /// Cleared on `reset()`.
+    component_energy: RwLock<HashMap<u64, EnergyAccum>>,
     /// Per-component log of incoming setpoint requests + outcome.
     /// Populated by the gRPC server handlers for SetActivePower /
     /// SetReactivePower / AugmentBounds; read by /api/setpoints for
@@ -131,6 +142,11 @@ struct MicrogridSiteInner {
     /// accepted /api/eval (and future programmatic mutations) so UI
     /// tabs know to refetch /api/topology.
     version: AtomicU64,
+    /// Run generation — bumped by `reset()`, which a config hot-reload
+    /// runs before rebuilding the site. Readers holding cumulative state
+    /// derived from this site (the UI's aggregate energy totals) compare
+    /// it to tell a fresh run (clear) from a topology mutation (keep).
+    run_generation: AtomicU64,
     /// Broadcast bus for live UI subscribers. Senders are cheap to
     /// clone; receivers are obtained via `subscribe_events`.
     events: broadcast::Sender<SiteEvent>,
@@ -196,8 +212,10 @@ impl MicrogridSite {
                 runtime: RwLock::new(HashMap::new()),
                 name_overrides: RwLock::new(HashMap::new()),
                 histories: RwLock::new(HashMap::new()),
+                component_energy: RwLock::new(HashMap::new()),
                 setpoint_logs: RwLock::new(HashMap::new()),
                 version: AtomicU64::new(0),
+                run_generation: AtomicU64::new(0),
                 structural_version: AtomicU64::new(0),
                 events: broadcast::channel(EVENT_BUS_CAPACITY).0,
                 timeout_tracker: TimeoutTracker::new(),
@@ -464,6 +482,12 @@ impl MicrogridSite {
         // Default runtime mode: every flag at "Normal" — i.e. emit
         // telemetry, accept commands, report physics-derived state.
         self.inner.runtime.write().entry(id).or_default();
+        // A fresh component starts its energy from zero: drop any leftover
+        // accumulator and scenario baseline under this id (a removal that
+        // raced the physics tick can leave a re-created entry behind, and
+        // its stale cursor would integrate the removal-to-reregister gap).
+        self.inner.component_energy.write().remove(&id);
+        self.inner.scenario.write().energy_baseline_wh.remove(&id);
         ComponentHandle::from_arc(c)
     }
 
@@ -631,12 +655,15 @@ impl MicrogridSite {
     /// tick after reload still has plausible per-phase voltage /
     /// frequency values.
     pub fn reset(&self) {
+        // A reset starts a new run; see `run_generation`.
+        self.inner.run_generation.fetch_add(1, Ordering::Relaxed);
         self.inner.components.write().clear();
         self.inner.by_id.write().clear();
         self.inner.connections.write().clear();
         self.inner.runtime.write().clear();
         self.inner.name_overrides.write().clear();
         self.inner.histories.write().clear();
+        self.inner.component_energy.write().clear();
         self.inner.setpoint_logs.write().clear();
         *self.inner.scenario.write() = ScenarioJournal::default();
         // `clear()` drops every sink; each BufWriter flushes on drop.
@@ -667,6 +694,11 @@ impl MicrogridSite {
             .write()
             .retain(|(p, c)| *p != id && *c != id);
         self.inner.histories.write().remove(&id);
+        self.inner.component_energy.write().remove(&id);
+        // The scenario's energy baseline too: a component re-registered
+        // under this id restarts its accumulator at zero, and subtracting
+        // the old baseline would read negative energy.
+        self.inner.scenario.write().energy_baseline_wh.remove(&id);
         self.inner.runtime.write().remove(&id);
         self.inner.setpoint_logs.write().remove(&id);
         self.inner.name_overrides.write().remove(&id);
@@ -786,9 +818,85 @@ impl MicrogridSite {
     /// before driving `tick_once` should call `Config::refresh_once`.
     pub fn tick_once(&self, now: DateTime<Utc>, dt: Duration) {
         let components = self.inner.components.read().clone();
-        for c in components {
+        for c in &components {
             c.tick(self, now, dt);
         }
+        self.integrate_energy(&components, now);
+    }
+
+    /// Advance each component's cumulative-energy accumulator from the
+    /// power it settled on this tick. Runs on every `tick_once`, so
+    /// `EnergyWh` accrues identically in the live server and the headless
+    /// stepped runner. A component in `Health::Error` has its cursor
+    /// dropped — a faulted device isn't moving real metered energy; a
+    /// healthy but telemetry-silent component keeps accruing, since the
+    /// physics power is real whether or not a sample is being streamed.
+    /// Components carrying no AC active power (batteries) never get an
+    /// entry, matching the sparse `EnergyWh` history metric.
+    fn integrate_energy(&self, components: &[Arc<dyn SimulatedComponent>], now: DateTime<Utc>) {
+        // Gather power + health with no energy lock held: `telemetry()`
+        // re-enters `runtime` / `connections` reads, so snapshotting first
+        // keeps the `component_energy` critical section lock-clean.
+        let samples: Vec<(u64, Option<f32>, Health)> = components
+            .iter()
+            .map(|c| {
+                (
+                    c.id(),
+                    c.telemetry(self).active_power_w,
+                    self.runtime_of(c.id()).health,
+                )
+            })
+            .collect();
+        let ts_ms = now.timestamp_millis();
+        let mut acc = self.inner.component_energy.write();
+        for (id, power, health) in samples {
+            let Some(power_w) = power else { continue };
+            let e = acc.entry(id).or_default();
+            if health == Health::Error {
+                e.reset_cursor();
+            } else {
+                e.advance(power_w, ts_ms);
+            }
+        }
+    }
+
+    /// The running cumulative AC energy (Wh) a component has moved since
+    /// its first tick, or `None` for a component carrying no AC active
+    /// power (e.g. a battery) that never started integrating. Populated
+    /// on the physics tick, so it reads back in both live and stepped
+    /// runs (see `integrate_energy`).
+    pub fn component_energy_wh(&self, id: u64) -> Option<f64> {
+        self.inner
+            .component_energy
+            .read()
+            .get(&id)
+            .map(|e| e.total_wh)
+    }
+
+    /// The cumulative AC energy (Wh) a component has moved since the
+    /// current scenario started: the running total minus the baseline
+    /// `scenario_start` snapshotted. Equal to the full total when no
+    /// scenario has started (empty baseline) or when the component
+    /// first ticked mid-scenario (no baseline entry). `None` when the
+    /// component has no accumulator entry (see `component_energy_wh`).
+    pub fn component_energy_since_scenario_wh(&self, id: u64) -> Option<f64> {
+        let total = self.component_energy_wh(id)?;
+        let base = self
+            .inner
+            .scenario
+            .read()
+            .energy_baseline_wh
+            .get(&id)
+            .copied()
+            .unwrap_or(0.0);
+        Some(total - base)
+    }
+
+    /// The current run generation. `reset()` bumps it; a changed value
+    /// tells a reader that cumulative state gathered before the reset
+    /// belongs to a previous run.
+    pub fn run_generation(&self) -> u64 {
+        self.inner.run_generation.load(Ordering::Relaxed)
     }
 
     /// Spawn the physics loop. Returns immediately. The loop holds an

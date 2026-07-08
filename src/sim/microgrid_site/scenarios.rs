@@ -197,10 +197,20 @@ impl MicrogridSite {
     }
 
     /// Begin a fresh scenario at `now`. Empties the event ring,
-    /// clears the stop marker, sets the name. Used by
-    /// `(scenario-start)`.
+    /// clears the stop marker, sets the name, and snapshots the
+    /// per-component energy totals as the scenario's baseline (energy
+    /// checks read the accrual past it). Used by `(scenario-start)`.
     pub(crate) fn scenario_start(&self, name: String, now: DateTime<Utc>) {
-        self.inner.scenario.write().start(name, now);
+        let baseline: std::collections::BTreeMap<u64, f64> = self
+            .inner
+            .component_energy
+            .read()
+            .iter()
+            .map(|(id, e)| (*id, e.total_wh))
+            .collect();
+        let mut journal = self.inner.scenario.write();
+        journal.start(name, now);
+        journal.energy_baseline_wh = baseline;
     }
 
     /// Mark the scenario as ended at `now`. Also closes any active

@@ -32,6 +32,20 @@ pub enum Metric {
     /// quantity `Power`); kept as its own metric so the inspector
     /// can chart the AC + DC pair side-by-side.
     DcPowerW,
+    /// Cumulative AC active energy (Wh) since the component's first
+    /// sample — the running integral of `ActivePowerW` over wall-clock
+    /// time. Signed with the same convention as active power (import /
+    /// consumption positive, export / supply negative), so the running
+    /// total is the *net* energy across the bus. Integrated on the
+    /// physics tick via the shared trapezoidal accumulator (`EnergyAccum`,
+    /// see `MicrogridSite::tick_once`), so it accrues in both the live
+    /// server and the headless stepped runner; a component in
+    /// `Health::Error` stops accruing until it recovers. The history
+    /// sampler snapshots the running total into this ring for the UI
+    /// charts. A P·dt integral related to the battery SoC one (see
+    /// `battery.rs` `tick`), but a different quadrature — trapezoidal over
+    /// the sample gap here, rectangular over one physics tick there.
+    EnergyWh,
     ActivePowerLowerBoundW,
     ActivePowerUpperBoundW,
     ReactivePowerLowerBoundVar,
@@ -46,6 +60,7 @@ impl Metric {
             Self::FrequencyHz => "frequency_hz",
             Self::SocPct => "soc_pct",
             Self::DcPowerW => "dc_power_w",
+            Self::EnergyWh => "energy_wh",
             Self::ActivePowerLowerBoundW => "active_power_lower_bound_w",
             Self::ActivePowerUpperBoundW => "active_power_upper_bound_w",
             Self::ReactivePowerLowerBoundVar => "reactive_power_lower_bound_var",
@@ -70,6 +85,7 @@ impl Metric {
             | Self::ReactivePowerUpperBoundVar => "ReactivePower",
             Self::FrequencyHz => "Frequency",
             Self::SocPct => "Percentage",
+            Self::EnergyWh => "Energy",
         }
     }
 
@@ -87,6 +103,7 @@ impl Metric {
             | Self::ReactivePowerUpperBoundVar => "var",
             Self::FrequencyHz => "Hz",
             Self::SocPct => "%",
+            Self::EnergyWh => "Wh",
         }
     }
 }
@@ -107,6 +124,7 @@ impl std::str::FromStr for Metric {
             Metric::FrequencyHz,
             Metric::SocPct,
             Metric::DcPowerW,
+            Metric::EnergyWh,
             Metric::ActivePowerLowerBoundW,
             Metric::ActivePowerUpperBoundW,
             Metric::ReactivePowerLowerBoundVar,
@@ -247,6 +265,14 @@ impl ComponentHistory {
             .entry(metric)
             .or_insert_with(|| History::new(self.capacity))
             .push(ts, value);
+    }
+
+    /// Snapshot an externally-integrated cumulative value (the `EnergyWh`
+    /// running total, integrated on the physics tick) into its ring.
+    /// Unlike `push_snapshot`'s instantaneous metrics this value is
+    /// computed elsewhere; recording it here keeps the UI charts fed.
+    pub fn record(&mut self, ts: DateTime<Utc>, metric: Metric, value: f32) {
+        self.push(ts, metric, value);
     }
 
     pub fn get(&self, metric: Metric) -> Option<&History> {

@@ -109,6 +109,11 @@ impl Telemetry {
             Metric::FrequencyHz => self.frequency_hz,
             Metric::SocPct => self.soc_pct,
             Metric::DcPowerW => self.dc_power_w,
+            // Cumulative — integrated on the physics tick and held in the
+            // site's per-component energy accumulator, not on the
+            // instantaneous snapshot. Read it via
+            // `MicrogridSite::component_energy_wh`.
+            Metric::EnergyWh => None,
             Metric::ActivePowerLowerBoundW => self
                 .active_power_bounds
                 .as_ref()

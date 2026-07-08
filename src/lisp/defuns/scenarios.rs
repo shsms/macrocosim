@@ -236,6 +236,7 @@ fn parse_expect_metric(name: &str) -> Option<Metric> {
         "reactive_power" => Metric::ReactivePowerVar,
         "dc_power" => Metric::DcPowerW,
         "soc" => Metric::SocPct,
+        "energy" => Metric::EnergyWh,
         "frequency" => Metric::FrequencyHz,
         "active_power_bounds_lower" => Metric::ActivePowerLowerBoundW,
         "active_power_bounds_upper" => Metric::ActivePowerUpperBoundW,
@@ -377,8 +378,25 @@ pub(super) fn register_lifecycle(
                 ))
             })?;
             let w = r.site();
-            let actual = w.get(id).and_then(|c| c.telemetry(&w).metric_value(metric));
-            let passed = actual.is_some_and(|v| expectation.passes(v as f64));
+            // Energy is cumulative — integrated on the physics tick and held
+            // in the site's per-component accumulator (so it reads back in a
+            // headless stepped run too), not on the instantaneous snapshot.
+            // Checks compare the energy accrued since `scenario-start` (the
+            // baseline the journal snapshotted), so a long-running live
+            // server behaves like a fresh stepped run. Compare on the
+            // full-precision f64; `actual` keeps the f32 the
+            // history/`ScenarioCheck` layer records.
+            let actual;
+            let passed;
+            if metric == Metric::EnergyWh {
+                let e = w.component_energy_since_scenario_wh(id);
+                passed = e.is_some_and(|v| expectation.passes(v));
+                actual = e.map(|v| v as f32);
+            } else {
+                let v = w.get(id).and_then(|c| c.telemetry(&w).metric_value(metric));
+                passed = v.is_some_and(|v| expectation.passes(v as f64));
+                actual = v;
+            }
             w.scenario_record_check(ScenarioCheck {
                 ts: nowsrc.now(),
                 component_id: id,
