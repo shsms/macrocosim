@@ -17,7 +17,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-grpc = ["frequenz-client-microgrid~=0.18"]
+# pytest-asyncio ships here too: the settle-aware `expect` assertions are
+# async, so a suite awaiting them needs it (with `asyncio_mode = "auto"`)
+# to actually run the assertions rather than collect never-awaited coroutines.
+grpc = ["frequenz-client-microgrid~=0.18", "pytest-asyncio>=0.24"]
 
 # Auto-load the pytest fixtures when both packages are installed.
 [project.entry-points.pytest11]
@@ -28,6 +31,7 @@ switchyard = "switchyard.pytest_plugin"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.24",
     "ruff>=0.6",
     "frequenz-client-microgrid~=0.18",
     "ty>=0.0.56",
@@ -51,6 +55,9 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
+# The settle-aware `expect` assertions are async; auto mode runs
+# `async def test_*` without a per-test marker.
+asyncio_mode = "auto"
 # The microgrid client decodes samples through its own deprecated
 # ComponentId (0.18.3 internal inconsistency) — not our code.
 filterwarnings = [

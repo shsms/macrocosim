@@ -7,14 +7,23 @@ or a path to a ``.lisp`` file) and depend on ``switchyard``:
 
     import switchyard as sw
     import pytest
+    from frequenz.quantities import Power
 
     @pytest.fixture
     def switchyard_config():
         return sw.Microgrid(id=1, topology=sw.grid(id=1,
             successors=[sw.meter(id=2, power=7000.0)]))
 
-    def test_grid_holds(switchyard):
-        switchyard.assert_(None).grid_power().eventually(approx="7kW", tol="500")
+    async def test_grid_holds(switchyard):
+        await switchyard.expect.grid_power(
+            approx=Power.from_kilowatts(7), tol=Power.from_watts(500))
+
+The ``expect`` assertions are ``async``, so tests that await them must run
+under ``pytest-asyncio`` (installed with the ``grpc`` extra) with
+``asyncio_mode = "auto"`` in your pyproject/pytest config, or be marked
+``@pytest.mark.asyncio`` individually. Without it pytest collects an
+``async def`` test but never awaits it — the assertion silently never runs
+and the test passes green.
 
 The binary is found via ``SWITCHYARD_BIN`` / ``$PATH`` (or pass one through
 a ``switchyard_bin`` fixture).

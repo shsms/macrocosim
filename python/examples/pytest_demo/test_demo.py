@@ -45,17 +45,19 @@ def switchyard_config():
     )
 
 
-def test_grid_power_holds(switchyard: sw.Site) -> None:
-    switchyard.expect.grid_power(
+async def test_grid_power_holds(switchyard: sw.Site) -> None:
+    await switchyard.expect.grid_power(
         approx=Power.from_kilowatts(7),
         tol=Power.from_kilowatts(1),
         timeout=timedelta(seconds=15),
     )
 
 
-def test_setpoint_then_fault(switchyard: sw.Site) -> None:
+async def test_setpoint_then_fault(switchyard: sw.Site) -> None:
     inv = switchyard.component(3)
     inv.command(active_power=Power.from_kilowatts(2), lifetime=timedelta(seconds=60))
-    inv.expect.active_power(approx=Power.from_kilowatts(2), tol=Power.from_watts(300))
+    await inv.expect.active_power(
+        approx=Power.from_kilowatts(2), tol=Power.from_watts(300)
+    )
     inv.status(health=sw.Health.ERROR)
-    inv.expect.active_power(approx=Power.from_watts(0), tol=Power.from_watts(100))
+    await inv.expect.active_power(approx=Power.from_watts(0), tol=Power.from_watts(100))

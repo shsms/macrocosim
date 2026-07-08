@@ -2,13 +2,17 @@
 
 The live sim is real-time, so assertions read a value repeatedly and check
 a *settled-state invariant with tolerance* rather than a single transient
-sample (see ``docs/e2e-testing.md``). Reach these through the
-handle ``expect`` surfaces (``site.expect`` / ``site[id].expect``):
+sample (see ``docs/e2e-testing.md``). They are ``async`` — each read runs in
+a worker thread (``asyncio.to_thread``) and the polls await between reads, so
+an app under test on the same event loop keeps running while they settle,
+even when a read itself blocks (a sync HTTP round-trip, or a gRPC stream's
+first-sample wait). Reach these through the handle ``expect`` surfaces (``site.expect`` /
+``site[id].expect``):
 
-    site.expect.grid_power(max=Power.from_megawatts(1),
-                           for_=timedelta(seconds=30))
-    site.component(bat).expect.soc(within=(Percentage.from_percent(45),
-                                    Percentage.from_percent(55)))
+    await site.expect.grid_power(max=Power.from_megawatts(1),
+                                 for_=timedelta(seconds=30))
+    await site.component(bat).expect.soc(within=(Percentage.from_percent(45),
+                                         Percentage.from_percent(55)))
 
 ``eventually`` polls until the predicate holds (or the timeout passes);
 ``always`` requires it on every sample across a duration. ``approx`` /
@@ -20,15 +24,13 @@ typed ``frequenz-quantities`` of the metric's kind (``Power`` for power,
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from datetime import timedelta
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from frequenz.quantities import Quantity
-
-if TYPE_CHECKING:
-    pass
 
 Q = TypeVar("Q", bound=Quantity)
 
@@ -72,7 +74,34 @@ class Assertion(Generic[Q]):
         self._read = read
         self._label = label
 
-    def eventually(
+    async def _poll_until(
+        self,
+        keep_polling: Callable[[Q | None], bool],
+        pred: Callable[[Q | None], bool],
+        fail: Callable[[Q | None], str],
+        *,
+        timeout: timedelta,
+        poll: timedelta,
+    ) -> Q | None:
+        """Re-read while ``keep_polling`` holds and the timeout hasn't passed,
+        then check ``pred`` on the final value. Each read runs in a worker
+        thread and the loop awaits between reads, so an app under test on the
+        same event loop keeps running — even when a read blocks. Raises
+        ``AssertionError(fail(value))`` on a miss. Shared by ``eventually``
+        (poll until the matcher passes) and ``once`` (poll only until a value
+        is available, then check the matcher a single time).
+        """
+        deadline = time.monotonic() + timeout.total_seconds()
+        interval = poll.total_seconds()
+        value = await asyncio.to_thread(self._read)
+        while keep_polling(value) and time.monotonic() < deadline:
+            await asyncio.sleep(interval)
+            value = await asyncio.to_thread(self._read)
+        if not pred(value):
+            raise AssertionError(fail(value))
+        return value
+
+    async def eventually(
         self,
         *,
         within: tuple[Q, Q] | None = None,
@@ -83,24 +112,26 @@ class Assertion(Generic[Q]):
         timeout: timedelta = timedelta(seconds=10),
         poll: timedelta = _DEFAULT_POLL,
     ) -> Q | None:
-        """Poll until the predicate holds, or fail at ``timeout``."""
-        pred, desc = _predicate(within, approx, tol, max, min)
-        deadline = time.monotonic() + timeout.total_seconds()
-        interval = poll.total_seconds()
-        value = self._read()
-        while not pred(value) and time.monotonic() < deadline:
-            time.sleep(interval)
-            value = self._read()
-        if not pred(value):
-            raise AssertionError(
-                f"{self._label}: expected {desc} within {timeout}; last read {value}"
-            )
-        return value
+        """Poll until the predicate holds, or fail at ``timeout``.
 
-    def always(
+        Awaits between reads, so an app under test running on the same event
+        loop keeps making progress while this settles.
+        """
+        pred, desc = _predicate(within, approx, tol, max, min)
+        return await self._poll_until(
+            lambda v: not pred(v),
+            pred,
+            lambda v: f"{self._label}: expected {desc} within {timeout}; last read {v}",
+            timeout=timeout,
+            poll=poll,
+        )
+
+    async def always(
         self,
         *,
         within: tuple[Q, Q] | None = None,
+        approx: Q | None = None,
+        tol: Q | None = None,
         max: Q | None = None,
         min: Q | None = None,
         for_: timedelta = timedelta(seconds=2),
@@ -113,13 +144,14 @@ class Assertion(Generic[Q]):
         not yet published, or a transient miss) are skipped, not treated as a
         breach — only a real out-of-bounds value fails.
         """
-        pred, desc = _predicate(within, None, None, max, min)
-        self._read()  # prime: pay any stream-open latency before the window
+        pred, desc = _predicate(within, approx, tol, max, min)
+        # Prime: pay any stream-open latency before the window.
+        await asyncio.to_thread(self._read)
         end = time.monotonic() + for_.total_seconds()
         interval = poll.total_seconds()
         series: list[Q | None] = []
         while time.monotonic() < end:
-            value = self._read()
+            value = await asyncio.to_thread(self._read)
             if value is not None:
                 series.append(value)
                 if not pred(value):
@@ -127,12 +159,43 @@ class Assertion(Generic[Q]):
                         f"{self._label}: {desc} broke at {value} after "
                         f"{len(series)} sample(s); series={series}"
                     )
-            time.sleep(interval)
+            await asyncio.sleep(interval)
         return series
+
+    async def once(
+        self,
+        *,
+        within: tuple[Q, Q] | None = None,
+        approx: Q | None = None,
+        tol: Q | None = None,
+        max: Q | None = None,
+        min: Q | None = None,
+        timeout: timedelta = timedelta(seconds=5),
+        poll: timedelta = _DEFAULT_POLL,
+    ) -> Q | None:
+        """Check the matcher on a single reading, once the value is available.
+
+        For a cumulative / monotonic signal (e.g. energy) that should be
+        asserted *at a point* rather than settled to: unlike ``eventually``
+        this does not poll the matcher — polling a monotonic value against a
+        ``max`` would pass early then break as it grows. It polls only the
+        value's *availability*, awaiting up to ``timeout`` for the first
+        non-``None`` reading (the stream may not have published yet just
+        after launch, or right after a topology rebuild cleared the cache),
+        then checks the matcher exactly once.
+        """
+        pred, desc = _predicate(within, approx, tol, max, min)
+        return await self._poll_until(
+            lambda v: v is None,
+            pred,
+            lambda v: f"{self._label}: expected {desc}; measured {v}",
+            timeout=timeout,
+            poll=poll,
+        )
 
     # --- settle-then-check shorthands (bounded poll, then assert) ---------
 
-    def approx(
+    async def approx(
         self,
         expected: Q,
         *,
@@ -140,31 +203,31 @@ class Assertion(Generic[Q]):
         timeout: timedelta = timedelta(seconds=5),
         poll: timedelta = _DEFAULT_POLL,
     ) -> Q | None:
-        return self.eventually(approx=expected, tol=tol, timeout=timeout, poll=poll)
+        return await self.eventually(approx=expected, tol=tol, timeout=timeout, poll=poll)
 
-    def within(
+    async def within(
         self,
         bounds: tuple[Q, Q],
         *,
         timeout: timedelta = timedelta(seconds=5),
         poll: timedelta = _DEFAULT_POLL,
     ) -> Q | None:
-        return self.eventually(within=bounds, timeout=timeout, poll=poll)
+        return await self.eventually(within=bounds, timeout=timeout, poll=poll)
 
-    def max(
+    async def max(
         self,
         ceiling: Q,
         *,
         timeout: timedelta = timedelta(seconds=5),
         poll: timedelta = _DEFAULT_POLL,
     ) -> Q | None:
-        return self.eventually(max=ceiling, timeout=timeout, poll=poll)
+        return await self.eventually(max=ceiling, timeout=timeout, poll=poll)
 
-    def min(
+    async def min(
         self,
         floor: Q,
         *,
         timeout: timedelta = timedelta(seconds=5),
         poll: timedelta = _DEFAULT_POLL,
     ) -> Q | None:
-        return self.eventually(min=floor, timeout=timeout, poll=poll)
+        return await self.eventually(min=floor, timeout=timeout, poll=poll)

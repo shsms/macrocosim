@@ -9,6 +9,7 @@ exercise it the way an integration test would.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 from frequenz.quantities import Energy, Percentage, Power
@@ -47,27 +48,31 @@ TOPOLOGY = sw.Microgrid(
 )
 
 
-def main() -> None:
+async def main() -> None:
     with sw.launch(TOPOLOGY) as site:
         # Command a battery-inverter setpoint, then trip it offline.
         inv = site.component(3)
         inv.command(active_power=Power.from_kilowatts(2), lifetime=timedelta(seconds=60))
-        inv.expect.active_power(approx=Power.from_kilowatts(2), tol=Power.from_watts(300))
+        await inv.expect.active_power(
+            approx=Power.from_kilowatts(2), tol=Power.from_watts(300)
+        )
         print("OK  inverter holding 2 kW")
 
         inv.status(health=sw.Health.ERROR)
-        inv.expect.active_power(approx=Power.from_watts(0), tol=Power.from_watts(100))
+        await inv.expect.active_power(
+            approx=Power.from_watts(0), tol=Power.from_watts(100)
+        )
         print("OK  fault injected — inverter tripped to ~0 W")
 
         # Drive the environment and assert the aggregates react.
         site.component(6).drive(power=Power.from_kilowatts(3))
-        site.component(6).expect.active_power(
+        await site.component(6).expect.active_power(
             approx=Power.from_kilowatts(3), tol=Power.from_watts(300)
         )
         site.component(5).drive(sunlight=Percentage.from_percent(0))
-        site.expect.pv_power(approx=Power.from_watts(0), tol=Power.from_watts(200))
+        await site.expect.pv_power(approx=Power.from_watts(0), tol=Power.from_watts(200))
         print("OK  drove load to 3 kW and PV to 0")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

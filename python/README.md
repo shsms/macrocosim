@@ -13,7 +13,7 @@ from datetime import timedelta
 from frequenz.quantities import Energy, Percentage, Power
 import switchyard as sw
 
-def test_limiter_holds_import_cap():
+async def test_limiter_holds_import_cap():
     bat = sw.battery(id=4, capacity=Energy.from_kilowatt_hours(92),
                      soc=Percentage.from_percent(50))
     inv = sw.battery_inverter(id=3, successors=[bat],
@@ -23,9 +23,9 @@ def test_limiter_holds_import_cap():
 
     with sw.launch(mg) as site:
         site.component(inv).status(health=sw.Health.ERROR)            # fault injection
-        site.component(inv).expect.active_power(
+        await site.component(inv).expect.active_power(
             approx=Power.from_watts(0), tol=Power.from_watts(100))
-        site.component(bat).expect.soc(
+        await site.component(bat).expect.soc(
             within=(Percentage.from_percent(45), Percentage.from_percent(55)))
 ```
 
@@ -123,9 +123,9 @@ Assert on them through `expect` (a one-shot check — energy accumulates, so it
 isn't a settling value to poll):
 
 ```python
-site.expect.grid_energy(max=Energy.from_kilowatt_hours(15))   # held import down
-site.expect.battery_energy(approx=Energy.from_kilowatt_hours(-8),
-                           tol=Energy.from_kilowatt_hours(1))  # discharge total
+await site.expect.grid_energy(max=Energy.from_kilowatt_hours(15))   # held import down
+await site.expect.battery_energy(approx=Energy.from_kilowatt_hours(-8),
+                                 tol=Energy.from_kilowatt_hours(1))  # discharge total
 ```
 
 Per-component energy is a first-class metric too, assertable from Lisp and the
@@ -151,21 +151,24 @@ raises `sw.SetpointRejected` (the production behaviour under test); `fault` /
 `drive` are test-side stimuli.
 
 **Assert** — settle-aware `expect`, on a component (`site[id].expect`) or a
-microgrid aggregate (`site.expect`):
+microgrid aggregate (`site.expect`). The settle-aware assertions are `async`
+(they `await` between polls, so an app under test on the same event loop keeps
+running); the cumulative-energy ones are one-shot but `async` too, for a
+uniform surface:
 
 ```python
-site[3].expect.active_power(
+await site[3].expect.active_power(
     approx=Power.from_kilowatts(2), tol=Power.from_watts(300),
     timeout=timedelta(seconds=15))
-site.expect.grid_power(
+await site.expect.grid_power(
     max=Power.from_megawatts(1), for_=timedelta(seconds=30))
-site[4].expect.soc(
+await site[4].expect.soc(
     within=(Percentage.from_percent(45), Percentage.from_percent(55)))
 ```
 
-`expect.<metric>(…)` polls until the matcher holds; pass `for_=` to require it
-on every sample across a duration instead. Matchers: `approx`+`tol`, `within`,
-`max`, `min`.
+`await expect.<metric>(…)` polls until the matcher holds; pass `for_=` to
+require it on every sample across a duration instead. Matchers: `approx`+`tol`,
+`within`, `max`, `min`.
 
 **Scenarios** — author in Python, or run a registered Lisp scenario:
 
@@ -186,17 +189,23 @@ sw.run_scenario_stepped([mg, scn], "cloud-fade")
 def switchyard_config():
     return mg
 
-def test_grid_holds(switchyard):
-    switchyard.expect.grid_power(
+async def test_grid_holds(switchyard):
+    await switchyard.expect.grid_power(
         approx=Power.from_kilowatts(7), tol=Power.from_watts(500))
 
 @pytest.mark.switchyard_scenario("cloud-fade")   # runs + gates after the test
 def test_scenario(switchyard): ...
 ```
 
+The `expect` assertions are `async`, so awaiting them needs `pytest-asyncio`
+(installed with the `grpc` extra) and `asyncio_mode = "auto"` in your pytest
+config — otherwise an `async def` test is collected but never awaited, and the
+assertion silently never runs.
+
 ## Status
 
 Early but functional end to end — see `todo.org` §Y in the switchyard repo
-for the design and roadmap. The public API is synchronous (pytest-first);
-an async surface is a planned follow-up. Runnable `examples/` cover each
+for the design and roadmap. Building, launching, reading and mutating are
+synchronous; the settle-aware `expect` assertions are `async` (so they compose
+with an app under test on the same event loop). Runnable `examples/` cover each
 piece; `examples/pytest_demo/` is a live suite.

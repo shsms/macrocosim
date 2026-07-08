@@ -42,17 +42,67 @@ class _EnergyStub:
         return self._e
 
 
-def test_expect_grid_energy_passes_within_matcher() -> None:
+async def test_expect_grid_energy_passes_within_matcher() -> None:
     expect = MicrogridExpect(_EnergyStub(66.0), None)  # type: ignore[arg-type]
-    assert expect.grid_energy(max=Energy.from_watt_hours(100)) == (
+    assert await expect.grid_energy(max=Energy.from_watt_hours(100)) == (
         Energy.from_watt_hours(66.0)
     )
 
 
-def test_expect_grid_energy_raises_when_over_cap() -> None:
+async def test_expect_grid_energy_raises_when_over_cap() -> None:
     expect = MicrogridExpect(_EnergyStub(150.0), None)  # type: ignore[arg-type]
     with pytest.raises(AssertionError):
-        expect.grid_energy(max=Energy.from_watt_hours(100))
+        await expect.grid_energy(max=Energy.from_watt_hours(100))
+
+
+class _EnergySite:
+    """A stand-in site returning a distinct fixed energy per stream, so a
+    test can tell whether an expect reads the stream it names."""
+
+    def __init__(self, **wh: float) -> None:
+        self._wh = {k: Energy.from_watt_hours(v) for k, v in wh.items()}
+
+    def grid_energy(self, _mg: int | None = None) -> Energy | None:
+        return self._wh.get("grid")
+
+    def consumer_energy(self, _mg: int | None = None) -> Energy | None:
+        return self._wh.get("consumer")
+
+    def pv_energy(self, _mg: int | None = None) -> Energy | None:
+        return self._wh.get("pv")
+
+    def battery_energy(self, _mg: int | None = None) -> Energy | None:
+        return self._wh.get("battery")
+
+
+async def test_expect_consumer_energy_reads_its_own_stream() -> None:
+    # grid carries a large value; a `max` on consumer must read consumer,
+    # not spill over onto grid.
+    expect = MicrogridExpect(_EnergySite(grid=9999.0, consumer=50.0), None)  # type: ignore[arg-type]
+    assert await expect.consumer_energy(max=Energy.from_watt_hours(100)) == (
+        Energy.from_watt_hours(50.0)
+    )
+
+
+async def test_expect_pv_energy_within_matcher_negative() -> None:
+    # PV production is signed negative.
+    expect = MicrogridExpect(_EnergySite(pv=-30.0), None)  # type: ignore[arg-type]
+    assert await expect.pv_energy(
+        within=(Energy.from_watt_hours(-40), Energy.from_watt_hours(-20))
+    ) == Energy.from_watt_hours(-30.0)
+
+
+async def test_expect_battery_energy_approx_matcher() -> None:
+    expect = MicrogridExpect(_EnergySite(battery=-8000.0), None)  # type: ignore[arg-type]
+    assert await expect.battery_energy(
+        approx=Energy.from_kilowatt_hours(-8), tol=Energy.from_watt_hours(100)
+    ) == Energy.from_watt_hours(-8000.0)
+
+
+async def test_expect_battery_energy_raises_under_floor() -> None:
+    expect = MicrogridExpect(_EnergySite(battery=-50.0), None)  # type: ignore[arg-type]
+    with pytest.raises(AssertionError):
+        await expect.battery_energy(min=Energy.from_watt_hours(0))
 
 
 def test_energy_metric_renders_to_lisp_symbol() -> None:

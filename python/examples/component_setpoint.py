@@ -10,6 +10,7 @@ the grpc extra installed (``pip install -e '.[grpc]'``):
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 from frequenz.quantities import Energy, Percentage, Power
@@ -44,7 +45,7 @@ TOPOLOGY = sw.Microgrid(
 )
 
 
-def main() -> None:
+async def main() -> None:
     with sw.launch(TOPOLOGY) as site:
         for c in site.components():
             print(f"  {c.category:20} id={c.id} name={c.name}")
@@ -52,12 +53,12 @@ def main() -> None:
         # Command a setpoint over gRPC and assert it settles.
         inv = site.component(INVERTER)
         inv.command(active_power=Power.from_kilowatts(2), lifetime=timedelta(seconds=60))
-        inv.expect.active_power(
+        await inv.expect.active_power(
             approx=Power.from_kilowatts(2),
             tol=Power.from_watts(300),
             timeout=timedelta(seconds=15),
         )
-        site.component(4).expect.soc(
+        await site.component(4).expect.soc(
             within=(Percentage.from_percent(49), Percentage.from_percent(51))
         )  # battery still ~50 %
         print("OK  setpoint settled at ~2 kW; battery SoC ~50 %")
@@ -74,4 +75,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
