@@ -10,6 +10,8 @@ from typing import Any, TypedDict
 
 import httpx
 
+from .errors import ControlRejected
+
 
 class EvalResult(TypedDict, total=False):
     """Parsed ``/api/eval`` response. ``ok`` is False (with ``error`` set) when
@@ -18,6 +20,17 @@ class EvalResult(TypedDict, total=False):
     ok: bool
     value: Any
     error: str
+
+
+def control_path(component_id: int, action: str, mg_id: int | None) -> str:
+    """The control endpoint for one component action (``status``/``drive``).
+
+    One place builds the route for both client flavors, so a route change
+    on the server cannot be missed in one of them.
+    """
+    if mg_id is None:
+        return f"/api/component/{component_id}/{action}"
+    return f"/api/mg/{mg_id}/component/{component_id}/{action}"
 
 
 class HttpClient:
@@ -34,6 +47,23 @@ class HttpClient:
 
     def post(self, path: str, content: str = "") -> Any:
         resp = self._client.post(path, content=content)
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}
+
+    def control(self, path: str, payload: dict[str, Any]) -> Any:
+        """POST a typed control request; a 4xx rejection raises.
+
+        The control endpoints report rejections as structured JSON
+        (``{"error": ...}``) with a 400/404 status — turn that into
+        :class:`ControlRejected` so a rejection can never silently no-op.
+        """
+        resp = self._client.post(path, json=payload)
+        if 400 <= resp.status_code < 500:
+            try:
+                error = resp.json().get("error", resp.text)
+            except ValueError:
+                error = resp.text
+            raise ControlRejected(error)
         resp.raise_for_status()
         return resp.json() if resp.content else {}
 

@@ -181,15 +181,20 @@ class ComponentHandle:
         telemetry_mode: TelemetryMode | None = None,
     ) -> ComponentHandle:
         """Set the component's operational status — its reported health and its
-        command / telemetry channel modes (this is how you inject faults)."""
+        command / telemetry channel modes (this is how you inject faults).
+
+        Goes over the typed control API; an unknown component or a bad
+        value raises ``ControlRejected``.
+        """
+        payload: dict[str, str] = {}
         if health is not None:
-            self._eval(f"(set-component-health {self._id} {to_lisp_atom(health)})")
+            payload["health"] = health.value
         if command_mode is not None:
-            mode = to_lisp_atom(command_mode)
-            self._eval(f"(set-component-command-mode {self._id} {mode})")
+            payload["command_mode"] = command_mode.value
         if telemetry_mode is not None:
-            mode = to_lisp_atom(telemetry_mode)
-            self._eval(f"(set-component-telemetry-mode {self._id} {mode})")
+            payload["telemetry_mode"] = telemetry_mode.value
+        if payload:
+            self._site.control_component(self._id, "status", payload, self._mg)
         return self
 
     def drive(
@@ -198,11 +203,21 @@ class ComponentHandle:
         power: Power | RawLisp | None = None,
         sunlight: Percentage | None = None,
     ) -> ComponentHandle:
-        """Drive the environment: a meter's published power, a PV's sunlight."""
-        if power is not None:
+        """Drive the environment: a meter's published power, a PV's sunlight.
+
+        Constant values go over the typed control API (rejections raise
+        ``ControlRejected``); a ``RawLisp`` power (a lambda or symbol,
+        re-resolved every tick) still goes through ``/api/eval``.
+        """
+        payload: dict[str, float] = {}
+        if isinstance(power, RawLisp):
             self._eval(f"(set-meter-power {self._id} {to_lisp_atom(power)})")
+        elif power is not None:
+            payload["power_w"] = power.as_watts()
         if sunlight is not None:
-            self._eval(f"(set-solar-sunlight {self._id} {to_lisp_atom(sunlight)})")
+            payload["sunlight_pct"] = sunlight.as_percent()
+        if payload:
+            self._site.control_component(self._id, "drive", payload, self._mg)
         return self
 
     def active_power(self) -> Power | None:

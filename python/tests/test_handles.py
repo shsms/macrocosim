@@ -3,25 +3,35 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from frequenz.quantities import Percentage, Power
 
 from switchyard.build import raw
 from switchyard.enums import CommandMode, Health, TelemetryMode
+from switchyard.errors import ControlRejected
 from switchyard.handles import ComponentHandle
 
 
 class FakeSite:
     def __init__(self) -> None:
         self.evals: list[str] = []
-        self.eval_result: dict = {"ok": True}
+        self.controls: list[tuple[int, str, dict[str, Any]]] = []
+        self.reject_controls: str | None = None
         self.setpoints: list[tuple[int, float, float | None]] = []
         self.bounds: list[tuple[int, float, float]] = []
 
     def eval(self, expr: str, mg_id: int | None = None) -> dict:
         self.evals.append(expr)
-        return self.eval_result
+        return {"ok": True}
+
+    def control_component(
+        self, cid: int, action: str, payload: dict[str, Any], mg_id=None
+    ) -> None:
+        if self.reject_controls is not None:
+            raise ControlRejected(self.reject_controls)
+        self.controls.append((cid, action, payload))
 
     def set_active_power(
         self, cid: int, power: Power, *, lifetime: timedelta | None = None, mg_id=None
@@ -39,25 +49,27 @@ def _h(site: FakeSite, cid: int = 3) -> ComponentHandle:
     return ComponentHandle(site, cid)
 
 
-def test_status_emits_symbols() -> None:
+def test_status_posts_typed_payloads() -> None:
     w = FakeSite()
     _h(w).status(health=Health.ERROR)
-    _h(w).status(command_mode=CommandMode.TIMEOUT)
-    _h(w).status(telemetry_mode=TelemetryMode.SILENT)
-    assert w.evals == [
-        "(set-component-health 3 'error)",
-        "(set-component-command-mode 3 'timeout)",
-        "(set-component-telemetry-mode 3 'silent)",
+    _h(w).status(command_mode=CommandMode.TIMEOUT, telemetry_mode=TelemetryMode.SILENT)
+    assert w.controls == [
+        (3, "status", {"health": "error"}),
+        (3, "status", {"command_mode": "timeout", "telemetry_mode": "silent"}),
     ]
+    assert w.evals == []  # stimuli no longer go through eval
 
 
-def test_status_and_drive_raise_on_rejected_eval() -> None:
-    # /api/eval reports interpreter errors as HTTP 200 + ok:false — they
+def test_rejected_control_raises() -> None:
+    # The control endpoints report rejections as structured errors — they
     # must raise, not silently no-op the stimulus.
     w = FakeSite()
-    w.eval_result = {"ok": False, "error": "set-meter-power: component 3 not found"}
-    with pytest.raises(ValueError, match="not found"):
+    w.reject_controls = "component 3 not found"
+    with pytest.raises(ControlRejected, match="not found"):
         _h(w).drive(power=Power.from_watts(100))
+    with pytest.raises(ValueError, match="not found"):
+        # Still catchable as the historic ValueError.
+        _h(w).status(health=Health.ERROR)
 
 
 def test_command_setpoint_and_bounds_go_grpc() -> None:
@@ -66,17 +78,20 @@ def test_command_setpoint_and_bounds_go_grpc() -> None:
     _h(w).command(bounds=(Power.from_kilowatts(-1), Power.from_kilowatts(1)))
     assert w.setpoints == [(3, 2000.0, 30.0)]
     assert w.bounds == [(3, -1000.0, 1000.0)]
-    assert w.evals == []  # gateway commands don't touch eval
+    assert w.controls == []  # gateway commands don't touch the control API
 
 
-def test_drive_power_units_and_raw() -> None:
+def test_drive_constants_go_typed_and_raw_goes_eval() -> None:
     w = FakeSite()
     _h(w, 6).drive(power=Power.from_megawatts(2))
     _h(w, 6).drive(power=Power.from_watts(-5000))
+    # A dynamic source (lambda / symbol) still needs the Lisp escape hatch.
     _h(w, 6).drive(power=raw("(lambda () (+ 1000.0 (random 500)))"))
+    assert w.controls == [
+        (6, "drive", {"power_w": 2000000.0}),
+        (6, "drive", {"power_w": -5000.0}),
+    ]
     assert w.evals == [
-        "(set-meter-power 6 2000000.0)",
-        "(set-meter-power 6 -5000.0)",
         "(set-meter-power 6 (lambda () (+ 1000.0 (random 500))))",
     ]
 
@@ -84,7 +99,7 @@ def test_drive_power_units_and_raw() -> None:
 def test_drive_sunlight() -> None:
     w = FakeSite()
     _h(w, 5).drive(sunlight=Percentage.from_percent(30))
-    assert w.evals == ["(set-solar-sunlight 5 30.0)"]
+    assert w.controls == [(5, "drive", {"sunlight_pct": 30.0})]
 
 
 def test_handle_methods_chain() -> None:

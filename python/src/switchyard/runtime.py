@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from frequenz.quantities import Energy, Percentage, Power
 
-from ._http import EvalResult, HttpClient
+from ._http import EvalResult, HttpClient, control_path
 from ._process import spawn_switchyard, terminate, which_binary
 from .build import LaunchConfig
 from .errors import EvalRejected
@@ -274,6 +274,19 @@ class Site:
     def eval(self, expr: str, mg_id: int | None = None) -> EvalResult:
         """Evaluate a raw Lisp form on the running interpreter."""
         return self._http.eval(expr, mg_id)
+
+    def control_component(
+        self,
+        component_id: int,
+        action: str,
+        payload: dict[str, Any],
+        mg_id: int | None = None,
+    ) -> None:
+        """POST a typed control request (``status`` / ``drive``) for a component.
+
+        Rejections (unknown id, bad value) raise ``ControlRejected``.
+        """
+        self._http.control(control_path(component_id, action, mg_id), payload)
 
     def scenario(self, name: str) -> ScenarioRun:
         """Handle onto a registered ``(define-scenario …)`` for run/report."""

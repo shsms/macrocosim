@@ -309,6 +309,24 @@ class Site:
             raise EvalRejected(f"eval of {expr!r} failed: {result.get('error')}")
         return result
 
+    async def control_component(
+        self,
+        component_id: int,
+        action: str,
+        payload: dict[str, Any],
+        mg_id: int | None = None,
+    ) -> None:
+        """POST a typed control request (``status`` / ``drive``) for a component.
+
+        Rejections (unknown id, bad value) raise ``ControlRejected``.
+        """
+        path = (
+            f"/api/component/{component_id}/{action}"
+            if mg_id is None
+            else f"/api/mg/{mg_id}/component/{component_id}/{action}"
+        )
+        await self._http.control(path, payload)
+
     # --- scenarios --------------------------------------------------------------
 
     def scenario(self, name: str) -> ScenarioRun:
@@ -391,21 +409,20 @@ class ComponentHandle:
         command_mode: CommandMode | None = None,
         telemetry_mode: TelemetryMode | None = None,
     ) -> None:
-        """Set the component's operational status (fault injection)."""
+        """Set the component's operational status (fault injection).
+
+        Goes over the typed control API; an unknown component or a bad
+        value raises ``ControlRejected``.
+        """
+        payload: dict[str, str] = {}
         if health is not None:
-            await self._site._eval_ok(
-                f"(set-component-health {self._id} {to_lisp_atom(health)})", self._mg
-            )
+            payload["health"] = health.value
         if command_mode is not None:
-            mode = to_lisp_atom(command_mode)
-            await self._site._eval_ok(
-                f"(set-component-command-mode {self._id} {mode})", self._mg
-            )
+            payload["command_mode"] = command_mode.value
         if telemetry_mode is not None:
-            mode = to_lisp_atom(telemetry_mode)
-            await self._site._eval_ok(
-                f"(set-component-telemetry-mode {self._id} {mode})", self._mg
-            )
+            payload["telemetry_mode"] = telemetry_mode.value
+        if payload:
+            await self._site.control_component(self._id, "status", payload, self._mg)
 
     async def drive(
         self,
@@ -413,15 +430,23 @@ class ComponentHandle:
         power: Power | RawLisp | None = None,
         sunlight: Percentage | None = None,
     ) -> None:
-        """Drive the environment: a meter's published power, a PV's sunlight."""
-        if power is not None:
+        """Drive the environment: a meter's published power, a PV's sunlight.
+
+        Constant values go over the typed control API (rejections raise
+        ``ControlRejected``); a ``RawLisp`` power (a lambda or symbol,
+        re-resolved every tick) still goes through ``/api/eval``.
+        """
+        payload: dict[str, float] = {}
+        if isinstance(power, RawLisp):
             await self._site._eval_ok(
                 f"(set-meter-power {self._id} {to_lisp_atom(power)})", self._mg
             )
+        elif power is not None:
+            payload["power_w"] = power.as_watts()
         if sunlight is not None:
-            await self._site._eval_ok(
-                f"(set-solar-sunlight {self._id} {to_lisp_atom(sunlight)})", self._mg
-            )
+            payload["sunlight_pct"] = sunlight.as_percent()
+        if payload:
+            await self._site.control_component(self._id, "drive", payload, self._mg)
 
     async def active_power(self) -> Power | None:
         """A single sample of this component's active power (gRPC)."""

@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from .._http import EvalResult
+from ..errors import ControlRejected
 
 
 class AsyncHttpClient:
@@ -31,16 +32,21 @@ class AsyncHttpClient:
         resp.raise_for_status()
         return resp.json() if resp.content else {}
 
-    async def post_json(self, path: str, payload: Any) -> Any:
-        """POST a JSON body to ``path``; return the parsed JSON response.
+    async def control(self, path: str, payload: Any) -> Any:
+        """POST a typed control request; a 4xx rejection raises.
 
-        Does NOT raise on HTTP error statuses: typed control endpoints
-        report rejections as structured JSON, and the caller turns that
-        into the right exception.
+        The control endpoints report rejections as structured JSON
+        (``{"error": ...}``) with a 400/404 status — turn that into
+        :class:`ControlRejected` so a rejection can never silently no-op.
         """
         resp = await self._client.post(path, json=payload)
-        if resp.status_code >= 500:
-            resp.raise_for_status()
+        if 400 <= resp.status_code < 500:
+            try:
+                error = resp.json().get("error", resp.text)
+            except ValueError:
+                error = resp.text
+            raise ControlRejected(error)
+        resp.raise_for_status()
         return resp.json() if resp.content else {}
 
     async def eval(self, expr: str, mg_id: int | None = None) -> EvalResult:

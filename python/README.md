@@ -170,6 +170,29 @@ await site[4].expect.soc(
 require it on every sample across a duration instead. Matchers: `approx`+`tol`,
 `within`, `max`, `min`.
 
+**Async core (v2)** — `switchyard.aio` is the async-native core: every
+read, write, and wait is a coroutine on your event loop (no background
+threads). Its assertion surface is generic-first: pass a metric from
+`switchyard.metrics`, and the metric's *kind* picks the semantics
+(power settles, energy is checked once):
+
+```python
+from switchyard.metrics import ACTIVE_POWER, BATTERY_ENERGY, GRID_POWER
+
+async with sw.aio.launch(mg) as site:
+    await site[5].drive(power=Power.from_kilowatts(20))
+    await site.expect(GRID_POWER, max=Power.from_kilowatts(13))
+    await site[3].expect(ACTIVE_POWER, approx=Power.from_kilowatts(2),
+                         tol=Power.from_watts(300))
+    await site.expect(BATTERY_ENERGY, max=Energy.from_watt_hours(-1))
+```
+
+`status()` and `drive()` constants go over typed JSON control endpoints
+(`/api/component/{id}/status` / `/drive`); a rejection (unknown id, bad
+value) raises `ControlRejected`. A `raw(...)` drive (lambda / symbol)
+still rides `/api/eval`. See `docs/python-api-redesign.org` for the
+design.
+
 **Scenarios** — author in Python, or run a registered Lisp scenario:
 
 ```python

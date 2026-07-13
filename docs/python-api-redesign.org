@@ -121,18 +121,22 @@ optimizers) should only ever import the top-level package.
 
 * Migration plan
 
-- *Phase 1 — metric model (compatible).* Introduce ~MetricSpec~ /
-  ~BoundMetric~ and route every existing ~expect~ method through the
-  one engine. Public surface unchanged, except the cumulative metrics
-  gain the full keyword set they were missing. Ships inside v1.
-- *Phase 2 — async core (breaking, shimmed).* Build ~switchyard.aio~;
-  reimplement the sync ~Site~ as the facade. Reads become coroutines
-  in the aio namespace; the sync names keep working through the
-  facade. Deprecate, do not remove.
-- *Phase 3 — typed control API (server + client).* Add the JSON
-  control endpoints on the Rust side; move ~drive~ / ~status~ /
-  scenario definition off eval. The Lisp generation code in the client
-  is deleted.
+- *Phase 1 — metric model (compatible).* DONE. ~MetricSpec~ /
+  ~BoundMetric~ landed and every existing ~expect~ method routes
+  through the one engine. Public surface unchanged, except the
+  cumulative metrics gained the full keyword set they were missing.
+- *Phase 2 — async core.* Core DONE: ~switchyard.aio~ is async-native
+  end to end (no background loop, no worker threads, no locks), with
+  *signals* as the assertion surface. REMAINING: reimplement the sync
+  ~Site~ as a facade over the aio core so the duplicated transports
+  can go; until then the sync client keeps its own.
+- *Phase 3 — typed control API (server + client).* Stimuli DONE:
+  ~POST /api/component/{id}/status~ and ~/drive~ (plus per-mg
+  variants) with structured 400/404 errors; both clients use them for
+  ~status()~ / ~drive()~ constants, and rejections raise
+  ~ControlRejected~. A ~RawLisp~ drive (lambda / symbol) still rides
+  ~/api/eval~ through the raising choke point, by design. REMAINING:
+  typed scenario definition/runs and topology edits.
 
 Each phase must keep the downstream integration suites green — they
 are the acceptance tests for this redesign.

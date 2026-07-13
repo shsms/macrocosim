@@ -85,7 +85,21 @@ async def test_component_expect_reads_the_component() -> None:
     assert value == Power.from_watts(7.0)
 
 
-async def test_rejected_eval_raises_from_drive() -> None:
+async def test_drive_posts_typed_control_payloads() -> None:
+    site = _site()
+    calls: list[tuple[str, Any]] = []
+
+    async def fake_control(path: str, payload: Any) -> Any:
+        calls.append((path, payload))
+        return {}
+
+    site._http.control = fake_control  # type: ignore[method-assign]
+    await site[6].drive(power=Power.from_kilowatts(20))
+    assert calls == [("/api/component/6/drive", {"power_w": 20000.0})]
+
+
+async def test_rejected_eval_raises_from_raw_drive() -> None:
+    # A RawLisp drive still goes through the eval choke point.
     site = _site()
 
     async def fake_eval(expr: str, mg_id: int | None = None) -> dict[str, Any]:
@@ -93,6 +107,6 @@ async def test_rejected_eval_raises_from_drive() -> None:
 
     site._http.eval = fake_eval  # type: ignore[method-assign]
     with pytest.raises(EvalRejected, match="not found"):
-        await site[3].drive(power=Power.from_watts(100))
+        await site[3].drive(power=sw.raw("(lambda () 100.0)"))
     # EvalRejected still satisfies the historic except ValueError.
     assert issubclass(EvalRejected, ValueError)
