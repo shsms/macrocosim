@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 from frequenz.quantities import Percentage, Power
 
 from switchyard.build import raw
@@ -14,11 +15,13 @@ from switchyard.handles import ComponentHandle
 class FakeSite:
     def __init__(self) -> None:
         self.evals: list[str] = []
+        self.eval_result: dict = {"ok": True}
         self.setpoints: list[tuple[int, float, float | None]] = []
         self.bounds: list[tuple[int, float, float]] = []
 
-    def eval(self, expr: str, mg_id: int | None = None) -> None:
+    def eval(self, expr: str, mg_id: int | None = None) -> dict:
         self.evals.append(expr)
+        return self.eval_result
 
     def set_active_power(
         self, cid: int, power: Power, *, lifetime: timedelta | None = None, mg_id=None
@@ -46,6 +49,15 @@ def test_status_emits_symbols() -> None:
         "(set-component-command-mode 3 'timeout)",
         "(set-component-telemetry-mode 3 'silent)",
     ]
+
+
+def test_status_and_drive_raise_on_rejected_eval() -> None:
+    # /api/eval reports interpreter errors as HTTP 200 + ok:false — they
+    # must raise, not silently no-op the stimulus.
+    w = FakeSite()
+    w.eval_result = {"ok": False, "error": "set-meter-power: component 3 not found"}
+    with pytest.raises(ValueError, match="not found"):
+        _h(w).drive(power=Power.from_watts(100))
 
 
 def test_command_setpoint_and_bounds_go_grpc() -> None:

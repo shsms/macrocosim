@@ -208,7 +208,12 @@ class ComponentHandle:
         return ComponentExpect(self._site, self._id, self._mg)
 
     def _eval(self, expr: str) -> None:
-        self._site.eval(expr, self._mg)
+        # /api/eval reports interpreter rejections as HTTP 200 + ok:false —
+        # surface them, or a status()/drive() typo silently no-ops and the
+        # test asserts against an unfaulted, undriven sim.
+        result = self._site.eval(expr, self._mg)
+        if not result.get("ok", True):
+            raise ValueError(f"eval of {expr!r} failed: {result.get('error')}")
 
 
 class MicrogridExpect:
