@@ -17,18 +17,32 @@ production behaviour under test); ``status`` / ``drive`` are test-side stimuli
 POSTed to ``/api/eval``. The ``expect`` assertions are ``async`` (they await
 between polls): ``await site.expect.grid_power(...)`` (or ``site.microgrid(id)``
 for a non-default one).
+
+Every ``expect`` method here is one-line sugar over the kind-aware engine
+(:func:`switchyard.assertions.expect_metric`): the metric's entry in
+:mod:`switchyard.metrics` decides whether it settles (power, SoC) or is
+checked once as a running total (energy).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import timedelta
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any
 
-from frequenz.quantities import Quantity
-
-from .assertions import Assertion
+from .assertions import expect_metric
 from .build import RawLisp, to_lisp_atom
+from .metrics import (
+    ACTIVE_POWER,
+    BATTERY_ENERGY,
+    BATTERY_POWER,
+    CONSUMER_ENERGY,
+    CONSUMER_POWER,
+    GRID_ENERGY,
+    GRID_POWER,
+    PV_ENERGY,
+    PV_POWER,
+    SOC,
+)
 
 if TYPE_CHECKING:
     from frequenz.quantities import Energy, Percentage, Power
@@ -37,39 +51,33 @@ if TYPE_CHECKING:
     from .enums import CommandMode, Health, TelemetryMode
     from .runtime import Site
 
-_Q = TypeVar("_Q", bound=Quantity)
-
 _TIMEOUT = timedelta(seconds=10)
 _POLL = timedelta(milliseconds=250)
 
 
-async def _settle(
-    read: Callable[[], _Q | None],
-    label: str,
+async def _expect(
+    spec: Any,
+    read: Any,
+    label: str | None,
     *,
-    approx: _Q | None,
-    tol: _Q | None,
-    within: tuple[_Q, _Q] | None,
-    max: _Q | None,
-    min: _Q | None,
-    for_: timedelta | None,
-    timeout: timedelta,
-    poll: timedelta,
-) -> _Q | list[_Q | None] | None:
-    """Poll a read until the matcher holds (``eventually``), or on every sample
-    across ``for_`` (``always``). Raises ``AssertionError`` on breach; returns
-    the value converged on (or the series observed)."""
-    a: Assertion[_Q] = Assertion(read, label)
-    if for_ is not None:
-        return await a.always(
-            within=within, approx=approx, tol=tol, max=max, min=min, for_=for_, poll=poll
-        )
-    return await a.eventually(
-        within=within,
+    approx: Any = None,
+    tol: Any = None,
+    within: Any = None,
+    max: Any = None,  # noqa: A002 — mirrors the engine's matcher names
+    min: Any = None,  # noqa: A002
+    for_: timedelta | None = None,
+    timeout: timedelta = _TIMEOUT,
+    poll: timedelta = _POLL,
+) -> Any:
+    """One forwarding point for every named expect method below."""
+    return await expect_metric(
+        spec.bind(read, label=label),
         approx=approx,
         tol=tol,
+        within=within,
         max=max,
         min=min,
+        for_=for_,
         timeout=timeout,
         poll=poll,
     )
@@ -95,7 +103,8 @@ class ComponentExpect:
         timeout: timedelta = _TIMEOUT,
         poll: timedelta = _POLL,
     ) -> Power | list[Power | None] | None:
-        return await _settle(
+        return await _expect(
+            ACTIVE_POWER,
             lambda: self._site.active_power(self._id, self._mg),
             f"component {self._id} active_power",
             approx=approx,
@@ -120,7 +129,8 @@ class ComponentExpect:
         timeout: timedelta = _TIMEOUT,
         poll: timedelta = _POLL,
     ) -> Percentage | list[Percentage | None] | None:
-        return await _settle(
+        return await _expect(
+            SOC,
             lambda: self._site.soc(self._id, self._mg),
             f"component {self._id} soc",
             approx=approx,
@@ -223,31 +233,7 @@ class MicrogridExpect:
         self._site = site
         self._mg = mg_id
 
-    async def _formula(
-        self,
-        name: str,
-        read: Callable[[], Power | None],
-        approx: Power | None,
-        tol: Power | None,
-        within: tuple[Power, Power] | None,
-        max: Power | None,
-        min: Power | None,
-        for_: timedelta | None,
-        timeout: timedelta,
-        poll: timedelta,
-    ) -> Power | list[Power | None] | None:
-        return await _settle(
-            read,
-            name,
-            approx=approx,
-            tol=tol,
-            within=within,
-            max=max,
-            min=min,
-            for_=for_,
-            timeout=timeout,
-            poll=poll,
-        )
+    # --- power (instantaneous — settles) -----------------------------------
 
     async def grid_power(
         self,
@@ -261,17 +247,18 @@ class MicrogridExpect:
         timeout: timedelta = _TIMEOUT,
         poll: timedelta = _POLL,
     ) -> Power | list[Power | None] | None:
-        return await self._formula(
-            "grid_power",
+        return await _expect(
+            GRID_POWER,
             lambda: self._site.grid_power(self._mg),
-            approx,
-            tol,
-            within,
-            max,
-            min,
-            for_,
-            timeout,
-            poll,
+            None,
+            approx=approx,
+            tol=tol,
+            within=within,
+            max=max,
+            min=min,
+            for_=for_,
+            timeout=timeout,
+            poll=poll,
         )
 
     async def pv_power(
@@ -286,17 +273,18 @@ class MicrogridExpect:
         timeout: timedelta = _TIMEOUT,
         poll: timedelta = _POLL,
     ) -> Power | list[Power | None] | None:
-        return await self._formula(
-            "pv_power",
+        return await _expect(
+            PV_POWER,
             lambda: self._site.pv_power(self._mg),
-            approx,
-            tol,
-            within,
-            max,
-            min,
-            for_,
-            timeout,
-            poll,
+            None,
+            approx=approx,
+            tol=tol,
+            within=within,
+            max=max,
+            min=min,
+            for_=for_,
+            timeout=timeout,
+            poll=poll,
         )
 
     async def consumer_power(
@@ -311,17 +299,18 @@ class MicrogridExpect:
         timeout: timedelta = _TIMEOUT,
         poll: timedelta = _POLL,
     ) -> Power | list[Power | None] | None:
-        return await self._formula(
-            "consumer_power",
+        return await _expect(
+            CONSUMER_POWER,
             lambda: self._site.consumer_power(self._mg),
-            approx,
-            tol,
-            within,
-            max,
-            min,
-            for_,
-            timeout,
-            poll,
+            None,
+            approx=approx,
+            tol=tol,
+            within=within,
+            max=max,
+            min=min,
+            for_=for_,
+            timeout=timeout,
+            poll=poll,
         )
 
     async def battery_power(
@@ -336,118 +325,122 @@ class MicrogridExpect:
         timeout: timedelta = _TIMEOUT,
         poll: timedelta = _POLL,
     ) -> Power | list[Power | None] | None:
-        return await self._formula(
-            "battery_power",
+        return await _expect(
+            BATTERY_POWER,
             lambda: self._site.battery_power(self._mg),
-            approx,
-            tol,
-            within,
-            max,
-            min,
-            for_,
-            timeout,
-            poll,
+            None,
+            approx=approx,
+            tol=tol,
+            within=within,
+            max=max,
+            min=min,
+            for_=for_,
+            timeout=timeout,
+            poll=poll,
         )
 
-    # --- energy assertions (cumulative — a one-shot check, not settling) ---
-
-    async def _energy(
-        self,
-        name: str,
-        read: Callable[[], Energy | None],
-        within: tuple[Energy, Energy] | None,
-        approx: Energy | None,
-        tol: Energy | None,
-        max: Energy | None,
-        min: Energy | None,
-    ) -> Energy | None:
-        # Energy accumulates monotonically, so (unlike the power expects) it
-        # isn't a settling signal to poll — `once` checks the matcher a
-        # single time, but still waits for the running total to first appear
-        # so a read just after launch / a topology rebuild isn't a spurious
-        # failure.
-        return await Assertion(read, name).once(
-            within=within, approx=approx, tol=tol, max=max, min=min
-        )
+    # --- energy (cumulative — a one-shot check, not settling) --------------
+    # No ``for_``: a running total is checked once, so a hold window does
+    # not apply (the engine rejects it).
 
     async def grid_energy(
         self,
         *,
-        within: tuple[Energy, Energy] | None = None,
         approx: Energy | None = None,
         tol: Energy | None = None,
+        within: tuple[Energy, Energy] | None = None,
         max: Energy | None = None,
         min: Energy | None = None,
-    ) -> Energy | None:
+        timeout: timedelta = _TIMEOUT,
+        poll: timedelta = _POLL,
+    ) -> Energy | list[Energy | None] | None:
         """Assert on cumulative net grid energy (import positive)."""
-        return await self._energy(
-            "grid_energy",
+        return await _expect(
+            GRID_ENERGY,
             lambda: self._site.grid_energy(self._mg),
-            within,
-            approx,
-            tol,
-            max,
-            min,
+            None,
+            approx=approx,
+            tol=tol,
+            within=within,
+            max=max,
+            min=min,
+            timeout=timeout,
+            poll=poll,
         )
 
     async def consumer_energy(
         self,
         *,
-        within: tuple[Energy, Energy] | None = None,
         approx: Energy | None = None,
         tol: Energy | None = None,
+        within: tuple[Energy, Energy] | None = None,
         max: Energy | None = None,
         min: Energy | None = None,
-    ) -> Energy | None:
+        timeout: timedelta = _TIMEOUT,
+        poll: timedelta = _POLL,
+    ) -> Energy | list[Energy | None] | None:
         """Assert on cumulative consumer (load) energy."""
-        return await self._energy(
-            "consumer_energy",
+        return await _expect(
+            CONSUMER_ENERGY,
             lambda: self._site.consumer_energy(self._mg),
-            within,
-            approx,
-            tol,
-            max,
-            min,
+            None,
+            approx=approx,
+            tol=tol,
+            within=within,
+            max=max,
+            min=min,
+            timeout=timeout,
+            poll=poll,
         )
 
     async def pv_energy(
         self,
         *,
-        within: tuple[Energy, Energy] | None = None,
         approx: Energy | None = None,
         tol: Energy | None = None,
+        within: tuple[Energy, Energy] | None = None,
         max: Energy | None = None,
         min: Energy | None = None,
-    ) -> Energy | None:
+        timeout: timedelta = _TIMEOUT,
+        poll: timedelta = _POLL,
+    ) -> Energy | list[Energy | None] | None:
         """Assert on cumulative PV energy (production negative)."""
-        return await self._energy(
-            "pv_energy",
+        return await _expect(
+            PV_ENERGY,
             lambda: self._site.pv_energy(self._mg),
-            within,
-            approx,
-            tol,
-            max,
-            min,
+            None,
+            approx=approx,
+            tol=tol,
+            within=within,
+            max=max,
+            min=min,
+            timeout=timeout,
+            poll=poll,
         )
 
     async def battery_energy(
         self,
         *,
-        within: tuple[Energy, Energy] | None = None,
         approx: Energy | None = None,
         tol: Energy | None = None,
+        within: tuple[Energy, Energy] | None = None,
         max: Energy | None = None,
         min: Energy | None = None,
-    ) -> Energy | None:
+        timeout: timedelta = _TIMEOUT,
+        poll: timedelta = _POLL,
+    ) -> Energy | list[Energy | None] | None:
         """Assert on cumulative net battery-pool energy (discharge negative)."""
-        return await self._energy(
-            "battery_energy",
+        return await _expect(
+            BATTERY_ENERGY,
             lambda: self._site.battery_energy(self._mg),
-            within,
-            approx,
-            tol,
-            max,
-            min,
+            None,
+            approx=approx,
+            tol=tol,
+            within=within,
+            max=max,
+            min=min,
+            timeout=timeout,
+            poll=poll,
         )
 
 
