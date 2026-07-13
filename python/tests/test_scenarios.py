@@ -155,3 +155,17 @@ def test_scenario_name_escaped_and_time_non_scientific() -> None:
     assert '\\"' in lisp  # the embedded quote was escaped
     assert "2592000s" in lisp  # 30 days as plain integer seconds
     assert "e+" not in lisp  # never scientific notation
+
+
+def test_sub_100_microsecond_offsets_render_fixed_point() -> None:
+    # repr(5e-05) is scientific notation, which the server's parse-offset
+    # rejects — fractional offsets must render as plain decimals.
+    scn = Scenario("s", length=timedelta(seconds=1)).check(
+        timedelta(microseconds=50),
+        component=2,
+        metric=Metric.ACTIVE_POWER,
+        min=Power.from_watts(0),
+    )
+    lisp = scn.to_lisp()
+    assert '"0.00005s"' in lisp
+    assert "e-05" not in lisp

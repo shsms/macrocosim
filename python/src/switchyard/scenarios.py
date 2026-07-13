@@ -54,7 +54,13 @@ def _time_literal(value: timedelta | clock_time) -> str:
     if isinstance(value, clock_time):
         return f'"{value.isoformat()}"'
     secs = value.total_seconds()
-    text = f"{secs:.0f}" if secs == int(secs) else repr(secs)
+    if secs == int(secs):
+        text = f"{secs:.0f}"
+    else:
+        # Fixed-point, then strip trailing zeros: repr() would render
+        # sub-100 µs offsets as e.g. "5e-05". 6 decimals cover timedelta's
+        # microsecond resolution.
+        text = f"{secs:.6f}".rstrip("0")
     return f'"{text}s"'
 
 
