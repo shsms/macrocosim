@@ -1,7 +1,9 @@
 //! `(set-meter-power)` + `(set-solar-sunlight)` — drive a
 //! component's input slot from Lisp. Both accept a number (constant
 //! override), a lambda (re-resolved on every refresh tick), or a
-//! quoted symbol (deref the bound variable per refresh).
+//! quoted symbol (deref the bound variable per refresh). Plus
+//! `(set-battery-soc)` — teleport a battery's charge state, for
+//! arranging a precondition from a scenario cue.
 
 use tulisp::{Error, TulispContext, TulispObject};
 
@@ -39,6 +41,27 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-meter-power: expected a number, lambda, or symbol — got {value}"
                 )));
             }
+            Ok(true)
+        },
+    );
+
+    // Teleport a battery's state of charge (clamped to 0..=100 by the
+    // battery). Scenario cues use it to arrange a precondition — a
+    // nearly-empty or nearly-full pool — without simulating the charge.
+    // Follows this file's convention: unknown id errors, but a
+    // non-battery component is a lenient no-op (the typed control API
+    // is the strict door).
+    let r = router.clone();
+    ctx.defun(
+        "set-battery-soc",
+        move |id: i64, pct: f64| -> Result<bool, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "set-battery-soc: component {id} not found"
+                )));
+            };
+            let _ = c.set_soc_pct(pct as f32);
             Ok(true)
         },
     );
@@ -161,5 +184,20 @@ mod tests {
             cfg.eval("(set-meter-power 7 \"garbage\")").is_ok(),
             "string is accepted as an eval source — fallback governs",
         );
+    }
+
+    /// `(set-battery-soc id PCT)` teleports the charge state; the next
+    /// telemetry read reflects it. An unknown id errors.
+    #[test]
+    fn set_battery_soc_teleports_state() {
+        let (cfg, _dir) = config_with(
+            "(set-microgrid-id 9)
+             (%make-battery :id 4 :initial-soc 60.0)",
+        );
+        cfg.eval("(set-battery-soc 4 12.5)").unwrap();
+        let site = cfg.site();
+        let soc = site.get(4).unwrap().telemetry(&site).soc_pct.unwrap();
+        assert!((soc - 12.5).abs() < 1e-3, "{soc}");
+        assert!(cfg.eval("(set-battery-soc 99 50.0)").is_err());
     }
 }
