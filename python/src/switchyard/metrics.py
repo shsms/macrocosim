@@ -89,9 +89,15 @@ class BoundMetric(Generic[Q]):
 
 
 # --- the catalog: one line per metric the client knows -------------------
+#
+# Naming rule: every `*_energy` AGGREGATE is the time-integral of its
+# paired `*_power` aggregate — a flow. Stored energy is component STATE
+# (a battery's `stored_energy`, from SoC and capacity), never an
+# aggregate — so "battery_energy" always means flow through the pool.
 
 ACTIVE_POWER = MetricSpec("active_power", MetricKind.INSTANTANEOUS, Power)
 SOC = MetricSpec("soc", MetricKind.INSTANTANEOUS, Percentage)
+STORED_ENERGY = MetricSpec("stored_energy", MetricKind.INSTANTANEOUS, Energy)
 
 GRID_POWER = MetricSpec("grid_power", MetricKind.INSTANTANEOUS, Power)
 PV_POWER = MetricSpec("pv_power", MetricKind.INSTANTANEOUS, Power)

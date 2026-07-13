@@ -7,11 +7,11 @@ worker threads. See ``docs/python-api-redesign.org``.
 Typical use::
 
     import switchyard as sw
-    from switchyard.metrics import GRID_POWER, BATTERY_ENERGY
 
-    async with sw.aio.launch(topology) as site:
-        await site[5].drive(power=Power.from_kilowatts(20))
-        await site.expect(GRID_POWER, max=Power.from_kilowatts(13))
+    load = sw.meter(id=5, power=Power.zero())  # ... build the topology
+    async with sw.aio.launch(mg) as site:      # binds the builders
+        await load.power.set(Power.from_kilowatts(20))
+        await site.grid_power.expect(sw.at_most(Power.from_kilowatts(13)))
 """
 
 from ._site import ComponentHandle, ScenarioRun, Site, connect, launch

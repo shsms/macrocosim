@@ -1,4 +1,4 @@
-"""End-to-end pass of the async core against a real simulator.
+"""End-to-end pass of the signal surface against a real simulator.
 
 Skips when no ``switchyard`` binary is available (``SWITCHYARD_BIN``,
 PATH, or the wheel's scripts dir).
@@ -14,7 +14,6 @@ from frequenz.quantities import Energy, Percentage, Power
 
 import switchyard as sw
 from switchyard._process import which_binary
-from switchyard.metrics import ACTIVE_POWER, GRID_ENERGY, GRID_POWER, SOC
 
 pytestmark = [
     pytest.mark.filterwarnings("ignore:.*ComponentId is deprecated.*:DeprecationWarning"),
@@ -24,77 +23,54 @@ if not (os.environ.get("SWITCHYARD_BIN") or which_binary("switchyard")):
     pytest.skip("no switchyard binary available", allow_module_level=True)
 
 kW = Power.from_kilowatts
+kWh = Energy.from_kilowatt_hours
+percent = Percentage.from_percent
 
-GRID_ID = 1
-METER_ID = 2
-INVERTER_ID = 3
-BATTERY_ID = 4
-LOAD_ID = 5
+_SETTLE = timedelta(seconds=20)
 
 
-def _topology() -> sw.Microgrid:
-    return sw.Microgrid(
+async def test_signal_surface_end_to_end() -> None:
+    # The builders are the identities — and, once launched, the handles.
+    load = sw.meter(id=5, power=Power.zero())
+    bat = sw.battery(id=4, capacity=kWh(100), soc=percent(60))
+    inv = sw.battery_inverter(id=3, rated=(kW(-50), kW(50)), successors=[bat])
+    mg = sw.Microgrid(
         id=1,
-        topology=sw.grid(
-            id=GRID_ID,
-            successors=[
-                sw.meter(
-                    id=METER_ID,
-                    successors=[
-                        sw.battery_inverter(
-                            id=INVERTER_ID,
-                            rated=(kW(-50), kW(50)),
-                            successors=[
-                                sw.battery(
-                                    id=BATTERY_ID,
-                                    capacity=Energy.from_kilowatt_hours(100),
-                                    soc=Percentage.from_percent(60),
-                                )
-                            ],
-                        ),
-                        sw.meter(id=LOAD_ID, power=Power.zero()),
-                    ],
-                )
-            ],
-        ),
+        topology=sw.grid(id=1, successors=[sw.meter(id=2, successors=[inv, load])]),
     )
 
+    async with sw.aio.launch(mg) as site:
+        # Drive the world through the meter's own signal; watch the
+        # aggregate settle through the site's.
+        await load.power.set(kW(20))
+        await site.grid_power.expect(sw.near(kW(20), tol=kW(1)), timeout=_SETTLE)
+        await load.power.expect(sw.near(kW(20), tol=kW(1)), timeout=_SETTLE)
 
-async def test_async_core_end_to_end() -> None:
-    async with sw.aio.launch(_topology()) as site:
-        # Drive the environment and watch the ground truth settle.
-        await site[LOAD_ID].drive(power=kW(20))
-        await site.expect(
-            GRID_POWER,
-            approx=kW(20),
-            tol=kW(1),
-            timeout=timedelta(seconds=20),
+        # State vs flow: stored_energy derives from SoC and capacity...
+        soc = await bat.soc.read(wait=timedelta(seconds=10))
+        stored = await bat.stored_energy.read()
+        expected = kWh(100) * (soc.as_percent() / 100.0)
+        assert abs((stored - expected).as_watt_hours()) < 1.0
+        # ... while the site's battery_energy is the pool's cumulative flow.
+        await site.grid_energy.expect(sw.at_least(Energy.zero()))
+
+        # Teleport the charge state — arranging a precondition, no charging.
+        await bat.soc.set(percent(11.0))
+        await bat.soc.expect(
+            sw.between(percent(10.0), percent(12.0)), timeout=timedelta(seconds=10)
         )
 
-        # Component reads + expects over the native async gRPC path.
-        await site[LOAD_ID].expect(
-            ACTIVE_POWER,
-            approx=kW(20),
-            tol=kW(1),
-            timeout=timedelta(seconds=20),
-        )
-        soc = await site[BATTERY_ID].soc()
-        assert soc is not None
-        await site[BATTERY_ID].expect(
-            SOC,
-            within=(Percentage.from_percent(50), Percentage.from_percent(70)),
-        )
-
-        # A cumulative metric: the total exists and only grows.
-        energy = await site.expect(GRID_ENERGY, min=Energy.from_watt_hours(0))
-        assert energy is not None
-
-        # Fault injection through the typed choke point; a bad id raises.
-        await site[INVERTER_ID].status(health=sw.Health.ERROR)
-        with pytest.raises(ValueError, match="not found"):
+        # Fault injection through the typed control API; a bad id raises.
+        await inv.health.set(sw.Health.ERROR)
+        with pytest.raises(sw.ControlRejected, match="not found"):
             await site[999].drive(power=kW(1))
 
-        # The real gateway path still rejects out-of-envelope setpoints.
-        await site[INVERTER_ID].status(health=sw.Health.OK)
+        # The real gateway path still rejects out-of-envelope setpoints —
+        # command() is deliberately not a signal .set.
+        await inv.health.set(sw.Health.OK)
         with pytest.raises(sw.SetpointRejected):
-            await site[INVERTER_ID].command(active_power=kW(500))
+            await site[inv].command(active_power=kW(500))
+
+    # The context manager unbinds: the builders are specs again.
+    with pytest.raises(RuntimeError, match="not bound"):
+        _ = load.power

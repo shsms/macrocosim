@@ -30,3 +30,11 @@ class ControlRejected(SwitchyardError, ValueError):
     Carries the server's error text — e.g. an unknown component id, or a
     stimulus that does not apply to the component's type.
     """
+
+
+class NoSample(SwitchyardError):
+    """A signal produced no value within the read's wait window.
+
+    Raised by ``Signal.read()`` so its return type is the plain quantity;
+    use ``Signal.try_read()`` when ``None`` is an expected outcome.
+    """

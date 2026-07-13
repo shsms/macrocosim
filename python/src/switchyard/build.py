@@ -21,11 +21,13 @@ from dataclasses import dataclass, field
 from datetime import time, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol, TypeAlias, runtime_checkable
+from typing import Any, Protocol, TypeAlias, TypeVar, runtime_checkable
 
 from frequenz.quantities import Energy, Percentage, Power, Quantity
 
 from .enums import CommandMode, Health, TelemetryMode
+from .metrics import ACTIVE_POWER, SOC, STORED_ENERGY
+from .signals import DrivenSignal, SettingSignal, Signal
 
 
 @dataclass(frozen=True)
@@ -112,11 +114,23 @@ def _normalize(kwargs: Mapping[str, Value | None]) -> dict[str, Value]:
 
 @dataclass
 class Component:
-    """One node in the topology tree — a ``(make-*)`` form and its children."""
+    """One node in the topology tree — a ``(make-*)`` form and its children.
+
+    Before launch it is the spec; after ``switchyard.aio.launch`` binds
+    the topology, the same object is the *live handle*: its typed signal
+    properties (``health`` here; ``power`` / ``soc`` / ... on the
+    category subclasses) read, assert, and drive the running component.
+    """
 
     make: str
     args: dict[str, Value] = field(default_factory=dict)
     successors: list[Component] = field(default_factory=list)
+    # The running aio site this object is live on (None until launch
+    # binds it). One site at a time: build a fresh topology per launch.
+    _site: Any = field(default=None, repr=False, compare=False)
+    # The owning microgrid's id (None = the site's default microgrid),
+    # recorded at bind time so signals route to the right microgrid.
+    _mg: Any = field(default=None, repr=False, compare=False)
 
     def to_lisp(self) -> str:
         parts = [f":{key} {to_lisp_atom(val)}" for key, val in self.args.items()]
@@ -126,6 +140,159 @@ class Component:
         body = (" " + " ".join(parts)) if parts else ""
         return f"({self.make}{body})"
 
+    # --- live-handle plumbing (bound by switchyard.aio.launch) ------------
+
+    @property
+    def component_id(self) -> int:
+        """The explicit ``id=`` this builder was given."""
+        cid = self.args.get("id")
+        if not isinstance(cid, int):
+            # ValueError, like the sync client raises for the same
+            # mistake — code catching one works on both flavors.
+            raise ValueError(
+                f"{self.make}: needs an explicit id= to be referenced"
+            )
+        return cid
+
+    def _bind(self, site: Any, mg_id: int | None = None) -> None:
+        # No id check here: a component without an explicit id= simply
+        # has no usable signals (the property raises on first use), but
+        # its topology still launches.
+        if self._site is not None:
+            raise RuntimeError(
+                f"{self.make} id={self.args.get('id')} is already bound to a "
+                "running site; build a fresh topology per launch"
+            )
+        self._site = site
+        self._mg = mg_id
+
+    def _unbind(self) -> None:
+        self._site = None
+        self._mg = None
+
+    def _live(self) -> Any:
+        if self._site is None:
+            raise RuntimeError(
+                f"{self.make} id={self.args.get('id')} is not bound to a "
+                "running site — launch its topology with switchyard.aio.launch"
+            )
+        return self._site
+
+    @property
+    def health(self) -> SettingSignal[Health]:
+        """The component's reported health — set it to inject faults."""
+        site, cid = self._live(), self.component_id
+
+        mg = self._mg
+
+        async def set_(value: Health) -> None:
+            await site.control_component(cid, "status", {"health": value.value}, mg)
+
+        return SettingSignal(set_, f"{self.make} {cid} health")
+
+
+class Meter(Component):
+    """A meter: its published power is both measured and drivable."""
+
+    @property
+    def power(self) -> DrivenSignal[Power]:
+        """The meter's active power — read/expect the telemetry, set the load."""
+        site, cid, mg = self._live(), self.component_id, self._mg
+
+        async def read() -> Power | None:
+            return await site.active_power(cid, mg)
+
+        async def set_(value: Power) -> None:
+            await site.control_component(cid, "drive", {"power_w": value.as_watts()}, mg)
+
+        return DrivenSignal(ACTIVE_POWER, read, set_, f"meter {cid} power")
+
+
+class Battery(Component):
+    """A battery: charge state is both measurable and arrangeable."""
+
+    @property
+    def soc(self) -> DrivenSignal[Percentage]:
+        """State of charge — read/expect it, or teleport it to arrange a test."""
+        site, cid, mg = self._live(), self.component_id, self._mg
+
+        async def read() -> Percentage | None:
+            return await site.soc(cid, mg)
+
+        async def set_(value: Percentage) -> None:
+            await site.control_component(
+                cid, "drive", {"soc_pct": value.as_percent()}, mg
+            )
+
+        return DrivenSignal(SOC, read, set_, f"battery {cid} soc")
+
+    @property
+    def stored_energy(self) -> Signal[Energy]:
+        """Energy held right now (SoC × capacity) — component *state*.
+
+        Not to be confused with the site's ``battery_energy`` aggregate,
+        which is the cumulative *flow* through the pool (the integral of
+        ``battery_power``).
+        """
+        site, cid, mg = self._live(), self.component_id, self._mg
+        capacity = self.args.get("capacity")
+        if not isinstance(capacity, Energy):
+            raise RuntimeError(
+                f"battery {cid}: stored_energy needs capacity= on the builder"
+            )
+
+        async def read() -> Energy | None:
+            soc = await site.soc(cid, mg)
+            if soc is None:
+                return None
+            return capacity * (soc.as_percent() / 100.0)
+
+        return Signal(STORED_ENERGY, read, f"battery {cid} stored_energy")
+
+
+class BatteryInverter(Component):
+    """A battery inverter: power is measured; setting it is ``command()``'s
+    job (the production gateway path), never a test-side ``set``."""
+
+    @property
+    def power(self) -> Signal[Power]:
+        """The inverter's active power (read/expect only)."""
+        site, cid, mg = self._live(), self.component_id, self._mg
+
+        async def read() -> Power | None:
+            return await site.active_power(cid, mg)
+
+        return Signal(ACTIVE_POWER, read, f"battery_inverter {cid} power")
+
+
+class SolarInverter(Component):
+    """A PV inverter: power is measured, sunlight is the drivable input."""
+
+    @property
+    def power(self) -> Signal[Power]:
+        """The inverter's active power (read/expect only)."""
+        site, cid, mg = self._live(), self.component_id, self._mg
+
+        async def read() -> Power | None:
+            return await site.active_power(cid, mg)
+
+        return Signal(ACTIVE_POWER, read, f"solar_inverter {cid} power")
+
+    @property
+    def sunlight(self) -> SettingSignal[Percentage]:
+        """The irradiance driving the PV model (write-only)."""
+        site, cid, mg = self._live(), self.component_id, self._mg
+
+        async def set_(value: Percentage) -> None:
+            await site.control_component(
+                cid, "drive", {"sunlight_pct": value.as_percent()}, mg
+            )
+
+        return SettingSignal(set_, f"solar_inverter {cid} sunlight")
+
+
+_C = TypeVar("_C", bound=Component)
+
 
 def _component(
     make: str,
@@ -133,11 +300,12 @@ def _component(
     *,
     rated: tuple[Power, Power] | None = None,
     successors: Sequence[Component] | None = None,
-) -> Component:
+    cls: type[_C],
+) -> _C:
     normalized = _normalize(args)
     if rated is not None:
         normalized["rated-lower"], normalized["rated-upper"] = rated
-    return Component(make, normalized, list(successors or []))
+    return cls(make, normalized, list(successors or []))
 
 
 # --- constructors (parents take successors; leaves don't) -----------------
@@ -164,7 +332,11 @@ def grid(
         **extra,
     }
     return _component(
-        "make-grid-connection-point", args, rated=rated, successors=successors
+        "make-grid-connection-point",
+        args,
+        rated=rated,
+        successors=successors,
+        cls=Component,
     )
 
 
@@ -178,7 +350,7 @@ def meter(
     command_mode: CommandMode | None = None,
     successors: Sequence[Component] | None = None,
     **extra: Value,
-) -> Component:
+) -> Meter:
     """A meter. ``power`` seeds its published load (a ``Power``, or ``raw(...)``)."""
     args = {
         "id": id,
@@ -189,7 +361,7 @@ def meter(
         "command_mode": command_mode,
         **extra,
     }
-    return _component("make-meter", args, successors=successors)
+    return _component("make-meter", args, successors=successors, cls=Meter)
 
 
 def battery_inverter(
@@ -202,7 +374,7 @@ def battery_inverter(
     command_mode: CommandMode | None = None,
     successors: Sequence[Component] | None = None,
     **extra: Value,
-) -> Component:
+) -> BatteryInverter:
     """A battery inverter; give it a ``battery`` child via ``successors``."""
     args = {
         "id": id,
@@ -212,7 +384,13 @@ def battery_inverter(
         "command_mode": command_mode,
         **extra,
     }
-    return _component("make-battery-inverter", args, rated=rated, successors=successors)
+    return _component(
+        "make-battery-inverter",
+        args,
+        rated=rated,
+        successors=successors,
+        cls=BatteryInverter,
+    )
 
 
 def solar_inverter(
@@ -226,7 +404,7 @@ def solar_inverter(
     command_mode: CommandMode | None = None,
     successors: Sequence[Component] | None = None,
     **extra: Value,
-) -> Component:
+) -> SolarInverter:
     """A solar (PV) inverter. ``sunlight`` seeds its irradiance (a ``Percentage``)."""
     args = {
         "id": id,
@@ -237,7 +415,13 @@ def solar_inverter(
         "command_mode": command_mode,
         **extra,
     }
-    return _component("make-solar-inverter", args, rated=rated, successors=successors)
+    return _component(
+        "make-solar-inverter",
+        args,
+        rated=rated,
+        successors=successors,
+        cls=SolarInverter,
+    )
 
 
 def battery(
@@ -247,10 +431,10 @@ def battery(
     capacity: Energy | None = None,
     soc: Percentage | None = None,
     **extra: Value,
-) -> Component:
+) -> Battery:
     """A battery (leaf). ``capacity`` is an ``Energy``; ``soc`` a ``Percentage``."""
     args = {"id": id, "name": name, "capacity": capacity, "soc": soc, **extra}
-    return _component("make-battery", args)
+    return _component("make-battery", args, cls=Battery)
 
 
 def ev_charger(
@@ -262,7 +446,7 @@ def ev_charger(
 ) -> Component:
     """An EV charger (leaf)."""
     args = {"id": id, "name": name, **extra}
-    return _component("make-ev-charger", args, rated=rated)
+    return _component("make-ev-charger", args, rated=rated, cls=Component)
 
 
 def chp(
@@ -274,7 +458,7 @@ def chp(
 ) -> Component:
     """A combined heat-and-power unit (leaf)."""
     args = {"id": id, "name": name, **extra}
-    return _component("make-chp", args, rated=rated)
+    return _component("make-chp", args, rated=rated, cls=Component)
 
 
 def _emit_topology(topology: Topology) -> str:

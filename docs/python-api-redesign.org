@@ -70,20 +70,30 @@ v1 hand-writes one method per metric per surface
 wrappers, a *reduced* keyword surface on the cumulative metrics
 (retyping fatigue), and every new metric costing four methods.
 
-*Target:* one metric model, one assertion engine.
+*Target:* one metric model, one assertion engine, and *signals* as the
+surface.
 
 - A ~MetricSpec~ describes a metric: name, quantity type, and *kind* —
   ~INSTANTANEOUS~ (power, SoC) or ~CUMULATIVE~ (energy).
-- Binding a spec to a source (a component id, or a site aggregate)
-  yields a ~BoundMetric~: a typed read plus a label.
-- One engine consumes a ~BoundMetric~ and the matchers. The metric's
-  *kind* picks the semantics: instantaneous metrics settle
-  (~eventually~, or ~always~ when ~for_~ is given); cumulative metrics
-  are checked once, after waiting for availability.
-- The familiar named methods survive as one-line sugar over the
-  engine, so tests keep reading well — but they all share one
-  signature and one implementation, and a new metric is one spec
-  entry.
+- One engine consumes a bound metric and the matchers; the kind picks
+  the semantics (settle vs one-shot).
+- The public surface is the *signal*: one object per observable
+  quantity, with up to three verbs — ~read~ (returns the plain
+  quantity; raises ~NoSample~), ~expect~ (takes exactly one typed
+  ~Matcher~: ~near~/~between~/~at_most~/~at_least~), and ~set~ where
+  the simulator allows it. Capability lives in the type: a driven
+  signal (a meter's power, a battery's SoC) has ~set~; a measured one
+  (an inverter's power, the site's ~grid_power~) does not; a
+  cumulative one's ~expect~ has no hold window. Misuse is a type
+  error, not a runtime branch.
+- The topology builders are the identities — and, once ~aio.launch~
+  binds them, the live handles: ~LOAD.power.set(...)~,
+  ~BAT.soc.expect(...)~. Site aggregates are signal attributes
+  (~site.grid_power~).
+- Naming rule: every ~*_energy~ aggregate is the time-integral of its
+  paired ~*_power~ — a *flow*. Stored energy is component *state*
+  (~BAT.stored_energy~, from SoC and capacity), never an aggregate, so
+  "battery_energy" always means flow through the pool.
 
 ** 3. Lisp-by-string as the wire format
 

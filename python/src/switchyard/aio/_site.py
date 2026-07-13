@@ -5,16 +5,19 @@ no worker threads, no locks. This is the v2 core
 (``docs/python-api-redesign.org``); the sync client remains available for
 REPL use and simple scripts.
 
-The assertion surface here is *generic-first*: pass a metric spec from
-:mod:`switchyard.metrics` instead of calling a named method::
+The surface is *signals*: every observable quantity is an object with
+``read`` / ``expect`` / (where the simulator allows it) ``set``::
 
     async with sw.aio.launch(topology) as site:
-        await site[5].drive(power=Power.from_kilowatts(20))
-        await site.expect(GRID_POWER, max=Power.from_kilowatts(13))
-        await site.expect(BATTERY_ENERGY, max=Energy.from_watt_hours(-1))
+        await load.power.set(Power.from_kilowatts(20))
+        await site.grid_power.expect(sw.at_most(Power.from_kilowatts(13)))
+        await site.battery_energy.expect(
+            sw.at_most(Energy.from_watt_hours(-1)))
 
-The metric's *kind* picks the check semantics (settle vs one-shot), and a
-new metric is a catalog entry, not a set of new methods.
+Component signals live on the topology builders (bound at launch); the
+site's aggregates are signal properties here. A signal's *kind* picks
+the check semantics (settle vs one-shot), and a new metric is a catalog
+entry, not a set of new methods.
 """
 
 from __future__ import annotations
@@ -32,13 +35,13 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from frequenz.quantities import Energy, Percentage, Power, Quantity
 
 from .. import metrics as _M
-from .._http import EvalResult
+from .._http import EvalResult, control_path
 from .._process import spawn_switchyard, terminate
-from ..assertions import expect_metric
 from ..build import RawLisp, to_lisp_atom
 from ..errors import EvalRejected
-from ..metrics import BoundMetric, MetricSpec
+from ..metrics import MetricSpec
 from ..runtime import MicrogridEndpoint
+from ..signals import CumulativeSignal, Signal
 from ._grpc import AsyncGrpcClient
 from ._http import AsyncHttpClient
 
@@ -53,16 +56,10 @@ if TYPE_CHECKING:
 Q = TypeVar("Q", bound=Quantity)
 T = TypeVar("T")
 
-# Aggregate metric name -> the formula stream serving it. Only the battery
-# pool's stream name differs from its metric name.
+# Aggregate metric name -> the formula stream serving it, for the names
+# that differ; everything else streams under its metric name.
 _STREAM_FOR = {
-    "grid_power": "grid_power",
-    "pv_power": "pv_power",
-    "consumer_power": "consumer_power",
     "battery_power": "battery_pool_power",
-    "grid_energy": "grid_energy",
-    "pv_energy": "pv_energy",
-    "consumer_energy": "consumer_energy",
     "battery_energy": "battery_pool_energy",
 }
 
@@ -167,99 +164,80 @@ class Site:
         self, spec: MetricSpec[Q], mg_id: int | None = None
     ) -> Q | None:
         """Read one *aggregate* metric from the catalog, typed by its spec."""
-        value = await self.formula(_STREAM_FOR[spec.name], mg_id)
+        value = await self.formula(_STREAM_FOR.get(spec.name, spec.name), mg_id)
         if value is None:
             return None
         return cast("Q", _FROM_WIRE[spec.quantity](value))
 
-    async def grid_power(self, mg_id: int | None = None) -> Power | None:
-        """Net power at the grid connection point (import positive)."""
-        return await self.metric_value(_M.GRID_POWER, mg_id)
+    # --- aggregate signals (flows; each *_energy integrates its *_power) ----
 
-    async def pv_power(self, mg_id: int | None = None) -> Power | None:
-        """Aggregate PV power (production negative)."""
-        return await self.metric_value(_M.PV_POWER, mg_id)
+    def microgrid(self, mg_id: int | None = None) -> MicrogridSignals:
+        """The aggregate signals of one microgrid.
 
-    async def consumer_power(self, mg_id: int | None = None) -> Power | None:
-        """Aggregate consumer (load) power."""
-        return await self.metric_value(_M.CONSUMER_POWER, mg_id)
-
-    async def battery_power(self, mg_id: int | None = None) -> Power | None:
-        """Aggregate battery-pool power (discharge negative)."""
-        return await self.metric_value(_M.BATTERY_POWER, mg_id)
-
-    async def grid_energy(self, mg_id: int | None = None) -> Energy | None:
-        """Cumulative net grid energy for the current run (import positive)."""
-        return await self.metric_value(_M.GRID_ENERGY, mg_id)
-
-    async def consumer_energy(self, mg_id: int | None = None) -> Energy | None:
-        """Cumulative consumer (load) energy for the current run."""
-        return await self.metric_value(_M.CONSUMER_ENERGY, mg_id)
-
-    async def pv_energy(self, mg_id: int | None = None) -> Energy | None:
-        """Cumulative PV energy for the current run (production negative)."""
-        return await self.metric_value(_M.PV_ENERGY, mg_id)
-
-    async def battery_energy(self, mg_id: int | None = None) -> Energy | None:
-        """Cumulative net battery-pool energy for the current run (discharge
-        negative)."""
-        return await self.metric_value(_M.BATTERY_ENERGY, mg_id)
-
-    # --- assertions (generic-first: pass a metric spec) ----------------------
-
-    async def expect(
-        self,
-        spec: MetricSpec[Q],
-        *,
-        approx: Q | None = None,
-        tol: Q | None = None,
-        within: tuple[Q, Q] | None = None,
-        max: Q | None = None,
-        min: Q | None = None,
-        for_: timedelta | None = None,
-        timeout: timedelta = timedelta(seconds=10),
-        poll: timedelta = timedelta(milliseconds=250),
-        mg_id: int | None = None,
-    ) -> Q | list[Q | None] | None:
-        """Assert on an aggregate metric; its kind picks the semantics.
-
-        ``await site.expect(GRID_POWER, max=...)`` settles;
-        ``await site.expect(GRID_ENERGY, max=...)`` checks the total once.
+        ``None`` (the default) is the first microgrid — the same signals
+        the properties below expose directly.
         """
-        bound: BoundMetric[Q] = spec.bind(
-            functools.partial(self.metric_value, spec, mg_id)
-        )
-        return await expect_metric(
-            bound,
-            approx=approx,
-            tol=tol,
-            within=within,
-            max=max,
-            min=min,
-            for_=for_,
-            timeout=timeout,
-            poll=poll,
-        )
+        return MicrogridSignals(self, mg_id)
+
+    @property
+    def grid_power(self) -> Signal[Power]:
+        """Net power at the grid connection point (import positive)."""
+        return self.microgrid().grid_power
+
+    @property
+    def pv_power(self) -> Signal[Power]:
+        """Aggregate PV power (production negative)."""
+        return self.microgrid().pv_power
+
+    @property
+    def consumer_power(self) -> Signal[Power]:
+        """Aggregate consumer (load) power."""
+        return self.microgrid().consumer_power
+
+    @property
+    def battery_power(self) -> Signal[Power]:
+        """Aggregate battery-pool power (discharge negative)."""
+        return self.microgrid().battery_power
+
+    @property
+    def grid_energy(self) -> CumulativeSignal[Energy]:
+        """Cumulative net grid energy this run (the integral of grid_power)."""
+        return self.microgrid().grid_energy
+
+    @property
+    def consumer_energy(self) -> CumulativeSignal[Energy]:
+        """Cumulative consumer energy this run (integral of consumer_power)."""
+        return self.microgrid().consumer_energy
+
+    @property
+    def pv_energy(self) -> CumulativeSignal[Energy]:
+        """Cumulative PV energy this run (the integral of pv_power)."""
+        return self.microgrid().pv_energy
+
+    @property
+    def battery_energy(self) -> CumulativeSignal[Energy]:
+        """Cumulative battery-pool *flow* this run (integral of
+        battery_power) — for the energy currently stored in a battery,
+        read that battery's ``stored_energy`` signal."""
+        return self.microgrid().battery_energy
 
     # --- component handles ----------------------------------------------------
-
-    def _component_id_of(self, target: Component | int) -> int:
-        from ..build import Component
-
-        if isinstance(target, Component):
-            cid = target.args.get("id")
-            if not isinstance(cid, int):
-                raise ValueError(
-                    "this call needs a component with an explicit id= to reference it"
-                )
-            return cid
-        return int(target)
 
     def component(
         self, target: Component | int, mg_id: int | None = None
     ) -> ComponentHandle:
-        """A handle onto one component (``site[id]`` is the same)."""
-        return ComponentHandle(self, self._component_id_of(target), mg_id)
+        """A handle onto one component (``site[id]`` is the same).
+
+        A builder bound to a non-default microgrid at launch carries
+        its microgrid into the handle; an explicit ``mg_id`` wins.
+        """
+        from ..build import Component
+
+        if isinstance(target, Component):
+            if mg_id is None:
+                mg_id = target._mg
+            return ComponentHandle(self, target.component_id, mg_id)
+        return ComponentHandle(self, int(target), mg_id)
 
     def __getitem__(self, target: Component | int) -> ComponentHandle:
         return self.component(target)
@@ -320,12 +298,7 @@ class Site:
 
         Rejections (unknown id, bad value) raise ``ControlRejected``.
         """
-        path = (
-            f"/api/component/{component_id}/{action}"
-            if mg_id is None
-            else f"/api/mg/{mg_id}/component/{component_id}/{action}"
-        )
-        await self._http.control(path, payload)
+        await self._http.control(control_path(component_id, action, mg_id), payload)
 
     # --- scenarios --------------------------------------------------------------
 
@@ -375,6 +348,64 @@ class Site:
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.aclose()
+
+
+class MicrogridSignals:
+    """One microgrid's aggregate signals (flows over the whole graph)."""
+
+    def __init__(self, site: Site, mg_id: int | None) -> None:
+        self._site = site
+        self._mg = mg_id
+
+    def _signal(self, spec: MetricSpec[Q]) -> Signal[Q]:
+        read = functools.partial(self._site.metric_value, spec, self._mg)
+        return Signal(spec, read, spec.name)
+
+    def _cumulative(self, spec: MetricSpec[Q]) -> CumulativeSignal[Q]:
+        read = functools.partial(self._site.metric_value, spec, self._mg)
+        return CumulativeSignal(spec, read, spec.name)
+
+    @property
+    def grid_power(self) -> Signal[Power]:
+        """Net power at the grid connection point (import positive)."""
+        return self._signal(_M.GRID_POWER)
+
+    @property
+    def pv_power(self) -> Signal[Power]:
+        """Aggregate PV power (production negative)."""
+        return self._signal(_M.PV_POWER)
+
+    @property
+    def consumer_power(self) -> Signal[Power]:
+        """Aggregate consumer (load) power."""
+        return self._signal(_M.CONSUMER_POWER)
+
+    @property
+    def battery_power(self) -> Signal[Power]:
+        """Aggregate battery-pool power (discharge negative)."""
+        return self._signal(_M.BATTERY_POWER)
+
+    @property
+    def grid_energy(self) -> CumulativeSignal[Energy]:
+        """Cumulative net grid energy this run (the integral of grid_power)."""
+        return self._cumulative(_M.GRID_ENERGY)
+
+    @property
+    def consumer_energy(self) -> CumulativeSignal[Energy]:
+        """Cumulative consumer energy this run (integral of consumer_power)."""
+        return self._cumulative(_M.CONSUMER_ENERGY)
+
+    @property
+    def pv_energy(self) -> CumulativeSignal[Energy]:
+        """Cumulative PV energy this run (the integral of pv_power)."""
+        return self._cumulative(_M.PV_ENERGY)
+
+    @property
+    def battery_energy(self) -> CumulativeSignal[Energy]:
+        """Cumulative battery-pool *flow* this run (integral of
+        battery_power) — for the energy currently stored in a battery,
+        read that battery's ``stored_energy`` signal."""
+        return self._cumulative(_M.BATTERY_ENERGY)
 
 
 class ComponentHandle:
@@ -448,50 +479,30 @@ class ComponentHandle:
         if payload:
             await self._site.control_component(self._id, "drive", payload, self._mg)
 
-    async def active_power(self) -> Power | None:
-        """A single sample of this component's active power (gRPC)."""
-        return await self._site.active_power(self._id, self._mg)
+    @property
+    def power(self) -> Signal[Power]:
+        """The component's active power (gRPC) — read/expect only.
 
-    async def soc(self) -> Percentage | None:
-        """A single sample of this battery's state of charge (gRPC)."""
-        return await self._site.soc(self._id, self._mg)
+        The category-typed builders are the richer surface (a Meter's
+        ``power`` is also settable); this raw-id handle cannot know the
+        category, so its signals only observe.
+        """
+        site, cid, mg = self._site, self._id, self._mg
 
-    async def expect(
-        self,
-        spec: MetricSpec[Q],
-        *,
-        approx: Q | None = None,
-        tol: Q | None = None,
-        within: tuple[Q, Q] | None = None,
-        max: Q | None = None,
-        min: Q | None = None,
-        for_: timedelta | None = None,
-        timeout: timedelta = timedelta(seconds=10),
-        poll: timedelta = timedelta(milliseconds=250),
-    ) -> Q | list[Q | None] | None:
-        """Assert on one of this component's metrics (``ACTIVE_POWER``, ``SOC``)."""
-        reads: dict[str, Callable[[], Awaitable[Any]]] = {
-            "active_power": self.active_power,
-            "soc": self.soc,
-        }
-        untyped_read = reads.get(spec.name)
-        if untyped_read is None:
-            raise ValueError(
-                f"component expect supports active_power / soc, not {spec.name!r}"
-            )
-        read = cast("Callable[[], Awaitable[Q | None]]", untyped_read)
-        bound = spec.bind(read, label=f"component {self._id} {spec.name}")
-        return await expect_metric(
-            bound,
-            approx=approx,
-            tol=tol,
-            within=within,
-            max=max,
-            min=min,
-            for_=for_,
-            timeout=timeout,
-            poll=poll,
-        )
+        async def read() -> Power | None:
+            return await site.active_power(cid, mg)
+
+        return Signal(_M.ACTIVE_POWER, read, f"component {cid} active_power")
+
+    @property
+    def soc(self) -> Signal[Percentage]:
+        """The battery's state of charge (gRPC) — read/expect only."""
+        site, cid, mg = self._site, self._id, self._mg
+
+        async def read() -> Percentage | None:
+            return await site.soc(cid, mg)
+
+        return Signal(_M.SOC, read, f"component {cid} soc")
 
 
 class ScenarioRun:
@@ -556,6 +567,44 @@ class ScenarioRun:
         """The scenario's journal events (list of ``{kind, payload, …}``)."""
         body = await self._site._http.get_json(f"/api/scenario/events?since={since}")
         return body.get("events", [])
+
+
+def _components_of(config: Any) -> list[tuple[Any, int | None]]:
+    """Every builder Component in a launch config, with its microgrid id.
+
+    Components under a single top-level ``Microgrid`` keep ``None`` (the
+    site default routes there anyway); in a multi-microgrid config each
+    component carries its owning ``Microgrid``'s id, so its signals
+    route to the right one.
+    """
+    from ..build import Component, Microgrid
+
+    microgrids = 0
+
+    def count(node: Any) -> None:
+        nonlocal microgrids
+        if isinstance(node, Microgrid):
+            microgrids += 1
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                count(item)
+
+    count(config)
+    out: list[tuple[Any, int | None]] = []
+
+    def walk(node: Any, mg_id: int | None) -> None:
+        if isinstance(node, Component):
+            out.append((node, mg_id))
+            for child in node.successors:
+                walk(child, mg_id)
+        elif isinstance(node, Microgrid):
+            walk(node.topology, node.id if microgrids > 1 else None)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item, mg_id)
+
+    walk(config, None)
+    return out
 
 
 def connect(
@@ -626,7 +675,20 @@ async def launch(
             dispatch=endpoints.get("dispatch"),
             process=spawned.process,
         )
-        yield site
+        # Bind the topology objects: from here on, the builders are the
+        # live handles (LOAD.power.set(...), BAT.soc.read(), ...).
+        components = _components_of(config)
+        bound: list[Any] = []
+        try:
+            for component, mg_id in components:
+                component._bind(site, mg_id)
+                bound.append(component)
+            yield site
+        finally:
+            # Unbind whatever got bound — also on a failure partway
+            # through the bind loop, so a retry starts clean.
+            for component in bound:
+                component._unbind()
     finally:
         if site is not None:
             await site.aclose()

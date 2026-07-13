@@ -14,7 +14,6 @@ typed value to the Lisp literal switchyard reads.
 from __future__ import annotations
 
 from . import aio
-from .assertions import expect_metric
 from .build import (
     Component,
     ConfigSource,
@@ -33,8 +32,15 @@ from .build import (
     to_lisp_atom,
 )
 from .enums import CommandMode, Health, Metric, Schedule, TelemetryMode
-from .errors import ControlRejected, EvalRejected, SetpointRejected, SwitchyardError
-from .metrics import BoundMetric, MetricKind, MetricSpec
+from .errors import (
+    ControlRejected,
+    EvalRejected,
+    NoSample,
+    SetpointRejected,
+    SwitchyardError,
+)
+from .matchers import Matcher, at_least, at_most, between, near
+from .metrics import MetricSpec
 from .runtime import MicrogridEndpoint, Site, connect, launch
 from .scenarios import (
     Check,
@@ -44,6 +50,7 @@ from .scenarios import (
     ScenarioRun,
     run_scenario_stepped,
 )
+from .signals import CumulativeSignal, DrivenSignal, SettingSignal, Signal
 
 __all__ = [
     # process + transport
@@ -58,11 +65,19 @@ __all__ = [
     "SetpointRejected",
     "EvalRejected",
     "ControlRejected",
-    # metric model + assertion engine
+    "NoSample",
+    # signals + matchers
+    "Signal",
+    "CumulativeSignal",
+    "DrivenSignal",
+    "SettingSignal",
+    "Matcher",
+    "near",
+    "between",
+    "at_most",
+    "at_least",
+    # metric model
     "MetricSpec",
-    "MetricKind",
-    "BoundMetric",
-    "expect_metric",
     # topology builder
     "Microgrid",
     "Component",

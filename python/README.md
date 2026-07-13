@@ -170,28 +170,41 @@ await site[4].expect.soc(
 require it on every sample across a duration instead. Matchers: `approx`+`tol`,
 `within`, `max`, `min`.
 
-**Async core (v2)** — `switchyard.aio` is the async-native core: every
-read, write, and wait is a coroutine on your event loop (no background
-threads). Its assertion surface is generic-first: pass a metric from
-`switchyard.metrics`, and the metric's *kind* picks the semantics
-(power settles, energy is checked once):
+**Async core (v2): signals** — `switchyard.aio` is the async-native
+core: every read, write, and wait is a coroutine on your event loop (no
+background threads). Its unit is the *signal*: once `aio.launch` binds
+the topology, the builder objects are the live handles, and every
+observable quantity is an object with up to three verbs — `read`
+(returns the plain quantity; raises `NoSample`), `expect` (takes one
+typed matcher), and `set` where the simulator allows it. Capability
+lives in the type:
 
 ```python
-from switchyard.metrics import ACTIVE_POWER, BATTERY_ENERGY, GRID_POWER
+load = sw.meter(id=5, power=Power.zero())
+bat = sw.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
+                 soc=Percentage.from_percent(60))
 
 async with sw.aio.launch(mg) as site:
-    await site[5].drive(power=Power.from_kilowatts(20))
-    await site.expect(GRID_POWER, max=Power.from_kilowatts(13))
-    await site[3].expect(ACTIVE_POWER, approx=Power.from_kilowatts(2),
-                         tol=Power.from_watts(300))
-    await site.expect(BATTERY_ENERGY, max=Energy.from_watt_hours(-1))
+    await load.power.set(Power.from_kilowatts(20))       # drive the world
+    await site.grid_power.expect(sw.at_most(Power.from_kilowatts(13)))
+    await bat.soc.set(Percentage.from_percent(11))       # teleport state
+    await bat.soc.expect(sw.between(Percentage.from_percent(10),
+                                    Percentage.from_percent(12)))
+    stored = await bat.stored_energy.read()              # state (SoC×capacity)
+    await site.battery_energy.expect(                    # flow (∫ battery_power)
+        sw.at_most(Energy.from_watt_hours(-1)))
+    await inv.health.set(sw.Health.ERROR)                # fault injection
 ```
 
-`status()` and `drive()` constants go over typed JSON control endpoints
-(`/api/component/{id}/status` / `/drive`); a rejection (unknown id, bad
-value) raises `ControlRejected`. A `raw(...)` drive (lambda / symbol)
-still rides `/api/eval`. See `docs/python-api-redesign.org` for the
-design.
+Matchers: `near(x, tol=…)`, `between(lo, hi)`, `at_most(x)`,
+`at_least(x)` — one per expect, typed by the signal's quantity. An
+inverter's `power` has no `.set` (commanding it is `site[inv].command()`
+through the real gateway), and a cumulative signal's `expect` has no
+`hold_for` — the distinctions are in the types, not runtime errors.
+Every `*_energy` site aggregate is the integral of its `*_power`; energy
+*stored* in a battery is `bat.stored_energy`. Stimuli go over typed JSON
+control endpoints; rejections raise `ControlRejected`. See
+`docs/python-api-redesign.org` for the design.
 
 **Scenarios** — author in Python, or run a registered Lisp scenario:
 
