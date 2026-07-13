@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import switchyard.runtime as rt
+import switchyard._process as rt
 
 
 def test_which_binary_prefers_path(monkeypatch) -> None:

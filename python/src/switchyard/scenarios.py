@@ -28,9 +28,9 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from ._process import render_config, resolve_binary
 from .build import ConfigSource, RawLisp, to_lisp_atom
 from .enums import Metric, Schedule
-from .runtime import _render_config, _resolve_binary
 
 if TYPE_CHECKING:
     from frequenz.quantities import Power, Quantity
@@ -242,11 +242,11 @@ def run_scenario_stepped(
     Shells ``swctl scenario run NAME --stepped --config … --json``; with
     ``assert_pass`` a non-zero exit (a failed ``(check …)``) raises.
     """
-    binary = _resolve_binary(
+    binary = resolve_binary(
         "swctl", env_var="SWCTL_BIN", explicit=swctl_bin, flag="swctl_bin"
     )
     tmpdir = Path(tempfile.mkdtemp(prefix="switchyard-py-"))
-    config_path = _render_config(config, tmpdir)
+    config_path = render_config(config, tmpdir)
     args = [
         binary,
         "scenario",

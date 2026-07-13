@@ -120,7 +120,7 @@ def test_scenario_authoring_emits_define_scenario() -> None:
 
 
 def test_run_scenario_stepped_returns_report(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(scenarios_mod, "_resolve_binary", lambda *a, **k: "swctl")
+    monkeypatch.setattr(scenarios_mod, "resolve_binary", lambda *a, **k: "swctl")
     monkeypatch.setattr(
         scenarios_mod.subprocess,
         "run",
@@ -131,7 +131,7 @@ def test_run_scenario_stepped_returns_report(monkeypatch, tmp_path) -> None:
 
 
 def test_run_scenario_stepped_raises_on_nonzero_exit(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(scenarios_mod, "_resolve_binary", lambda *a, **k: "swctl")
+    monkeypatch.setattr(scenarios_mod, "resolve_binary", lambda *a, **k: "swctl")
     monkeypatch.setattr(
         scenarios_mod.subprocess,
         "run",
