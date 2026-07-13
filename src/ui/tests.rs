@@ -699,3 +699,91 @@ async fn dispatch_delete_endpoint_removes_then_404s() {
     let (status, _) = call(cfg, delete_req(&format!("/api/mg/2200/dispatches/{id}"))).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// The typed control endpoints mutate the site without Lisp: a drive
+/// lands a meter's constant power override, and every rejection is a
+/// structured HTTP error (400/404 + JSON), not an `ok: false` payload.
+#[tokio::test]
+async fn control_drive_sets_meter_power() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/7/drive", r#"{"power_w": 1234.5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    cfg.refresh_once();
+    let m = cfg.site().get(7).unwrap();
+    assert!((m.aggregate_power_w(&cfg.site()) - 1234.5).abs() < 1e-3);
+
+    // An unknown component is a 404 with the reason in the body.
+    let (status, body) = call(
+        cfg,
+        post_json("/api/component/999/drive", r#"{"power_w": 1.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("999"));
+}
+
+/// Status changes parse-then-apply: a valid health lands on the
+/// component's runtime, a bad value is a 400 and changes nothing.
+#[tokio::test]
+async fn control_status_flips_health_and_rejects_bad_values() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/7/status", r#"{"health": "error"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        cfg.site().runtime_of(7).health,
+        crate::sim::runtime::Health::Error
+    );
+
+    // A bad enum value: 400, and the health is untouched.
+    let (status, body) = call(
+        cfg.clone(),
+        post_json("/api/component/7/status", r#"{"health": "broken"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("health"));
+    assert_eq!(
+        cfg.site().runtime_of(7).health,
+        crate::sim::runtime::Health::Error
+    );
+
+    // A request with one bad field applies nothing (parse-then-apply).
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/component/7/status",
+            r#"{"health": "ok", "command_mode": "nonsense"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        cfg.site().runtime_of(7).health,
+        crate::sim::runtime::Health::Error
+    );
+}
+
+/// The per-microgrid variants resolve the mg first: an unregistered
+/// microgrid is a 404 before the component is even looked at.
+#[tokio::test]
+async fn control_for_mg_requires_a_registered_microgrid() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let (status, body) = call(
+        cfg,
+        post_json("/api/mg/33/component/7/drive", r#"{"power_w": 1.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("microgrid 33"));
+}

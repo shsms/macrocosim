@@ -67,6 +67,9 @@ pub async fn serve_with_listener(
 fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopbacks) -> Router {
     use handlers::{
         assets::{asset, index, logs_backfill},
+        control::{
+            component_drive, component_drive_for_mg, component_status, component_status_for_mg,
+        },
         defaults::defaults,
         dispatches::{
             dispatch_create_for_mg, dispatch_delete_for_mg, dispatch_set_active_for_mg,
@@ -96,6 +99,8 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/assets/{*path}", get(asset))
         .route("/api/topology", get(topology))
         .route("/api/eval", post(eval))
+        .route("/api/component/{id}/status", post(component_status))
+        .route("/api/component/{id}/drive", post(component_drive))
         .route("/api/format", post(format))
         .route("/api/history", get(history))
         .route("/api/defaults", get(defaults))
@@ -127,6 +132,14 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/api/microgrids/create", post(microgrids_create))
         .route("/api/mg/{mg_id}/topology", get(topology_for_mg))
         .route("/api/mg/{mg_id}/eval", post(eval_for_mg))
+        .route(
+            "/api/mg/{mg_id}/component/{id}/status",
+            post(component_status_for_mg),
+        )
+        .route(
+            "/api/mg/{mg_id}/component/{id}/drive",
+            post(component_drive_for_mg),
+        )
         .route("/api/mg/{mg_id}/history", get(history_for_mg))
         .route(
             "/api/mg/{mg_id}/microgrid/status",
