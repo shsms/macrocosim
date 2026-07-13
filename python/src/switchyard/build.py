@@ -103,7 +103,7 @@ def _normalize(kwargs: Mapping[str, Value | None]) -> dict[str, Value]:
     Only the convenience *key* renames live here; value conversion is
     :func:`to_lisp_atom`'s job, at emit time.
     """
-    renames = {"soc": "initial-soc", "sunlight": "sunlight%"}
+    renames = {"sunlight": "sunlight%"}
     out: dict[str, Value] = {}
     for key, value in kwargs.items():
         if value is None:
@@ -429,11 +429,21 @@ def battery(
     id: int | None = None,
     name: str | None = None,
     capacity: Energy | None = None,
-    soc: Percentage | None = None,
+    initial_soc: Percentage | None = None,
     **extra: Value,
 ) -> Battery:
-    """A battery (leaf). ``capacity`` is an ``Energy``; ``soc`` a ``Percentage``."""
-    args = {"id": id, "name": name, "capacity": capacity, "soc": soc, **extra}
+    """A battery (leaf). ``capacity`` is an ``Energy``.
+
+    ``initial_soc`` seeds the charge state; physics evolves it from the
+    first tick (read or teleport it later via the ``soc`` signal).
+    """
+    args = {
+        "id": id,
+        "name": name,
+        "capacity": capacity,
+        "initial_soc": initial_soc,
+        **extra,
+    }
     return _component("make-battery", args, cls=Battery)
 
 

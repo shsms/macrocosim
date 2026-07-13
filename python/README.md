@@ -15,7 +15,7 @@ import switchyard as sw
 
 async def test_limiter_holds_import_cap():
     bat = sw.battery(id=4, capacity=Energy.from_kilowatt_hours(92),
-                     soc=Percentage.from_percent(50))
+                     initial_soc=Percentage.from_percent(50))
     inv = sw.battery_inverter(id=3, successors=[bat],
         rated=(Power.from_kilowatts(-5), Power.from_kilowatts(5)))
     mg  = sw.Microgrid(id=1,
@@ -73,7 +73,7 @@ mg = sw.Microgrid(id=1, topology=sw.grid(id=1, successors=[
     sw.meter(id=2, successors=[
         sw.battery_inverter(id=3, rated=(P(-5), P(5)), successors=[
             sw.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
-                       soc=Percentage.from_percent(50))]),
+                       initial_soc=Percentage.from_percent(50))]),
         sw.solar_inverter(id=5, sunlight=Percentage.from_percent(80)),
         sw.meter(id=6, power=Power.from_watts(1000))])]))
 ```
@@ -182,7 +182,7 @@ lives in the type:
 ```python
 load = sw.meter(id=5, power=Power.zero())
 bat = sw.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
-                 soc=Percentage.from_percent(60))
+                 initial_soc=Percentage.from_percent(60))
 
 async with sw.aio.launch(mg) as site:
     await load.power.set(Power.from_kilowatts(20))       # drive the world

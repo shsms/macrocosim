@@ -32,7 +32,7 @@ _SETTLE = timedelta(seconds=20)
 async def test_signal_surface_end_to_end() -> None:
     # The builders are the identities — and, once launched, the handles.
     load = sw.meter(id=5, power=Power.zero())
-    bat = sw.battery(id=4, capacity=kWh(100), soc=percent(60))
+    bat = sw.battery(id=4, capacity=kWh(100), initial_soc=percent(60))
     inv = sw.battery_inverter(id=3, rated=(kW(-50), kW(50)), successors=[bat])
     mg = sw.Microgrid(
         id=1,

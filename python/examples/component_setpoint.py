@@ -34,7 +34,7 @@ TOPOLOGY = sw.Microgrid(
                             sw.battery(
                                 id=4,
                                 capacity=Energy.from_kilowatt_hours(100),
-                                soc=Percentage.from_percent(50),
+                                initial_soc=Percentage.from_percent(50),
                             )
                         ],
                     )

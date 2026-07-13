@@ -31,7 +31,9 @@ def test_ergonomic_kwargs_map_to_plist_keys() -> None:
     assert ":rated-upper 5000.0" in inv_lisp
     # Energy → Wh; Percentage → percent; soc → initial-soc (battery conveniences).
     bat_lisp = battery(
-        id=4, capacity=Energy.from_kilowatt_hours(100), soc=Percentage.from_percent(50)
+        id=4,
+        capacity=Energy.from_kilowatt_hours(100),
+        initial_soc=Percentage.from_percent(50),
     ).to_lisp()
     assert ":capacity 100000.0" in bat_lisp
     assert ":initial-soc 50.0" in bat_lisp
