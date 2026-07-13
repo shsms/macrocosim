@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sysconfig
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -71,6 +72,9 @@ class Site:
         self._process = process
         self._http = HttpClient(f"http://{ui}")
         self._grpc_clients: dict[int, GrpcClient] = {}
+        # Assertion reads run on asyncio.to_thread worker threads, so two
+        # can race to build the same client; the lock makes it one-shot.
+        self._grpc_lock = threading.Lock()
 
     @property
     def grpc(self) -> str:
@@ -108,12 +112,13 @@ class Site:
         test would open against switchyard.
         """
         mg = self._resolve_mg(mg_id)
-        client = self._grpc_clients.get(mg)
-        if client is None:
-            from ._grpc import GrpcClient
+        with self._grpc_lock:
+            client = self._grpc_clients.get(mg)
+            if client is None:
+                from ._grpc import GrpcClient
 
-            client = GrpcClient(self.microgrid_grpc_url(mg))
-            self._grpc_clients[mg] = client
+                client = GrpcClient(self.microgrid_grpc_url(mg))
+                self._grpc_clients[mg] = client
         return client
 
     # --- reads: component-level (gRPC — what the app under test sees) ------
@@ -304,9 +309,12 @@ class Site:
     # --- lifecycle --------------------------------------------------------
 
     def close(self) -> None:
-        for client in self._grpc_clients.values():
-            client.close()
-        self._grpc_clients.clear()
+        # Under the same lock grpc_client() inserts with — a still-running
+        # to_thread assertion must not slip a fresh client past the drain.
+        with self._grpc_lock:
+            for client in self._grpc_clients.values():
+                client.close()
+            self._grpc_clients.clear()
         self._http.close()
         _terminate(self._process)
 

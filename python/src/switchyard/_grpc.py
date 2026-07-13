@@ -70,6 +70,9 @@ class GrpcClient:
         self._latest: dict[tuple[int, str], float | None] = {}
         self._primed: set[tuple[int, str]] = set()
         self._pumps: dict[tuple[int, str], Future[None]] = {}
+        # Reads run on asyncio.to_thread worker threads, so two can race
+        # to open the same stream; the lock makes pump creation one-shot.
+        self._pump_lock = threading.Lock()
 
     @staticmethod
     async def _make_client(url: str) -> Any:
@@ -118,12 +121,13 @@ class GrpcClient:
         wait, not one per poll, and never busy-waits forever.
         """
         key = (component_id, metric_name)
-        pump = self._pumps.get(key)
-        if pump is None:
-            pump = asyncio.run_coroutine_threadsafe(
-                self._pump(component_id, metric_name), self._loop
-            )
-            self._pumps[key] = pump
+        with self._pump_lock:
+            pump = self._pumps.get(key)
+            if pump is None:
+                pump = asyncio.run_coroutine_threadsafe(
+                    self._pump(component_id, metric_name), self._loop
+                )
+                self._pumps[key] = pump
         deadline = time.monotonic() + first_wait
         while (
             key not in self._latest
@@ -201,9 +205,13 @@ class GrpcClient:
     # --- lifecycle --------------------------------------------------------
 
     def close(self) -> None:
-        for pump in self._pumps.values():
-            pump.cancel()
-        self._pumps.clear()
+        # Under the same lock _read_metric inserts with — a still-running
+        # read must not slip a fresh pump past the drain onto a loop that
+        # is about to stop.
+        with self._pump_lock:
+            for pump in self._pumps.values():
+                pump.cancel()
+            self._pumps.clear()
         try:
             self._run(self._client.disconnect())
         except Exception:  # noqa: BLE001 — teardown is best-effort
