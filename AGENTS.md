@@ -113,12 +113,13 @@ so construction + validation stay identical.
 
 ## Dependencies
 
-- `tulisp = { git = "https://github.com/shsms/tulisp", features =
-  ["sync", "etags"] }` — tracks the main branch for AsPlist!, etags,
-  and other downstream-touching features. Don't downgrade or swap
-  branches without coordination.
-- `tulisp-async = { git = "https://github.com/tulisp/tulisp-async" }`
-  — same-ctx timer primitives (`run-with-timer`, `cancel-timer`,
+- `tulisp = { version = "0.29", features = ["sync", "etags"] }` — the
+  crates.io release (the git main-branch pin ended when 0.29.0
+  shipped). Known 0.29.0 gap: a re-entrant `eval_string` underflows
+  the eval-depth counter (fixed upstream) — `src/lisp/defuns/fs.rs`
+  works around it with `eval_file`; drop the workaround on the next
+  release bump.
+- `tulisp-async = "0.1"` — same-ctx timer primitives (`run-with-timer`, `cancel-timer`,
   `sleep-for`). `TokioExecutor::new` calls `Handle::current()`, so
   `Config::new` must be invoked inside a running tokio runtime.
   `register` returns a `Handle`; the pre-tick hook owns one clone
