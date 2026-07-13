@@ -86,12 +86,11 @@ a battery inverter charging at the highest power the live cap allows:
 The optional :id is a readability/label. The timer is tracked on
 `active-timers` so `reset-state` cancels it on reload.
 
-Cadence vs command-delay: re-commanding a component resets its
-command-delay timer, so a controller that re-sends every :every-ms must
-tick *slower* than the target's :command-delay-ms or the setpoint never
-arms. The default 100 ms suits fast actuators; for a battery inverter
-(default 1500 ms delay) raise :every-ms above the delay, or give the
-inverter a small :command-delay-ms."
+Cadence vs command-delay: each command takes :command-delay-ms to
+execute, and while one executes only the newest incoming command waits
+for its turn. A controller that re-sends every :every-ms therefore
+trails the target by about one delay; re-sending faster than the delay
+is safe (it never starves the device), it just wastes commands."
   (let* ((on-tick (plist-get plist :on-tick))
          (req-ms (plist-get plist :every-ms))
          (ms (if req-ms req-ms 100)))

@@ -15,6 +15,15 @@ use parking_lot::Mutex;
 
 /// Holds a pending set-point that becomes "armed" only after `delay`
 /// has elapsed since `set` was called.
+///
+/// Models a device that takes `delay` to execute each command: every
+/// command arms at its own set-time-plus-delay, and while one command
+/// is still executing only the newest later arrival is kept (a
+/// one-deep waiting slot). A controller that re-sends faster than
+/// `delay` therefore trails by about one delay but always makes
+/// progress — a fresh command must never restart the executing
+/// command's clock, or a fast re-send cadence would starve the device
+/// forever.
 #[derive(Debug)]
 pub struct CommandDelay {
     state: Mutex<State>,
@@ -23,15 +32,36 @@ pub struct CommandDelay {
 
 #[derive(Debug, Clone)]
 struct State {
-    pending: Option<(DateTime<Utc>, f32)>,
+    /// The command being executed; arms once its due time passes.
+    executing: Option<(DateTime<Utc>, f32)>,
+    /// The newest command that arrived while another was executing.
+    /// It keeps its own arrival time, so it arms at arrival + delay —
+    /// commands pipeline; they are not serialized one per delay.
+    waiting: Option<(DateTime<Utc>, f32)>,
     armed: Option<f32>,
+}
+
+impl State {
+    /// Arm every command whose execution has finished by `now`. Runs
+    /// at most twice: the executing command, then a waiting one that
+    /// is also already past its own due time.
+    fn promote(&mut self, now: DateTime<Utc>, delay: chrono::Duration) {
+        while let Some((set_at, v)) = self.executing {
+            if now < set_at + delay {
+                return;
+            }
+            self.armed = Some(v);
+            self.executing = self.waiting.take();
+        }
+    }
 }
 
 impl CommandDelay {
     pub fn new(delay: Duration) -> Self {
         Self {
             state: Mutex::new(State {
-                pending: None,
+                executing: None,
+                waiting: None,
                 armed: None,
             }),
             delay,
@@ -46,31 +76,35 @@ impl CommandDelay {
         let mut s = self.state.lock();
         if self.delay.is_zero() {
             s.armed = Some(value);
-            s.pending = None;
+            s.executing = None;
+            s.waiting = None;
+            return;
+        }
+        s.promote(now, self.delay_chrono());
+        if s.executing.is_none() {
+            s.executing = Some((now, value));
         } else {
-            s.pending = Some((now, value));
+            s.waiting = Some((now, value));
         }
     }
 
-    /// Promote pending → armed if its delay has elapsed. Returns the
-    /// currently armed value (None until the first command finishes).
+    /// Promote finished commands, then return the currently armed
+    /// value (None until the first command finishes executing).
     pub fn poll(&self, now: DateTime<Utc>) -> Option<f32> {
         let mut s = self.state.lock();
-        if let Some((set_at, v)) = s.pending {
-            let due =
-                set_at + chrono::Duration::from_std(self.delay).unwrap_or(chrono::Duration::zero());
-            if now >= due {
-                s.armed = Some(v);
-                s.pending = None;
-            }
-        }
+        s.promote(now, self.delay_chrono());
         s.armed
     }
 
     pub fn reset(&self) {
         let mut s = self.state.lock();
         s.armed = None;
-        s.pending = None;
+        s.executing = None;
+        s.waiting = None;
+    }
+
+    fn delay_chrono(&self) -> chrono::Duration {
+        chrono::Duration::from_std(self.delay).unwrap_or(chrono::Duration::zero())
     }
 
     /// Inspect the armed value without advancing the delay clock.
@@ -179,6 +213,52 @@ mod tests {
         cd.set_target(t0, 5000.0);
         assert_eq!(cd.poll(t0 + chrono::Duration::seconds(1)), None);
         assert_eq!(cd.poll(t0 + chrono::Duration::seconds(2)), Some(5000.0));
+    }
+
+    /// A controller re-sending faster than the delay must not starve
+    /// the device: the executing command keeps its own due time, so
+    /// commands keep arming even under a continuous fast stream.
+    #[test]
+    fn command_delay_survives_fast_resend_cadence() {
+        let t0 = Utc::now();
+        let cd = CommandDelay::new(Duration::from_millis(1500));
+        // One command every 500 ms, values ramping 1000, 2000, …
+        for i in 0..10 {
+            cd.set_target(
+                t0 + chrono::Duration::milliseconds(500 * i),
+                (i + 1) as f32 * 1000.0,
+            );
+        }
+        // At t0+4.5s the stream has been running for 9 commands; the
+        // device must have armed several of them by now, not none.
+        let armed = cd.poll(t0 + chrono::Duration::milliseconds(4500));
+        assert!(armed.is_some(), "fast re-sends starved the device");
+        // And it keeps progressing: the newest command eventually arms.
+        let settled = cd.poll(t0 + chrono::Duration::seconds(60));
+        assert_eq!(settled, Some(10_000.0));
+    }
+
+    /// While one command executes, only the newest waiting command
+    /// survives — intermediate values are superseded, not queued.
+    #[test]
+    fn command_delay_newest_waiting_command_wins() {
+        let t0 = Utc::now();
+        let cd = CommandDelay::new(Duration::from_secs(2));
+        cd.set_target(t0, 1000.0);
+        cd.set_target(t0 + chrono::Duration::milliseconds(200), 2000.0);
+        cd.set_target(t0 + chrono::Duration::milliseconds(400), 3000.0);
+        // First command arms at its own due time, t0+2s. The waiting
+        // slot holds only the newest (3000), which arms at t0+2.4s —
+        // its own set time plus the delay. 2000 never arms.
+        assert_eq!(cd.poll(t0 + chrono::Duration::seconds(2)), Some(1000.0));
+        assert_eq!(
+            cd.poll(t0 + chrono::Duration::milliseconds(2300)),
+            Some(1000.0)
+        );
+        assert_eq!(
+            cd.poll(t0 + chrono::Duration::milliseconds(2400)),
+            Some(3000.0)
+        );
     }
 
     #[test]
