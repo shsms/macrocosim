@@ -32,9 +32,12 @@ from typing import Generic, TypeVar
 
 from frequenz.quantities import Quantity
 
+from .metrics import BoundMetric, MetricKind
+
 Q = TypeVar("Q", bound=Quantity)
 
 _DEFAULT_POLL = timedelta(milliseconds=250)
+_DEFAULT_TIMEOUT = timedelta(seconds=10)
 
 
 def _predicate(
@@ -231,3 +234,82 @@ class Assertion(Generic[Q]):
         poll: timedelta = _DEFAULT_POLL,
     ) -> Q | None:
         return await self.eventually(min=floor, timeout=timeout, poll=poll)
+
+
+async def expect_metric(
+    metric: BoundMetric[Q],
+    *,
+    approx: Q | None = None,
+    tol: Q | None = None,
+    within: tuple[Q, Q] | None = None,
+    max: Q | None = None,
+    min: Q | None = None,
+    for_: timedelta | None = None,
+    timeout: timedelta = _DEFAULT_TIMEOUT,
+    poll: timedelta = _DEFAULT_POLL,
+) -> Q | list[Q | None] | None:
+    """Assert on a bound metric; its *kind* picks the check semantics.
+
+    The one engine behind every named ``expect`` method:
+
+    - An ``INSTANTANEOUS`` metric settles: poll until the matcher holds
+      (``eventually``), or require it on every sample when ``for_`` is
+      given (``always``).
+    - A ``CUMULATIVE`` metric is a monotonic total: check the matcher
+      once, after awaiting the total's first appearance (``once``).
+      ``for_`` does not apply and raises.
+
+    Args:
+        metric: the bound metric (read + kind + label).
+        approx: match values equal to this, within ``tol``.
+        tol: the tolerance for ``approx``.
+        within: match values inside this closed interval.
+        max: match values at or below this.
+        min: match values at or above this.
+        for_: require the matcher on every sample across this duration
+            (instantaneous metrics only). The window itself is then the
+            whole budget: ``timeout`` does not apply.
+        timeout: how long to poll (or await availability) before failing.
+        poll: the delay between reads.
+
+    Returns:
+        The value converged on (or the observed series with ``for_``).
+
+    Raises:
+        ValueError: on ``for_`` with a cumulative metric.
+    """
+    assertion: Assertion[Q] = Assertion(metric.read, metric.label)
+    if metric.spec.kind is MetricKind.CUMULATIVE:
+        if for_ is not None:
+            raise ValueError(
+                f"{metric.label}: for_= does not apply to a cumulative "
+                "metric — the running total is checked once"
+            )
+        return await assertion.once(
+            within=within,
+            approx=approx,
+            tol=tol,
+            max=max,
+            min=min,
+            timeout=timeout,
+            poll=poll,
+        )
+    if for_ is not None:
+        return await assertion.always(
+            within=within,
+            approx=approx,
+            tol=tol,
+            max=max,
+            min=min,
+            for_=for_,
+            poll=poll,
+        )
+    return await assertion.eventually(
+        within=within,
+        approx=approx,
+        tol=tol,
+        max=max,
+        min=min,
+        timeout=timeout,
+        poll=poll,
+    )

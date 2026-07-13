@@ -13,6 +13,7 @@ typed value to the Lisp literal switchyard reads.
 
 from __future__ import annotations
 
+from .assertions import expect_metric
 from .build import (
     Component,
     ConfigSource,
@@ -32,6 +33,7 @@ from .build import (
 )
 from .enums import CommandMode, Health, Metric, Schedule, TelemetryMode
 from .errors import SetpointRejected, SwitchyardError
+from .metrics import BoundMetric, MetricKind, MetricSpec
 from .runtime import MicrogridEndpoint, Site, connect, launch
 from .scenarios import (
     Check,
@@ -51,6 +53,11 @@ __all__ = [
     # errors
     "SwitchyardError",
     "SetpointRejected",
+    # metric model + assertion engine
+    "MetricSpec",
+    "MetricKind",
+    "BoundMetric",
+    "expect_metric",
     # topology builder
     "Microgrid",
     "Component",
