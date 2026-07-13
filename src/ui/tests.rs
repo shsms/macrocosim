@@ -787,3 +787,29 @@ async fn control_for_mg_requires_a_registered_microgrid() {
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(parsed["error"].as_str().unwrap().contains("microgrid 33"));
 }
+
+/// Driving a battery's SoC teleports its state: the test can arrange a
+/// nearly-empty or nearly-full pool without simulating the charge.
+#[tokio::test]
+async fn control_drive_sets_battery_soc() {
+    let cfg = config_with("(%make-battery :id 4 :initial-soc 60.0)").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/4/drive", r#"{"soc_pct": 11.5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let site = cfg.site();
+    let soc = site.get(4).unwrap().telemetry(&site).soc_pct.unwrap();
+    assert!((soc - 11.5).abs() < 1e-3, "{soc}");
+
+    // Out-of-range values clamp instead of corrupting the state.
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/4/drive", r#"{"soc_pct": 250.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let soc = site.get(4).unwrap().telemetry(&site).soc_pct.unwrap();
+    assert!((soc - 100.0).abs() < 1e-3, "{soc}");
+}

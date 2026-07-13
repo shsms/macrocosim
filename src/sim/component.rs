@@ -263,6 +263,12 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// numeric argument. Default no-op.
     fn set_active_power_override(&self, _p: f32) {}
 
+    /// Teleport a battery's state of charge to `pct` (clamped to
+    /// 0..=100). Lets a test arrange a precondition (a nearly-empty or
+    /// nearly-full pool) without simulating hours of charging. Default
+    /// no-op for components that carry no charge.
+    fn set_soc_pct(&self, _pct: f32) {}
+
     /// Replace the meter's `:power` source with a Lisp expression
     /// that the scheduler's `refresh_inputs` pass re-resolves each
     /// tick. Used by `(set-meter-power id (lambda () …))` and by

@@ -20,6 +20,7 @@ use crate::sim::microgrid_site::MicrogridSite;
 use crate::sim::runtime::{CommandMode, Health, TelemetryMode};
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::ui) struct StatusRequest {
     /// New health state (`ok` / `error` / `standby`), if changing.
     health: Option<String>,
@@ -32,11 +33,14 @@ pub(in crate::ui) struct StatusRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::ui) struct DriveRequest {
     /// Constant active-power override for a meter (watts), if driving.
     power_w: Option<f64>,
     /// Sunlight percentage for a PV inverter, if driving.
     sunlight_pct: Option<f64>,
+    /// Teleport a battery's state of charge to this percentage.
+    soc_pct: Option<f64>,
 }
 
 /// Empty JSON on success; the error text on any rejection.
@@ -120,6 +124,9 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
     }
     if let Some(pct) = req.sunlight_pct {
         component.set_sunlight_pct(pct as f32);
+    }
+    if let Some(pct) = req.soc_pct {
+        component.set_soc_pct(pct as f32);
     }
     Ok(Json(serde_json::json!({})))
 }
