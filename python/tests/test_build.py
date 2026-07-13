@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import time, timedelta
 
-from frequenz.quantities import Energy, Percentage, Power
+from frequenz.quantities import (
+    ApparentPower,
+    Current,
+    Energy,
+    Percentage,
+    Power,
+    Voltage,
+)
 
 import switchyard as sw
 from switchyard.build import Microgrid, battery, battery_inverter, grid, meter, raw
@@ -43,13 +50,20 @@ def test_ergonomic_kwargs_map_to_plist_keys() -> None:
 
 
 def test_value_kinds_render_correctly() -> None:
-    # symbol-valued key (enum), string-valued key, bool → t, int stays int.
-    node = meter(id=2, name="main", hidden=True, health=sw.Health.ERROR, interval=5)
+    # symbol-valued key (enum), string-valued key, bool → t, and the
+    # interval timedelta lands as whole server-side milliseconds.
+    node = meter(
+        id=2,
+        name="main",
+        hidden=True,
+        health=sw.Health.ERROR,
+        interval=timedelta(seconds=5),
+    )
     lisp = node.to_lisp()
     assert ':name "main"' in lisp
     assert ":hidden t" in lisp
     assert ":health 'error" in lisp  # symbol, not a string
-    assert ":interval 5" in lisp  # int, no decimal
+    assert ":interval 5000" in lisp  # milliseconds, no decimal
 
 
 def test_to_lisp_atom_converts_typed_values() -> None:
@@ -97,3 +111,63 @@ def test_public_constructors_exported() -> None:
         "Microgrid",
     ):
         assert hasattr(sw, name), name
+
+
+def test_builders_cover_every_server_arg() -> None:
+    # One call per builder exercising the newly named parameters; each
+    # keyword must land under the server's exact plist key and unit.
+    g = sw.grid(
+        id=1,
+        rated_fuse_current=Current.from_amperes(63),
+        stream_jitter_pct=Percentage.from_percent(5),
+    ).to_lisp()
+    assert ":rated-fuse-current 63" in g
+    assert ":stream-jitter-pct 5.0" in g
+
+    inv = sw.battery_inverter(
+        id=3,
+        interval=timedelta(milliseconds=500),
+        command_delay=timedelta(milliseconds=250),
+        ramp_rate=1000.0,
+        reactive_pf_limit=0.9,
+        reactive_apparent_va=ApparentPower.from_volt_amperes(10000),
+        reactive_command_delay=timedelta(milliseconds=100),
+        reactive_ramp_rate=2000.0,
+    ).to_lisp()
+    assert ":interval 500" in inv
+    assert ":command-delay-ms 250" in inv
+    assert ":ramp-rate 1000.0" in inv
+    assert ":reactive-pf-limit 0.9" in inv
+    assert ":reactive-apparent-va 10000.0" in inv
+    assert ":reactive-command-delay-ms 100" in inv
+    assert ":reactive-ramp-rate 2000.0" in inv
+
+    bat = sw.battery(
+        id=4,
+        soc_lower=Percentage.from_percent(10),
+        soc_upper=Percentage.from_percent(90),
+        soc_protect_margin=Percentage.from_percent(5),
+        voltage=Voltage.from_volts(800),
+    ).to_lisp()
+    assert ":soc-lower 10.0" in bat
+    assert ":soc-upper 90.0" in bat
+    assert ":soc-protect-margin 5.0" in bat
+    assert ":voltage 800.0" in bat
+
+    ev = sw.ev_charger(
+        id=6,
+        capacity=Energy.from_kilowatt_hours(75),
+        initial_soc=Percentage.from_percent(30),
+        command_delay=timedelta(milliseconds=200),
+        ramp_rate=500.0,
+    ).to_lisp()
+    assert ":capacity 75000.0" in ev
+    assert ":initial-soc 30.0" in ev
+    assert ":command-delay-ms 200" in ev
+
+    # make-chp takes no rated bounds; the builder no longer offers them.
+    import inspect
+
+    assert "rated" not in inspect.signature(sw.chp).parameters
+    chp_lisp = sw.chp(id=7, stream_jitter_pct=Percentage.from_percent(2)).to_lisp()
+    assert ":stream-jitter-pct 2.0" in chp_lisp

@@ -23,7 +23,15 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, TypeAlias, TypeVar, runtime_checkable
 
-from frequenz.quantities import Energy, Percentage, Power, Quantity
+from frequenz.quantities import (
+    ApparentPower,
+    Current,
+    Energy,
+    Percentage,
+    Power,
+    Quantity,
+    Voltage,
+)
 
 from .enums import CommandMode, Health, TelemetryMode
 from .metrics import ACTIVE_POWER, SOC, STORED_ENERGY
@@ -339,6 +347,16 @@ def _component(
     return cls(make, normalized, list(successors or []))
 
 
+def _ms(value: timedelta | None) -> int | None:
+    """A timedelta as whole milliseconds (the server's interval unit)."""
+    return None if value is None else int(round(value.total_seconds() * 1000.0))
+
+
+def _amps(value: Current | None) -> int | None:
+    """A current as whole amperes (the server's fuse-rating unit)."""
+    return None if value is None else int(round(value.base_value))
+
+
 # --- constructors (parents take successors; leaves don't) -----------------
 
 
@@ -347,6 +365,8 @@ def grid(
     id: int | None = None,
     name: str | None = None,
     rated: tuple[Power, Power] | None = None,
+    rated_fuse_current: Current | None = None,
+    stream_jitter_pct: Percentage | None = None,
     health: Health | None = None,
     telemetry_mode: TelemetryMode | None = None,
     command_mode: CommandMode | None = None,
@@ -357,6 +377,8 @@ def grid(
     args = {
         "id": id,
         "name": name,
+        "rated_fuse_current": _amps(rated_fuse_current),
+        "stream_jitter_pct": stream_jitter_pct,
         "health": health,
         "telemetry_mode": telemetry_mode,
         "command_mode": command_mode,
@@ -376,17 +398,27 @@ def meter(
     id: int | None = None,
     name: str | None = None,
     power: Power | RawLisp | None = None,
+    interval: timedelta | None = None,
+    hidden: bool | None = None,
+    stream_jitter_pct: Percentage | None = None,
     health: Health | None = None,
     telemetry_mode: TelemetryMode | None = None,
     command_mode: CommandMode | None = None,
     successors: Sequence[Component] | None = None,
     **extra: Value,
 ) -> Meter:
-    """A meter. ``power`` seeds its published load (a ``Power``, or ``raw(...)``)."""
+    """A meter. ``power`` seeds its published load (a ``Power``, or ``raw(...)``).
+
+    ``interval`` is the telemetry stream period; ``hidden`` keeps the
+    meter out of the visible topology (helper meters).
+    """
     args = {
         "id": id,
         "name": name,
         "power": power,
+        "interval": _ms(interval),
+        "hidden": hidden,
+        "stream_jitter_pct": stream_jitter_pct,
         "health": health,
         "telemetry_mode": telemetry_mode,
         "command_mode": command_mode,
@@ -400,16 +432,39 @@ def battery_inverter(
     id: int | None = None,
     name: str | None = None,
     rated: tuple[Power, Power] | None = None,
+    interval: timedelta | None = None,
+    command_delay: timedelta | None = None,
+    ramp_rate: float | None = None,
+    reactive_pf_limit: float | None = None,
+    reactive_apparent_va: ApparentPower | None = None,
+    reactive_command_delay: timedelta | None = None,
+    reactive_ramp_rate: float | None = None,
+    stream_jitter_pct: Percentage | None = None,
     health: Health | None = None,
     telemetry_mode: TelemetryMode | None = None,
     command_mode: CommandMode | None = None,
     successors: Sequence[Component] | None = None,
     **extra: Value,
 ) -> BatteryInverter:
-    """A battery inverter; give it a ``battery`` child via ``successors``."""
+    """A battery inverter; give it a ``battery`` child via ``successors``.
+
+    ``command_delay`` models the device latency before a setpoint starts
+    tracking; ``ramp_rate`` is the slew in W/s. The ``reactive_*`` knobs
+    cap and pace reactive power: ``reactive_pf_limit`` (|Q| ≤ k·|P|,
+    0 disables), ``reactive_apparent_va`` (P² + Q² ≤ apparent², 0
+    disables), and ``reactive_ramp_rate`` in VAR/s.
+    """
     args = {
         "id": id,
         "name": name,
+        "interval": _ms(interval),
+        "command_delay_ms": _ms(command_delay),
+        "ramp_rate": ramp_rate,
+        "reactive_pf_limit": reactive_pf_limit,
+        "reactive_apparent_va": reactive_apparent_va,
+        "reactive_command_delay_ms": _ms(reactive_command_delay),
+        "reactive_ramp_rate": reactive_ramp_rate,
+        "stream_jitter_pct": stream_jitter_pct,
         "health": health,
         "telemetry_mode": telemetry_mode,
         "command_mode": command_mode,
@@ -430,17 +485,36 @@ def solar_inverter(
     name: str | None = None,
     rated: tuple[Power, Power] | None = None,
     sunlight: Percentage | None = None,
+    interval: timedelta | None = None,
+    command_delay: timedelta | None = None,
+    ramp_rate: float | None = None,
+    reactive_pf_limit: float | None = None,
+    reactive_apparent_va: ApparentPower | None = None,
+    reactive_command_delay: timedelta | None = None,
+    reactive_ramp_rate: float | None = None,
+    stream_jitter_pct: Percentage | None = None,
     health: Health | None = None,
     telemetry_mode: TelemetryMode | None = None,
     command_mode: CommandMode | None = None,
     successors: Sequence[Component] | None = None,
     **extra: Value,
 ) -> SolarInverter:
-    """A solar (PV) inverter. ``sunlight`` seeds its irradiance (a ``Percentage``)."""
+    """A solar (PV) inverter. ``sunlight`` seeds its irradiance (a ``Percentage``).
+
+    Latency, slew, and reactive knobs as on ``battery_inverter``.
+    """
     args = {
         "id": id,
         "name": name,
         "sunlight": sunlight,
+        "interval": _ms(interval),
+        "command_delay_ms": _ms(command_delay),
+        "ramp_rate": ramp_rate,
+        "reactive_pf_limit": reactive_pf_limit,
+        "reactive_apparent_va": reactive_apparent_va,
+        "reactive_command_delay_ms": _ms(reactive_command_delay),
+        "reactive_ramp_rate": reactive_ramp_rate,
+        "stream_jitter_pct": stream_jitter_pct,
         "health": health,
         "telemetry_mode": telemetry_mode,
         "command_mode": command_mode,
@@ -462,19 +536,39 @@ def battery(
     capacity: Energy | None = None,
     initial_soc: Percentage | None = None,
     rated: tuple[Power, Power] | None = None,
+    soc_lower: Percentage | None = None,
+    soc_upper: Percentage | None = None,
+    soc_protect_margin: Percentage | None = None,
+    voltage: Voltage | None = None,
+    interval: timedelta | None = None,
+    stream_jitter_pct: Percentage | None = None,
+    health: Health | None = None,
+    telemetry_mode: TelemetryMode | None = None,
+    command_mode: CommandMode | None = None,
     **extra: Value,
 ) -> Battery:
     """A battery (leaf). ``capacity`` is an ``Energy``.
 
     ``initial_soc`` seeds the charge state; physics evolves it from the
     first tick (read or teleport it later via the ``soc`` signal).
-    ``rated`` bounds the DC power envelope (lower, upper).
+    ``rated`` bounds the DC power envelope (lower, upper);
+    ``soc_lower`` / ``soc_upper`` set the operating band, and the
+    protective taper starts ``soc_protect_margin`` inside it.
     """
     args = {
         "id": id,
         "name": name,
         "capacity": capacity,
         "initial_soc": initial_soc,
+        "soc_lower": soc_lower,
+        "soc_upper": soc_upper,
+        "soc_protect_margin": soc_protect_margin,
+        "voltage": voltage,
+        "interval": _ms(interval),
+        "stream_jitter_pct": stream_jitter_pct,
+        "health": health,
+        "telemetry_mode": telemetry_mode,
+        "command_mode": command_mode,
         **extra,
     }
     return _component("make-battery", args, rated=rated, cls=Battery)
@@ -485,10 +579,39 @@ def ev_charger(
     id: int | None = None,
     name: str | None = None,
     rated: tuple[Power, Power] | None = None,
+    capacity: Energy | None = None,
+    initial_soc: Percentage | None = None,
+    soc_lower: Percentage | None = None,
+    soc_upper: Percentage | None = None,
+    soc_protect_margin: Percentage | None = None,
+    interval: timedelta | None = None,
+    command_delay: timedelta | None = None,
+    ramp_rate: float | None = None,
+    stream_jitter_pct: Percentage | None = None,
+    health: Health | None = None,
+    telemetry_mode: TelemetryMode | None = None,
+    command_mode: CommandMode | None = None,
     **extra: Value,
 ) -> Component:
-    """An EV charger (leaf)."""
-    args = {"id": id, "name": name, **extra}
+    """An EV charger (leaf). Battery-like: the connected car's pack has a
+    ``capacity``, an ``initial_soc``, and an SoC operating band."""
+    args = {
+        "id": id,
+        "name": name,
+        "capacity": capacity,
+        "initial_soc": initial_soc,
+        "soc_lower": soc_lower,
+        "soc_upper": soc_upper,
+        "soc_protect_margin": soc_protect_margin,
+        "interval": _ms(interval),
+        "command_delay_ms": _ms(command_delay),
+        "ramp_rate": ramp_rate,
+        "stream_jitter_pct": stream_jitter_pct,
+        "health": health,
+        "telemetry_mode": telemetry_mode,
+        "command_mode": command_mode,
+        **extra,
+    }
     return _component("make-ev-charger", args, rated=rated, cls=Component)
 
 
@@ -496,12 +619,27 @@ def chp(
     *,
     id: int | None = None,
     name: str | None = None,
-    rated: tuple[Power, Power] | None = None,
+    stream_jitter_pct: Percentage | None = None,
+    health: Health | None = None,
+    telemetry_mode: TelemetryMode | None = None,
+    command_mode: CommandMode | None = None,
     **extra: Value,
 ) -> Component:
-    """A combined heat-and-power unit (leaf)."""
-    args = {"id": id, "name": name, **extra}
-    return _component("make-chp", args, rated=rated, cls=Component)
+    """A combined heat-and-power unit (leaf).
+
+    ``make-chp`` takes no rated bounds (unlike the other generators);
+    anything else it grows lands here via ``extra``.
+    """
+    args = {
+        "id": id,
+        "name": name,
+        "stream_jitter_pct": stream_jitter_pct,
+        "health": health,
+        "telemetry_mode": telemetry_mode,
+        "command_mode": command_mode,
+        **extra,
+    }
+    return _component("make-chp", args, cls=Component)
 
 
 def _emit_topology(topology: Topology) -> str:
