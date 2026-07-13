@@ -164,7 +164,18 @@ class Scenario:
         Any settable signal works — a meter's ``power``, a PV's
         ``sunlight``, a battery's ``soc``, a component's ``health``.
         """
-        self._cues.append(f"(at {_time_literal(when)} {target._scenario_cue(value)})")
+        cue = getattr(target, "_scenario_cue", None)
+        if cue is None:
+            label = getattr(target, "_label", repr(target))
+            raise TypeError(
+                f"{label} cannot be cued: it is read-only. "
+                "Cue a settable signal (a meter's power, a PV's sunlight, "
+                "a battery's soc, a component's health)."
+            )
+        # The prelude's `at` takes a THUNK: without the lambda the action
+        # would run eagerly when the cue list is evaluated (at define
+        # time), not at its scheduled offset.
+        self._cues.append(f"(at {_time_literal(when)} (lambda () {cue(value)}))")
         return self
 
     def drive_meter(self, meter: Component | int, value: Power | RawLisp) -> Scenario:
@@ -179,7 +190,12 @@ class Scenario:
         return self
 
     def cue(self, at: timedelta | clock_time, action: str | RawLisp) -> Scenario:
-        """A timed cue: ``(at "<time>" <action>)``."""
+        """A timed cue: ``(at "<time>" <action>)``.
+
+        ``action`` must evaluate to a 0-arg lambda (a thunk) — e.g.
+        ``(event ...)`` returns one. A bare call would run at define
+        time; wrap it: ``(lambda () (...))``.
+        """
         text = action.text if isinstance(action, RawLisp) else action
         self._cues.append(f"(at {_time_literal(at)} {text})")
         return self

@@ -73,9 +73,10 @@ def test_cues_render_from_settable_signals() -> None:
     scn.at(timedelta(seconds=10), bat.soc, Percentage.from_percent(11))
     scn.at(timedelta(seconds=15), pv.sunlight, Percentage.from_percent(80))
     lisp = scn.to_lisp()
-    assert '(at "5s" (set-meter-power 2 20000.0))' in lisp
-    assert '(at "10s" (set-battery-soc 4 11.0))' in lisp
-    assert '(at "15s" (set-solar-sunlight 8 80.0))' in lisp
+    # Cue actions are thunks: the lambda defers them to their offset.
+    assert '(at "5s" (lambda () (set-meter-power 2 20000.0)))' in lisp
+    assert '(at "10s" (lambda () (set-battery-soc 4 11.0)))' in lisp
+    assert '(at "15s" (lambda () (set-solar-sunlight 8 80.0)))' in lisp
 
 
 def test_aggregate_signals_are_not_checkable() -> None:
@@ -94,6 +95,15 @@ def test_run_starts_and_stops() -> None:
     site = FakeSite({"checks_passed": 1, "checks_failed": 0, "checks": []})
     ScenarioRun(site, "s").run(wait=True)
     assert site._http.posts == ["/api/scenarios/s/start", "/api/scenarios/stop"]
+
+
+def test_at_rejects_a_read_only_signal() -> None:
+    from switchyard.build import battery_inverter
+
+    inv = battery_inverter(id=3)
+    scn = Scenario("s")
+    with pytest.raises(TypeError, match="cannot be cued"):
+        scn.at(timedelta(seconds=0), inv.power, Power.from_kilowatts(5))
 
 
 def test_wait_and_report_reject_an_inactive_scenario() -> None:
