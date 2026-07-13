@@ -25,6 +25,7 @@ typed ``frequenz-quantities`` of the metric's kind (``Power`` for power,
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from collections.abc import Callable
 from datetime import timedelta
@@ -32,12 +33,27 @@ from typing import Generic, TypeVar
 
 from frequenz.quantities import Quantity
 
-from .metrics import BoundMetric, MetricKind
+from .metrics import BoundMetric, MetricKind, MetricRead
 
 Q = TypeVar("Q", bound=Quantity)
 
 _DEFAULT_POLL = timedelta(milliseconds=250)
 _DEFAULT_TIMEOUT = timedelta(seconds=10)
+
+
+async def _read_value(read: MetricRead[Q]) -> Q | None:
+    """Run a read without stalling the event loop.
+
+    An async read (the aio core) is awaited directly on the caller's
+    loop. A plain blocking read (the sync facade's transports) runs in a
+    worker thread. Either way the app under test keeps running.
+    """
+    if inspect.iscoroutinefunction(read):
+        return await read()
+    value = await asyncio.to_thread(read)
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 def _predicate(
@@ -73,7 +89,7 @@ def _predicate(
 class Assertion(Generic[Q]):
     """A metric read plus the matchers that assert on it."""
 
-    def __init__(self, read: Callable[[], Q | None], label: str) -> None:
+    def __init__(self, read: MetricRead[Q], label: str) -> None:
         self._read = read
         self._label = label
 
@@ -87,19 +103,19 @@ class Assertion(Generic[Q]):
         poll: timedelta,
     ) -> Q | None:
         """Re-read while ``keep_polling`` holds and the timeout hasn't passed,
-        then check ``pred`` on the final value. Each read runs in a worker
-        thread and the loop awaits between reads, so an app under test on the
-        same event loop keeps running — even when a read blocks. Raises
+        then check ``pred`` on the final value. Reads go through
+        ``_read_value`` (await async reads; thread plain ones), so an app
+        under test on the same event loop keeps running. Raises
         ``AssertionError(fail(value))`` on a miss. Shared by ``eventually``
         (poll until the matcher passes) and ``once`` (poll only until a value
         is available, then check the matcher a single time).
         """
         deadline = time.monotonic() + timeout.total_seconds()
         interval = poll.total_seconds()
-        value = await asyncio.to_thread(self._read)
+        value = await _read_value(self._read)
         while keep_polling(value) and time.monotonic() < deadline:
             await asyncio.sleep(interval)
-            value = await asyncio.to_thread(self._read)
+            value = await _read_value(self._read)
         if not pred(value):
             raise AssertionError(fail(value))
         return value
@@ -149,12 +165,12 @@ class Assertion(Generic[Q]):
         """
         pred, desc = _predicate(within, approx, tol, max, min)
         # Prime: pay any stream-open latency before the window.
-        await asyncio.to_thread(self._read)
+        await _read_value(self._read)
         end = time.monotonic() + for_.total_seconds()
         interval = poll.total_seconds()
         series: list[Q | None] = []
         while time.monotonic() < end:
-            value = await asyncio.to_thread(self._read)
+            value = await _read_value(self._read)
             if value is not None:
                 series.append(value)
                 if not pred(value):

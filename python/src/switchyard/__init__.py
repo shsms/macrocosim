@@ -13,6 +13,7 @@ typed value to the Lisp literal switchyard reads.
 
 from __future__ import annotations
 
+from . import aio
 from .assertions import expect_metric
 from .build import (
     Component,
@@ -32,7 +33,7 @@ from .build import (
     to_lisp_atom,
 )
 from .enums import CommandMode, Health, Metric, Schedule, TelemetryMode
-from .errors import SetpointRejected, SwitchyardError
+from .errors import ControlRejected, EvalRejected, SetpointRejected, SwitchyardError
 from .metrics import BoundMetric, MetricKind, MetricSpec
 from .runtime import MicrogridEndpoint, Site, connect, launch
 from .scenarios import (
@@ -50,9 +51,13 @@ __all__ = [
     "MicrogridEndpoint",
     "launch",
     "connect",
+    # async core
+    "aio",
     # errors
     "SwitchyardError",
     "SetpointRejected",
+    "EvalRejected",
+    "ControlRejected",
     # metric model + assertion engine
     "MetricSpec",
     "MetricKind",

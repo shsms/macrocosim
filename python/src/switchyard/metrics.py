@@ -18,14 +18,22 @@ described; the named ``expect`` methods are one-line sugar over it.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Generic, TypeVar
+from typing import Generic, TypeAlias, TypeVar
 
 from frequenz.quantities import Energy, Percentage, Power, Quantity
 
 Q = TypeVar("Q", bound=Quantity)
+
+MetricRead: TypeAlias = "Callable[[], Q | None] | Callable[[], Awaitable[Q | None]]"
+"""A metric read: plain (facade transports) or a coroutine function (aio).
+
+The assertion engine awaits an awaitable result directly on the caller's
+loop; a plain blocking read runs in a worker thread so the loop stays
+live either way.
+"""
 
 
 class MetricKind(Enum):
@@ -51,13 +59,12 @@ class MetricSpec(Generic[Q]):
     quantity: type[Q]
     """The ``frequenz-quantities`` type of its values."""
 
-    def bind(
-        self, read: Callable[[], Q | None], *, label: str | None = None
-    ) -> BoundMetric[Q]:
-        """Bind this spec to a concrete read.
+    def bind(self, read: MetricRead[Q], *, label: str | None = None) -> BoundMetric[Q]:
+        """Bind this spec to a concrete read (plain or async).
 
         Args:
-            read: returns the latest value, or ``None`` while unavailable.
+            read: returns the latest value (or an awaitable of it), or
+                ``None`` while unavailable.
             label: failure-message label; defaults to the metric name.
 
         Returns:
@@ -73,8 +80,9 @@ class BoundMetric(Generic[Q]):
     spec: MetricSpec[Q]
     """What the metric is (name, kind, quantity type)."""
 
-    read: Callable[[], Q | None]
-    """Returns the latest value, or ``None`` while unavailable."""
+    read: MetricRead[Q]
+    """Returns the latest value (or an awaitable of it); ``None`` while
+    unavailable."""
 
     label: str
     """Identifies the metric in assertion failure messages."""
