@@ -309,8 +309,13 @@ impl SimulatedComponent for SolarInverter {
         Some(self.bounds.lock().effective())
     }
 
-    fn set_sunlight_pct(&self, pct: f32) {
+    fn set_sunlight_pct(&self, pct: f32) -> bool {
         SolarInverter::set_sunlight_pct(self, pct);
+        true
+    }
+
+    fn takes_sunlight_pct(&self) -> bool {
+        true
     }
 
     fn set_sunlight_source(&self, scalar: DynamicScalar) {

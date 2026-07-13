@@ -260,14 +260,36 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
 
     /// Override the active-power value a meter publishes with a
     /// constant. Used by `(set-meter-power id W)` when called with a
-    /// numeric argument. Default no-op.
-    fn set_active_power_override(&self, _p: f32) {}
+    /// numeric argument. Returns whether the component supports the
+    /// stimulus (the typed control API rejects a `false`); the default
+    /// is an unsupported no-op.
+    fn set_active_power_override(&self, _p: f32) -> bool {
+        false
+    }
+
+    /// Whether [`Self::set_active_power_override`] applies to this
+    /// component. The typed control API checks every field of a drive
+    /// request with these predicates before applying any of them, so a
+    /// rejected request changes nothing.
+    fn takes_active_power_override(&self) -> bool {
+        false
+    }
 
     /// Teleport a battery's state of charge to `pct` (clamped to
     /// 0..=100). Lets a test arrange a precondition (a nearly-empty or
-    /// nearly-full pool) without simulating hours of charging. Default
-    /// no-op for components that carry no charge.
-    fn set_soc_pct(&self, _pct: f32) {}
+    /// nearly-full pool) without simulating hours of charging. Returns
+    /// whether the component carries charge (the typed control API
+    /// rejects a `false`); the default is an unsupported no-op.
+    fn set_soc_pct(&self, _pct: f32) -> bool {
+        false
+    }
+
+    /// Whether [`Self::set_soc_pct`] applies to this component. See
+    /// [`Self::takes_active_power_override`] for why the predicates
+    /// exist.
+    fn takes_soc_pct(&self) -> bool {
+        false
+    }
 
     /// Replace the meter's `:power` source with a Lisp expression
     /// that the scheduler's `refresh_inputs` pass re-resolves each
@@ -279,7 +301,19 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// Update the live cloud-cover percentage on a solar inverter.
     /// Used by `(set-solar-sunlight id PCT)` with a numeric
     /// argument. Default no-op for non-solar components.
-    fn set_sunlight_pct(&self, _pct: f32) {}
+    /// Returns whether the component models sunlight (the typed
+    /// control API rejects a `false`); the default is an unsupported
+    /// no-op.
+    fn set_sunlight_pct(&self, _pct: f32) -> bool {
+        false
+    }
+
+    /// Whether [`Self::set_sunlight_pct`] applies to this component.
+    /// See [`Self::takes_active_power_override`] for why the
+    /// predicates exist.
+    fn takes_sunlight_pct(&self) -> bool {
+        false
+    }
 
     /// Replace the solar inverter's `:sunlight%` source with a Lisp
     /// expression. PV analogue of [`Self::set_active_power_source`];

@@ -60,7 +60,18 @@ fn site_for(
     mg_id: Option<u64>,
 ) -> Result<MicrogridSite, (StatusCode, Json<ControlError>)> {
     match mg_id {
-        None => Ok(config.site()),
+        // The default is the FIRST registered microgrid — deterministic,
+        // and the same default the Python client uses for gRPC reads.
+        // (`config.site()` would follow the ambient `current_microgrid`
+        // scope, whose contract needs the interpreter lock we don't
+        // hold.) Registry empty = single bootstrap site.
+        None => Ok(config
+            .microgrids()
+            .lock()
+            .values()
+            .next()
+            .map(|entry| entry.site.clone())
+            .unwrap_or_else(|| config.site())),
         Some(id) => config
             .microgrids()
             .lock()
@@ -119,14 +130,41 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
             format!("component {id} not found"),
         ));
     };
+    // Validate every field first, apply after (same contract as
+    // apply_status): a request with one inapplicable field changes
+    // nothing. An inapplicable stimulus is a 400, never a silent no-op.
+    if req.power_w.is_some() && !component.takes_active_power_override() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} does not take power_w (not a meter)"),
+        ));
+    }
+    if req.sunlight_pct.is_some() && !component.takes_sunlight_pct() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} does not take sunlight_pct (not a solar inverter)"),
+        ));
+    }
+    if req.soc_pct.is_some() && !component.takes_soc_pct() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} does not take soc_pct (not a battery)"),
+        ));
+    }
+    // The debug_asserts catch a takes_* predicate drifting from its
+    // setter: predicate true + setter false would be a 200 that did
+    // nothing, the exact silent no-op this endpoint must not produce.
     if let Some(watts) = req.power_w {
-        component.set_active_power_override(watts as f32);
+        let applied = component.set_active_power_override(watts as f32);
+        debug_assert!(applied, "takes_active_power_override disagrees with setter");
     }
     if let Some(pct) = req.sunlight_pct {
-        component.set_sunlight_pct(pct as f32);
+        let applied = component.set_sunlight_pct(pct as f32);
+        debug_assert!(applied, "takes_sunlight_pct disagrees with setter");
     }
     if let Some(pct) = req.soc_pct {
-        component.set_soc_pct(pct as f32);
+        let applied = component.set_soc_pct(pct as f32);
+        debug_assert!(applied, "takes_soc_pct disagrees with setter");
     }
     Ok(Json(serde_json::json!({})))
 }
@@ -161,4 +199,30 @@ pub(in crate::ui) async fn component_drive_for_mg(
     Json(req): Json<DriveRequest>,
 ) -> ControlResult {
     apply_drive(&site_for(&config, Some(mg_id))?, id, &req)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::meter::Meter;
+    use std::time::Duration;
+
+    /// A drive request with one inapplicable field changes nothing:
+    /// the rejection must come before any field is applied.
+    #[test]
+    fn rejected_drive_applies_nothing() {
+        let site = MicrogridSite::new();
+        site.register(Meter::new(5, Duration::from_secs(1), None, 0.0, false));
+
+        let req = DriveRequest {
+            power_w: Some(5_000.0),
+            sunlight_pct: None,
+            soc_pct: Some(50.0), // not a battery → the whole request rejects
+        };
+        assert!(apply_drive(&site, 5, &req).is_err());
+
+        // The meter's power override must not have been installed.
+        let meter = site.get(5).unwrap();
+        assert!(meter.aggregate_power_w(&site).abs() < 1e-6);
+    }
 }

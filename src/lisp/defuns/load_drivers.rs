@@ -27,7 +27,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             };
             if value.numberp() {
                 let watts = f64::try_from(&value)?;
-                c.set_active_power_override(watts as f32);
+                // Lisp keeps the historic lenient behavior: the bool is
+                // only enforced by the typed control API.
+                let _ = c.set_active_power_override(watts as f32);
             } else if let Some(scalar) =
                 crate::sim::dynamic_scalar::DynamicScalar::from_lisp(&value, 0.0)
             {
@@ -58,7 +60,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             };
             if value.numberp() {
                 let pct = f64::try_from(&value)?;
-                c.set_sunlight_pct(pct as f32);
+                let _ = c.set_sunlight_pct(pct as f32);
             } else if let Some(scalar) =
                 crate::sim::dynamic_scalar::DynamicScalar::from_lisp(&value, 100.0)
             {

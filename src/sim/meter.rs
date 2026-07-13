@@ -158,8 +158,13 @@ impl SimulatedComponent for Meter {
         self.aggregate_reactive(site)
     }
 
-    fn set_active_power_override(&self, p: f32) {
+    fn set_active_power_override(&self, p: f32) -> bool {
         self.set_fixed_power(p);
+        true
+    }
+
+    fn takes_active_power_override(&self) -> bool {
+        true
     }
 
     fn set_active_power_source(&self, scalar: DynamicScalar) {

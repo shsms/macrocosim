@@ -813,3 +813,50 @@ async fn control_drive_sets_battery_soc() {
     let soc = site.get(4).unwrap().telemetry(&site).soc_pct.unwrap();
     assert!((soc - 100.0).abs() < 1e-3, "{soc}");
 }
+
+/// A drive stimulus that does not apply to the component's category is
+/// a 400 with the reason — never a silent 200 no-op. The matching
+/// stimulus on the right category still lands (sunlight covered here).
+#[tokio::test]
+async fn control_drive_rejects_wrong_category() {
+    let cfg = config_with(
+        "(%make-meter :id 7)
+         (%make-solar-inverter :id 8)",
+    )
+    .await;
+
+    // Sunlight on a meter: rejected.
+    let (status, body) = call(
+        cfg.clone(),
+        post_json("/api/component/7/drive", r#"{"sunlight_pct": 80.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("sunlight_pct"));
+
+    // SoC on a meter: rejected.
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/7/drive", r#"{"soc_pct": 50.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Sunlight on the solar inverter: applies.
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/8/drive", r#"{"sunlight_pct": 25.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // An unknown field name is a client error too (deny_unknown_fields
+    // -> axum's 422), not a silently ignored typo.
+    let (status, _) = call(
+        cfg,
+        post_json("/api/component/7/drive", r#"{"powr_w": 1.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}

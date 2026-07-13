@@ -156,10 +156,15 @@ impl SimulatedComponent for Battery {
         self.cfg.stream_jitter_pct
     }
 
-    fn set_soc_pct(&self, pct: f32) {
+    fn set_soc_pct(&self, pct: f32) -> bool {
         // The next tick re-derives the SoC-protected bounds from the
         // new value, so no other state needs touching here.
         self.state.lock().soc_pct = pct.clamp(0.0, 100.0);
+        true
+    }
+
+    fn takes_soc_pct(&self) -> bool {
+        true
     }
 
     fn tick(&self, _world: &MicrogridSite, _now: DateTime<Utc>, dt: Duration) {
