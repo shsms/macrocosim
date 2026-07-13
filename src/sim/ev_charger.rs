@@ -242,7 +242,7 @@ impl SimulatedComponent for EvCharger {
                 envelope,
             });
         }
-        self.delay.set_target(Utc::now(), power_w);
+        self.delay.set_target(power_w);
         Ok(())
     }
 

@@ -144,7 +144,7 @@ impl ReactivePath {
                 envelope: crate::sim::bounds::VecBounds::single(lo, hi),
             });
         }
-        self.delay.set_target(Utc::now(), vars);
+        self.delay.set_target(vars);
         Ok(())
     }
 
