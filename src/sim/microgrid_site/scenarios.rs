@@ -45,6 +45,10 @@ pub(crate) struct ScenarioSummary {
 /// Snapshot of scenario-scoped metrics for `/api/scenario/report`.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ScenarioReport {
+    /// The scenario the report belongs to (`None` before any start).
+    /// Clients check this in the same response they judge, so a report
+    /// can never be silently attributed to the wrong scenario.
+    pub name: Option<String>,
     pub scenario_elapsed_s: f64,
     pub peak_main_meter_w: f64,
     pub main_meter_id: Option<u64>,
@@ -321,6 +325,7 @@ impl MicrogridSite {
         let soc_stats = compute_soc_stats(&socs);
 
         ScenarioReport {
+            name: self.inner.scenario.read().name.clone(),
             scenario_elapsed_s: self.inner.scenario.read().elapsed_s(now),
             peak_main_meter_w: self.inner.scenario.read().peak_main_meter_active_w(),
             main_meter_id: self.main_meter_id(),

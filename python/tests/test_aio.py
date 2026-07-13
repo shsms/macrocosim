@@ -197,3 +197,14 @@ async def test_scenario_run_fails_fast_without_a_length() -> None:
     site._http.get_json = fake_get_json  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="no :length"):
         await site.scenario("soak").run(wait=True)
+
+
+async def test_scenario_wait_requires_a_length() -> None:
+    site = _site()
+
+    async def fake_get_json(path: str) -> Any:
+        return [{"name": "soak", "length_s": None}]
+
+    site._http.get_json = fake_get_json  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="no :length"):
+        await site.scenario("soak").wait()

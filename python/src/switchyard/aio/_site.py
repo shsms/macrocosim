@@ -536,10 +536,43 @@ class ScenarioRun:
         await self._site._http.post(f"/api/scenarios/{self._name}/start")
         if not wait or length is None:
             return self
+        return await self._wait_for(length, poll)
+
+    async def wait(
+        self,
+        *,
+        until: timedelta | None = None,
+        poll: timedelta = timedelta(seconds=1),
+    ) -> ScenarioRun:
+        """Block until the running scenario finishes, then stop it.
+
+        The companion to ``run(wait=False)`` — start the scenario, do
+        other work (boot an app under test), then wait for the report.
+        """
+        length = until.total_seconds() if until is not None else await self._length_s()
+        if length is None:
+            raise ValueError(
+                f"scenario {self._name!r} has no :length; pass until= to bound the wait"
+            )
+        return await self._wait_for(length, poll)
+
+    def _assert_active(self, state: ScenarioReport) -> None:
+        # The server tracks one scenario; a mismatched (or absent) name
+        # means this run never started or another scenario's state is
+        # live — waiting on it, or judging its report, would silently
+        # test the wrong thing.
+        if state.get("name") != self._name:
+            raise RuntimeError(
+                f"scenario {self._name!r} is not the active scenario "
+                f"(server reports {state.get('name')!r}); was run() called?"
+            )
+
+    async def _wait_for(self, length: float, poll: timedelta) -> ScenarioRun:
         deadline = time.monotonic() + length + 5.0
         interval = poll.total_seconds()
         while time.monotonic() < deadline:
             state = await self._site._http.get_json("/api/scenario")
+            self._assert_active(state)
             if state.get("ended_at") is not None:
                 break
             if (state.get("elapsed_s") or 0.0) >= length:
@@ -550,7 +583,11 @@ class ScenarioRun:
 
     async def report(self) -> ScenarioReport:
         """The parsed scenario report (pass/fail ledger + peak/soc stats)."""
-        return await self._site._http.get_json("/api/scenario/report")
+        # The report carries the scenario name it belongs to; checking
+        # it in the same response avoids a two-request race.
+        report = await self._site._http.get_json("/api/scenario/report")
+        self._assert_active(report)
+        return report
 
     async def assert_passed(self) -> ScenarioReport:
         """Raise if any ``(check …)`` failed; return the report otherwise."""

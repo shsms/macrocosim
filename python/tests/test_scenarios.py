@@ -23,14 +23,15 @@ class _FakeProc:
 
 class FakeHttp:
     def __init__(self, report: dict) -> None:
-        self._report = report
+        # Real reports carry the scenario name; the client checks it.
+        self._report = {"name": "s", **report}
         self.posts: list[str] = []
 
     def get_json(self, path: str):
         if path == "/api/scenarios":
             return [{"name": "s", "length_s": 0.0}]
         if path == "/api/scenario":
-            return {"ended_at": "2026-01-01T00:00:00Z", "elapsed_s": 1.0}
+            return {"name": "s", "ended_at": "2026-01-01T00:00:00Z", "elapsed_s": 1.0}
         if path == "/api/scenario/report":
             return self._report
         if path.startswith("/api/scenario/events"):
@@ -93,6 +94,24 @@ def test_run_starts_and_stops() -> None:
     site = FakeSite({"checks_passed": 1, "checks_failed": 0, "checks": []})
     ScenarioRun(site, "s").run(wait=True)
     assert site._http.posts == ["/api/scenarios/s/start", "/api/scenarios/stop"]
+
+
+def test_wait_and_report_reject_an_inactive_scenario() -> None:
+    class OtherActiveHttp(FakeHttp):
+        def get_json(self, path: str):
+            # No scenario ever started: summary and report are empty.
+            if path == "/api/scenario":
+                return {"name": None, "ended_at": None, "elapsed_s": 0.0}
+            if path == "/api/scenario/report":
+                return {"name": None, "checks_passed": 0, "checks_failed": 0}
+            return super().get_json(path)
+
+    site = FakeSite({})
+    site._http = OtherActiveHttp({})
+    with pytest.raises(RuntimeError, match="not the active scenario"):
+        ScenarioRun(site, "s").wait(until=timedelta(seconds=1))
+    with pytest.raises(RuntimeError, match="not the active scenario"):
+        ScenarioRun(site, "s").report()
 
 
 def test_run_wait_without_length_raises_before_starting() -> None:
