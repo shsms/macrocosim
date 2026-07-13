@@ -129,6 +129,37 @@ switchyard/
 Downstream test suites (any SDK app: controllers, schedulers,
 optimizers) should only ever import the top-level package.
 
+* Scenarios speak signals too
+
+The scenario DSL is the same testing vocabulary at a different time:
+a *check* is an ~expect~ scheduled at a point in the run, and a *cue*
+is a ~set~ scheduled at a point in the run. So the DSL takes signals
+and matchers, not raw ids, a ~Metric~ enum, and a keyword bag:
+
+#+begin_example
+scn = sw.Scenario("cloud-fade", length=timedelta(minutes=4))
+scn.at(timedelta(seconds=30), pv.sunlight, percent(20))     # cue
+scn.check(timedelta(seconds=110), inv.power,
+          sw.near(MW(1.5), tol=kW(300)))                    # check
+scn.check(timedelta(seconds=110), bat.soc, sw.at_least(percent(40)))
+#+end_example
+
+- A cue targets a *settable* signal; a check any component signal.
+  The capability typing carries over: cueing an inverter's power is
+  a type error, exactly like ~.set~ on it.
+- Matchers are shared with ~expect~, so a live assertion and a
+  scenario check read and fail the same way.
+- Signals carry their *identity* (component + metric) without being
+  bound: properties never raise; only calling a verb on an unbound
+  builder does. Scenarios are authored before launch.
+- The DSL still renders ~(define-scenario ...)~ Lisp underneath; the
+  typed scenario wire format remains phase-3 work. Raw ~cue()~ /
+  ~drive_form()~ escapes stay for anything not modelled.
+- Server gap closed alongside: ~set-battery-soc~ joins the cue
+  vocabulary (the control API's SoC teleport, callable from Lisp).
+- Known limitation: checks are per component server-side; aggregate
+  checks (grid power) are follow-up work with the typed wire format.
+
 * Migration plan
 
 - *Phase 1 — metric model (compatible).* DONE. ~MetricSpec~ /

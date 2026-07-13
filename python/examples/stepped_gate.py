@@ -14,17 +14,13 @@ from frequenz.quantities import Power
 
 import switchyard as sw
 
-TOPOLOGY = sw.Microgrid(
-    id=1,
-    topology=sw.grid(id=1, successors=[sw.meter(id=2, power=Power.from_watts(5000))]),
-)
+MAIN_METER = sw.meter(id=2, power=Power.from_watts(5000))
+TOPOLOGY = sw.Microgrid(id=1, topology=sw.grid(id=1, successors=[MAIN_METER]))
 
 SCENARIO = sw.Scenario("hold-load", length=timedelta(seconds=3), seed=1).check(
     timedelta(seconds=1),
-    component=2,
-    metric=sw.Metric.ACTIVE_POWER,
-    approx=Power.from_watts(5000),
-    tol=Power.from_watts(500),
+    MAIN_METER.power,
+    sw.near(Power.from_watts(5000), tol=Power.from_watts(500)),
 )
 
 

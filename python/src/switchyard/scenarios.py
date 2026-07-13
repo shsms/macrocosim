@@ -29,14 +29,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from ._process import render_config, resolve_binary
-from .build import ConfigSource, RawLisp, to_lisp_atom
+from .build import Component, ConfigSource, RawLisp, to_lisp_atom
 from .enums import Metric, Schedule
+from .matchers import Matcher
 
 if TYPE_CHECKING:
-    from frequenz.quantities import Power, Quantity
+    from frequenz.quantities import Power
 
     from ._http import HttpClient
     from .runtime import Site
+    from .signals import DrivenSignal, SettingSignal, Signal
 
 # A scenario report / journal are dynamic JSON from switchyard; named for intent.
 ScenarioReport: TypeAlias = dict[str, Any]
@@ -70,22 +72,30 @@ class Check:
 
     at: timedelta | clock_time
     component: int
-    metric: Metric
-    approx: Quantity | None = None
-    tol: Quantity | None = None
-    min: Quantity | None = None
-    max: Quantity | None = None
+    metric: str
+    matcher: Matcher[Any]
 
     def to_lisp(self) -> str:
         parts = [
             _time_literal(self.at),
             f":component {self.component}",
-            f":metric {to_lisp_atom(self.metric)}",
+            f":metric '{self.metric}",
         ]
-        for key in ("approx", "tol", "min", "max"):
-            value = getattr(self, key)
-            if value is not None:
-                parts.append(f":{key} {to_lisp_atom(value)}")
+        m = self.matcher
+        if m.approx is not None:
+            parts.append(f":approx {to_lisp_atom(m.approx)}")
+        if m.tol is not None:
+            parts.append(f":tol {to_lisp_atom(m.tol)}")
+        if m.within is not None:
+            # The server check has no :within; a closed interval is
+            # exactly :min + :max.
+            low, high = m.within
+            parts.append(f":min {to_lisp_atom(low)}")
+            parts.append(f":max {to_lisp_atom(high)}")
+        if m.min is not None:
+            parts.append(f":min {to_lisp_atom(m.min)}")
+        if m.max is not None:
+            parts.append(f":max {to_lisp_atom(m.max)}")
         return f"(check {' '.join(parts)})"
 
 
@@ -94,10 +104,13 @@ class Scenario:
     """Author a scenario in Python; renders to ``(define-scenario …)``.
 
     Register it on a running site with ``site.define_scenario(scenario)``,
-    which returns a :class:`ScenarioRun` to ``run(...)`` and gate. ``check``
-    adds a timed assertion (the CI gate); ``drive_meter`` installs a
-    continuous meter source; ``drive`` / ``cue`` splice a raw Lisp
-    ``(drive-* …)`` / ``(at …)`` form for anything not modelled here.
+    which returns a :class:`ScenarioRun` to ``run(...)`` and gate. The DSL
+    speaks signals, like the live API: ``check`` schedules an assertion on
+    a component signal with one typed matcher, ``at`` schedules a cue that
+    sets a signal to a value, and ``drive_meter`` installs a continuous
+    meter source. ``check_metric`` covers server metrics without a signal
+    yet (per-component energy); ``drive`` / ``cue`` splice raw Lisp
+    ``(drive-* …)`` / ``(at …)`` forms for anything else.
     """
 
     name: str
@@ -112,19 +125,52 @@ class Scenario:
     def check(
         self,
         at: timedelta | clock_time,
+        signal: Signal[Any],
+        matcher: Matcher[Any],
+    ) -> Scenario:
+        """Schedule an assertion on a component signal (``power``, ``soc``).
+
+        The same matchers as the live ``expect``; the signal only lends
+        its identity, so an unbound builder's signal works here.
+        """
+        component_id, metric = signal._scenario_check_ref()
+        self._checks.append(Check(at, component_id, metric, matcher))
+        return self
+
+    def check_metric(
+        self,
+        at: timedelta | clock_time,
         *,
         component: int,
         metric: Metric,
-        approx: Quantity | None = None,
-        tol: Quantity | None = None,
-        min: Quantity | None = None,
-        max: Quantity | None = None,
+        matcher: Matcher[Any],
     ) -> Scenario:
-        self._checks.append(Check(at, component, metric, approx, tol, min, max))
+        """Schedule a check on a server metric with no signal yet.
+
+        The escape hatch for per-component ``Metric.ENERGY`` (and other
+        wire metrics) until they grow signals.
+        """
+        self._checks.append(Check(at, component, metric.value, matcher))
         return self
 
-    def drive_meter(self, component: int, value: Power | RawLisp) -> Scenario:
-        self._drives.append(f"(drive-meter {component} {to_lisp_atom(value)})")
+    def at(
+        self,
+        when: timedelta | clock_time,
+        target: DrivenSignal[Any] | SettingSignal[Any],
+        value: Any,
+    ) -> Scenario:
+        """Schedule a cue: set ``target`` to ``value`` at ``when``.
+
+        Any settable signal works — a meter's ``power``, a PV's
+        ``sunlight``, a battery's ``soc``, a component's ``health``.
+        """
+        self._cues.append(f"(at {_time_literal(when)} {target._scenario_cue(value)})")
+        return self
+
+    def drive_meter(self, meter: Component | int, value: Power | RawLisp) -> Scenario:
+        """Install a continuous source on a meter (a value, or ``raw`` Lisp)."""
+        cid = meter.component_id if isinstance(meter, Component) else int(meter)
+        self._drives.append(f"(drive-meter {cid} {to_lisp_atom(value)})")
         return self
 
     def drive(self, form: str | RawLisp) -> Scenario:

@@ -101,22 +101,25 @@ def test_builders_return_typed_components() -> None:
     assert meter.to_lisp() == "(make-meter :id 5)"
 
 
-def test_unbound_component_signals_raise() -> None:
+async def test_unbound_component_signals_raise_on_use() -> None:
+    # Properties never raise (scenarios need the identity pre-launch);
+    # calling a verb on an unbound builder does.
     meter = sw.meter(id=5)
+    signal = meter.power  # fine: identity only
     with pytest.raises(RuntimeError, match="not bound"):
-        _ = meter.power
+        await signal.set(kW(1))
     with pytest.raises(ValueError, match="explicit id="):
         _ = sw.meter().component_id
 
 
-def test_idless_components_bind_but_have_no_signals() -> None:
+async def test_idless_components_bind_but_have_no_signals() -> None:
     # A topology may carry id-less components (the server auto-assigns);
-    # they launch fine — only touching their signals raises.
+    # they launch fine — only using their signals raises.
     grid = sw.grid()
     site = FakeAioSite()
     grid._bind(site)
     with pytest.raises(ValueError, match="explicit id="):
-        _ = grid.health
+        await grid.health.set(sw.Health.OK)
     grid._unbind()
 
 
@@ -131,7 +134,7 @@ async def test_bound_meter_power_reads_and_sets() -> None:
         meter._bind(site)
     meter._unbind()
     with pytest.raises(RuntimeError, match="not bound"):
-        _ = meter.power
+        await meter.power.read()
 
 
 async def test_battery_soc_gets_and_sets() -> None:

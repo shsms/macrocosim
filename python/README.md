@@ -209,9 +209,10 @@ control endpoints; rejections raise `ControlRejected`. See
 **Scenarios** — author in Python, or run a registered Lisp scenario:
 
 ```python
-scn = sw.Scenario("cloud-fade", length=timedelta(minutes=4)).check(
-    timedelta(seconds=110), component=2, metric=sw.Metric.ACTIVE_POWER,
-    approx=Power.from_megawatts(1.5), tol=Power.from_kilowatts(300))
+scn = sw.Scenario("cloud-fade", length=timedelta(minutes=4))
+scn.at(timedelta(seconds=30), pv.sunlight, Percentage.from_percent(20))
+scn.check(timedelta(seconds=110), inv.power,
+          sw.near(Power.from_megawatts(1.5), tol=Power.from_kilowatts(300)))
 site.define_scenario(scn).run(wait=True).assert_passed()
 
 # deterministic, serverless gate (no app under test):

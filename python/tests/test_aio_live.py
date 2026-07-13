@@ -60,6 +60,18 @@ async def test_signal_surface_end_to_end() -> None:
             sw.between(percent(10.0), percent(12.0)), timeout=timedelta(seconds=10)
         )
 
+        # Scenario DSL over the same signals: a cue teleports the SoC,
+        # a check gates the load — authored pre-launch style, run live.
+        scn = sw.Scenario("arrange", length=timedelta(seconds=3))
+        scn.at(timedelta(seconds=1), bat.soc, percent(90))
+        scn.check(timedelta(seconds=2), load.power, sw.near(kW(20), tol=kW(1)))
+        run = await site.define_scenario(scn)
+        await run.run(wait=True)
+        await run.assert_passed()
+        await bat.soc.expect(
+            sw.between(percent(88), percent(92)), timeout=timedelta(seconds=10)
+        )
+
         # Fault injection through the typed control API; a bad id raises.
         await inv.health.set(sw.Health.ERROR)
         with pytest.raises(sw.ControlRejected, match="not found"):
@@ -71,6 +83,7 @@ async def test_signal_surface_end_to_end() -> None:
         with pytest.raises(sw.SetpointRejected):
             await site[inv].command(active_power=kW(500))
 
-    # The context manager unbinds: the builders are specs again.
+    # The context manager unbinds: the builders are specs again (the
+    # identity stays usable; verbs raise).
     with pytest.raises(RuntimeError, match="not bound"):
-        _ = load.power
+        await load.power.read()

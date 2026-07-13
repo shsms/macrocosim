@@ -8,7 +8,9 @@ import pytest
 from frequenz.quantities import Power
 
 import switchyard.scenarios as scenarios_mod
+from switchyard.build import meter as sw_meter
 from switchyard.enums import Metric, Schedule
+from switchyard.matchers import at_least, at_most, near
 from switchyard.scenarios import Scenario, ScenarioRun, run_scenario_stepped
 
 
@@ -43,6 +45,48 @@ class FakeHttp:
 class FakeSite:
     def __init__(self, report: dict) -> None:
         self._http = FakeHttp(report)
+
+
+METER = sw_meter(id=2)
+
+
+def test_check_metric_is_the_escape_for_signal_less_metrics() -> None:
+    scn = Scenario("e", length=timedelta(seconds=60)).check_metric(
+        timedelta(seconds=30),
+        component=2,
+        metric=Metric.ENERGY,
+        matcher=at_most(Power.from_watts(70)),
+    )
+    assert '(check "30s" :component 2 :metric \'energy :max 70.0)' in scn.to_lisp()
+
+
+def test_cues_render_from_settable_signals() -> None:
+    from frequenz.quantities import Percentage
+
+    from switchyard.build import battery, solar_inverter
+
+    bat = battery(id=4)
+    pv = solar_inverter(id=8)
+    scn = Scenario("c", length=timedelta(seconds=60))
+    scn.at(timedelta(seconds=5), METER.power, Power.from_kilowatts(20))
+    scn.at(timedelta(seconds=10), bat.soc, Percentage.from_percent(11))
+    scn.at(timedelta(seconds=15), pv.sunlight, Percentage.from_percent(80))
+    lisp = scn.to_lisp()
+    assert '(at "5s" (set-meter-power 2 20000.0))' in lisp
+    assert '(at "10s" (set-battery-soc 4 11.0))' in lisp
+    assert '(at "15s" (set-solar-sunlight 8 80.0))' in lisp
+
+
+def test_aggregate_signals_are_not_checkable() -> None:
+    import switchyard as sw
+
+    site = sw.aio.connect(
+        ui="127.0.0.1:9",
+        microgrids={1: sw.MicrogridEndpoint(id=1, name="a", grpc="10.0.0.1:1")},
+    )
+    scn = Scenario("x", length=timedelta(seconds=1))
+    with pytest.raises(ValueError, match="component signals"):
+        scn.check(timedelta(seconds=1), site.grid_power, at_most(Power.zero()))
 
 
 def test_run_starts_and_stops() -> None:
@@ -97,12 +141,10 @@ def test_scenario_authoring_emits_define_scenario() -> None:
         )
         .check(
             timedelta(seconds=1),
-            component=2,
-            metric=Metric.ACTIVE_POWER,
-            approx=Power.from_watts(5000),
-            tol=Power.from_watts(500),
+            METER.power,
+            near(Power.from_watts(5000), tol=Power.from_watts(500)),
         )
-        .drive_meter(2, Power.from_megawatts(2))
+        .drive_meter(METER, Power.from_megawatts(2))
         .cue(timedelta(seconds=60), '(event \'clouds "rolling in")')
     )
     lisp = scn.to_lisp()
@@ -146,10 +188,8 @@ def test_run_scenario_stepped_raises_on_nonzero_exit(monkeypatch, tmp_path) -> N
 def test_scenario_name_escaped_and_time_non_scientific() -> None:
     scn = Scenario('a"b', length=timedelta(days=30)).check(
         timedelta(seconds=1),
-        component=2,
-        metric=Metric.ACTIVE_POWER,
-        approx=Power.from_watts(1),
-        tol=Power.from_watts(1),
+        METER.power,
+        near(Power.from_watts(1), tol=Power.from_watts(1)),
     )
     lisp = scn.to_lisp()
     assert '\\"' in lisp  # the embedded quote was escaped
@@ -162,9 +202,8 @@ def test_sub_100_microsecond_offsets_render_fixed_point() -> None:
     # rejects — fractional offsets must render as plain decimals.
     scn = Scenario("s", length=timedelta(seconds=1)).check(
         timedelta(microseconds=50),
-        component=2,
-        metric=Metric.ACTIVE_POWER,
-        min=Power.from_watts(0),
+        METER.power,
+        at_least(Power.from_watts(0)),
     )
     lisp = scn.to_lisp()
     assert '"0.00005s"' in lisp

@@ -181,14 +181,17 @@ class Component:
     @property
     def health(self) -> SettingSignal[Health]:
         """The component's reported health — set it to inject faults."""
-        site, cid = self._live(), self.component_id
-
-        mg = self._mg
 
         async def set_(value: Health) -> None:
-            await site.control_component(cid, "status", {"health": value.value}, mg)
+            await self._live().control_component(
+                self.component_id, "status", {"health": value.value}, self._mg
+            )
 
-        return SettingSignal(set_, f"{self.make} {cid} health")
+        return SettingSignal(
+            set_,
+            f"{self.make} {self.args.get('id')} health",
+            cue=lambda v: f"(set-component-health {self.component_id} {to_lisp_atom(v)})",
+        )
 
 
 class Meter(Component):
@@ -197,15 +200,23 @@ class Meter(Component):
     @property
     def power(self) -> DrivenSignal[Power]:
         """The meter's active power — read/expect the telemetry, set the load."""
-        site, cid, mg = self._live(), self.component_id, self._mg
 
         async def read() -> Power | None:
-            return await site.active_power(cid, mg)
+            return await self._live().active_power(self.component_id, self._mg)
 
         async def set_(value: Power) -> None:
-            await site.control_component(cid, "drive", {"power_w": value.as_watts()}, mg)
+            await self._live().control_component(
+                self.component_id, "drive", {"power_w": value.as_watts()}, self._mg
+            )
 
-        return DrivenSignal(ACTIVE_POWER, read, set_, f"meter {cid} power")
+        return DrivenSignal(
+            ACTIVE_POWER,
+            read,
+            set_,
+            f"meter {self.args.get('id')} power",
+            check_ref=lambda: (self.component_id, "active-power"),
+            cue=lambda v: f"(set-meter-power {self.component_id} {to_lisp_atom(v)})",
+        )
 
 
 class Battery(Component):
@@ -214,17 +225,23 @@ class Battery(Component):
     @property
     def soc(self) -> DrivenSignal[Percentage]:
         """State of charge — read/expect it, or teleport it to arrange a test."""
-        site, cid, mg = self._live(), self.component_id, self._mg
 
         async def read() -> Percentage | None:
-            return await site.soc(cid, mg)
+            return await self._live().soc(self.component_id, self._mg)
 
         async def set_(value: Percentage) -> None:
-            await site.control_component(
-                cid, "drive", {"soc_pct": value.as_percent()}, mg
+            await self._live().control_component(
+                self.component_id, "drive", {"soc_pct": value.as_percent()}, self._mg
             )
 
-        return DrivenSignal(SOC, read, set_, f"battery {cid} soc")
+        return DrivenSignal(
+            SOC,
+            read,
+            set_,
+            f"battery {self.args.get('id')} soc",
+            check_ref=lambda: (self.component_id, "soc"),
+            cue=lambda v: f"(set-battery-soc {self.component_id} {to_lisp_atom(v)})",
+        )
 
     @property
     def stored_energy(self) -> Signal[Energy]:
@@ -234,20 +251,20 @@ class Battery(Component):
         which is the cumulative *flow* through the pool (the integral of
         ``battery_power``).
         """
-        site, cid, mg = self._live(), self.component_id, self._mg
         capacity = self.args.get("capacity")
         if not isinstance(capacity, Energy):
             raise RuntimeError(
-                f"battery {cid}: stored_energy needs capacity= on the builder"
+                f"battery {self.args.get('id')}: stored_energy needs "
+                "capacity= on the builder"
             )
 
         async def read() -> Energy | None:
-            soc = await site.soc(cid, mg)
+            soc = await self._live().soc(self.component_id, self._mg)
             if soc is None:
                 return None
             return capacity * (soc.as_percent() / 100.0)
 
-        return Signal(STORED_ENERGY, read, f"battery {cid} stored_energy")
+        return Signal(STORED_ENERGY, read, f"battery {self.args.get('id')} stored_energy")
 
 
 class BatteryInverter(Component):
@@ -257,12 +274,16 @@ class BatteryInverter(Component):
     @property
     def power(self) -> Signal[Power]:
         """The inverter's active power (read/expect only)."""
-        site, cid, mg = self._live(), self.component_id, self._mg
 
         async def read() -> Power | None:
-            return await site.active_power(cid, mg)
+            return await self._live().active_power(self.component_id, self._mg)
 
-        return Signal(ACTIVE_POWER, read, f"battery_inverter {cid} power")
+        return Signal(
+            ACTIVE_POWER,
+            read,
+            f"battery_inverter {self.args.get('id')} power",
+            check_ref=lambda: (self.component_id, "active-power"),
+        )
 
 
 class SolarInverter(Component):
@@ -271,24 +292,34 @@ class SolarInverter(Component):
     @property
     def power(self) -> Signal[Power]:
         """The inverter's active power (read/expect only)."""
-        site, cid, mg = self._live(), self.component_id, self._mg
 
         async def read() -> Power | None:
-            return await site.active_power(cid, mg)
+            return await self._live().active_power(self.component_id, self._mg)
 
-        return Signal(ACTIVE_POWER, read, f"solar_inverter {cid} power")
+        return Signal(
+            ACTIVE_POWER,
+            read,
+            f"solar_inverter {self.args.get('id')} power",
+            check_ref=lambda: (self.component_id, "active-power"),
+        )
 
     @property
     def sunlight(self) -> SettingSignal[Percentage]:
         """The irradiance driving the PV model (write-only)."""
-        site, cid, mg = self._live(), self.component_id, self._mg
 
         async def set_(value: Percentage) -> None:
-            await site.control_component(
-                cid, "drive", {"sunlight_pct": value.as_percent()}, mg
+            await self._live().control_component(
+                self.component_id,
+                "drive",
+                {"sunlight_pct": value.as_percent()},
+                self._mg,
             )
 
-        return SettingSignal(set_, f"solar_inverter {cid} sunlight")
+        return SettingSignal(
+            set_,
+            f"solar_inverter {self.args.get('id')} sunlight",
+            cue=lambda v: f"(set-solar-sunlight {self.component_id} {to_lisp_atom(v)})",
+        )
 
 
 _C = TypeVar("_C", bound=Component)

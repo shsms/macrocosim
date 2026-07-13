@@ -25,7 +25,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from frequenz.quantities import Quantity
 
@@ -36,6 +36,12 @@ from .metrics import MetricSpec
 
 Q = TypeVar("Q", bound=Quantity)
 V = TypeVar("V")
+
+CheckRef = Callable[[], tuple[int, str]]
+"""Resolves a signal's scenario identity: (component id, metric symbol)."""
+
+CueForm = Callable[[Any], str]
+"""Renders a timed scenario cue setting the signal to a value."""
 
 _READ_WAIT = timedelta(seconds=5)
 _TIMEOUT = timedelta(seconds=10)
@@ -50,10 +56,22 @@ class _Readable(Generic[Q]):
         spec: MetricSpec[Q],
         read: Callable[[], Awaitable[Q | None]],
         label: str,
+        *,
+        check_ref: CheckRef | None = None,
     ) -> None:
         self._spec = spec
         self._read = read
         self._label = label
+        self._check_ref = check_ref
+
+    def _scenario_check_ref(self) -> tuple[int, str]:
+        """The (component id, metric symbol) a scenario check targets."""
+        if self._check_ref is None:
+            raise ValueError(
+                f"{self._label}: scenario checks target component signals "
+                "(power, soc); site aggregates are not checkable yet"
+            )
+        return self._check_ref()
 
     async def try_read(self) -> Q | None:
         """The latest value, or ``None`` while none is available."""
@@ -150,22 +168,45 @@ class DrivenSignal(Signal[Q]):
         read: Callable[[], Awaitable[Q | None]],
         set_: Callable[[Q], Awaitable[None]],
         label: str,
+        *,
+        check_ref: CheckRef | None = None,
+        cue: CueForm | None = None,
     ) -> None:
-        super().__init__(spec, read, label)
+        super().__init__(spec, read, label, check_ref=check_ref)
         self._set = set_
+        self._cue = cue
 
     async def set(self, value: Q) -> None:
         """Drive the signal to ``value``; a rejection raises
         ``ControlRejected``."""
         await self._set(value)
 
+    def _scenario_cue(self, value: Q) -> str:
+        """Render the Lisp form a scenario cue uses to set this signal."""
+        if self._cue is None:
+            raise ValueError(f"{self._label}: this signal cannot be cued")
+        return self._cue(value)
+
 
 class SettingSignal(Generic[V]):
     """A write-only knob on a component (health, sunlight)."""
 
-    def __init__(self, set_: Callable[[V], Awaitable[None]], label: str) -> None:
+    def __init__(
+        self,
+        set_: Callable[[V], Awaitable[None]],
+        label: str,
+        *,
+        cue: CueForm | None = None,
+    ) -> None:
         self._set = set_
         self._label = label
+        self._cue = cue
+
+    def _scenario_cue(self, value: V) -> str:
+        """Render the Lisp form a scenario cue uses to set this knob."""
+        if self._cue is None:
+            raise ValueError(f"{self._label}: this signal cannot be cued")
+        return self._cue(value)
 
     async def set(self, value: V) -> None:
         """Set the knob to ``value``; a rejection raises ``ControlRejected``."""
