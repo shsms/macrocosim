@@ -1,0 +1,146 @@
+#+TITLE: Python client v2: a redesign sketch
+#+OPTIONS: toc:2 num:nil
+#+STARTUP: showall
+
+Status: draft. This sketches the second generation of switchyard's
+Python client. The first generation grew feature by feature while we
+built end-to-end tests for downstream applications (power controllers,
+battery schedulers, and other apps built on the frequenz SDK). Those
+tests work, and they taught us where the seams are. This document names
+the seams and the shape of the fix.
+
+* Design principles
+
+- *Typed values everywhere.* Quantities (~Power~, ~Energy~,
+  ~Percentage~) at every boundary. No bare floats, no unit strings.
+- *Intent over mechanism.* A test says what should happen (~drive~,
+  ~status~, ~command~, ~expect~), not which endpoint to hit.
+- *One concurrency model.* The core is async. Sync is a thin facade at
+  the outermost layer, never a layer in the middle.
+- *Metrics are data, not methods.* Adding a metric must not mean
+  writing four new methods with eight copied keyword arguments.
+- *A typed wire protocol.* The client never generates Lisp source as a
+  transport. Lisp stays what it is good at: the human config and
+  scenario layer.
+- *Errors are exceptions.* Every rejected operation raises, with the
+  server's reason attached. No silent no-ops, no ~ok: false~ payloads
+  the caller must remember to check.
+
+* What v1 got right (keep the surface)
+
+These parts carried real integration suites well. v2 keeps their
+*shape*; only the plumbing underneath changes.
+
+- The topology builders (~sw.grid(...)~, ~sw.meter(...)~, ...) that
+  read like the topology they build.
+- ~launch()~ / ~connect()~ with ephemeral ports, the endpoint
+  handshake, and context-manager teardown.
+- The intent split on component handles: ~.command()~ goes through the
+  real gRPC gateway (and can be rejected, like production);
+  ~.drive()~ / ~.status()~ are test-side stimuli.
+- Settle-aware assertions: ~eventually~ / ~always~ / ~once~ with typed
+  matchers (~approx+tol~, ~within~, ~max~, ~min~).
+- Formula reads as ground truth (~grid_power~, ~battery_power~, ...).
+- The pytest plugin and the scenario DSL.
+
+* The three seams
+
+** 1. The concurrency sandwich
+
+v1 stacks three regimes: a background asyncio loop owned by the gRPC
+facade, worker threads for reads (so async assertions do not stall the
+caller's event loop), and the caller's own loop. It works, but the
+bugs we fixed lived exactly here (blocking reads on the loop,
+check-then-insert races once reads became multi-threaded).
+
+*Target:* an async-native core.
+
+- ~switchyard.aio.Site~: every read, write, and wait is a coroutine.
+  HTTP via an async client; the gRPC client used natively on the
+  caller's loop — no background loop, no worker threads, no locks.
+- ~switchyard.Site~: a thin sync facade over the async core for REPL
+  use and simple scripts. It owns the one place where a loop is run.
+  Async test code never sees it.
+
+** 2. The per-metric method explosion
+
+v1 hand-writes one method per metric per surface
+(~ComponentExpect.active_power~, ~.soc~, ~MicrogridExpect.grid_power~,
+...), each repeating the same matcher keywords. Symptoms: pass-through
+wrappers, a *reduced* keyword surface on the cumulative metrics
+(retyping fatigue), and every new metric costing four methods.
+
+*Target:* one metric model, one assertion engine.
+
+- A ~MetricSpec~ describes a metric: name, quantity type, and *kind* —
+  ~INSTANTANEOUS~ (power, SoC) or ~CUMULATIVE~ (energy).
+- Binding a spec to a source (a component id, or a site aggregate)
+  yields a ~BoundMetric~: a typed read plus a label.
+- One engine consumes a ~BoundMetric~ and the matchers. The metric's
+  *kind* picks the semantics: instantaneous metrics settle
+  (~eventually~, or ~always~ when ~for_~ is given); cumulative metrics
+  are checked once, after waiting for availability.
+- The familiar named methods survive as one-line sugar over the
+  engine, so tests keep reading well — but they all share one
+  signature and one implementation, and a new metric is one spec
+  entry.
+
+** 3. Lisp-by-string as the wire format
+
+v1 assembles Lisp source with f-strings and posts it to ~/api/eval~,
+which reports interpreter rejections as ~ok: false~ JSON. Escaping and
+number formatting become client bugs; errors become a contract the
+caller must remember to check.
+
+*Target:* a typed control API.
+
+- The server grows a small JSON control surface for everything
+  programmatic: component stimuli (drive/status), topology edits,
+  scenario definition and runs. Validation errors come back as
+  structured errors; the client raises typed exceptions.
+- ~/api/eval~ remains as the escape hatch, and the Lisp layer remains
+  the human surface: config files, the scenario library, the REPL.
+- Until the control API lands, the eval path stays behind one
+  choke-point function that checks ~ok~ and raises — never scattered
+  call sites.
+
+* Target layout
+
+#+begin_example
+switchyard/
+  metrics.py       MetricSpec, MetricKind, BoundMetric, the catalog
+  assertions.py    the one kind-aware assertion engine
+  aio/             async-native core (site, transports, scenarios)
+  _facade.py       sync Site wrapping aio.Site (the only sync/async seam)
+  build.py         topology builders (unchanged surface)
+  pytest_plugin.py fixtures on top of the facade or the aio core
+#+end_example
+
+Downstream test suites (any SDK app: controllers, schedulers,
+optimizers) should only ever import the top-level package.
+
+* Migration plan
+
+- *Phase 1 — metric model (compatible).* Introduce ~MetricSpec~ /
+  ~BoundMetric~ and route every existing ~expect~ method through the
+  one engine. Public surface unchanged, except the cumulative metrics
+  gain the full keyword set they were missing. Ships inside v1.
+- *Phase 2 — async core (breaking, shimmed).* Build ~switchyard.aio~;
+  reimplement the sync ~Site~ as the facade. Reads become coroutines
+  in the aio namespace; the sync names keep working through the
+  facade. Deprecate, do not remove.
+- *Phase 3 — typed control API (server + client).* Add the JSON
+  control endpoints on the Rust side; move ~drive~ / ~status~ /
+  scenario definition off eval. The Lisp generation code in the client
+  is deleted.
+
+Each phase must keep the downstream integration suites green — they
+are the acceptance tests for this redesign.
+
+* Non-goals
+
+- No new assertion semantics. ~eventually~ / ~always~ / ~once~ cover
+  what real-time tests need; v2 only changes who owns the dispatch.
+- No ORM-style topology mutation API. Topology edits stay explicit.
+- No promise of API stability before the redesign completes; the
+  package stays 0.x until phase 3 lands.
