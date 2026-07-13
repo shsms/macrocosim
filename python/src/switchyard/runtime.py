@@ -75,7 +75,7 @@ class Site:
     @property
     def grpc(self) -> str:
         """``host:port`` of the first (default) microgrid's gRPC API."""
-        return next(iter(self.microgrids.values())).grpc
+        return self.microgrids[self._resolve_mg(None)].grpc
 
     @property
     def grpc_url(self) -> str:
@@ -93,6 +93,11 @@ class Site:
     def _resolve_mg(self, mg_id: int | None) -> int:
         if mg_id is not None:
             return mg_id
+        if not self.microgrids:
+            raise RuntimeError(
+                "this Site has no microgrid endpoints; launch() discovers them, "
+                "connect() needs microgrids={id: MicrogridEndpoint(...)}"
+            )
         return next(iter(self.microgrids))
 
     def grpc_client(self, mg_id: int | None = None) -> GrpcClient:

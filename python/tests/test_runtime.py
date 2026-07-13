@@ -23,6 +23,16 @@ def test_grpc_is_first_microgrid_host_port() -> None:
     assert _site().grpc == "10.0.0.1:61000"
 
 
+def test_no_microgrids_raises_a_clear_error() -> None:
+    # connect() without microgrids must not leak a bare StopIteration
+    # from the default-microgrid lookup.
+    site = sw.connect(ui="127.0.0.1:8080")
+    with pytest.raises(RuntimeError, match="no microgrid endpoints"):
+        _ = site.grpc
+    with pytest.raises(RuntimeError, match="no microgrid endpoints"):
+        site.grpc_client()
+
+
 def test_grpc_url_prefixes_scheme() -> None:
     assert _site().grpc_url == "grpc://10.0.0.1:61000"
 
