@@ -461,12 +461,14 @@ def battery(
     name: str | None = None,
     capacity: Energy | None = None,
     initial_soc: Percentage | None = None,
+    rated: tuple[Power, Power] | None = None,
     **extra: Value,
 ) -> Battery:
     """A battery (leaf). ``capacity`` is an ``Energy``.
 
     ``initial_soc`` seeds the charge state; physics evolves it from the
     first tick (read or teleport it later via the ``soc`` signal).
+    ``rated`` bounds the DC power envelope (lower, upper).
     """
     args = {
         "id": id,
@@ -475,7 +477,7 @@ def battery(
         "initial_soc": initial_soc,
         **extra,
     }
-    return _component("make-battery", args, cls=Battery)
+    return _component("make-battery", args, rated=rated, cls=Battery)
 
 
 def ev_charger(

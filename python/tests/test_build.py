@@ -34,9 +34,12 @@ def test_ergonomic_kwargs_map_to_plist_keys() -> None:
         id=4,
         capacity=Energy.from_kilowatt_hours(100),
         initial_soc=Percentage.from_percent(50),
+        rated=(Power.from_kilowatts(-30), Power.from_kilowatts(30)),
     ).to_lisp()
     assert ":capacity 100000.0" in bat_lisp
     assert ":initial-soc 50.0" in bat_lisp
+    assert ":rated-lower -30000.0" in bat_lisp
+    assert ":rated-upper 30000.0" in bat_lisp
 
 
 def test_value_kinds_render_correctly() -> None:
