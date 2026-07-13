@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from .assertions import expect_metric
 from .build import RawLisp, to_lisp_atom
+from .errors import EvalRejected
 from .metrics import (
     ACTIVE_POWER,
     BATTERY_ENERGY,
@@ -223,7 +224,7 @@ class ComponentHandle:
         # test asserts against an unfaulted, undriven sim.
         result = self._site.eval(expr, self._mg)
         if not result.get("ok", True):
-            raise ValueError(f"eval of {expr!r} failed: {result.get('error')}")
+            raise EvalRejected(f"eval of {expr!r} failed: {result.get('error')}")
 
 
 class MicrogridExpect:
