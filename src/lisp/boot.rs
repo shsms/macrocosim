@@ -257,6 +257,7 @@ impl Config {
             router,
             current_microgrid,
             enterprise_id_allocator,
+            import_lock: Arc::new(tokio::sync::Mutex::new(())),
             microgrid_registered,
             timer_handle,
             now,

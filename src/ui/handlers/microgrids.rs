@@ -43,10 +43,31 @@ pub(in crate::ui) async fn microgrids_create(
     State(config): State<Config>,
     Json(body): Json<CreateMicrogridBody>,
 ) -> Result<Json<CreateMicrogridResp>, (StatusCode, String)> {
+    let created = create_core(&config, &body.name, body.tso.as_deref())?;
+    // Notify enterprise-wide subscribers: the binary's listener boots
+    // the runtime (physics + history + gRPC server + loopback), and
+    // the WS event pump starts forwarding topology_changed / sample
+    // events to live UI sessions. The registry insert + stub write
+    // both happen before this, so the listener's lookup finds the
+    // entry. Test fixtures run no listener — the entry simply gets
+    // no runtime, same as the old no-op spawner.
+    config.notify_microgrid_registered(created.id);
+    Ok(Json(created))
+}
+
+/// The shared create path: allocates id + port, inserts the registry
+/// entry, and writes the per-mg config stub. Does NOT notify the
+/// runtime spawner — the caller does, after any extra persistence of
+/// its own (the import writes the overrides file in between).
+fn create_core(
+    config: &Config,
+    name: &str,
+    tso: Option<&str>,
+) -> Result<CreateMicrogridResp, (StatusCode, String)> {
     use crate::sim::microgrids::{
         MicrogridDef, MicrogridEntry, next_free_id_in, next_free_port_in,
     };
-    let name = body.name.trim().to_string();
+    let name = name.trim().to_string();
     if name.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name must be non-empty".into()));
     }
@@ -65,7 +86,7 @@ pub(in crate::ui) async fn microgrids_create(
             id,
             name: name.clone(),
             grpc_port,
-            tso: body.tso.clone(),
+            tso: tso.map(str::to_string),
         };
         r.insert(
             id,
@@ -82,23 +103,152 @@ pub(in crate::ui) async fn microgrids_create(
     // stub is what re-creates the microgrid at load-time. Rolling
     // back the registry insert + bailing out keeps the failure
     // mode clean: nothing started, nothing leaked.
-    if let Err(e) = write_microgrid_stub(&config, id, &name, grpc_port, body.tso.as_deref()) {
+    if let Err(e) = write_microgrid_stub(config, id, &name, grpc_port, tso) {
         registry.lock().remove(&id);
         return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
     }
-    // Notify enterprise-wide subscribers: the binary's listener boots
-    // the runtime (physics + history + gRPC server + loopback), and
-    // the WS event pump starts forwarding topology_changed / sample
-    // events to live UI sessions. The registry insert + stub write
-    // above both happen before this, so the listener's lookup finds
-    // the entry. Test fixtures run no listener — the entry simply
-    // gets no runtime, same as the old no-op spawner.
-    config.notify_microgrid_registered(id);
-    Ok(Json(CreateMicrogridResp {
+    Ok(CreateMicrogridResp {
         id,
         name: def.name,
         grpc_port,
         tso: def.tso,
+    })
+}
+
+#[derive(Deserialize)]
+pub(in crate::ui) struct ImportMicrogridBody {
+    name: String,
+    #[serde(default)]
+    tso: Option<String>,
+    /// The site export's components.json, verbatim.
+    components: crate::sim::site_import::ComponentsFile,
+    /// The site export's connections.json, verbatim (optional).
+    #[serde(default)]
+    connections: Option<crate::sim::site_import::ConnectionsFile>,
+}
+
+#[derive(Serialize)]
+pub(in crate::ui) struct ImportMicrogridResp {
+    id: u64,
+    name: String,
+    grpc_port: u16,
+    tso: Option<String>,
+    components: usize,
+    connections: usize,
+}
+
+/// POST /api/microgrids/import — creates a REAL microgrid from a
+/// site export: same allocate + stub + boot path as create, then the
+/// export's components rendered as one `(progn (make-* …) …
+/// (connect …) …)` form evaluated against the new microgrid — the
+/// same path a UI edit takes, so the persistence gate appends the
+/// form to the microgrid's overrides file and the stub's
+/// `(load-overrides)` replays it at every later boot. Capacity, SoC
+/// bounds, rated power bounds and the grid's rated fuse current all
+/// survive into the simulation.
+///
+/// Imported component ids are kept verbatim. Component ids are
+/// enterprise-unique in switchyard, so an id that any registered
+/// microgrid already carries fails the whole import atomically —
+/// nothing is created. The enterprise id allocator jumps past the
+/// import's highest id so later auto-assigned ids can't collide.
+pub(in crate::ui) async fn microgrids_import(
+    State(config): State<Config>,
+    Json(body): Json<ImportMicrogridBody>,
+) -> Result<Json<ImportMicrogridResp>, (StatusCode, String)> {
+    let import = crate::sim::site_import::parse(body.components, body.connections)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    // One import at a time, from here to the eval that registers
+    // the components. The collision check below is authoritative
+    // only while no other import can add components between the
+    // scan and this import's own eval — the make-* re-check at
+    // replay is per site and cannot see a cross-site collision.
+    // Parsing stays outside the lock; it touches no shared state.
+    let import_lock = config.import_lock();
+    let _serialized = import_lock.lock().await;
+    // Collision check against every registered site, plus the
+    // bootstrap site legacy single-site configs run on.
+    // `import.components` comes from a dedup-validated
+    // parse, so the collected list is already sorted and unique.
+    {
+        // Resolve the bootstrap site BEFORE taking the registry
+        // lock: config.site() takes that same (non-reentrant) lock
+        // internally, so the other order deadlocks.
+        let bootstrap = config.site();
+        // Snapshot the site handles under the lock, then scan with
+        // the lock RELEASED: a big export means thousands of per-id
+        // lookups, and holding the registry mutex through them
+        // would stall every other registry user (create, listing,
+        // the WS pump, the typed control endpoints).
+        let sites: Vec<crate::sim::MicrogridSite> = {
+            let registry = config.microgrids();
+            let r = registry.lock();
+            std::iter::once(bootstrap)
+                .chain(r.values().map(|e| e.site.clone()))
+                .collect()
+        };
+        let taken: Vec<u64> = import
+            .components
+            .iter()
+            .map(|c| c.id)
+            .filter(|id| sites.iter().any(|s| s.get(*id).is_some()))
+            .collect();
+        if !taken.is_empty() {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "component ids already exist in other microgrids: {taken:?} \
+                     (component ids are enterprise-unique)"
+                ),
+            ));
+        }
+    }
+    let created = create_core(&config, &body.name, body.tso.as_deref())?;
+    // Move the shared allocator past the imported ids before any
+    // component is built, so nothing auto-allocates into that range.
+    // Saturating: an export carrying id u64::MAX must not overflow
+    // the bump (the allocator then sits at the ceiling, which only
+    // affects auto-assigned ids, not the explicit imported ones).
+    config.enterprise_id_allocator().fetch_max(
+        import.max_id().saturating_add(1),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    config.notify_microgrid_registered(created.id);
+    // Populate the (empty) new microgrid through the per-mg eval
+    // path. eval_in_mg holds the interpreter lock across scope-set +
+    // eval + overrides append, and the progn is one form, so the
+    // whole topology lands atomically — and persists for later
+    // boots. spawn_blocking because tulisp's lock is std-sync.
+    let forms = import.forms();
+    let cfg = config.clone();
+    let id = created.id;
+    let evaled = tokio::task::spawn_blocking(move || cfg.eval_in_mg(id, &forms))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("import eval panicked: {e}"),
+            )
+        })?;
+    if let Err(e) = evaled {
+        // The runtime is already booted, so this cannot roll back
+        // cleanly; the parse + collision checks above make this a
+        // should-not-happen. Name the leftover so the user can act.
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "import failed while building components: {e} \
+                 (microgrid {id} was created but is incomplete)"
+            ),
+        ));
+    }
+    Ok(Json(ImportMicrogridResp {
+        id: created.id,
+        name: created.name,
+        grpc_port: created.grpc_port,
+        tso: created.tso,
+        components: import.components.len(),
+        connections: import.connections.len(),
     }))
 }
 
@@ -126,22 +276,9 @@ fn write_microgrid_stub(
             path.display()
         ));
     }
-    // Escape " and \ inside the name string, and strip control
-    // characters (incl. newlines) — tulisp strings tolerate embedded
-    // newlines so this isn't currently exploitable, but a name that
-    // can't break out of its string literal is cheap insurance for a
-    // file we later re-eval. The TSO is one of the four short codes
-    // ("TN" / "AM" / "HZ" / "BW") or unset, so the same rule covers it.
-    fn esc(s: &str) -> String {
-        s.chars()
-            .filter(|c| !c.is_control())
-            .flat_map(|c| match c {
-                '\\' => vec!['\\', '\\'],
-                '"' => vec!['\\', '"'],
-                c => vec![c],
-            })
-            .collect()
-    }
+    // The TSO is one of the four short codes ("TN" / "AM" / "HZ" /
+    // "BW") or unset, so the same escaping rule covers name and TSO.
+    use crate::lisp::escape_lisp_string as esc;
     let tso_form = match tso {
         Some(t) if !t.is_empty() => format!(" :tso \"{}\"", esc(t)),
         _ => String::new(),

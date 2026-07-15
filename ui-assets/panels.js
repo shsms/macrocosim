@@ -2,7 +2,7 @@
 // poll the corresponding /api endpoint, render a card grid, and
 // respond to clicks / WS pushes by re-fetching + re-rendering.
 
-import { escapeHtml, notify, selectMicrogrid } from "./app.js";
+import { escapeHtml, mutate, notify, selectMicrogrid } from "./app.js";
 import { readSelectedMg, renderReplMgChip } from "./routing.js";
 
 export const microgridsPanel = (() => {
@@ -55,6 +55,66 @@ export const microgridsPanel = (() => {
         .catch((e) => notify(`Create failed: ${e.message}`));
     });
     grid.appendChild(newCard);
+    // Trailing [⇪ Import site…] card: picks a site export
+    // (components.json + connections.json together) and POSTs
+    // /api/microgrids/import, which creates a real simulated
+    // microgrid with the export's capacity / SoC / rated bounds.
+    const importCard = document.createElement("button");
+    importCard.type = "button";
+    importCard.className = "mglist-card mglist-new";
+    importCard.id = "mglist-import-btn";
+    importCard.title =
+      "Load a microgrid API site export: pick components.json and connections.json together (connections optional)";
+    importCard.innerHTML = `<span class="mglist-plus">⇪</span><span>Import site…</span>`;
+    importCard.addEventListener("click", () => {
+      document.getElementById("import-files").click();
+    });
+    grid.appendChild(importCard);
+  }
+
+  // The site-export files are identified by content — the object key
+  // names — not by their file names, so renamed downloads still
+  // import. A file that parses but matches neither key is an error;
+  // a file that doesn't parse at all is too.
+  async function importSiteFiles(files) {
+    let components = null;
+    let connections = null;
+    for (const file of files) {
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch (e) {
+        notify(`${file.name}: not valid JSON (${e.message})`);
+        return;
+      }
+      if (parsed.electricalComponents) components = parsed;
+      else if (parsed.electricalComponentConnections) connections = parsed;
+      else {
+        notify(`${file.name}: neither components nor connections export`);
+        return;
+      }
+    }
+    if (!components) {
+      notify("Pick the components.json file (connections.json is optional).");
+      return;
+    }
+    const name = prompt("Name for the imported microgrid:");
+    if (!name) return;
+    try {
+      const res = await mutate("POST", "/api/microgrids/import", {
+        name,
+        components,
+        connections,
+      });
+      const m = await res.json();
+      notify(
+        `Imported ${m.components} components, ${m.connections} connections.`,
+        "success",
+      );
+      selectMicrogrid(m.id);
+    } catch (e) {
+      notify(`Import failed: ${e.message}`);
+    }
   }
 
   function renderBreadcrumb() {
@@ -102,6 +162,15 @@ export const microgridsPanel = (() => {
       renderBreadcrumb();
     }, 5000);
   }
+
+  // Module scripts run after the DOM is parsed, so the hidden file
+  // input exists by now. Wired once here — the card in renderList is
+  // re-created per render and only clicks the input.
+  document.getElementById("import-files").addEventListener("change", (ev) => {
+    const files = [...ev.target.files];
+    ev.target.value = ""; // same files pickable again
+    if (files.length) importSiteFiles(files);
+  });
 
   return { refresh };
 })();

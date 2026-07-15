@@ -922,3 +922,130 @@ async fn formula_endpoint_404s_unknown_microgrid() {
     let (status, _) = call(cfg, get("/api/mg/9999/formula?metric=grid")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn microgrids_import_creates_entry_with_overrides() {
+    let cfg = config_with("(%make-grid-connection-point :id 1)").await;
+    let body = r#"{
+      "name": "imported site",
+      "components": {"electricalComponents": [
+        {"id": "10", "name": "grid", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT",
+         "categorySpecificInfo": {"gridConnectionPoint": {"ratedFuseCurrent": 125}}},
+        {"id": "11", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+        {"id": "12", "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER",
+         "categorySpecificInfo": {"inverter": {"type": "INVERTER_TYPE_BATTERY"}}},
+        {"id": "13", "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY",
+         "metricConfigBounds": [
+           {"metric": "METRIC_BATTERY_CAPACITY", "configBounds": {"upper": 40000}}
+         ]}
+      ]},
+      "connections": {"electricalComponentConnections": [
+        {"sourceElectricalComponentId": "10", "destinationElectricalComponentId": "11"},
+        {"sourceElectricalComponentId": "11", "destinationElectricalComponentId": "12"},
+        {"sourceElectricalComponentId": "12", "destinationElectricalComponentId": "13"}
+      ]}
+    }"#;
+    let (status, resp) = call(cfg.clone(), post_json("/api/microgrids/import", body)).await;
+    let parsed: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+    assert_eq!(status, StatusCode::OK, "body: {parsed}");
+    assert_eq!(parsed["components"], 4);
+    assert_eq!(parsed["connections"], 3);
+    let id = parsed["id"].as_u64().unwrap();
+
+    // The import populates the new site through the per-mg eval
+    // path, so the components exist right away…
+    let (status, topo) = call(cfg.clone(), get(&format!("/api/mg/{id}/topology"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let topo: serde_json::Value = serde_json::from_slice(&topo).unwrap();
+    assert_eq!(topo["components"].as_array().unwrap().len(), 4);
+    assert_eq!(topo["connections"].as_array().unwrap().len(), 3);
+    // …and the persistence gate appended the form to the overrides
+    // file, with the export's physical parameters, for boot replay.
+    let overrides = std::fs::read_to_string(
+        cfg.microgrids_dir()
+            .join(format!("config.{id}.overrides.lisp")),
+    )
+    .unwrap();
+    assert!(overrides.contains(":rated-fuse-current 125"));
+    assert!(overrides.contains("(make-battery :id 13 :capacity 40000.0)"));
+    assert!(overrides.contains("(connect 12 13)"));
+
+    // The registry lists it.
+    let (_, list) = call(cfg, get("/api/microgrids")).await;
+    let list: serde_json::Value = serde_json::from_slice(&list).unwrap();
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"].as_u64() == Some(id) && m["name"] == "imported site")
+    );
+}
+
+#[tokio::test]
+async fn microgrids_import_rejects_id_collisions_atomically() {
+    // Component id 1 already exists in the config's microgrid.
+    let cfg = config_with("(%make-grid-connection-point :id 1)").await;
+    let body = r#"{
+      "name": "colliding site",
+      "components": {"electricalComponents": [
+        {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"}
+      ]}
+    }"#;
+    let (status, resp) = call(cfg.clone(), post_json("/api/microgrids/import", body)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(String::from_utf8_lossy(&resp).contains("enterprise-unique"));
+    // Nothing was created.
+    let (_, list) = call(cfg, get("/api/microgrids")).await;
+    let list: serde_json::Value = serde_json::from_slice(&list).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn microgrids_import_serializes_racing_imports() {
+    // Two imports carrying the same component id race. The import
+    // lock runs them one at a time, so the loser's collision scan
+    // sees the winner's components and returns 409 — component ids
+    // stay enterprise-unique, with no silent duplicate.
+    let cfg = config_with("(%make-grid-connection-point :id 1)").await;
+    let body = |name: &str| {
+        format!(
+            r#"{{
+      "name": "{name}",
+      "components": {{"electricalComponents": [
+        {{"id": "40", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"}}
+      ]}}
+    }}"#
+        )
+    };
+    let (a, b) = tokio::join!(
+        call(
+            cfg.clone(),
+            post_json("/api/microgrids/import", &body("site a"))
+        ),
+        call(
+            cfg.clone(),
+            post_json("/api/microgrids/import", &body("site b"))
+        ),
+    );
+    let statuses = [a.0, b.0];
+    assert!(statuses.contains(&StatusCode::OK), "{statuses:?}");
+    assert!(statuses.contains(&StatusCode::CONFLICT), "{statuses:?}");
+    // Exactly one import landed next to the config's own microgrid.
+    let (_, list) = call(cfg, get("/api/microgrids")).await;
+    let list: serde_json::Value = serde_json::from_slice(&list).unwrap();
+    assert_eq!(list.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn microgrids_import_rejects_unsupported_category() {
+    let cfg = config_with("(%make-grid-connection-point :id 1)").await;
+    let body = r#"{
+      "name": "boiler site",
+      "components": {"electricalComponents": [
+        {"id": "10", "category": "ELECTRICAL_COMPONENT_CATEGORY_WIND_TURBINE"}
+      ]}
+    }"#;
+    let (status, resp) = call(cfg, post_json("/api/microgrids/import", body)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(String::from_utf8_lossy(&resp).contains("cannot simulate"));
+}

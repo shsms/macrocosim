@@ -83,7 +83,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
             microgrid_history_for_mg, microgrid_latest, microgrid_latest_for_mg, microgrid_status,
             microgrid_status_for_mg,
         },
-        microgrids::{microgrids_create, microgrids_list},
+        microgrids::{microgrids_create, microgrids_import, microgrids_list},
         overrides::{
             overrides_list, overrides_text_for_mg, overrides_text_replace_for_mg,
             persisted_bulk_remove, persisted_remove,
@@ -131,6 +131,12 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/api/scenarios/{name}/start", post(scenarios_start))
         .route("/api/microgrids", get(microgrids_list))
         .route("/api/microgrids/create", post(microgrids_create))
+        .route(
+            "/api/microgrids/import",
+            // Site exports run to tens of MB; axum's 2 MB default
+            // body limit would reject them.
+            post(microgrids_import).layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024)),
+        )
         .route("/api/mg/{mg_id}/topology", get(topology_for_mg))
         .route("/api/mg/{mg_id}/eval", post(eval_for_mg))
         .route("/api/mg/{mg_id}/formula", get(formula_for_mg))

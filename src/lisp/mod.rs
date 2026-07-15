@@ -76,6 +76,22 @@ pub struct Metadata {
     pub default_request_lifetime: Duration,
 }
 
+/// Escape `"` and `\` inside a Lisp string literal, and strip
+/// control characters (incl. newlines), so a value can never break
+/// out of its quotes in a file we later re-eval. Used by every
+/// writer that renders text into Lisp source: the microgrid stub
+/// writer and the site-import form renderer.
+pub(crate) fn escape_lisp_string(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_control())
+        .flat_map(|c| match c {
+            '\\' => vec!['\\', '\\'],
+            '"' => vec!['\\', '"'],
+            c => vec![c],
+        })
+        .collect()
+}
+
 impl Default for Metadata {
     fn default() -> Self {
         Self {
@@ -150,6 +166,15 @@ pub struct Config {
     /// per-site counter — only the multi-microgrid path gains
     /// cross-site uniqueness.
     pub(crate) enterprise_id_allocator: Arc<std::sync::atomic::AtomicU64>,
+    /// Serializes `/api/microgrids/import` requests. The import
+    /// handler scans every site for id collisions and only then
+    /// evals the components into its new site; no registry lock
+    /// spans both steps, so two racing imports could each pass the
+    /// scan before the other's components exist — silently breaking
+    /// the enterprise-unique component-id invariant. One import at
+    /// a time keeps the scan authoritative. A tokio mutex because
+    /// the handler holds it across `await`s.
+    pub(crate) import_lock: Arc<tokio::sync::Mutex<()>>,
     /// Enterprise-wide notification fired when a new microgrid
     /// lands in `microgrids` — both `(make-microgrid …)` and
     /// `/api/microgrids/create` publish on it. The WS event pump
@@ -186,6 +211,11 @@ impl Config {
     /// read here. Always carries at least one entry once
     /// `Config::new` has returned — the hard-error in `Config::new`
     /// rejects configs whose registry is empty after eval.
+    /// The import-serialization lock — see the field doc.
+    pub(crate) fn import_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.import_lock.clone()
+    }
+
     pub fn microgrids(&self) -> crate::sim::microgrids::SharedMicrogrids {
         self.microgrids.clone()
     }
