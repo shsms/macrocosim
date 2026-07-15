@@ -66,6 +66,7 @@
         <nav id="mg-subtoggle" aria-label="microgrid view">
           <button class="mode-btn" data-subview="dashboard">Dashboard</button>
           <button class="mode-btn" data-subview="topology">Topology</button>
+          <button class="mode-btn" data-subview="formulas">Formulas</button>
           <button class="mode-btn" data-subview="dispatches">Dispatches</button>
         </nav>
       </header>
@@ -79,6 +80,83 @@
           <li>Paste a structure copied from another microgrid (Ctrl/Cmd+V).</li>
         </ol>
         <p class="hint">Wire it up via Ctrl/Cmd+drag once it's on the canvas.</p>
+      </div>
+      <div id="formulas">
+        <div id="formula-canvas-pane">
+          <div id="formula-topology"></div>
+          <div id="formulas-controls" class="canvas-controls in-pane">
+            <span class="ctl-label">layout</span>
+            <button type="button" class="pill layout-btn active" data-layout="lanes"
+                    title="Subtree blocks; a big fan-out splits into two lanes">lanes</button>
+            <button type="button" class="pill layout-btn" data-layout="columns"
+                    title="Classic strict depth columns">columns</button>
+            <button type="button" class="pill layout-btn" data-layout="topdown"
+                    title="Tree from top to bottom">top-down</button>
+            <button type="button" class="pill layout-btn" data-layout="radial"
+                    title="Root in the middle, one ring per depth">radial</button>
+            <span class="ctl-label">drag</span>
+            <button type="button" class="pill snap-btn active"
+                    title="Dragged nodes snap to a grid, relative to where the drag started. Hold Alt while dragging to move along one axis only.">snap</button>
+          </div>
+        </div>
+        <aside id="formula-side">
+          <section class="card">
+            <h2>Metric</h2>
+            <div id="metric-buttons">
+              <div class="field">
+                <span class="field-label">power</span>
+                <button type="button" class="pill metric-btn active" data-metric="grid">grid</button>
+                <button type="button" class="pill metric-btn" data-metric="consumer">consumer</button>
+                <button type="button" class="pill metric-btn" data-metric="producer">producer</button>
+                <button type="button" class="pill metric-btn" data-metric="battery">battery</button>
+                <button type="button" class="pill metric-btn" data-metric="pv">PV</button>
+                <button type="button" class="pill metric-btn" data-metric="chp">CHP</button>
+                <button type="button" class="pill metric-btn" data-metric="ev_charger">EV</button>
+              </div>
+              <div class="field">
+                <span class="field-label">voltage / freq</span>
+                <button type="button" class="pill metric-btn" data-metric="grid_coalesce">grid</button>
+                <button type="button" class="pill metric-btn" data-metric="battery_ac_coalesce">battery</button>
+                <button type="button" class="pill metric-btn" data-metric="pv_ac_coalesce">PV</button>
+              </div>
+              <div class="field">
+                <span class="field-label">one component</span>
+                <button type="button" class="pill metric-btn" data-metric="component">reading</button>
+                <button type="button" class="pill metric-btn" data-metric="component_ac_coalesce">voltage / freq</button>
+              </div>
+            </div>
+            <label class="check"><input type="checkbox" id="use-selection" />
+              limit to the selected components</label>
+            <div class="field" id="config-panel">
+              <span class="field-label">engine options</span>
+              <label class="check"><input type="checkbox" id="cfg-prefer-meters" />
+                prefer meters over component readings</label>
+              <label class="check"><input type="checkbox" id="cfg-phantom" />
+                include phantom loads in consumer formula</label>
+              <label class="check"><input type="checkbox" id="cfg-no-fallback" />
+                disable fallback components</label>
+            </div>
+          </section>
+          <section class="card">
+            <h2>Formula</h2>
+            <p id="formula-error" class="graph-error" hidden></p>
+            <pre id="formula-view" class="formula-tree"></pre>
+            <div class="field">
+              <button type="button" class="tool-btn" id="copy-formula"
+                title="Copy the plain formula string">copy</button>
+              <button type="button" class="tool-btn" id="copy-commented"
+                title="Copy the formula with the reasons as // comments">copy with comments</button>
+            </div>
+            <p class="hint">Hover a part for its reason; click it to open the Why
+              panel. A <code>#N</code> selects that component. Right-click a
+              selection to toggle telemetry or arrange nodes.</p>
+          </section>
+        </aside>
+        <div id="formula-drawer-splitter" class="fsplitter"></div>
+        <section id="why-drawer">
+          <div id="why-tree"></div>
+          <div id="why-detail"></div>
+        </section>
       </div>
       <div id="scenarios" hidden>
         <header class="scenarios-header">
@@ -250,6 +328,7 @@
     </main>
     <noscript>This UI requires JavaScript.</noscript>
     <div id="ctx-menu" hidden></div>
+    <div id="formula-tip" hidden></div>
     <dialog id="pending-dialog">
       <header>
         <h3>Active overrides</h3>

@@ -5,6 +5,18 @@
 // + Defaults / Scenarios all hang off the same /api/eval mutation
 // path so anything done in the UI is also scriptable from outside.
 
+import { clockState, pulseBar } from "./chrome.js";
+import { dashboardTiles } from "./dashboard.js";
+import {
+  overrideState,
+  setupDefaultsToggle,
+  setupHelpButton,
+  setupOverridesDialog,
+  setupOverridesPill,
+  setupScenarioReportToggle,
+  setupSnapshotsDialog,
+} from "./dialogs.js";
+import { dispatchForm } from "./dispatch-form.js";
 import {
   copySelection,
   cutSelection,
@@ -15,22 +27,11 @@ import {
   setupContextMenu,
   undoMgr,
 } from "./editor.js";
-import { clearSide, refitCharts, showComponent } from "./inspect.js";
-import {
-  overrideState,
-  setupDefaultsToggle,
-  setupHelpButton,
-  setupOverridesDialog,
-  setupOverridesPill,
-  setupScenarioReportToggle,
-  setupSnapshotsDialog,
-} from "./dialogs.js";
-import { backfillLogs, openWebSocket, setupRepl } from "./repl.js";
-import { dashboardTiles } from "./dashboard.js";
-import { clockState, pulseBar } from "./chrome.js";
-import { dispatchForm } from "./dispatch-form.js";
+import { formulaCanvas, refreshFormula, setupExplainPanel } from "./explain.js";
 import { setupFormulaTileClicks } from "./formulas.js";
+import { clearSide, refitCharts, showComponent } from "./inspect.js";
 import { scenariosPanel } from "./panels.js";
+import { backfillLogs, openWebSocket, setupRepl } from "./repl.js";
 import {
   jumpToTopology,
   mgPath,
@@ -41,7 +42,7 @@ import {
   setupModeToggle,
   setupReplMgChip,
 } from "./routing.js";
-import { setupDrawerSplitter } from "./splitter.js";
+import { setupDrawerSplitter, setupFormulaDrawerSplitter } from "./splitter.js";
 import { topology } from "./topology.js";
 
 // Re-export the routing helpers that other modules still pull
@@ -363,12 +364,16 @@ export const dispatchesPanel = (() => {
   return { render, setup };
 })();
 
+// Pending debounce handle for the WS-driven formula refresh.
+let formulaRefreshTimer = null;
+
 async function init() {
   setupAddForm();
   setupDefaultsToggle();
   setupScenarioReportToggle();
   setupFloatingPanels();
   setupDrawerSplitter();
+  setupFormulaDrawerSplitter();
   setupOverridesDialog();
   setupSnapshotsDialog();
   backfillLogs();
@@ -378,12 +383,31 @@ async function init() {
   // before the first apply so the listeners are in place.
   topology.setSelectionHandler(showComponent, clearSide);
   setupCanvasControls("topology-controls", topology);
+  setupExplainPanel();
+  setupCanvasControls("formulas-controls", formulaCanvas());
   // Editor-style keyboard shortcuts. All check that focus isn't in
   // a text editor (REPL textarea, dialog inputs) before firing, so
   // typing remains unaffected.
   document.addEventListener("keydown", (e) => {
     const inEditable = e.target.matches?.("input, textarea, [contenteditable]");
     if (inEditable) return;
+    // The editing shortcuts drive the Topology canvas's selection.
+    // Anywhere else they must stay inert — Delete pressed on the
+    // Formulas tab, the Scenarios mode, or the microgrid list must
+    // not remove whatever happens to be selected on the (hidden)
+    // Topology canvas. All three body flags must say the canvas is
+    // the visible pane; data-subview alone persists across mode
+    // switches and would leave the shortcuts armed on Scenarios.
+    const { mode, mgView, subview } = document.body.dataset;
+    const topologyVisible =
+      mode === "microgrids" && mgView === "selected" && subview === "topology";
+    if (!topologyVisible) {
+      if (e.key === "Escape") {
+        if (subview === "formulas") formulaCanvas().select([]);
+        clearSide();
+      }
+      return;
+    }
     const meta = e.metaKey || e.ctrlKey;
     const key = e.key.toLowerCase();
     if (meta && e.shiftKey && key === "z") {
@@ -436,6 +460,16 @@ async function init() {
   openWebSocket((_v) => {
     refreshTopology();
     overrideState.refresh();
+    // The formula depends on the topology; re-derive it while the
+    // Formulas subview is showing (hidden, the subview-enter hook
+    // refreshes on the next visit anyway). Debounced: a burst of
+    // edits (multi-step undo, scripted evals) fires many
+    // topology_changed events, and each formula refresh is a
+    // server-side graph build plus a full panel re-render.
+    if (visibleSubview() === "formulas") {
+      clearTimeout(formulaRefreshTimer);
+      formulaRefreshTimer = setTimeout(refreshFormula, 300);
+    }
     // The loopback supervisor debounces ~300ms and rebuilds the
     // Microgrid handle; /api/microgrid/latest + /formulas return
     // 503 mid-rebuild. Delay the dashboard re-fetch so it lands

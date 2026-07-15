@@ -5,6 +5,8 @@
 // refreshTopology fetch that ferries /api/topology data into the
 // canvas + chrome pulse bar.
 
+import { dispatchesPanel, setStatus } from "./app.js";
+import { gridFrequency, pulseBar } from "./chrome.js";
 import {
   batteryPairs,
   chpRows,
@@ -12,11 +14,10 @@ import {
   evRows,
   pvRows,
 } from "./dashboard.js";
-import { gridFrequency, pulseBar } from "./chrome.js";
+import { formulaCanvas, refreshFormula } from "./explain.js";
+import { clearSide, refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { topology } from "./topology.js";
-import { clearSide, refitCharts, showComponent } from "./inspect.js";
-import { dispatchesPanel, setStatus } from "./app.js";
 
 // ─── Per-mg URL helper ─────────────────────────────────────────────────────
 // Prefixes /api/mg/{selected_id}/ when a microgrid is selected,
@@ -61,11 +62,15 @@ export function setupDensityToggle() {
 }
 
 // ─── Route state keys + read helpers ───────────────────────────────────────
+// The last /api/topology snapshot, for catching the Formulas canvas
+// up when its subview becomes visible (it is not fed while hidden).
+let lastTopologySnapshot = null;
+
 const MODE_KEY = "switchyard-mode";
 const MG_SELECTED_KEY = "switchyard-selected-mg";
 const MG_SUBVIEW_KEY = "switchyard-mg-subview";
 const VALID_MODES = new Set(["microgrids", "scenarios"]);
-const VALID_SUBVIEWS = new Set(["dashboard", "topology", "dispatches"]);
+const VALID_SUBVIEWS = new Set(["dashboard", "topology", "formulas", "dispatches"]);
 
 export function readSelectedMg() {
   const raw = localStorage.getItem(MG_SELECTED_KEY);
@@ -107,7 +112,7 @@ function parseHash(hash) {
   if (hash === "#scenarios") {
     return { mode: "scenarios", selectedMg: null, subview: "dashboard" };
   }
-  const m = /^#microgrids\/(\d+)(?:\/(dashboard|topology|dispatches))?$/.exec(hash);
+  const m = /^#microgrids\/(\d+)(?:\/(dashboard|topology|formulas|dispatches))?$/.exec(hash);
   if (m) {
     return {
       mode: "microgrids",
@@ -186,6 +191,14 @@ function applyMode(mode) {
   if (mode === "microgrids" && selected != null && subview === "topology") {
     refitCharts();
     requestAnimationFrame(() => topology.fit());
+  }
+  if (mode === "microgrids" && selected != null && subview === "formulas") {
+    // The Formulas canvas is fed lazily: while its subview is hidden
+    // refreshTopology() only stashes the snapshot, so catch up now
+    // that the container is visible and measurable.
+    if (lastTopologySnapshot) formulaCanvas().apply(lastTopologySnapshot);
+    requestAnimationFrame(() => formulaCanvas().fit());
+    refreshFormula();
   }
   if (mode === "microgrids" && selected != null && subview === "dashboard") {
     dashboardTiles.backfill();
@@ -300,6 +313,14 @@ export async function refreshTopology() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     topology.apply(data);
+    // The Formulas canvas renders the same snapshot, but only while
+    // its subview is showing — feeding a hidden (0×0) canvas would
+    // pay a full layout for invisible pixels and measure junk node
+    // sizes. The stash catches it up on subview enter (applyMode).
+    lastTopologySnapshot = data;
+    if (document.body.dataset.subview === "formulas") {
+      formulaCanvas().apply(data);
+    }
     // Pulse bar's health counters + graph pill read from the
     // same /api/topology fetch — one round-trip carries both
     // signals + a hot-reload's WS topology_changed nudge
