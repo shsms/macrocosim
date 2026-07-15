@@ -1446,24 +1446,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-size: 14px;
 }
 
-.add-row {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
-.add-row select {
-  flex: 1;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 4px 6px;
-  font-family: var(--font-mono);
-  font-size: 14px;
-}
-.add-row select:focus { outline: 1px solid var(--accent); }
-
 .name-input {
   width: 100%;
   background: transparent;
@@ -2270,3 +2252,31 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="formulas"] #
 }
 #formula-tip p { margin: 4px 0; }
 .tip-hint { font-size: 10.5px; color: var(--muted); }
+
+/* Component palette in the ＋ Add panel: one button per category,
+   with a color dot matching the node color on the canvas. */
+#palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.pal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 9px 3px 7px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  cursor: pointer;
+}
+.pal-btn::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--dot, var(--muted));
+}
+.pal-btn:hover { border-color: var(--dot, var(--accent)); }

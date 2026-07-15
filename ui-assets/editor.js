@@ -345,17 +345,17 @@ export function setupContextMenu() {
   });
 }
 
+// The component palette: one button per category, click to add.
 export function setupAddForm() {
-  const sel = document.getElementById("add-category");
-  const btn = document.getElementById("add-btn");
-  btn.addEventListener("click", async () => {
-    const fn = sel.value;
+  document.getElementById("palette").addEventListener("click", async (ev) => {
+    const btn = ev.target.closest(".pal-btn");
+    if (!btn) return;
     btn.disabled = true;
     try {
       await undoMgr.record();
       const res = await fetch(mgPath("eval"), {
         method: "POST",
-        body: `(${fn})`,
+        body: `(${btn.dataset.make})`,
       });
       const data = await res.json();
       if (!data.ok) notify(`Create failed: ${data.error}`);
