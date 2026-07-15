@@ -177,6 +177,21 @@
         </header>
         <div id="dispatches-body"></div>
       </div>
+      <!-- Floating right: layout picker + drag-snap toggle (topology only). -->
+      <div id="topology-controls" class="canvas-controls">
+        <span class="ctl-label">layout</span>
+        <button type="button" class="pill layout-btn active" data-layout="lanes"
+                title="Subtree blocks; a big fan-out splits into two lanes">lanes</button>
+        <button type="button" class="pill layout-btn" data-layout="columns"
+                title="Classic strict depth columns">columns</button>
+        <button type="button" class="pill layout-btn" data-layout="topdown"
+                title="Tree from top to bottom">top-down</button>
+        <button type="button" class="pill layout-btn" data-layout="radial"
+                title="Root in the middle, one ring per depth">radial</button>
+        <span class="ctl-label">drag</span>
+        <button type="button" class="pill snap-btn active"
+                title="Dragged nodes snap to a grid, relative to where the drag started. Hold Alt while dragging to move along one axis only.">snap</button>
+      </div>
       <!-- Floating left: summon the Add-component panel (topology only). -->
       <button id="add-toggle" class="canvas-btn" type="button"
               title="Add a component">＋ Add</button>

@@ -3,10 +3,10 @@
 // the floating right-click menu, the side-panel `Add component`
 // form, and helpers around them.
 
-import { notify } from "./app.js";
+import { escapeHtml, notify } from "./app.js";
 import { showComponent } from "./inspect.js";
 import { mgPath, readSelectedMg } from "./routing.js";
-import { topology } from "./topology.js";
+import { ALIGN_MODES, topology } from "./topology.js";
 
 function makeFnFor(c) {
   if (c.category === "inverter") {
@@ -242,27 +242,37 @@ export function selectAllVisible() {
   showComponent(topology.get(ids[0]));
 }
 
-// Floating right-click menu. Items are context-dependent: Copy +
-// Delete (and Cut) when something's selected, Paste when nothing's
-// selected and the clipboard has content. Hidden on outside click,
-// Esc, or after running an action.
-export function showContextMenu(x, y) {
-  const menu = document.getElementById("ctx-menu");
-  const sel = topology.selectedIds();
+// One context-menu entry per ALIGN_MODES row; each group starts
+// with a separator. Shared between the Topology menu (below) and
+// the Formulas canvas's align-only menu, so the two cannot drift.
+export function alignMenuItems(canvas) {
   const items = [];
-  if (sel.length) {
-    items.push({ label: "Copy", shortcut: "Ctrl/Cmd+C", action: copySelection });
-    items.push({ label: "Cut", shortcut: "Ctrl/Cmd+X", action: cutSelection });
-    items.push({ label: "Delete", shortcut: "Del", action: deleteSelection });
-  } else if (!clipboard.isEmpty()) {
-    items.push({ label: "Paste", shortcut: "Ctrl/Cmd+V", action: pasteClipboard });
+  let prevGroup = null;
+  for (const m of ALIGN_MODES) {
+    items.push({
+      label: m.menu,
+      title: m.title,
+      action: () =>
+        m.scale
+          ? canvas.scaleSelection(m.scale.axis, m.scale.factor)
+          : canvas.alignSelection(m.mode),
+      separator: m.group !== prevGroup,
+    });
+    prevGroup = m.group;
   }
-  if (!items.length) return; // nothing relevant; keep menu hidden
+  return items;
+}
+
+// Renders `items` as the floating menu at (x, y): label + optional
+// shortcut per row, separators between groups, viewport-clamped.
+// Hidden on outside click, Esc, or after running an action.
+export function showMenuItems(menu, items, x, y) {
   menu.innerHTML = items
     .map(
       (it) =>
-        `<button class="ctx-item" data-idx="${items.indexOf(it)}">
-          <span>${it.label}</span><kbd>${it.shortcut}</kbd>
+        `${it.separator ? '<div class="ctx-separator"></div>' : ""}
+        <button class="ctx-item" data-idx="${items.indexOf(it)}"${it.title ? ` title="${escapeHtml(it.title)}"` : ""}>
+          <span>${it.label}</span>${it.shortcut ? `<kbd>${it.shortcut}</kbd>` : ""}
         </button>`,
     )
     .join("");
@@ -287,6 +297,26 @@ export function showContextMenu(x, y) {
       items[idx].action();
     });
   }
+}
+
+// The Topology canvas's right-click menu. Items are context-
+// dependent: Copy + Cut + Delete when something's selected, Paste
+// when nothing's selected and the clipboard has content, and the
+// align section when two or more nodes are selected.
+export function showContextMenu(x, y) {
+  const menu = document.getElementById("ctx-menu");
+  const sel = topology.selectedIds();
+  const items = [];
+  if (sel.length) {
+    items.push({ label: "Copy", shortcut: "Ctrl/Cmd+C", action: copySelection });
+    items.push({ label: "Cut", shortcut: "Ctrl/Cmd+X", action: cutSelection });
+    items.push({ label: "Delete", shortcut: "Del", action: deleteSelection });
+  } else if (!clipboard.isEmpty()) {
+    items.push({ label: "Paste", shortcut: "Ctrl/Cmd+V", action: pasteClipboard });
+  }
+  if (sel.length >= 2) items.push(...alignMenuItems(topology));
+  if (!items.length) return; // nothing relevant; keep menu hidden
+  showMenuItems(menu, items, x, y);
 }
 
 function hideContextMenu() {

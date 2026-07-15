@@ -123,6 +123,30 @@ export function notify(message, kind = "error") {
   setTimeout(() => t.remove(), 5000);
 }
 
+// Layout picker + snap toggle wiring for one canvas-controls strip.
+// Clicking an algorithm applies it (and drops any manual
+// arrangement); clicking the active one re-runs it. The snap toggle
+// is the magnetic grid for node drags; Alt-drag locks the movement
+// to one axis, with snap on or off.
+export function setupCanvasControls(stripId, canvas) {
+  const strip = document.getElementById(stripId);
+  strip.addEventListener("click", (ev) => {
+    const layoutBtn = ev.target.closest(".layout-btn");
+    if (layoutBtn) {
+      for (const b of strip.querySelectorAll(".layout-btn")) {
+        b.classList.toggle("active", b === layoutBtn);
+      }
+      canvas.resetLayout(layoutBtn.dataset.layout);
+      return;
+    }
+    const snapBtn = ev.target.closest(".snap-btn");
+    if (snapBtn) {
+      snapBtn.classList.toggle("active");
+      canvas.setSnap(snapBtn.classList.contains("active"));
+    }
+  });
+}
+
 export function escapeHtml(s) {
   return String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
 }
@@ -353,6 +377,7 @@ async function init() {
   // (from inspect.js) on node click + canvas click. Wire it up
   // before the first apply so the listeners are in place.
   topology.setSelectionHandler(showComponent, clearSide);
+  setupCanvasControls("topology-controls", topology);
   // Editor-style keyboard shortcuts. All check that focus isn't in
   // a text editor (REPL textarea, dialog inputs) before firing, so
   // typing remains unaffected.

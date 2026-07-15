@@ -1940,3 +1940,54 @@ dialog#dispatch-dialog { max-width: 640px; }
   border-top: 1px solid var(--border);
   margin-top: 10px;
 }
+
+/* Floating canvas controls (top-right): layout picker + snap toggle.
+   Shared look between the Topology and Formulas canvases; each canvas
+   has its own strip, shown by its subview rule below. */
+.canvas-controls {
+  display: none;
+  grid-area: topology;
+  justify-self: end;
+  align-self: start;
+  z-index: 6;
+  margin: 10px;
+  padding: 4px 8px;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #topology-controls {
+  display: flex;
+}
+.ctl-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.pill {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.pill:hover { border-color: var(--accent); }
+.pill.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+/* Group separators inside the right-click menu (the align section). */
+#ctx-menu .ctx-separator {
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
