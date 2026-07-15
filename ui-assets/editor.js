@@ -18,6 +18,10 @@ function makeFnFor(c) {
     battery: "make-battery",
     "ev-charger": "make-ev-charger",
     chp: "make-chp",
+    "wind-turbine": "make-wind-turbine",
+    "steam-boiler": "make-steam-boiler",
+    "power-transformer": "make-power-transformer",
+    breaker: "make-breaker",
   }[c.category] ?? null;
 }
 

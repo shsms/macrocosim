@@ -34,6 +34,10 @@
   --cat-battery: #f1955b;
   --cat-ev-charger: #b18ed3;
   --cat-chp: #d27a85;
+  --cat-wind-turbine: #7ccbd3;
+  --cat-steam-boiler: #c99c7a;
+  --cat-power-transformer: #9aa5b1;
+  --cat-breaker: #8a94a3;
 }
 
 html,

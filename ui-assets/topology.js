@@ -33,6 +33,10 @@ const CATEGORY_COLOR = {
   battery: getCss("--cat-battery"),
   "ev-charger": getCss("--cat-ev-charger"),
   chp: getCss("--cat-chp"),
+  "wind-turbine": getCss("--cat-wind-turbine"),
+  "steam-boiler": getCss("--cat-steam-boiler"),
+  "power-transformer": getCss("--cat-power-transformer"),
+  breaker: getCss("--cat-breaker"),
 };
 
 // Inverters get a subtype-aware shade so battery-inverters and

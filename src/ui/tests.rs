@@ -1040,9 +1040,9 @@ async fn microgrids_import_serializes_racing_imports() {
 async fn microgrids_import_rejects_unsupported_category() {
     let cfg = config_with("(%make-grid-connection-point :id 1)").await;
     let body = r#"{
-      "name": "boiler site",
+      "name": "hvac site",
       "components": {"electricalComponents": [
-        {"id": "10", "category": "ELECTRICAL_COMPONENT_CATEGORY_WIND_TURBINE"}
+        {"id": "10", "category": "ELECTRICAL_COMPONENT_CATEGORY_HVAC"}
       ]}
     }"#;
     let (status, resp) = call(cfg, post_json("/api/microgrids/import", body)).await;

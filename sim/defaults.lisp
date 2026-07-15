@@ -54,6 +54,11 @@
 (setq chp-defaults
       '(:stream-jitter-pct 0.0))
 
+;; The marker categories (wind turbine, steam boiler, power
+;; transformer, breaker) carry no physics — one shared default plist.
+(setq marker-defaults
+      '(:stream-jitter-pct 0.0))
+
 ;; -----------------------------------------------------------------------------
 ;; make-* shorthand wrappers
 ;; -----------------------------------------------------------------------------
@@ -73,3 +78,7 @@
 (defun make-solar-inverter   (&rest p) (apply '%make-solar-inverter   (append solar-inverter-defaults   p)))
 (defun make-ev-charger       (&rest p) (apply '%make-ev-charger       (append ev-charger-defaults       p)))
 (defun make-chp              (&rest p) (apply '%make-chp              (append chp-defaults              p)))
+(defun make-wind-turbine     (&rest p) (apply '%make-wind-turbine     (append marker-defaults           p)))
+(defun make-steam-boiler     (&rest p) (apply '%make-steam-boiler     (append marker-defaults           p)))
+(defun make-power-transformer (&rest p) (apply '%make-power-transformer (append marker-defaults         p)))
+(defun make-breaker          (&rest p) (apply '%make-breaker          (append marker-defaults           p)))

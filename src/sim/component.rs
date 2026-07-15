@@ -15,6 +15,10 @@ pub enum Category {
     Battery,
     EvCharger,
     Chp,
+    WindTurbine,
+    SteamBoiler,
+    PowerTransformer,
+    Breaker,
 }
 
 #[derive(Debug, Clone)]

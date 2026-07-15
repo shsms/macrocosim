@@ -46,6 +46,12 @@ pub fn category_to_proto(c: Category) -> ElectricalComponentCategory {
         Category::Battery => ElectricalComponentCategory::Battery,
         Category::EvCharger => ElectricalComponentCategory::EvCharger,
         Category::Chp => ElectricalComponentCategory::Chp,
+        Category::WindTurbine => ElectricalComponentCategory::WindTurbine,
+        // The served proto version has no steam-boiler variant yet;
+        // Unspecified is the honest placeholder until it grows one.
+        Category::SteamBoiler => ElectricalComponentCategory::Unspecified,
+        Category::PowerTransformer => ElectricalComponentCategory::PowerTransformer,
+        Category::Breaker => ElectricalComponentCategory::Breaker,
     }
 }
 

@@ -128,6 +128,10 @@ fn lift_category(category: Category, subtype: Option<&str>) -> ComponentCategory
             _ => EvChargerType::Unspecified,
         }),
         Category::Chp => ComponentCategory::Chp,
+        Category::WindTurbine => ComponentCategory::WindTurbine,
+        Category::SteamBoiler => ComponentCategory::SteamBoiler,
+        Category::PowerTransformer => ComponentCategory::PowerTransformer,
+        Category::Breaker => ComponentCategory::Breaker,
     }
 }
 

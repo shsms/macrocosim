@@ -77,13 +77,14 @@ export async function toggleTelemetry() {
 }
 
 // Metrics that take a set of target component ids from the selection,
-// and metrics that need exactly one component. wind_turbine and
-// steam_boiler are gone: switchyard cannot simulate those categories.
+// and metrics that need exactly one component.
 const GROUP_ID_METRICS = new Set([
   "battery",
   "pv",
   "chp",
+  "wind_turbine",
   "ev_charger",
+  "steam_boiler",
   "battery_ac_coalesce",
   "pv_ac_coalesce",
 ]);

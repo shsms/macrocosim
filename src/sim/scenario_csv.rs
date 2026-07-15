@@ -164,6 +164,10 @@ fn category_slug(c: Category) -> &'static str {
         Category::Battery => "battery",
         Category::EvCharger => "ev-charger",
         Category::Chp => "chp",
+        Category::WindTurbine => "wind-turbine",
+        Category::SteamBoiler => "steam-boiler",
+        Category::PowerTransformer => "power-transformer",
+        Category::Breaker => "breaker",
     }
 }
 

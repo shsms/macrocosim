@@ -17,12 +17,19 @@
 //! - `categorySpecificInfo.gridConnectionPoint.ratedFuseCurrent`
 //!   → `:rated-fuse-current`
 //! - `metricConfigBounds[METRIC_AC_POWER_ACTIVE]` → `:rated-lower` /
-//!   `:rated-upper`
+//!   `:rated-upper` (batteries prefer `METRIC_DC_POWER` — their
+//!   rated range is a DC quantity)
 //! - `metricConfigBounds[METRIC_BATTERY_CAPACITY]` → `:capacity` (Wh)
 //! - `metricConfigBounds[METRIC_BATTERY_SOC_PCT]` → `:soc-lower` /
 //!   `:soc-upper`
+//! - `operationalMode` → `:telemetry-mode` / `:command-mode` (an
+//!   INACTIVE component streams nothing and rejects commands)
 //! - `categorySpecificInfo.battery.type` (chemistry) is dropped: the
 //!   simulator's battery carries no chemistry yet.
+//!
+//! Wind turbines, steam boilers, power transformers and breakers
+//! import as marker components (see [`crate::sim::marker`]): present
+//! in the topology, no physics.
 
 use serde::Deserialize;
 
@@ -75,6 +82,9 @@ struct ApiComponent {
     /// battery capacity and SoC range in current exports.
     #[serde(default)]
     metric_config_bounds: Vec<MetricConfigBounds>,
+    /// E.g. "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_INACTIVE".
+    #[serde(default)]
+    operational_mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -164,23 +174,13 @@ fn strip_prefixes<'a>(token: &'a str, prefixes: &[&str]) -> &'a str {
     token
 }
 
-/// Escape " and \ inside a Lisp string literal, and strip control
-/// characters — same rule the microgrid stub writer applies.
-fn esc(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_control())
-        .flat_map(|c| match c {
-            '\\' => vec!['\\', '\\'],
-            '"' => vec!['\\', '"'],
-            c => vec![c],
-        })
-        .collect()
-}
+use crate::lisp::escape_lisp_string as esc;
 
 /// Renders an f64 so tulisp reads it back as a float (always with a
-/// decimal point).
+/// decimal point). Whole numbers of any magnitude get the `.1`
+/// form — a bare integer token above i64::MAX would not even parse.
 fn lisp_float(v: f64) -> String {
-    if v == v.trunc() && v.abs() < 1e15 {
+    if v == v.trunc() && v.is_finite() {
         format!("{v:.1}")
     } else {
         format!("{v}")
@@ -197,17 +197,49 @@ fn bounds_for<'a>(c: &'a ApiComponent, suffix: &str) -> Option<&'a Bounds> {
     })
 }
 
-/// The `:rated-lower` / `:rated-upper` pair from the active-power
-/// bounds, when the export carries both.
-fn rated_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>) {
-    if let Some(b) = bounds_for(c, "AC_POWER_ACTIVE") {
-        if let Some(l) = b.lower {
-            out.push((":rated-lower", lisp_float(l)));
-        }
-        if let Some(u) = b.upper {
-            out.push((":rated-upper", lisp_float(u)));
-        }
+/// The `:rated-lower` / `:rated-upper` pair from the first metric in
+/// `metrics` the export configures bounds for. AC components pass
+/// only `AC_POWER_ACTIVE`; a battery prefers `DC_POWER` (its rated
+/// range is a DC quantity) with the AC bounds as fallback.
+fn rated_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>, metrics: &[&str]) {
+    let Some(b) = metrics.iter().find_map(|m| bounds_for(c, m)) else {
+        return;
+    };
+    if let Some(l) = b.lower {
+        out.push((":rated-lower", lisp_float(l)));
     }
+    if let Some(u) = b.upper {
+        out.push((":rated-upper", lisp_float(u)));
+    }
+}
+
+/// The export's operational mode, mapped onto the runtime-mode
+/// kwargs: a component that does not provide telemetry gets a silent
+/// stream, one that does not accept control gets an erroring command
+/// channel. CONTROL_AND_TELEMETRY and UNSPECIFIED are the defaults —
+/// no kwargs. Unknown tokens are an error, not a silent default.
+fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>) -> Result<(), String> {
+    let Some(mode) = c.operational_mode.as_deref() else {
+        return Ok(());
+    };
+    let suffix = strip_prefixes(
+        mode,
+        &[
+            "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_",
+            "COMPONENT_OPERATIONAL_MODE_",
+        ],
+    );
+    match suffix {
+        "UNSPECIFIED" | "CONTROL_AND_TELEMETRY" => {}
+        "INACTIVE" => {
+            out.push((":telemetry-mode", "'silent".to_string()));
+            out.push((":command-mode", "'error".to_string()));
+        }
+        "TELEMETRY_ONLY" => out.push((":command-mode", "'error".to_string())),
+        "CONTROL_ONLY" => out.push((":telemetry-mode", "'silent".to_string())),
+        other => return Err(format!("unknown operational mode: {other}")),
+    }
+    Ok(())
 }
 
 /// Battery-shaped storage kwargs: capacity (Wh) and the SoC range.
@@ -250,7 +282,7 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
             {
                 kwargs.push((":rated-fuse-current", fuse.to_string()));
             }
-            rated_kwargs(c, &mut kwargs);
+            rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
             "make-grid-connection-point"
         }
         "METER" => "make-meter",
@@ -262,7 +294,7 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
                 .and_then(|i| i.r#type.as_deref())
                 .map(|t| strip_prefixes(t, &["INVERTER_TYPE_"]))
                 .unwrap_or("UNSPECIFIED");
-            rated_kwargs(c, &mut kwargs);
+            rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
             match inverter_type {
                 "BATTERY" => "make-battery-inverter",
                 "PV" | "SOLAR" => "make-solar-inverter",
@@ -278,19 +310,27 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
         }
         "BATTERY" => {
             storage_kwargs(c, &mut kwargs);
-            rated_kwargs(c, &mut kwargs);
+            rated_kwargs(c, &mut kwargs, &["DC_POWER", "AC_POWER_ACTIVE"]);
             "make-battery"
         }
         "EV_CHARGER" => {
             storage_kwargs(c, &mut kwargs);
-            rated_kwargs(c, &mut kwargs);
+            rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
             "make-ev-charger"
         }
+        // CHP and the marker categories have no physics of their
+        // own: they complete the topology and classify the meters
+        // around them; power is set on the neighboring meter.
         "CHP" => "make-chp",
+        "WIND_TURBINE" => "make-wind-turbine",
+        "STEAM_BOILER" => "make-steam-boiler",
+        "POWER_TRANSFORMER" => "make-power-transformer",
+        "BREAKER" => "make-breaker",
         other => {
             return Err(format!("component {id}: cannot simulate category {other}"));
         }
     };
+    mode_kwargs(c, &mut kwargs).map_err(|e| format!("component {id}: {e}"))?;
     Ok(ImportedComponent {
         id,
         make_fn,
@@ -446,13 +486,13 @@ mod tests {
 
     #[test]
     fn import_rejects_unsupported_categories_and_untyped_inverters() {
-        let boiler: ComponentsFile = serde_json::from_str(
+        let hvac: ComponentsFile = serde_json::from_str(
             r#"{"electricalComponents": [
-                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_WIND_TURBINE"}
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_HVAC"}
             ]}"#,
         )
         .unwrap();
-        let err = parse(boiler, None).unwrap_err();
+        let err = parse(hvac, None).unwrap_err();
         assert!(err.contains("component 1"));
         assert!(err.contains("cannot simulate"));
 
@@ -465,6 +505,66 @@ mod tests {
         let err = parse(untyped, None).unwrap_err();
         assert!(err.contains("component 7"));
         assert!(err.contains("UNSPECIFIED"));
+    }
+
+    /// Wind turbines, steam boilers, power transformers and breakers
+    /// import as marker components.
+    #[test]
+    fn import_lifts_marker_categories() {
+        let file: ComponentsFile = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_WIND_TURBINE"},
+                {"id": "2", "category": "ELECTRICAL_COMPONENT_CATEGORY_STEAM_BOILER"},
+                {"id": "3", "category": "ELECTRICAL_COMPONENT_CATEGORY_POWER_TRANSFORMER"},
+                {"id": "4", "category": "ELECTRICAL_COMPONENT_CATEGORY_BREAKER"}
+            ]}"#,
+        )
+        .unwrap();
+        let forms = parse(file, None).unwrap().forms();
+        assert!(forms.contains("(make-wind-turbine :id 1)"));
+        assert!(forms.contains("(make-steam-boiler :id 2)"));
+        assert!(forms.contains("(make-power-transformer :id 3)"));
+        assert!(forms.contains("(make-breaker :id 4)"));
+    }
+
+    /// A battery's rated range is its DC power bounds; the AC bounds
+    /// are only a fallback.
+    #[test]
+    fn import_prefers_dc_power_bounds_for_batteries() {
+        let file: ComponentsFile = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY",
+                 "metricConfigBounds": [
+                   {"metric": "METRIC_AC_POWER_ACTIVE", "configBounds": {"lower": -1, "upper": 1}},
+                   {"metric": "METRIC_DC_POWER", "configBounds": {"lower": -50000, "upper": 50000}}
+                 ]}
+            ]}"#,
+        )
+        .unwrap();
+        let forms = parse(file, None).unwrap().forms();
+        assert!(forms.contains("(make-battery :id 1 :rated-lower -50000.0 :rated-upper 50000.0)"));
+    }
+
+    /// The operational mode maps onto the runtime-mode kwargs: no
+    /// telemetry means a silent stream, no control means an erroring
+    /// command channel.
+    #[test]
+    fn import_maps_operational_modes() {
+        let file: ComponentsFile = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
+                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_INACTIVE"},
+                {"id": "2", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
+                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_TELEMETRY_ONLY"},
+                {"id": "3", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
+                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_CONTROL_AND_TELEMETRY"}
+            ]}"#,
+        )
+        .unwrap();
+        let forms = parse(file, None).unwrap().forms();
+        assert!(forms.contains("(make-meter :id 1 :telemetry-mode 'silent :command-mode 'error)"));
+        assert!(forms.contains("(make-meter :id 2 :command-mode 'error)"));
+        assert!(forms.contains("(make-meter :id 3)"));
     }
 
     /// The older `COMPONENT_*` token prefixes and plain-number ids
