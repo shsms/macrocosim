@@ -36,17 +36,19 @@
 
 use frequenz_microgrid_component_graph::{
     BatteryType, ComponentCategory, ComponentGraph, ComponentGraphConfig, Edge, EvChargerType,
-    InverterType, Node,
+    InverterType, Node, OperationalMode,
 };
 
+use crate::sim::runtime::TelemetryMode;
 use crate::sim::{component::Category, microgrid_site::MicrogridSite};
 
 /// Plain-data view of one switchyard component, sized for the graph
-/// crate's `Node` trait. Cloned cheaply (two scalars).
+/// crate's `Node` trait. Cloned cheaply (three scalars).
 #[derive(Debug, Clone, Copy)]
 pub struct GraphNode {
     pub id: u64,
     pub category: ComponentCategory,
+    pub mode: OperationalMode,
 }
 
 impl Node for GraphNode {
@@ -56,6 +58,25 @@ impl Node for GraphNode {
 
     fn category(&self) -> ComponentCategory {
         self.category
+    }
+
+    fn operational_mode(&self) -> OperationalMode {
+        self.mode
+    }
+}
+
+/// Lift a runtime telemetry mode into the graph crate's declared
+/// operational mode. Any mode that stops metric samples from reaching
+/// clients means the component can't be a measurement source, which is
+/// exactly what `ControlOnly` declares — so formulas route around it
+/// through their fallback components.
+fn lift_mode(telemetry: TelemetryMode) -> OperationalMode {
+    match telemetry {
+        TelemetryMode::Normal => OperationalMode::Unspecified,
+        TelemetryMode::Silent
+        | TelemetryMode::Closed
+        | TelemetryMode::ErrorEmpty
+        | TelemetryMode::NotFound => OperationalMode::ControlOnly,
     }
 }
 
@@ -122,6 +143,7 @@ pub fn snapshot(site: &MicrogridSite) -> (Vec<GraphNode>, Vec<GraphEdge>) {
         .map(|c| GraphNode {
             id: c.id(),
             category: lift_category(c.category(), c.subtype()),
+            mode: lift_mode(site.runtime_of(c.id()).telemetry),
         })
         .collect();
     let edges = site
@@ -161,7 +183,11 @@ mod tests {
     use super::*;
 
     fn node(id: u64, category: ComponentCategory) -> GraphNode {
-        GraphNode { id, category }
+        GraphNode {
+            id,
+            category,
+            mode: OperationalMode::Unspecified,
+        }
     }
 
     fn edge(source: u64, destination: u64) -> GraphEdge {
@@ -273,6 +299,24 @@ mod tests {
             s.contains("#3"),
             "expected formula to use the fronting meter (#3), got {s}"
         );
+    }
+
+    /// Every silenced telemetry mode declares the component a
+    /// non-source for formulas; only `Normal` keeps the default.
+    #[test]
+    fn lift_mode_maps_silenced_modes_to_control_only() {
+        assert_eq!(
+            lift_mode(TelemetryMode::Normal),
+            OperationalMode::Unspecified
+        );
+        for silenced in [
+            TelemetryMode::Silent,
+            TelemetryMode::Closed,
+            TelemetryMode::ErrorEmpty,
+            TelemetryMode::NotFound,
+        ] {
+            assert_eq!(lift_mode(silenced), OperationalMode::ControlOnly);
+        }
     }
 
     /// Missing root: no `GridConnectionPoint` → try_new errors out.
