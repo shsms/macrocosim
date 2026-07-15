@@ -29,7 +29,7 @@ import {
 } from "./editor.js";
 import { formulaCanvas, refreshFormula, setupExplainPanel } from "./explain.js";
 import { setupFormulaTileClicks } from "./formulas.js";
-import { clearSide, refitCharts, showComponent } from "./inspect.js";
+import { clearSide, showComponent } from "./inspect.js";
 import { scenariosPanel } from "./panels.js";
 import { backfillLogs, openWebSocket, setupRepl } from "./repl.js";
 import {
@@ -60,10 +60,11 @@ export {
 const status = document.getElementById("status");
 // `inspect` holds the inspector's swappable content; `inspector` is the
 // floating card around it. The `inspector-open` class on <body> shows
-// the card AND reserves it a grid column, so the canvas shrinks beside
-// it rather than hiding under it. Set when something is selected (or a
-// chrome panel is opened); cleared on deselect, Esc, the × button, or a
-// tab switch — all via clearSide().
+// the card, which overlays the right side of the canvas — it never
+// resizes it, so a double-click's second click lands on an unmoved
+// graph. Set when something is selected (or a chrome panel is
+// opened); cleared on deselect, Esc, the × button, or a tab switch —
+// all via clearSide().
 export const inspectEl = document.getElementById("inspect");
 export const inspectorEl = document.getElementById("inspector");
 
@@ -72,30 +73,11 @@ export const inspectorEl = document.getElementById("inspector");
 // Report) lights up, so its state tracks the actual panel instead of a
 // private flag that a ×/tab-switch close would leave stale.
 export function openInspector(panel) {
-  const wasOpen = document.body.classList.contains("inspector-open");
   document.body.classList.add("inspector-open");
   inspectorEl.dataset.panel = panel || "";
   for (const b of document.querySelectorAll("#defaults-btn, #scenario-report-btn")) {
     b.classList.toggle("primary", b.id === panel);
   }
-  // The inspector column reserves space, so opening it shrinks the
-  // canvas — reframe so nothing is clipped. Only on the closed→open
-  // transition; a content swap (node→node) mustn't re-zoom the graph.
-  if (!wasOpen) reflowAfterPanel();
-}
-
-// Re-fit the topology graph + any open uPlot charts after the inspector
-// column appears or disappears and the panes resize. Deferred a frame so
-// the grid reflow has settled before vis-network measures.
-export function reflowAfterPanel() {
-  requestAnimationFrame(() => {
-    try {
-      topology.fit();
-    } catch (_) {
-      /* network not built yet (no microgrid) — nothing to fit */
-    }
-    refitCharts();
-  });
 }
 
 export function setStatus(text, klass) {

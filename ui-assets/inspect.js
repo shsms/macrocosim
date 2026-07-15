@@ -10,7 +10,6 @@ import {
   inspectorEl,
   notify,
   openInspector,
-  reflowAfterPanel,
 } from "./app.js";
 import { undoMgr } from "./editor.js";
 import { mgPath } from "./routing.js";
@@ -429,7 +428,6 @@ function makePlot(container, metric, quantity, unit, xs, ys) {
 // reset its content, and hide the card. Named `clearSide` for the
 // callers that predate the float (deselect handler, Esc, panel toggles).
 export function clearSide() {
-  const wasOpen = document.body.classList.contains("inspector-open");
   liveCharts.clear();
   if (scenarioReportTimer != null) {
     clearInterval(scenarioReportTimer);
@@ -442,8 +440,6 @@ export function clearSide() {
   for (const b of document.querySelectorAll("#defaults-btn, #scenario-report-btn")) {
     b.classList.remove("primary");
   }
-  // Closing gives the column back to the canvas — refit it (and charts).
-  if (wasOpen) reflowAfterPanel();
 }
 
 // Side-panel scenario-report poll handle. dialogs/refreshScenarioReport

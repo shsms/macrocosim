@@ -416,17 +416,24 @@ main {
   min-height: 0;
 }
 
-/* While the inspector is open it gets its own right-hand column, so the
-   content panes shrink to column 1 (the canvas re-fits) instead of the
-   inspector covering them. Only grid-template-columns/areas change here;
-   the drawer splitter still owns grid-template-rows via inline style. */
-body.inspector-open main {
+/* On the Dashboard subview the inspector keeps the old docked
+   column: tiles reflow beside it instead of hiding under it, and
+   there is no click-position gesture there for a resize to break.
+   The canvas subviews (Topology / Formulas) get the overlay
+   instead — see #inspector below. */
+body.inspector-open[data-subview="dashboard"] main {
   grid-template-columns: 1fr 420px;
   grid-template-areas:
     "mgheader        mgheader"
     "topology        inspector"
     "drawer-splitter drawer-splitter"
     "repl            repl";
+}
+body.inspector-open[data-subview="dashboard"] #inspector {
+  grid-area: inspector;
+  justify-self: stretch;
+  width: auto;
+  margin: 10px;
 }
 
 #topology,
@@ -1176,13 +1183,19 @@ body.compact .tier5-soc-text { font-size: 10px; }
    are inset cards with elevation; both are hidden until summoned. */
 #inspector {
   display: none;
-  /* Lives in its own grid column (added by body.inspector-open) so the
-     canvas shrinks beside it instead of hiding under it; the margin +
-     shadow keep it reading as a floating card, not a docked wall. */
-  grid-area: inspector;
-  z-index: 6;
+  /* Overlays the right side of the content cell instead of taking a
+     grid column of its own: opening or closing it must never resize
+     the canvas — a double-click's second click would land on a
+     re-fitted, shifted graph. The top margin keeps the floating
+     canvas controls (layout picker + snap) clickable above it. */
+  grid-area: topology;
+  justify-self: end;
+  align-self: stretch;
+  width: 420px;
+  max-width: calc(100% - 20px);
+  z-index: 7;
   position: relative;
-  margin: 10px;
+  margin: 48px 10px 10px;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 8px;
