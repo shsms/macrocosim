@@ -17,10 +17,11 @@ is wiring the topology + animating the environment.
   - `bounds.rs` — `VecBounds`, `ComponentBounds` (rated + TTL augmentations)
   - `ramp.rs` — `CommandDelay` + `Ramp`
   - `decay.rs` — `bounded_exp_decay` + `soc_protected_bounds`
-  - `battery.rs`, `meter.rs`, `grid.rs`, `chp.rs`, `ev_charger.rs`,
+  - `battery.rs`, `meter.rs`, `grid.rs`, `ev_charger.rs`,
     `inverter/{battery,solar}_inverter.rs`
-  - `marker.rs` — no-physics categories (wind turbine, steam boiler,
-    power transformer, breaker); they classify the meters around them
+  - `marker.rs` — no-physics categories (chp, wind turbine, steam
+    boiler, power transformer, breaker); they classify the meters
+    around them
   - `site_import.rs` — microgrid API site-export JSON → `(make-* …)` /
     `(connect …)` forms for `/api/microgrids/import`
   - `graph_adapter.rs` — lifts a site into

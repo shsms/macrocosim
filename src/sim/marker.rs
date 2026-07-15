@@ -1,9 +1,9 @@
-//! Marker components: wind turbine, steam boiler, power transformer,
-//! breaker. Like [`crate::sim::chp::Chp`], they carry no physics of
-//! their own — they exist so the topology is complete and so the
-//! formula engine can classify the meters around them (a meter
-//! feeding a wind turbine is a wind meter). Power is set directly on
-//! the neighboring meter via `(set-meter-power …)`.
+//! Marker components: CHP, wind turbine, steam boiler, power
+//! transformer, breaker. They carry no physics of their own — they
+//! exist so the topology is complete and so the formula engine can
+//! classify the meters around them (a meter feeding a wind turbine
+//! is a wind meter). Power is set directly on the neighboring meter
+//! via `(set-meter-power …)`.
 
 use std::{fmt, time::Duration};
 
@@ -21,11 +21,12 @@ pub struct Marker {
 impl Marker {
     pub fn new(id: u64, category: Category, stream_jitter_pct: f32) -> Self {
         let prefix = match category {
+            Category::Chp => "chp",
             Category::WindTurbine => "wind",
             Category::SteamBoiler => "boiler",
             Category::PowerTransformer => "transformer",
             Category::Breaker => "breaker",
-            // The constructor is only reached from the four %make-*
+            // The constructor is only reached from the %make-*
             // marker forms; anything else is a programming error.
             other => unreachable!("Marker::new with non-marker category {other:?}"),
         };

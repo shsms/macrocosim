@@ -37,7 +37,9 @@ const DEFAULT_CATEGORIES: &[&str] = &[
     "battery-inverter",
     "solar-inverter",
     "ev-charger",
-    "chp",
+    // One shared plist for all marker categories (chp, wind turbine,
+    // steam boiler, power transformer, breaker).
+    "marker",
 ];
 
 pub(in crate::ui) async fn defaults(State(config): State<Config>) -> Json<DefaultsResponse> {

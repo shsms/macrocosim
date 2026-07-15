@@ -1,6 +1,5 @@
 pub mod battery;
 pub mod bounds;
-pub mod chp;
 pub mod clock;
 pub mod component;
 pub mod decay;
@@ -29,7 +28,6 @@ pub mod sim_clock;
 pub mod site_import;
 
 pub use battery::Battery;
-pub use chp::Chp;
 pub use component::{Category, ComponentHandle, SetpointError, SimulatedComponent, Telemetry};
 pub use energy::EnergyAccum;
 pub use ev_charger::EvCharger;

@@ -16,7 +16,7 @@ use tulisp::{AsPlist, Error, Plist, TulispContext};
 
 use crate::lisp::value::LispValue;
 use crate::sim::{
-    Battery, BatteryInverter, Category, Chp, ComponentHandle, EvCharger, Grid, Marker, Meter,
+    Battery, BatteryInverter, Category, ComponentHandle, EvCharger, Grid, Marker, Meter,
     MicrogridSite, SolarInverter,
     battery::BatteryConfig,
     dynamic_scalar::DynamicScalar,
@@ -181,11 +181,12 @@ AsPlist! {
 }
 
 // -----------------------------------------------------------------------------
-// make-chp
+// the marker categories (chp, wind turbine, steam boiler, power
+// transformer, breaker)
 // -----------------------------------------------------------------------------
 
 AsPlist! {
-    pub struct ChpArgs {
+    pub struct MarkerArgs {
         id: Option<i64> {= None},
         name: Option<String> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
@@ -487,31 +488,12 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         },
     );
 
-    let r = router.clone();
-    ctx.defun(
-        "%make-chp",
-        move |_ctx: &mut TulispContext, args: Plist<ChpArgs>| {
-            let w = r.site();
-            let a = args.into_inner();
-            let id = id_or_next(&w, a.id)?;
-            let jitter = a.stream_jitter_pct.unwrap_or(0.0) as f32;
-            let h = register_with_modes(
-                &w,
-                Chp::new(id, jitter),
-                a.health,
-                a.telemetry_mode,
-                a.command_mode,
-            )?;
-            apply_initial_name(&w, id, a.name);
-            Ok::<_, Error>(h)
-        },
-    );
-
-    // The marker categories: no physics of their own, like CHP —
-    // they complete the topology and classify the meters around
-    // them; power is set on the neighboring meter. One registration
-    // loop because the four bodies are identical up to the category.
+    // The marker categories: no physics of their own — they
+    // complete the topology and classify the meters around them;
+    // power is set on the neighboring meter. One registration loop
+    // because the bodies are identical up to the category.
     for (form, category) in [
+        ("%make-chp", Category::Chp),
         ("%make-wind-turbine", Category::WindTurbine),
         ("%make-steam-boiler", Category::SteamBoiler),
         ("%make-power-transformer", Category::PowerTransformer),
@@ -520,7 +502,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         let r = router.clone();
         ctx.defun(
             form,
-            move |_ctx: &mut TulispContext, args: Plist<ChpArgs>| {
+            move |_ctx: &mut TulispContext, args: Plist<MarkerArgs>| {
                 let w = r.site();
                 let a = args.into_inner();
                 let id = id_or_next(&w, a.id)?;
