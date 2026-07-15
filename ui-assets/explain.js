@@ -11,16 +11,17 @@
 // - cross-highlighting between the tree, the formula and the canvas.
 
 import { escapeHtml, notify } from "./app.js";
-import { alignMenuItems, showMenuItems } from "./editor.js";
+import { alignMenuItems, showMenuItems, undoMgr } from "./editor.js";
 import { mgPath } from "./routing.js";
 import { createGraphCanvas } from "./topology.js";
 
 // The Formulas canvas: same snapshot as the Topology canvas, no
 // structural editing — the context menu only arranges, and the one
-// mutation it offers (the telemetry toggle) is a transient runtime
-// poke for exploring the fallback parts of formulas. Created lazily:
-// module bodies in this SPA form import cycles, so building the
-// canvas at import time could catch topology.js half-initialized.
+// mutation it offers is the telemetry toggle, which flips the
+// selection's operational mode (a config edit, persisted and
+// undoable). Created lazily: module bodies in this SPA form import
+// cycles, so building the canvas at import time could catch
+// topology.js half-initialized.
 let canvas = null;
 export function formulaCanvas() {
   if (!canvas) {
@@ -44,33 +45,58 @@ export function formulaCanvas() {
   return canvas;
 }
 
-// Flip the selection between telemetry and no telemetry. A silenced
-// component has no reading, so formulas route around it through the
-// fallbacks — the very thing the explanations describe. This is a
-// runtime poke, not config: it doesn't persist and doesn't land in
-// the overrides file, so a reload restores every component.
+// The telemetry toggle moves each mode to its twin with the SAME
+// control capability and the opposite telemetry — so toggling never
+// grants or removes control, only telemetry. Off then on lands on
+// the explicit full-capability mode for `unspecified`; every other
+// mode round-trips exactly.
+const TELEMETRY_OFF = {
+  unspecified: "control-only",
+  "control-and-telemetry": "control-only",
+  "telemetry-only": "inactive",
+};
+const TELEMETRY_ON = {
+  "control-only": "control-and-telemetry",
+  inactive: "telemetry-only",
+};
+
+// Flip the selection between telemetry and no telemetry by setting
+// the components' OPERATIONAL MODE (config, not a runtime poke): a
+// component without telemetry has no reading, so formulas route
+// around it through the fallbacks — the very thing the explanations
+// describe. The edit persists via the overrides gate and is
+// undoable like any other config edit.
 export async function toggleTelemetry() {
   const ids = formulaCanvas().selectedIds();
   if (!ids.length) {
     notify("Nothing selected.");
     return;
   }
+  // Mixed selections turn telemetry OFF first (matching the old
+  // behavior): only when nothing streams does the toggle turn on.
   const anyOn = ids.some(
-    (id) => formulaCanvas().get(id)?.telemetry_mode === "normal",
+    (id) => formulaCanvas().get(id)?.provides_telemetry,
   );
-  const mode = anyOn ? "silent" : "normal";
-  const pokes = ids
-    .map((id) => `(set-component-telemetry-mode ${id} '${mode})`)
+  const table = anyOn ? TELEMETRY_OFF : TELEMETRY_ON;
+  const sets = ids
+    .map((id) => {
+      const current = formulaCanvas().get(id)?.operational_mode;
+      const next = table[current];
+      return next ? `(set-component-operational-mode ${id} '${next})` : null;
+    })
+    .filter(Boolean)
     .join(" ");
+  if (!sets) return;
+  await undoMgr.record();
   const res = await fetch(mgPath("eval"), {
     method: "POST",
-    body: `(progn ${pokes})`,
+    body: `(progn ${sets})`,
   });
   const data = await res.json();
   if (!data.ok) notify(`Telemetry toggle failed: ${data.error}`);
   else {
     notify(
-      `Telemetry ${mode === "silent" ? "off" : "on"} for ${ids.length} component${ids.length > 1 ? "s" : ""} — a runtime poke; reload restores it.`,
+      `Telemetry ${anyOn ? "off" : "on"} for ${ids.length} component${ids.length > 1 ? "s" : ""} (operational mode).`,
       "success",
     );
   }

@@ -22,8 +22,8 @@
 //! - `metricConfigBounds[METRIC_BATTERY_CAPACITY]` → `:capacity` (Wh)
 //! - `metricConfigBounds[METRIC_BATTERY_SOC_PCT]` → `:soc-lower` /
 //!   `:soc-upper`
-//! - `operationalMode` → `:telemetry-mode` / `:command-mode` (an
-//!   INACTIVE component streams nothing and rejects commands)
+//! - `operationalMode` → `:operational-mode` (config; the simulator
+//!   derives the runtime knobs from it)
 //! - `categorySpecificInfo.battery.type` (chemistry) is dropped: the
 //!   simulator's battery carries no chemistry yet.
 //!
@@ -213,11 +213,11 @@ fn rated_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>, metrics
     }
 }
 
-/// The export's operational mode, mapped onto the runtime-mode
-/// kwargs: a component that does not provide telemetry gets a silent
-/// stream, one that does not accept control gets an erroring command
-/// channel. CONTROL_AND_TELEMETRY and UNSPECIFIED are the defaults —
-/// no kwargs. Unknown tokens are an error, not a silent default.
+/// The export's operational mode, kept as what it is: a config
+/// parameter (`:operational-mode`). The simulator derives the
+/// runtime knobs from it — the import never sets those directly.
+/// UNSPECIFIED is the default and is omitted. Unknown tokens are an
+/// error, not a silent default.
 fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>) -> Result<(), String> {
     let Some(mode) = c.operational_mode.as_deref() else {
         return Ok(());
@@ -229,16 +229,17 @@ fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>) -> Resul
             "COMPONENT_OPERATIONAL_MODE_",
         ],
     );
-    match suffix {
-        "UNSPECIFIED" | "CONTROL_AND_TELEMETRY" => {}
-        "INACTIVE" => {
-            out.push((":telemetry-mode", "'silent".to_string()));
-            out.push((":command-mode", "'error".to_string()));
-        }
-        "TELEMETRY_ONLY" => out.push((":command-mode", "'error".to_string())),
-        "CONTROL_ONLY" => out.push((":telemetry-mode", "'silent".to_string())),
-        other => return Err(format!("unknown operational mode: {other}")),
+    // The token list lives in OperationalMode's FromStr — the API
+    // token is the same word in SCREAMING_SNAKE_CASE.
+    let mode: crate::sim::OperationalMode = suffix
+        .to_lowercase()
+        .replace('_', "-")
+        .parse()
+        .map_err(|_| format!("unknown operational mode: {suffix}"))?;
+    if mode == crate::sim::OperationalMode::Unspecified {
+        return Ok(());
     }
+    out.push((":operational-mode", format!("'{mode}")));
     Ok(())
 }
 
@@ -545,11 +546,10 @@ mod tests {
         assert!(forms.contains("(make-battery :id 1 :rated-lower -50000.0 :rated-upper 50000.0)"));
     }
 
-    /// The operational mode maps onto the runtime-mode kwargs: no
-    /// telemetry means a silent stream, no control means an erroring
-    /// command channel.
+    /// The operational mode is a config parameter and stays one:
+    /// it renders as `:operational-mode`, never as runtime knobs.
     #[test]
-    fn import_maps_operational_modes() {
+    fn import_keeps_operational_modes_as_config() {
         let file: ComponentsFile = serde_json::from_str(
             r#"{"electricalComponents": [
                 {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
@@ -557,14 +557,19 @@ mod tests {
                 {"id": "2", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
                  "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_TELEMETRY_ONLY"},
                 {"id": "3", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
-                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_CONTROL_AND_TELEMETRY"}
+                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_CONTROL_AND_TELEMETRY"},
+                {"id": "4", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
+                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_UNSPECIFIED"}
             ]}"#,
         )
         .unwrap();
         let forms = parse(file, None).unwrap().forms();
-        assert!(forms.contains("(make-meter :id 1 :telemetry-mode 'silent :command-mode 'error)"));
-        assert!(forms.contains("(make-meter :id 2 :command-mode 'error)"));
-        assert!(forms.contains("(make-meter :id 3)"));
+        assert!(forms.contains("(make-meter :id 1 :operational-mode 'inactive)"));
+        assert!(forms.contains("(make-meter :id 2 :operational-mode 'telemetry-only)"));
+        assert!(forms.contains("(make-meter :id 3 :operational-mode 'control-and-telemetry)"));
+        assert!(forms.contains("(make-meter :id 4)"));
+        assert!(!forms.contains(":telemetry-mode"));
+        assert!(!forms.contains(":command-mode"));
     }
 
     /// The older `COMPONENT_*` token prefixes and plain-number ids

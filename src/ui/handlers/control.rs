@@ -93,19 +93,37 @@ fn apply_status(site: &MicrogridSite, id: u64, req: &StatusRequest) -> ControlRe
             format!("component {id} not found"),
         ));
     }
-    // Parse everything first, apply after: a request with one bad field
-    // changes nothing (no half-applied status).
+    // Parse and validate everything first, apply after: a request
+    // with one bad field changes nothing (no half-applied status).
     let health: Option<Health> = parse_enum(&req.health, "health")?;
     let command: Option<CommandMode> = parse_enum(&req.command_mode, "command_mode")?;
     let telemetry: Option<TelemetryMode> = parse_enum(&req.telemetry_mode, "telemetry_mode")?;
+    // The operational mode forbids some knob values (e.g.
+    // telemetry=normal on an inactive component). Check before any
+    // setter runs, so a rejected request leaves the state untouched.
+    let mode = site.operational_mode(id);
+    if telemetry == Some(TelemetryMode::Normal) && !mode.provides_telemetry() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} has operational mode {mode}, which streams no telemetry"),
+        ));
+    }
+    if command == Some(CommandMode::Normal) && !mode.accepts_control() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} has operational mode {mode}, which accepts no commands"),
+        ));
+    }
     if let Some(h) = health {
         site.set_health(id, h);
     }
     if let Some(m) = command {
-        site.set_command_mode(id, m);
+        site.set_command_mode(id, m)
+            .map_err(|e| reject(StatusCode::BAD_REQUEST, e))?;
     }
     if let Some(m) = telemetry {
-        site.set_telemetry_mode(id, m);
+        site.set_telemetry_mode(id, m)
+            .map_err(|e| reject(StatusCode::BAD_REQUEST, e))?;
     }
     Ok(Json(serde_json::json!({})))
 }

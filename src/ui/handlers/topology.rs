@@ -55,6 +55,13 @@ struct ComponentSummary {
     health: String,
     telemetry_mode: String,
     command_mode: String,
+    /// The config-level declared capability (drives the formula
+    /// engine); the runtime modes above depend on it.
+    operational_mode: String,
+    /// Whether the operational mode streams telemetry. Sent as a
+    /// boolean so the UI never re-derives it from the mode string —
+    /// Rust stays the single source of that rule.
+    provides_telemetry: bool,
 }
 
 pub(in crate::ui) async fn topology(State(config): State<Config>) -> Json<TopologySnapshot> {
@@ -75,6 +82,7 @@ fn topology_snapshot(config: &Config, site: &crate::sim::MicrogridSite) -> Topol
         .iter()
         .map(|c| {
             let runtime = site.runtime_of(c.id());
+            let mode = site.operational_mode(c.id());
             ComponentSummary {
                 id: c.id(),
                 name: site
@@ -86,6 +94,8 @@ fn topology_snapshot(config: &Config, site: &crate::sim::MicrogridSite) -> Topol
                 health: runtime.health.to_string(),
                 telemetry_mode: runtime.telemetry.to_string(),
                 command_mode: runtime.command.to_string(),
+                operational_mode: mode.to_string(),
+                provides_telemetry: mode.provides_telemetry(),
             }
         })
         .collect();

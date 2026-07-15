@@ -21,6 +21,77 @@ pub enum Category {
     Breaker,
 }
 
+/// A component's declared capability — a microgrid CONFIG parameter,
+/// not a runtime state. The runtime fault knobs (telemetry mode,
+/// command mode, health) depend on it: an `Inactive` component can
+/// never stream telemetry, whatever the knobs say. The formula
+/// engine reads this mode to decide whether a component can be a
+/// measurement source.
+///
+/// A deliberate twin of the graph crate's `OperationalMode`
+/// (lifted 1:1 in `graph_adapter::lift_mode`): the local type
+/// carries the Lisp `FromStr`/`Display`/plist impls the foreign
+/// type can't. Keep `provides_telemetry` in sync with the graph
+/// crate's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OperationalMode {
+    /// Not explicitly set; treated as full capability.
+    #[default]
+    Unspecified,
+    /// Not operational: no telemetry, no control.
+    Inactive,
+    /// Streams telemetry, rejects control commands.
+    TelemetryOnly,
+    /// Accepts control commands, streams no telemetry.
+    ControlOnly,
+    /// Full capability, explicitly declared.
+    ControlAndTelemetry,
+}
+
+impl OperationalMode {
+    /// Whether a component in this mode streams telemetry.
+    pub fn provides_telemetry(self) -> bool {
+        matches!(
+            self,
+            Self::Unspecified | Self::TelemetryOnly | Self::ControlAndTelemetry
+        )
+    }
+
+    /// Whether a component in this mode accepts control commands.
+    pub fn accepts_control(self) -> bool {
+        matches!(
+            self,
+            Self::Unspecified | Self::ControlOnly | Self::ControlAndTelemetry
+        )
+    }
+}
+
+impl std::str::FromStr for OperationalMode {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, ()> {
+        match s {
+            "unspecified" => Ok(Self::Unspecified),
+            "inactive" => Ok(Self::Inactive),
+            "telemetry-only" => Ok(Self::TelemetryOnly),
+            "control-only" => Ok(Self::ControlOnly),
+            "control-and-telemetry" => Ok(Self::ControlAndTelemetry),
+            _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for OperationalMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Unspecified => "unspecified",
+            Self::Inactive => "inactive",
+            Self::TelemetryOnly => "telemetry-only",
+            Self::ControlOnly => "control-only",
+            Self::ControlAndTelemetry => "control-and-telemetry",
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SetpointError {
     /// `envelope` is the *effective* envelope (rated ∩ live

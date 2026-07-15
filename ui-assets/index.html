@@ -541,7 +541,8 @@
           <li>The <em>Formulas</em> sub-tab explains the formulas the <code>frequenz-microgrid-component-graph</code> engine generates for this microgrid. Pick a metric on the right; the formula renders from the engine's own AST.</li>
           <li>Hover a part of the formula for its reason; click it to open that reason in the <em>Why</em> drawer at the bottom. A <code>#N</code> selects that component on the canvas.</li>
           <li>Hovering a row in the Why tree highlights its components in the formula and on the canvas. Subtracted parts show red.</li>
-          <li>The canvas is for looking and arranging only — no editing. The arrange tools live in the right-click menu, same as on Topology. <kbd>T</kbd> (or the right-click menu) toggles the selection's telemetry: a silenced component has no reading, so the formula routes around it through its fallbacks. This is a runtime poke; a reload restores it.</li>
+          <li>The canvas is for looking and arranging only — no structural editing. The arrange tools live in the right-click menu, same as on Topology.</li>
+          <li><kbd>T</kbd> (or the right-click menu) turns the selection's telemetry off and on. It works by changing the <em>operational mode</em>, keeping the control capability as it is. A component without telemetry has no reading, so the formula routes around it through its fallbacks. This is a config edit: it persists, and <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> on the Topology tab undoes it.</li>
           <li><em>copy</em> copies the plain formula string; <em>copy with comments</em> copies it with the reasons as <code>//</code> comments.</li>
           <li>The engine options (prefer meters, phantom loads, no fallbacks) change how the formula is generated. They are view-local: nothing is stored on the server.</li>
         </ul>

@@ -70,16 +70,23 @@ function shortLabel(name) {
 }
 
 function nodeStyleFor(c) {
+  // An operational mode without telemetry reads as standby: the
+  // component has no reading, so formulas route around it. A real
+  // health problem still wins the border color. The server derives
+  // provides_telemetry from the mode, so the rule lives in one place.
+  const noTelemetry = c.provides_telemetry === false;
+  const effectiveHealth =
+    (c.health || "ok") === "ok" && noTelemetry ? "standby" : c.health || "ok";
   const healthBorder = {
     ok: "#1c2128",     // matches --bg — subtle outline at rest
     standby: "#c4ad55", // toned-down yellow
     error: "#e58275",   // toned-down red, matches --bad
-  }[c.health || "ok"];
+  }[effectiveHealth];
   // Hidden meters draw with a dashed border + a thicker stroke so
   // the dash pattern reads cleanly. Health-error / standby still
   // win the colour since "this is faulted" is more urgent than
   // "this is hidden". borderDashes accepts an [on, off] array.
-  const healthWidth = c.health === "ok" ? (c.hidden ? 2 : 1) : 3;
+  const healthWidth = effectiveHealth === "ok" ? (c.hidden ? 2 : 1) : 3;
   const bg = colorFor(c);
   return {
     id: c.id,

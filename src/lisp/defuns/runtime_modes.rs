@@ -21,20 +21,38 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     let r = router.clone();
     ctx.defun(
         "set-component-telemetry-mode",
-        move |id: i64, m: TelemetryMode| -> bool {
+        move |id: i64, m: TelemetryMode| -> Result<bool, tulisp::Error> {
             let w = r.site();
-            w.set_telemetry_mode(id as u64, m);
-            true
+            w.set_telemetry_mode(id as u64, m)
+                .map_err(tulisp::Error::invalid_argument)?;
+            Ok(true)
         },
     );
 
     let r = router.clone();
     ctx.defun(
         "set-component-command-mode",
-        move |id: i64, m: CommandMode| -> bool {
+        move |id: i64, m: CommandMode| -> Result<bool, tulisp::Error> {
             let w = r.site();
-            w.set_command_mode(id as u64, m);
-            true
+            w.set_command_mode(id as u64, m)
+                .map_err(tulisp::Error::invalid_argument)?;
+            Ok(true)
+        },
+    );
+
+    // Unlike the runtime knobs above, the operational mode is a
+    // CONFIG parameter — the declared capability of the component.
+    // Setting it re-derives the runtime knobs (no telemetry means a
+    // silent stream, no control means an erroring command channel)
+    // and persists through the overrides gate.
+    let r = router.clone();
+    ctx.defun(
+        "set-component-operational-mode",
+        move |id: i64, m: crate::sim::component::OperationalMode| -> Result<bool, tulisp::Error> {
+            let w = r.site();
+            w.set_operational_mode(id as u64, m)
+                .map_err(tulisp::Error::invalid_argument)?;
+            Ok(true)
         },
     );
 

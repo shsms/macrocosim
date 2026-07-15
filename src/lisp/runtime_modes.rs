@@ -1,5 +1,6 @@
 //! Symbol-only `TulispObject` conversion for the three runtime mode
-//! enums (`Health`, `TelemetryMode`, `CommandMode`).
+//! enums (`Health`, `TelemetryMode`, `CommandMode`) and the
+//! config-level `OperationalMode`.
 //!
 //! Each enum gets four impls:
 //!   1. `TryFrom<TulispObject>`        — for `AsPlist!` / `AsAlist!` field types
@@ -15,6 +16,7 @@ use std::str::FromStr;
 
 use tulisp::{TulispConvertible, TulispObject};
 
+use crate::sim::component::OperationalMode;
 use crate::sim::runtime::{CommandMode, Health, TelemetryMode};
 
 /// Generates the four conversion impls listed in the module docs from
@@ -78,6 +80,11 @@ impl_lisp_symbol_enum!(
     CommandMode,
     expected = "normal / timeout / error / over-bound",
     label = "command-mode"
+);
+impl_lisp_symbol_enum!(
+    OperationalMode,
+    expected = "unspecified / inactive / telemetry-only / control-only / control-and-telemetry",
+    label = "operational-mode"
 );
 
 #[cfg(test)]

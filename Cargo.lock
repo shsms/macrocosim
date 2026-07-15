@@ -472,7 +472,7 @@ dependencies = [
 [[package]]
 name = "frequenz-microgrid-component-graph"
 version = "0.5.0"
-source = "git+https://github.com/shsms/frequenz-microgrid-component-graph-rs?rev=580e890bec852ddbb0ed63c57ce98d2bbf14e203#580e890bec852ddbb0ed63c57ce98d2bbf14e203"
+source = "git+https://github.com/shsms/frequenz-microgrid-component-graph-rs?rev=8bab132#8bab13290ccf9a979edec9e3adfeca0fad155e19"
 dependencies = [
  "petgraph 0.6.5",
  "serde",
@@ -1962,7 +1962,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "frequenz-microgrid",
- "frequenz-microgrid-component-graph 0.5.0 (git+https://github.com/shsms/frequenz-microgrid-component-graph-rs?rev=580e890bec852ddbb0ed63c57ce98d2bbf14e203)",
+ "frequenz-microgrid-component-graph 0.5.0 (git+https://github.com/shsms/frequenz-microgrid-component-graph-rs?rev=8bab132)",
  "futures",
  "http-body-util",
  "log",

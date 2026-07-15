@@ -150,12 +150,13 @@ function snapshotSelection(selectedIds) {
   const components = selectedIds
     .map((id) => topology.get(id))
     .filter(Boolean)
-    .map(({ id, category, subtype, hidden }) => ({
+    .map(({ id, category, subtype, hidden, operational_mode }) => ({
       id,
       category,
       subtype,
       hidden: !!hidden,
       main: id === mainId,
+      operational_mode,
     }));
   if (!components.length) return null;
   const selected = new Set(selectedIds);
@@ -205,6 +206,10 @@ export async function pasteClipboard() {
       // from make-meter, which is the expected guard.
       if (c.hidden) flags.push(":hidden t");
       if (c.main) flags.push(":main t");
+      // The operational mode is config, so a clone keeps it.
+      if (c.operational_mode && c.operational_mode !== "unspecified") {
+        flags.push(`:operational-mode '${c.operational_mode}`);
+      }
       const args = flags.length ? ` ${flags.join(" ")}` : "";
       return `(m${c.id} (${makeFnFor(c)}${args}))`;
     })

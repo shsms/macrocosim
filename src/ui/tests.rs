@@ -1049,3 +1049,57 @@ async fn microgrids_import_rejects_unsupported_category() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(String::from_utf8_lossy(&resp).contains("cannot simulate"));
 }
+
+/// set-component-operational-mode is a CONFIG change: it persists
+/// through the overrides gate (unlike the runtime pokes), and the
+/// runtime knobs derive from it.
+#[tokio::test]
+async fn operational_mode_eval_persists_and_derives() {
+    let cfg = config_with("(%make-grid-connection-point :id 1)").await;
+    let (status, body) = call(
+        cfg.clone(),
+        post(
+            "/api/eval",
+            "(set-component-operational-mode 1 'control-only)",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["ok"], true, "body: {parsed}");
+
+    // Persisted: the overrides list carries the eval.
+    let (_, body) = call(cfg.clone(), get("/api/overrides")).await;
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let persisted = parsed["persisted"].as_array().unwrap();
+    assert!(
+        persisted
+            .iter()
+            .any(|e| e["source"].as_str().unwrap().contains("operational-mode")),
+        "expected the mode eval in the overrides list: {parsed}"
+    );
+
+    // Derived: the topology snapshot shows the mode and the silenced
+    // stream.
+    let (_, body) = call(cfg.clone(), get("/api/topology")).await;
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let c = &parsed["components"][0];
+    assert_eq!(c["operational_mode"], "control-only");
+    assert_eq!(c["telemetry_mode"], "silent");
+
+    // Enforced: poking the stream back to normal is rejected while
+    // the mode forbids telemetry.
+    let (_, body) = call(
+        cfg,
+        post("/api/eval", "(set-component-telemetry-mode 1 'normal)"),
+    )
+    .await;
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["ok"], false);
+    assert!(
+        parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("streams no telemetry")
+    );
+}

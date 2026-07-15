@@ -17,7 +17,7 @@ use tulisp::{AsPlist, Error, Plist, TulispContext};
 use crate::lisp::value::LispValue;
 use crate::sim::{
     Battery, BatteryInverter, Category, ComponentHandle, EvCharger, Grid, Marker, Meter,
-    MicrogridSite, SolarInverter,
+    MicrogridSite, OperationalMode, SolarInverter,
     battery::BatteryConfig,
     dynamic_scalar::DynamicScalar,
     ev_charger::EvChargerConfig,
@@ -39,6 +39,7 @@ AsPlist! {
         rated_upper<":rated-upper">: Option<f64> {= None},
         successors: Option<Vec<ComponentHandle>> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        operational_mode<":operational-mode">: Option<OperationalMode> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
         command_mode<":command-mode">: Option<CommandMode> {= None},
@@ -61,6 +62,7 @@ AsPlist! {
         successors: Option<Vec<ComponentHandle>> {= None},
         hidden: Option<bool> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        operational_mode<":operational-mode">: Option<OperationalMode> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
         command_mode<":command-mode">: Option<CommandMode> {= None},
@@ -85,6 +87,7 @@ AsPlist! {
         rated_upper<":rated-upper">: Option<f64> {= None},
         soc_protect_margin<":soc-protect-margin">: Option<f64> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        operational_mode<":operational-mode">: Option<OperationalMode> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
         command_mode<":command-mode">: Option<CommandMode> {= None},
@@ -106,6 +109,7 @@ AsPlist! {
         command_delay_ms<":command-delay-ms">: Option<i64> {= None},
         ramp_rate<":ramp-rate">: Option<f64> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        operational_mode<":operational-mode">: Option<OperationalMode> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
         command_mode<":command-mode">: Option<CommandMode> {= None},
@@ -140,6 +144,7 @@ AsPlist! {
         command_delay_ms<":command-delay-ms">: Option<i64> {= None},
         ramp_rate<":ramp-rate">: Option<f64> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        operational_mode<":operational-mode">: Option<OperationalMode> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
         command_mode<":command-mode">: Option<CommandMode> {= None},
@@ -174,6 +179,7 @@ AsPlist! {
         command_delay_ms<":command-delay-ms">: Option<i64> {= None},
         ramp_rate<":ramp-rate">: Option<f64> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        operational_mode<":operational-mode">: Option<OperationalMode> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
         command_mode<":command-mode">: Option<CommandMode> {= None},
@@ -190,6 +196,7 @@ AsPlist! {
         id: Option<i64> {= None},
         name: Option<String> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        operational_mode<":operational-mode">: Option<OperationalMode> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
         command_mode<":command-mode">: Option<CommandMode> {= None},
@@ -218,7 +225,14 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 rated_active_bounds,
                 a.stream_jitter_pct.unwrap_or(0.0) as f32,
             );
-            let h = register_with_modes(&w, grid, a.health, a.telemetry_mode, a.command_mode)?;
+            let h = register_with_modes(
+                &w,
+                grid,
+                a.operational_mode,
+                a.health,
+                a.telemetry_mode,
+                a.command_mode,
+            )?;
             apply_initial_name(&w, id, a.name);
             connect_successors(&w, id, &a.successors);
             Ok::<_, Error>(h)
@@ -251,7 +265,14 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 a.stream_jitter_pct.unwrap_or(0.0) as f32,
                 hidden,
             );
-            let h = register_with_modes(&w, meter, a.health, a.telemetry_mode, a.command_mode)?;
+            let h = register_with_modes(
+                &w,
+                meter,
+                a.operational_mode,
+                a.health,
+                a.telemetry_mode,
+                a.command_mode,
+            )?;
             apply_initial_name(&w, id, a.name);
             connect_successors(&w, id, &a.successors);
             Ok::<_, Error>(h)
@@ -297,6 +318,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             let h = register_with_modes(
                 &w,
                 Battery::new(id, interval, cfg),
+                a.operational_mode,
                 a.health,
                 a.telemetry_mode,
                 a.command_mode,
@@ -359,6 +381,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             let h = register_with_modes(
                 &w,
                 BatteryInverter::new(id, interval, cfg),
+                a.operational_mode,
                 a.health,
                 a.telemetry_mode,
                 a.command_mode,
@@ -431,7 +454,14 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             if let Some(scalar) = dynamic_sunlight {
                 inverter.set_sunlight_source(scalar);
             }
-            let h = register_with_modes(&w, inverter, a.health, a.telemetry_mode, a.command_mode)?;
+            let h = register_with_modes(
+                &w,
+                inverter,
+                a.operational_mode,
+                a.health,
+                a.telemetry_mode,
+                a.command_mode,
+            )?;
             apply_initial_name(&w, id, a.name);
             Ok::<_, Error>(h)
         },
@@ -479,6 +509,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             let h = register_with_modes(
                 &w,
                 EvCharger::new(id, interval, cfg),
+                a.operational_mode,
                 a.health,
                 a.telemetry_mode,
                 a.command_mode,
@@ -521,6 +552,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 let h = register_with_modes(
                     &w,
                     Marker::new(id, category, jitter),
+                    a.operational_mode,
                     a.health,
                     a.telemetry_mode,
                     a.command_mode,
@@ -597,13 +629,32 @@ fn id_or_next(site: &MicrogridSite, explicit: Option<i64>) -> Result<u64, Error>
 fn register_with_modes<C: crate::sim::SimulatedComponent + 'static>(
     site: &MicrogridSite,
     component: C,
+    operational_mode: Option<OperationalMode>,
     health: Option<Health>,
     telemetry: Option<TelemetryMode>,
     command: Option<CommandMode>,
 ) -> Result<ComponentHandle, Error> {
     let id = component.id();
     let h = site.register(component);
-    apply_initial_modes(site, id, health, telemetry, command);
+    // The operational mode (config) goes first: it derives the
+    // runtime-knob defaults, which the explicit knob kwargs then
+    // refine — and are validated against. A mode error after the
+    // register above must unregister again: make-* is atomic to its
+    // callers, and without the rollback a rejected form (say
+    // :operational-mode 'inactive :telemetry-mode 'normal) would
+    // leave a half-configured ghost that ticks physics and collides
+    // with the retried :id.
+    let modes = (|| {
+        if let Some(m) = operational_mode {
+            site.set_operational_mode(id, m)
+                .map_err(Error::invalid_argument)?;
+        }
+        apply_initial_modes(site, id, health, telemetry, command)
+    })();
+    if let Err(e) = modes {
+        site.remove_component(id);
+        return Err(e);
+    }
     Ok(h)
 }
 
@@ -629,12 +680,16 @@ fn apply_initial_modes(
     health: Option<Health>,
     telemetry: Option<TelemetryMode>,
     command: Option<CommandMode>,
-) {
+) -> Result<(), Error> {
     if let Some(h) = health {
         site.set_health(id, h);
     }
+    // The checked setters reject a knob the component's operational
+    // mode forbids (e.g. `:telemetry-mode 'normal` on an inactive
+    // component) — that combination is a config error, not a poke.
     if let Some(t) = telemetry {
-        site.set_telemetry_mode(id, t);
+        site.set_telemetry_mode(id, t)
+            .map_err(Error::invalid_argument)?;
     }
     // An explicit `:command-mode` refines the default the health coupling
     // just applied — but it must not re-enable a device declared errored.
@@ -645,8 +700,10 @@ fn apply_initial_modes(
     if let Some(c) = command
         && health != Some(Health::Error)
     {
-        site.set_command_mode(id, c);
+        site.set_command_mode(id, c)
+            .map_err(Error::invalid_argument)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -682,6 +739,30 @@ mod tests {
     /// listing and the UI's topology endpoint both pick it up.
     /// Omitting `:name` falls through to the component's
     /// auto-generated default (`category-id`).
+    /// A make-* whose mode kwargs are rejected must leave nothing
+    /// behind: the component registered before the mode check runs,
+    /// so the error path unregisters it again. Without the rollback
+    /// the failed form left a ghost that ticks physics and collides
+    /// with the corrected form's :id.
+    #[test]
+    fn rejected_modes_unregister_the_component() {
+        use crate::sim::microgrids::{SiteRouter, new_current_microgrid, new_registry};
+        let site = MicrogridSite::new();
+        let mut ctx = TulispContext::new();
+        crate::lisp::handle::register(&mut ctx);
+        let router = SiteRouter::new(new_registry(), new_current_microgrid(), site.clone());
+        register(&mut ctx, router);
+        // Inactive provides no telemetry, so :telemetry-mode 'normal
+        // is rejected — after the component was registered.
+        let err = ctx
+            .eval_string("(%make-meter :id 7 :operational-mode 'inactive :telemetry-mode 'normal)");
+        assert!(err.is_err(), "conflicting modes should error");
+        assert!(site.get(7).is_none(), "the failed make must roll back");
+        // The corrected form reuses the id without a collision.
+        ctx.eval_string("(%make-meter :id 7)").expect("retry");
+        assert!(site.get(7).is_some());
+    }
+
     #[test]
     fn name_arg_sets_display_name() {
         let site = run(r#"(%make-battery :id 200 :name "main-batt")"#);
@@ -893,5 +974,23 @@ mod tests {
             auto_id > first,
             "skipped past the pinned {first}, got {auto_id}"
         );
+    }
+
+    /// `:operational-mode` is stored as config and derives the
+    /// runtime knobs; a knob kwarg the mode forbids is a config
+    /// error.
+    #[test]
+    fn operational_mode_kwarg_derives_and_validates() {
+        use crate::sim::runtime::TelemetryMode;
+
+        let site = run("(%make-meter :id 7 :operational-mode 'inactive)");
+        assert_eq!(site.operational_mode(7), OperationalMode::Inactive);
+        assert_eq!(site.runtime_of(7).telemetry, TelemetryMode::Silent);
+
+        let (_, mut ctx) = run_with_ctx("");
+        let err = ctx
+            .eval_string("(%make-meter :id 8 :operational-mode 'inactive :telemetry-mode 'normal)")
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("streams no telemetry"));
     }
 }

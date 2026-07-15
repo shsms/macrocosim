@@ -24,6 +24,7 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast;
 
 use crate::sim::EnergyAccum;
+use crate::sim::component::OperationalMode;
 use crate::sim::component::{Category, ComponentHandle, FIRST_AUTO_ID, SimulatedComponent};
 use crate::sim::events::{EVENT_BUS_CAPACITY, SiteEvent};
 use crate::sim::history::ComponentHistory;
@@ -114,6 +115,10 @@ struct MicrogridSiteInner {
     /// command mode). Defaulted on register, mutated via the
     /// `set-component-*` Lisp defuns or directly from server.rs.
     runtime: RwLock<HashMap<u64, ComponentRuntime>>,
+    /// Config-level operational mode per component (declared
+    /// capability). Not a runtime knob: the runtime fault modes
+    /// depend on it, never the other way around.
+    operational_modes: RwLock<HashMap<u64, OperationalMode>>,
     /// User-facing name overrides set via `(rename-component …)`.
     /// Reads go through `display_name`; the component's intrinsic
     /// `SimulatedComponent::name()` stays as the auto-derived default.
@@ -210,6 +215,7 @@ impl MicrogridSite {
                 physics_tick_ms: AtomicU64::new(100),
                 next_id,
                 runtime: RwLock::new(HashMap::new()),
+                operational_modes: RwLock::new(HashMap::new()),
                 name_overrides: RwLock::new(HashMap::new()),
                 histories: RwLock::new(HashMap::new()),
                 component_energy: RwLock::new(HashMap::new()),
@@ -661,6 +667,7 @@ impl MicrogridSite {
         self.inner.by_id.write().clear();
         self.inner.connections.write().clear();
         self.inner.runtime.write().clear();
+        self.inner.operational_modes.write().clear();
         self.inner.name_overrides.write().clear();
         self.inner.histories.write().clear();
         self.inner.component_energy.write().clear();
@@ -700,6 +707,7 @@ impl MicrogridSite {
         // the old baseline would read negative energy.
         self.inner.scenario.write().energy_baseline_wh.remove(&id);
         self.inner.runtime.write().remove(&id);
+        self.inner.operational_modes.write().remove(&id);
         self.inner.setpoint_logs.write().remove(&id);
         self.inner.name_overrides.write().remove(&id);
         was_present
@@ -780,22 +788,106 @@ impl MicrogridSite {
     /// must re-apply it after the recovery. (`Standby` leaves the
     /// command mode alone in both directions.)
     pub fn set_health(&self, id: u64, health: Health) {
+        let mode = self.operational_mode(id);
         let mut runtime = self.inner.runtime.write();
         let entry = runtime.entry(id).or_default();
         entry.health = health;
         match health {
             Health::Error => entry.command = CommandMode::Error,
-            Health::Ok => entry.command = CommandMode::Normal,
+            // Recovery restores commands only when the declared
+            // operational mode accepts them — health cannot grant a
+            // capability the config denies.
+            Health::Ok => {
+                entry.command = if mode.accepts_control() {
+                    CommandMode::Normal
+                } else {
+                    CommandMode::Error
+                };
+            }
             Health::Standby => {}
         }
     }
 
-    pub fn set_telemetry_mode(&self, id: u64, mode: TelemetryMode) {
+    /// Set a component's runtime telemetry mode. Rejected when the
+    /// component's operational mode does not stream telemetry — the
+    /// runtime knobs depend on the declared capability, so an
+    /// inactive component can never be poked back to `normal`.
+    pub fn set_telemetry_mode(&self, id: u64, mode: TelemetryMode) -> Result<(), String> {
+        if mode == TelemetryMode::Normal && !self.operational_mode(id).provides_telemetry() {
+            return Err(format!(
+                "component {id} has operational mode {}, which streams no \
+                 telemetry; cannot set telemetry-mode to normal",
+                self.operational_mode(id)
+            ));
+        }
         self.inner.runtime.write().entry(id).or_default().telemetry = mode;
+        Ok(())
     }
 
-    pub fn set_command_mode(&self, id: u64, mode: CommandMode) {
+    /// Set a component's runtime command mode. Rejected when the
+    /// component's operational mode does not accept control — same
+    /// rule as [`Self::set_telemetry_mode`].
+    pub fn set_command_mode(&self, id: u64, mode: CommandMode) -> Result<(), String> {
+        if mode == CommandMode::Normal && !self.operational_mode(id).accepts_control() {
+            return Err(format!(
+                "component {id} has operational mode {}, which accepts no \
+                 commands; cannot set command-mode to normal",
+                self.operational_mode(id)
+            ));
+        }
         self.inner.runtime.write().entry(id).or_default().command = mode;
+        Ok(())
+    }
+
+    // ─── Per-component operational mode (config) ─────────────────────
+
+    /// The component's declared operational mode. Defaults to
+    /// `Unspecified` (full capability) when never set.
+    pub fn operational_mode(&self, id: u64) -> OperationalMode {
+        self.inner
+            .operational_modes
+            .read()
+            .get(&id)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Set a component's operational mode — a CONFIG change, so it
+    /// bumps the structural version (the overrides gate persists the
+    /// eval that did it). Rejected for an unregistered id: the change
+    /// would persist, and a later component allocated on that id
+    /// would silently inherit it.
+    ///
+    /// The runtime knobs are re-derived from the new mode: a mode
+    /// without telemetry silences the stream, one without control
+    /// errors the command channel, and regaining a capability
+    /// restores the knob to `normal` — unless health is `Error`,
+    /// which keeps the command channel erroring (an errored device
+    /// never accepts commands, whatever the config says). Like the
+    /// health ↔ command coupling in [`Self::set_health`], this
+    /// deliberately clobbers independently-set fault knobs on the
+    /// affected axes.
+    pub fn set_operational_mode(&self, id: u64, mode: OperationalMode) -> Result<(), String> {
+        if self.get(id).is_none() {
+            return Err(format!("component {id} not found"));
+        }
+        self.inner.operational_modes.write().insert(id, mode);
+        {
+            let mut runtime = self.inner.runtime.write();
+            let entry = runtime.entry(id).or_default();
+            entry.telemetry = if mode.provides_telemetry() {
+                TelemetryMode::Normal
+            } else {
+                TelemetryMode::Silent
+            };
+            entry.command = if mode.accepts_control() && entry.health != Health::Error {
+                CommandMode::Normal
+            } else {
+                CommandMode::Error
+            };
+        }
+        self.bump_structural();
+        Ok(())
     }
 
     // ─── Physics tick ────────────────────────────────────────────────
@@ -1034,9 +1126,102 @@ mod tests {
         w.set_health(5, Health::Ok);
         assert_eq!(w.runtime_of(5).command, CommandMode::Normal);
         // Standby refuses via the health check but leaves command mode alone.
-        w.set_command_mode(5, CommandMode::Timeout);
+        w.set_command_mode(5, CommandMode::Timeout).unwrap();
         w.set_health(5, Health::Standby);
         assert_eq!(w.runtime_of(5).command, CommandMode::Timeout);
+    }
+
+    /// Setting the operational mode (config) derives the runtime
+    /// knobs; regaining a capability restores the knob to normal.
+    #[test]
+    fn operational_mode_derives_runtime_knobs() {
+        let w = MicrogridSite::new();
+        w.register(Stub::new(5));
+        assert_eq!(w.operational_mode(5), OperationalMode::Unspecified);
+
+        w.set_operational_mode(5, OperationalMode::Inactive)
+            .unwrap();
+        assert_eq!(w.runtime_of(5).telemetry, TelemetryMode::Silent);
+        assert_eq!(w.runtime_of(5).command, CommandMode::Error);
+
+        w.set_operational_mode(5, OperationalMode::TelemetryOnly)
+            .unwrap();
+        assert_eq!(w.runtime_of(5).telemetry, TelemetryMode::Normal);
+        assert_eq!(w.runtime_of(5).command, CommandMode::Error);
+
+        w.set_operational_mode(5, OperationalMode::ControlAndTelemetry)
+            .unwrap();
+        assert_eq!(w.runtime_of(5).telemetry, TelemetryMode::Normal);
+        assert_eq!(w.runtime_of(5).command, CommandMode::Normal);
+    }
+
+    /// The runtime knobs depend on the operational mode: a capability
+    /// the mode forbids cannot be poked back to normal, but fault
+    /// values are always allowed.
+    #[test]
+    fn runtime_knobs_validate_against_operational_mode() {
+        let w = MicrogridSite::new();
+        w.register(Stub::new(5));
+        w.set_operational_mode(5, OperationalMode::Inactive)
+            .unwrap();
+        assert!(w.set_telemetry_mode(5, TelemetryMode::Normal).is_err());
+        assert!(w.set_command_mode(5, CommandMode::Normal).is_err());
+        // Fault values stay settable — they only deepen the outage.
+        w.set_telemetry_mode(5, TelemetryMode::Closed).unwrap();
+        w.set_command_mode(5, CommandMode::Timeout).unwrap();
+
+        w.set_operational_mode(5, OperationalMode::ControlOnly)
+            .unwrap();
+        assert!(w.set_telemetry_mode(5, TelemetryMode::Normal).is_err());
+        w.set_command_mode(5, CommandMode::Normal).unwrap();
+    }
+
+    /// A config-level mode change bumps the structural version, so
+    /// the overrides gate persists the eval that made it.
+    #[test]
+    fn operational_mode_changes_are_structural() {
+        let w = MicrogridSite::new();
+        w.register(Stub::new(5));
+        let before = w.structural_version();
+        w.set_operational_mode(5, OperationalMode::ControlOnly)
+            .unwrap();
+        assert!(w.structural_version() > before);
+        // An unregistered id is rejected — the change would persist
+        // and a later component on that id would inherit it.
+        assert!(
+            w.set_operational_mode(99, OperationalMode::Inactive)
+                .is_err()
+        );
+    }
+
+    /// Health and operational mode both gate the command channel:
+    /// health recovery cannot grant control the mode denies, and a
+    /// mode change cannot re-enable an errored device.
+    #[test]
+    fn health_and_operational_mode_couple_on_commands() {
+        let w = MicrogridSite::new();
+        w.register(Stub::new(5));
+
+        // Control-only mode + health cycle: recovery keeps commands
+        // normal (the mode accepts control) …
+        w.set_operational_mode(5, OperationalMode::ControlOnly)
+            .unwrap();
+        w.set_health(5, Health::Error);
+        w.set_health(5, Health::Ok);
+        assert_eq!(w.runtime_of(5).command, CommandMode::Normal);
+
+        // … but an inactive mode wins over recovery.
+        w.set_operational_mode(5, OperationalMode::Inactive)
+            .unwrap();
+        w.set_health(5, Health::Error);
+        w.set_health(5, Health::Ok);
+        assert_eq!(w.runtime_of(5).command, CommandMode::Error);
+
+        // And a mode change never re-enables an errored device.
+        w.set_health(5, Health::Error);
+        w.set_operational_mode(5, OperationalMode::ControlAndTelemetry)
+            .unwrap();
+        assert_eq!(w.runtime_of(5).command, CommandMode::Error);
     }
 
     /// Cycle-creating edges are rejected — the aggregation walk has

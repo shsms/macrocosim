@@ -39,7 +39,6 @@ use frequenz_microgrid_component_graph::{
     InverterType, Node, OperationalMode,
 };
 
-use crate::sim::runtime::TelemetryMode;
 use crate::sim::{component::Category, microgrid_site::MicrogridSite};
 
 /// Plain-data view of one switchyard component, sized for the graph
@@ -65,18 +64,19 @@ impl Node for GraphNode {
     }
 }
 
-/// Lift a runtime telemetry mode into the graph crate's declared
-/// operational mode. Any mode that stops metric samples from reaching
-/// clients means the component can't be a measurement source, which is
-/// exactly what `ControlOnly` declares — so formulas route around it
-/// through their fallback components.
-fn lift_mode(telemetry: TelemetryMode) -> OperationalMode {
-    match telemetry {
-        TelemetryMode::Normal => OperationalMode::Unspecified,
-        TelemetryMode::Silent
-        | TelemetryMode::Closed
-        | TelemetryMode::ErrorEmpty
-        | TelemetryMode::NotFound => OperationalMode::ControlOnly,
+/// Lift the component's CONFIG operational mode into the graph
+/// crate's twin enum. This is the declared capability, not the
+/// runtime fault state — a `silent` telemetry poke simulates an
+/// error, it does not change what the component is configured to do,
+/// so it must not change the generated formulas.
+fn lift_mode(mode: crate::sim::OperationalMode) -> OperationalMode {
+    use crate::sim::OperationalMode as Sim;
+    match mode {
+        Sim::Unspecified => OperationalMode::Unspecified,
+        Sim::Inactive => OperationalMode::Inactive,
+        Sim::TelemetryOnly => OperationalMode::TelemetryOnly,
+        Sim::ControlOnly => OperationalMode::ControlOnly,
+        Sim::ControlAndTelemetry => OperationalMode::ControlAndTelemetry,
     }
 }
 
@@ -147,7 +147,7 @@ pub fn snapshot(site: &MicrogridSite) -> (Vec<GraphNode>, Vec<GraphEdge>) {
         .map(|c| GraphNode {
             id: c.id(),
             category: lift_category(c.category(), c.subtype()),
-            mode: lift_mode(site.runtime_of(c.id()).telemetry),
+            mode: lift_mode(site.operational_mode(c.id())),
         })
         .collect();
     let edges = site
@@ -317,22 +317,22 @@ mod tests {
         );
     }
 
-    /// Every silenced telemetry mode declares the component a
-    /// non-source for formulas; only `Normal` keeps the default.
+    /// The config operational mode maps 1:1 onto the graph crate's
+    /// twin enum.
     #[test]
-    fn lift_mode_maps_silenced_modes_to_control_only() {
+    fn lift_mode_maps_every_operational_mode() {
+        use crate::sim::OperationalMode as Sim;
+        assert_eq!(lift_mode(Sim::Unspecified), OperationalMode::Unspecified);
+        assert_eq!(lift_mode(Sim::Inactive), OperationalMode::Inactive);
         assert_eq!(
-            lift_mode(TelemetryMode::Normal),
-            OperationalMode::Unspecified
+            lift_mode(Sim::TelemetryOnly),
+            OperationalMode::TelemetryOnly
         );
-        for silenced in [
-            TelemetryMode::Silent,
-            TelemetryMode::Closed,
-            TelemetryMode::ErrorEmpty,
-            TelemetryMode::NotFound,
-        ] {
-            assert_eq!(lift_mode(silenced), OperationalMode::ControlOnly);
-        }
+        assert_eq!(lift_mode(Sim::ControlOnly), OperationalMode::ControlOnly);
+        assert_eq!(
+            lift_mode(Sim::ControlAndTelemetry),
+            OperationalMode::ControlAndTelemetry
+        );
     }
 
     /// Missing root: no `GridConnectionPoint` → try_new errors out.

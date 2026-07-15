@@ -28,7 +28,9 @@ pub mod sim_clock;
 pub mod site_import;
 
 pub use battery::Battery;
-pub use component::{Category, ComponentHandle, SetpointError, SimulatedComponent, Telemetry};
+pub use component::{
+    Category, ComponentHandle, OperationalMode, SetpointError, SimulatedComponent, Telemetry,
+};
 pub use energy::EnergyAccum;
 pub use ev_charger::EvCharger;
 pub use grid::Grid;

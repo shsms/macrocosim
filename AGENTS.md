@@ -154,6 +154,11 @@ so construction + validation stay identical.
    last-occurrence-wins resolution lets per-component plist values
    override the defaults.
 5. (Optional) Override `subtype()` if proto needs `InverterType::Foo` / etc.
+6. Register through `register_with_modes(...)` so the component gets
+   the shared config + runtime kwargs: `:operational-mode` (config,
+   persisted; derives the runtime knobs) plus `:health` /
+   `:telemetry-mode` / `:command-mode` (runtime fault knobs, checked
+   against the operational mode).
 
 ## Sample-config DSL convention
 
@@ -176,10 +181,14 @@ config.lisp does.
 
 ## Lisp value adapters
 
-- Runtime mode enums (`Health`, `TelemetryMode`, `CommandMode`) take
-  their lisp-side `TryFrom<TulispObject>` + `TulispConvertible` impls
-  in `src/lisp/runtime_modes.rs`. **Symbols only** — `:health 'error`
-  works, `:health "error"` errors with a type mismatch.
+- Runtime mode enums (`Health`, `TelemetryMode`, `CommandMode`) and
+  the config-level `OperationalMode` take their lisp-side
+  `TryFrom<TulispObject>` + `TulispConvertible` impls in
+  `src/lisp/runtime_modes.rs`. **Symbols only** — `:health 'error`
+  works, `:health "error"` errors with a type mismatch. Note the
+  split: `OperationalMode` is microgrid CONFIG (persists via the
+  overrides gate, drives the formula engine); the other three are
+  runtime fault knobs that depend on it.
 - `LispValue` (`src/lisp/value.rs`) — passthrough wrapper that lets a
   raw `TulispObject` ride through `AsPlist!` (works around the
   blanket-`From<T> for T` `Infallible` mismatch). Used for `:power`
