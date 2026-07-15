@@ -175,7 +175,19 @@ pub fn build_from(
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
 ) -> Result<ComponentGraph<GraphNode, GraphEdge>, frequenz_microgrid_component_graph::Error> {
-    ComponentGraph::try_new(nodes, edges, ComponentGraphConfig::default())
+    build_from_with_config(nodes, edges, ComponentGraphConfig::default())
+}
+
+/// [`build_from`] with an explicit engine config — the formula
+/// endpoint passes per-request options (prefer meters, phantom
+/// loads, no fallbacks). Every path that lifts a site into the graph
+/// crate funnels through here.
+pub fn build_from_with_config(
+    nodes: Vec<GraphNode>,
+    edges: Vec<GraphEdge>,
+    config: ComponentGraphConfig,
+) -> Result<ComponentGraph<GraphNode, GraphEdge>, frequenz_microgrid_component_graph::Error> {
+    ComponentGraph::try_new(nodes, edges, config)
 }
 
 #[cfg(test)]

@@ -860,3 +860,65 @@ async fn control_drive_rejects_wrong_category() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+/// Battery topology used by the explained-formula tests:
+/// grid → meter → battery-inverter → battery, mg id 2200.
+const FORMULA_TOPOLOGY: &str = r#"(%make-grid-connection-point :id 1
+     :successors
+     (list (%make-meter :id 2
+             :successors
+             (list (%make-battery-inverter :id 3
+                     :successors
+                     (list (%make-battery :id 4)))))))"#;
+
+#[tokio::test]
+async fn formula_endpoint_returns_ast_and_explanation() {
+    let cfg = config_with(FORMULA_TOPOLOGY).await;
+    let (status, body) = call(cfg, get("/api/mg/2200/formula?metric=battery")).await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["ok"], true, "body: {parsed}");
+    assert_eq!(parsed["metric"], "battery");
+    // The rendered string, its `//`-commented twin, the AST, and the
+    // explanation tree all ride along.
+    assert!(parsed["formula"].as_str().unwrap().contains('#'));
+    assert!(parsed["commented"].as_str().unwrap().contains("//"));
+    assert!(parsed["ast"].is_object());
+    assert!(parsed["explanation"].is_object());
+}
+
+#[tokio::test]
+async fn formula_endpoint_rejects_unknown_metric_and_bad_ids() {
+    let cfg = config_with(FORMULA_TOPOLOGY).await;
+    let (status, body) = call(cfg.clone(), get("/api/mg/2200/formula?metric=bogus")).await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["ok"], false);
+    assert!(parsed["error"].as_str().unwrap().contains("bogus"));
+
+    let (_, body) = call(cfg, get("/api/mg/2200/formula?metric=battery&ids=1,x")).await;
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["ok"], false);
+    assert!(
+        parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("bad component id")
+    );
+}
+
+#[tokio::test]
+async fn formula_endpoint_reports_error_kind_for_missing_component() {
+    let cfg = config_with(FORMULA_TOPOLOGY).await;
+    let (_, body) = call(cfg, get("/api/mg/2200/formula?metric=battery&ids=99")).await;
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["kind"], "component_not_found");
+}
+
+#[tokio::test]
+async fn formula_endpoint_404s_unknown_microgrid() {
+    let cfg = config_with(FORMULA_TOPOLOGY).await;
+    let (status, _) = call(cfg, get("/api/mg/9999/formula?metric=grid")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

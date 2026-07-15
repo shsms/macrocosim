@@ -13,6 +13,7 @@ pub(in crate::ui) mod control;
 pub(in crate::ui) mod defaults;
 pub(in crate::ui) mod dispatches;
 pub(in crate::ui) mod eval;
+pub(in crate::ui) mod formula;
 pub(in crate::ui) mod history;
 pub(in crate::ui) mod microgrid_data;
 pub(in crate::ui) mod microgrids;
