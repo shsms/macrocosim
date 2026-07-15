@@ -17,11 +17,14 @@ The simulator exposes three surfaces:
   sockets: `PlatformAssets` (`[::1]:9900`) and the
   `MicrogridDispatchService` store-and-serve dispatch API
   (`[::1]:8900`), each keyed by `microgrid_id` per request.
-- **Web UI** (`http://127.0.0.1:8801`) — multi-microgrid SPA
-  with a topology canvas (per-mg undo / redo of edits), a
-  per-component chart dashboard, and a scenario panel. Raw
-  JS / HTML / CSS embedded into the binary via `rust-embed`;
-  no build step.
+- **Web UI** (`http://127.0.0.1:8801`) — multi-microgrid SPA.
+  Each microgrid gets a topology canvas (edit with undo / redo,
+  pick a layout, align nodes), a per-component chart dashboard,
+  and a *Formulas* tab. The Formulas tab shows every generated
+  formula and the engine's reason for each part. The UI can
+  also import a microgrid API site export as a real simulated
+  microgrid, and run scenarios. Raw JS / HTML / CSS embedded
+  into the binary via `rust-embed`; no build step.
 - **swctl** — clap-based client that drives both surfaces from the
   shell.
 

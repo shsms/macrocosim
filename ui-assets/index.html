@@ -495,6 +495,7 @@
         <h4>Microgrids</h4>
         <ul class="help-list">
           <li>The <em>Microgrids</em> mode opens a card grid of every registered microgrid (one per <code>(make-microgrid …)</code> form, plus any added via the <em>+ New microgrid</em> card or <code>POST /api/microgrids/create</code>).</li>
+          <li>The <em>⇪ Import site…</em> card creates a microgrid from a microgrid API site export: pick <code>components.json</code> and <code>connections.json</code> together (connections optional). Rated power bounds, battery capacity, SoC range and the grid's rated fuse current all carry over into the simulation.</li>
           <li>Clicking a card drills into that microgrid's Dashboard + Topology sub-tabs. The <em>← Microgrids</em> button in the header returns to the list; a small <em>→ name</em> chip on the REPL form shows which microgrid the REPL's evals route to.</li>
           <li>Each microgrid runs its own Microgrid gRPC server on <code>[::1]:&lt;port&gt;</code> (default 8800, 8810, 8820, …). PlatformAssets runs on a single shared port (default 9900).</li>
           <li>Component ids are <em>globally unique</em> across the enterprise — copying a selection from one microgrid and pasting into another (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>V</kbd>) re-creates the structure with fresh ids.</li>
@@ -522,10 +523,21 @@
           <li><kbd>Shift</kbd>+<kbd>Drag</kbd> on empty canvas — rubber-band a selection rectangle; nodes inside the box are selected.</li>
           <li><kbd>Shift</kbd>+<kbd>Click</kbd> a node — toggle that node into / out of the current selection (after a rubber-band, or to build one a node at a time).</li>
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+hold + drag from one node to another — create an edge between them.</li>
-          <li><kbd>Right-click</kbd> — context menu. With a selection: <em>Copy</em>, <em>Cut</em>, <em>Delete</em>. With nothing selected and a non-empty clipboard: <em>Paste</em>. Right-clicking a node not in the current selection resets the selection to that node first.</li>
+          <li><kbd>Double-click</kbd> a node — select it together with everything it feeds (its whole subtree). <kbd>Shift</kbd>+<kbd>Double-click</kbd> adds the subtree to the selection.</li>
+          <li><kbd>Right-click</kbd> — context menu. With a selection: <em>Copy</em>, <em>Cut</em>, <em>Delete</em>. With two or more nodes selected, the menu grows the arrange tools: align as a grid / lanes / radial, align in a row / column, spread, mirror, and spacing. With nothing selected and a non-empty clipboard: <em>Paste</em>. Right-clicking a node not in the current selection resets the selection to that node first.</li>
+          <li><strong>Layout picker</strong> (top-right of the canvas) — lanes (default), columns, top-down, radial. Dragging a node by hand keeps your arrangement; picking a layout resets it. The <em>snap</em> toggle makes dragged nodes snap to a grid; hold <kbd>Alt</kbd> while dragging to move along one axis only.</li>
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>C</kbd> — copy selection. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>V</kbd> — paste. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>X</kbd> — cut. Each paste re-uses the last copy; clipboard captures structure only (categories + internal edges), so clones use category defaults.</li>
           <li><kbd>Del</kbd> / <kbd>Backspace</kbd> — delete selection. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>A</kbd> — select all visible. <kbd>Esc</kbd> — deselect.</li>
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> — undo the last canvas edit. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Y</kbd>) — redo. Stack is per microgrid and survives switching between dashboard and topology, but not page reloads.</li>
+        </ul>
+        <h4>Formulas</h4>
+        <ul class="help-list">
+          <li>The <em>Formulas</em> sub-tab explains the formulas the <code>frequenz-microgrid-component-graph</code> engine generates for this microgrid. Pick a metric on the right; the formula renders from the engine's own AST.</li>
+          <li>Hover a part of the formula for its reason; click it to open that reason in the <em>Why</em> drawer at the bottom. A <code>#N</code> selects that component on the canvas.</li>
+          <li>Hovering a row in the Why tree highlights its components in the formula and on the canvas. Subtracted parts show red.</li>
+          <li>The canvas is for looking and arranging only — no editing. The arrange tools live in the right-click menu, same as on Topology. <kbd>T</kbd> (or the right-click menu) toggles the selection's telemetry: a silenced component has no reading, so the formula routes around it through its fallbacks. This is a runtime poke; a reload restores it.</li>
+          <li><em>copy</em> copies the plain formula string; <em>copy with comments</em> copies it with the reasons as <code>//</code> comments.</li>
+          <li>The engine options (prefer meters, phantom loads, no fallbacks) change how the formula is generated. They are view-local: nothing is stored on the server.</li>
         </ul>
         <h4>Inspector + chrome</h4>
         <ul class="help-list">

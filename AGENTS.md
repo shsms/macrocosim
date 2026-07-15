@@ -19,6 +19,13 @@ is wiring the topology + animating the environment.
   - `decay.rs` — `bounded_exp_decay` + `soc_protected_bounds`
   - `battery.rs`, `meter.rs`, `grid.rs`, `chp.rs`, `ev_charger.rs`,
     `inverter/{battery,solar}_inverter.rs`
+  - `marker.rs` — no-physics categories (wind turbine, steam boiler,
+    power transformer, breaker); they classify the meters around them
+  - `site_import.rs` — microgrid API site-export JSON → `(make-* …)` /
+    `(connect …)` forms for `/api/microgrids/import`
+  - `graph_adapter.rs` — lifts a site into
+    `frequenz-microgrid-component-graph` nodes/edges (validation +
+    the Formulas tab's explained-formula endpoint)
 - `src/lisp/` — config DSL glue
   - `mod.rs` — `Config` (fields, accessors, reload)
   - `boot.rs` — `Config::new`: interpreter setup, defun registration,

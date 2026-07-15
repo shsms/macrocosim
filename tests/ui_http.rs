@@ -135,3 +135,79 @@ async fn overrides_endpoint_lists_each_successful_eval() {
     assert!(persisted[0]["source"].as_str().unwrap().contains("\"a\""));
     assert!(persisted[1]["source"].as_str().unwrap().contains("\"b\""));
 }
+
+/// The whole imported-site flow over HTTP: import a site export,
+/// then ask the new microgrid for an explained formula. The import
+/// populates the site through the per-mg eval path, so the formula
+/// engine sees the imported topology immediately.
+#[tokio::test(flavor = "multi_thread")]
+async fn site_import_creates_microgrid_with_working_formulas() {
+    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let client = reqwest::Client::new();
+
+    let body = serde_json::json!({
+        "name": "imported site",
+        "components": {"electricalComponents": [
+            {"id": "9101", "name": "grid",
+             "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT",
+             "categorySpecificInfo": {"gridConnectionPoint": {"ratedFuseCurrent": 125}}},
+            {"id": "9102", "name": "main meter",
+             "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+            {"id": "9103", "name": "bat inverter",
+             "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER",
+             "categorySpecificInfo": {"inverter": {"type": "INVERTER_TYPE_BATTERY"}},
+             "metricConfigBounds": [
+                {"metric": "METRIC_AC_POWER_ACTIVE",
+                 "configBounds": {"lower": -30000, "upper": 30000}}]},
+            {"id": "9104", "name": "battery",
+             "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY",
+             "metricConfigBounds": [
+                {"metric": "METRIC_BATTERY_CAPACITY", "configBounds": {"upper": 40000}},
+                {"metric": "METRIC_BATTERY_SOC_PCT",
+                 "configBounds": {"lower": 5, "upper": 95}}]}
+        ]},
+        "connections": {"electricalComponentConnections": [
+            {"sourceElectricalComponentId": "9101", "destinationElectricalComponentId": "9102"},
+            {"sourceElectricalComponentId": "9102", "destinationElectricalComponentId": "9103"},
+            {"sourceElectricalComponentId": "9103", "destinationElectricalComponentId": "9104"}
+        ]}
+    });
+    let resp: serde_json::Value = client
+        .post(format!("{}/api/microgrids/import", s.ui_url))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resp["components"], 4);
+    let id = resp["id"].as_u64().unwrap();
+
+    let topo = json(&client, format!("{}/api/mg/{id}/topology", s.ui_url)).await;
+    assert_eq!(topo["components"].as_array().unwrap().len(), 4);
+
+    let formula = json(
+        &client,
+        format!("{}/api/mg/{id}/formula?metric=battery", s.ui_url),
+    )
+    .await;
+    assert_eq!(formula["ok"], true, "body: {formula}");
+    assert!(formula["formula"].as_str().unwrap().contains("#9103"));
+    assert!(formula["explanation"].is_object());
+
+    // The persisted overrides carry the export's physical
+    // parameters, so they replay at every boot.
+    let overrides = client
+        .get(format!("{}/api/mg/{id}/overrides/text", s.ui_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(overrides.contains(":capacity 40000.0"));
+    assert!(overrides.contains(":rated-fuse-current 125"));
+}
