@@ -130,8 +130,11 @@
             </div>
             <label class="check"><input type="checkbox" id="use-selection" />
               limit to the selected components</label>
-            <div class="field" id="config-panel">
-              <span class="field-label">engine options</span>
+          </section>
+          <details class="card" id="config-panel">
+            <summary><h2>Engine options</h2><span id="config-count" class="muted"></span></summary>
+            <div class="field">
+              <span class="field-label">formulas</span>
               <label class="check"><input type="checkbox" id="cfg-prefer-meters" />
                 prefer meters over component readings</label>
               <label class="check"><input type="checkbox" id="cfg-phantom" />
@@ -139,7 +142,16 @@
               <label class="check"><input type="checkbox" id="cfg-no-fallback" />
                 disable fallback components</label>
             </div>
-          </section>
+            <div class="field">
+              <span class="field-label">graph building</span>
+              <label class="check"><input type="checkbox" id="cfg-allow-unconnected" />
+                allow unconnected components</label>
+              <label class="check"><input type="checkbox" id="cfg-allow-validation-failures" />
+                allow component validation failures</label>
+              <label class="check"><input type="checkbox" id="cfg-unspecified-inverters" />
+                treat unspecified inverters as battery inverters</label>
+            </div>
+          </details>
           <section class="card">
             <h2>Formula</h2>
             <p id="formula-error" class="graph-error" hidden></p>
@@ -542,7 +554,7 @@
           <li>The canvas is for looking and arranging only — no structural editing. The arrange tools live in the right-click menu, same as on Topology.</li>
           <li><kbd>T</kbd> (or the right-click menu) turns the selection's telemetry off and on. It works by changing the <em>operational mode</em>, keeping the control capability as it is. A component without telemetry has no reading, so the formula routes around it through its fallbacks. This is a config edit: it persists, and <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> on the Topology tab undoes it.</li>
           <li><em>copy</em> copies the plain formula string; <em>copy with comments</em> copies it with the reasons as <code>//</code> comments.</li>
-          <li>The engine options (prefer meters, phantom loads, no fallbacks) change how the formula is generated. They are view-local: nothing is stored on the server.</li>
+          <li>The <em>Engine options</em> card (collapsed by default) changes how the formula is generated and how strictly the graph is validated. The <em>graph building</em> flags accept graphs the engine would normally reject — unconnected components, failed component validation, untyped inverters. All options are view-local: nothing is stored on the server.</li>
         </ul>
         <h4>Inspector + chrome</h4>
         <ul class="help-list">

@@ -465,6 +465,15 @@ export async function refreshFormula() {
   if (document.getElementById("cfg-no-fallback").checked) {
     params.set("no_fallback", "true");
   }
+  if (document.getElementById("cfg-allow-unconnected").checked) {
+    params.set("allow_unconnected", "true");
+  }
+  if (document.getElementById("cfg-allow-validation-failures").checked) {
+    params.set("allow_validation_failures", "true");
+  }
+  if (document.getElementById("cfg-unspecified-inverters").checked) {
+    params.set("allow_unspecified_inverters", "true");
+  }
 
   const seq = ++requestSeq;
   let data;
@@ -647,6 +656,14 @@ function setupCopyButtons() {
     .addEventListener("click", () => copy(commentedText, "commented formula"));
 }
 
+// The options card is collapsed by default, so a badge on its summary
+// keeps active options visible ("2 on"); empty when nothing is set.
+function updateConfigCount() {
+  const boxes = document.querySelectorAll("#config-panel input[type=checkbox]");
+  const on = [...boxes].filter((box) => box.checked).length;
+  document.getElementById("config-count").textContent = on ? `${on} on` : "";
+}
+
 export function setupExplainPanel() {
   setupMetricButtons();
   setupFormulaTooltip();
@@ -656,7 +673,10 @@ export function setupExplainPanel() {
   // Engine options are client-side request parameters, so a change
   // only needs a re-fetch — nothing to store on the server.
   for (const box of document.querySelectorAll("#config-panel input[type=checkbox]")) {
-    box.addEventListener("change", refreshFormula);
+    box.addEventListener("change", () => {
+      updateConfigCount();
+      refreshFormula();
+    });
   }
   formulaCanvas().setSelectionHandler(selectionChanged, selectionChanged);
   // T toggles the selection's telemetry — the keyboard twin of the

@@ -12,9 +12,7 @@ use std::collections::BTreeSet;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use frequenz_microgrid_component_graph::{
-    ComponentGraphConfig, ErrorKind, ExplainedFormula, FormulaOverrides,
-};
+use frequenz_microgrid_component_graph::{ComponentGraphConfig, ErrorKind, ExplainedFormula};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -36,6 +34,12 @@ pub(in crate::ui) struct FormulaQuery {
     phantom_loads: bool,
     #[serde(default)]
     no_fallback: bool,
+    #[serde(default)]
+    allow_unconnected: bool,
+    #[serde(default)]
+    allow_validation_failures: bool,
+    #[serde(default)]
+    allow_unspecified_inverters: bool,
 }
 
 /// GET /api/mg/{mg_id}/formula?metric=grid[&ids=1,2][&prefer_meters=true…]
@@ -63,7 +67,9 @@ fn formula_body(
         .prefer_meters_in_component_formulas(query.prefer_meters)
         .include_phantom_loads_in_consumer_formula(query.phantom_loads)
         .disable_fallback_components(query.no_fallback)
-        .formula_overrides(FormulaOverrides::builder().build())
+        .allow_unconnected_components(query.allow_unconnected)
+        .allow_component_validation_failures(query.allow_validation_failures)
+        .allow_unspecified_inverters(query.allow_unspecified_inverters)
         .build();
     let (nodes, edges) = graph_adapter::snapshot(&site);
     if nodes.is_empty() {

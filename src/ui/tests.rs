@@ -917,6 +917,38 @@ async fn formula_endpoint_reports_error_kind_for_missing_component() {
 }
 
 #[tokio::test]
+async fn formula_endpoint_honors_allow_unconnected() {
+    // The same battery topology, plus a meter nobody connects to.
+    let cfg = config_with(
+        r#"(progn
+             (%make-meter :id 9)
+             (%make-grid-connection-point :id 1
+               :successors
+               (list (%make-meter :id 2
+                       :successors
+                       (list (%make-battery-inverter :id 3
+                               :successors
+                               (list (%make-battery :id 4))))))))"#,
+    )
+    .await;
+    // Default config: the unconnected meter makes the graph invalid.
+    let (status, body) = call(cfg.clone(), get("/api/mg/2200/formula?metric=battery")).await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["ok"], false, "body: {parsed}");
+    // With the flag the graph builds and the formula comes back.
+    let (status, body) = call(
+        cfg,
+        get("/api/mg/2200/formula?metric=battery&allow_unconnected=true"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(parsed["ok"], true, "body: {parsed}");
+    assert!(parsed["formula"].as_str().unwrap().contains('#'));
+}
+
+#[tokio::test]
 async fn formula_endpoint_404s_unknown_microgrid() {
     let cfg = config_with(FORMULA_TOPOLOGY).await;
     let (status, _) = call(cfg, get("/api/mg/9999/formula?metric=grid")).await;
