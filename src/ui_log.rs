@@ -37,7 +37,9 @@ pub struct LogEvent {
     pub message: String,
 }
 
-#[derive(Clone, Default)]
+// No Default derive: a default (cap 0) buffer silently keeps only
+// the newest event; construct via `new(cap)`.
+#[derive(Clone)]
 pub struct LogBuffer {
     inner: Arc<Mutex<VecDeque<LogEvent>>>,
     cap: usize,

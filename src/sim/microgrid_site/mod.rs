@@ -641,8 +641,14 @@ impl MicrogridSite {
     /// (`lisp::defuns::setpoints`).
     pub fn active_setpoint_envelope(&self, id: u64) -> Option<crate::sim::bounds::VecBounds> {
         let child_env = self.aggregate_child_bounds(id)?;
-        let own = self.get(id)?.effective_active_bounds().unwrap_or_default();
-        Some(own.intersect(&child_env))
+        // A component with children bounds but no own bounds gates
+        // on the children alone — intersecting with the empty
+        // default would reject EVERY setpoint with a nonsense
+        // "exceeds combined envelope []" message.
+        match self.get(id)?.effective_active_bounds() {
+            Some(own) => Some(own.intersect(&child_env)),
+            None => Some(child_env),
+        }
     }
 
     /// Wipe every registered component. Called from `(reset-state)` in
@@ -663,6 +669,13 @@ impl MicrogridSite {
     pub fn reset(&self) {
         // A reset starts a new run; see `run_generation`.
         self.inner.run_generation.fetch_add(1, Ordering::Relaxed);
+        // Cancel active telemetry streams: each stream task holds an
+        // Arc to its component from subscribe time, and a component
+        // cleared below is never ticked again — without the epoch
+        // bump the task keeps emitting the last snapshot on cadence
+        // forever, indistinguishable from live data. Clients see
+        // EOF/CANCELLED and reconnect onto the rebuilt registry.
+        self.cancel_all_streams();
         self.inner.components.write().clear();
         self.inner.by_id.write().clear();
         self.inner.connections.write().clear();

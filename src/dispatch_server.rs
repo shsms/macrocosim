@@ -200,7 +200,7 @@ impl pb::microgrid_dispatch_service_server::MicrogridDispatchService for Dispatc
         sort_dispatches(&mut items, req.sort_options.as_ref());
 
         let total = items.len();
-        let (dispatches, next_page_token) = paginate(items, req.pagination_params.as_ref());
+        let (dispatches, next_page_token) = paginate(items, req.pagination_params.as_ref())?;
         log::info!(
             "ListMicrogridDispatches(microgrid_id={}) -> {} of {total} dispatch(es)",
             req.microgrid_id,
@@ -244,7 +244,17 @@ impl pb::microgrid_dispatch_service_server::MicrogridDispatchService for Dispatc
                 }
             }
             loop {
-                match changes.recv().await {
+                // Select on tx.closed() so a disconnected client is
+                // reaped even while the bus is idle or only carrying
+                // other microgrids' events — same fix the telemetry
+                // stream in server.rs has. Without it, each connect/
+                // disconnect cycle leaked this task until process
+                // exit.
+                let recv = tokio::select! {
+                    r = changes.recv() => r,
+                    _ = tx.closed() => break,
+                };
+                match recv {
                     Ok(ev) if ev.microgrid_id == microgrid_id => {
                         let event = match ev.change {
                             DispatchChange::Created => Event::Created,
@@ -500,15 +510,22 @@ fn sort_dispatches(items: &mut [pb::Dispatch], opts: Option<&pb::SortOptions>) {
 fn paginate(
     items: Vec<pb::Dispatch>,
     params: Option<&PaginationParams>,
-) -> (Vec<pb::Dispatch>, Option<String>) {
+) -> Result<(Vec<pb::Dispatch>, Option<String>), tonic::Status> {
     let (offset, page_size) = match params.and_then(|p| p.params.as_ref()) {
         Some(pagination_params::Params::PageSize(n)) => (0usize, *n as usize),
-        Some(pagination_params::Params::PageToken(token)) => parse_page_token(token),
+        // A garbled token used to degrade silently to "return
+        // everything", which looks like a surprising final page —
+        // reject it instead, like any other malformed argument.
+        Some(pagination_params::Params::PageToken(token)) => {
+            parse_page_token(token).ok_or_else(|| {
+                tonic::Status::invalid_argument(format!("malformed page_token {token:?}"))
+            })?
+        }
         None => (0, 0),
     };
     let total = items.len();
     if page_size == 0 {
-        return (items, None);
+        return Ok((items, None));
     }
     // saturating_add: a crafted page_token offset near usize::MAX must
     // not overflow into a reversed slice range and panic the handler.
@@ -516,14 +533,12 @@ fn paginate(
     let end = offset.saturating_add(page_size).min(total);
     let page = items[start..end].to_vec();
     let next = (end < total).then(|| format!("{end}:{page_size}"));
-    (page, next)
+    Ok((page, next))
 }
 
-fn parse_page_token(token: &str) -> (usize, usize) {
-    let mut parts = token.splitn(2, ':');
-    let offset = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    let page_size = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    (offset, page_size)
+fn parse_page_token(token: &str) -> Option<(usize, usize)> {
+    let (offset, page_size) = token.split_once(':')?;
+    Some((offset.parse().ok()?, page_size.parse().ok()?))
 }
 
 #[cfg(test)]

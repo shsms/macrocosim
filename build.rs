@@ -23,9 +23,14 @@ fn main() -> Result<(), std::io::Error> {
     let google_proto_root = microgrid_root.join("submodules/api-common-protos");
 
     println!("cargo:rerun-if-env-changed=SWITCHYARD_PROTO_ROOT");
-    println!("cargo:rerun-if-changed={}", microgrid_proto.display());
-    println!("cargo:rerun-if-changed={}", assets_proto.display());
-    println!("cargo:rerun-if-changed={}", dispatch_proto.display());
+    // Watch the whole proto trees (cargo accepts directories), not
+    // just the three root files: a submodule bump that only touches
+    // an imported proto (e.g. frequenz-api-common) must regenerate
+    // too, or the crate keeps compiling stale generated code.
+    println!("cargo:rerun-if-changed={}", microgrid_root.display());
+    println!("cargo:rerun-if-changed={}", assets_root.display());
+    println!("cargo:rerun-if-changed={}", dispatch_root.display());
+    println!("cargo:rerun-if-changed={}", google_proto_root.display());
 
     tonic_prost_build::configure()
         .disable_comments(["."])

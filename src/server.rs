@@ -61,6 +61,17 @@ fn validate_augmentation(
             "augmentation contains no bounds",
         ));
     }
+    // NaN edges sail through every later comparison (all false),
+    // storing a de-facto no-op augmentation acknowledged with an
+    // expiry — reject them as a protocol error instead.
+    if let Some(b) = proposed.0.iter().find(|b| {
+        b.lower.is_some_and(|l| !l.is_finite()) || b.upper.is_some_and(|u| !u.is_finite())
+    }) {
+        return Err(tonic::Status::invalid_argument(format!(
+            "augmentation bound [{:?}, {:?}] has a non-finite edge",
+            b.lower, b.upper
+        )));
+    }
     if let Some(b) = proposed
         .0
         .iter()
@@ -190,6 +201,17 @@ impl MicrogridServer {
         tonic::Status,
     > {
         let site = self.site.clone();
+        // A non-finite power sails through every bounds gate (all
+        // NaN comparisons are false) and through CommandDelay, and
+        // would be acknowledged Success with a fresh TTL while the
+        // ramp silently drops it — the previous setpoint keeps
+        // running under a re-armed expiry. Protocol error instead.
+        if !req.power.is_finite() {
+            return Err(tonic::Status::invalid_argument(format!(
+                "power must be finite, got {}",
+                req.power
+            )));
+        }
         let component = site.get(req.electrical_component_id).ok_or_else(|| {
             tonic::Status::not_found(format!(
                 "component {} not found",
@@ -454,6 +476,7 @@ impl microgrid_server::Microgrid for MicrogridServer {
                 },
             );
         }
+        let known = site.get(id).is_some();
         let response = self.do_set_power(req, power_type).await;
 
         let outcome = match &response {
@@ -464,16 +487,25 @@ impl microgrid_server::Microgrid for MicrogridServer {
                 reason: s.message().to_string(),
             },
         };
-        site.log_setpoint(
-            id,
-            SetpointEvent {
-                ts: chrono::Utc::now(),
-                kind,
-                value,
-                ttl_s,
-                outcome,
-            },
-        );
+        // Only log for registered components — log_setpoint mints a
+        // per-id ring, so logging a not-found rejection would let a
+        // client with random ids grow the map without bound (and
+        // show phantom components in the UI). Matches the augment
+        // path's `known` guard. Checked again after the apply: a
+        // component registered while the command was in flight
+        // (site import, UI eval) must still get its audit record.
+        if known || site.get(id).is_some() {
+            site.log_setpoint(
+                id,
+                SetpointEvent {
+                    ts: chrono::Utc::now(),
+                    kind,
+                    value,
+                    ttl_s,
+                    outcome,
+                },
+            );
+        }
         response
     }
 
