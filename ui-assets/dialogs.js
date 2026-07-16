@@ -283,6 +283,11 @@ async function renderScenarioReport() {
   // handle so clearSide can cancel it from the inspect tear-down
   // path without reaching across module boundaries.
   await refreshScenarioReport();
+  // If the inspector moved on during the await (closed, or another
+  // panel / node view replaced our markup), don't start a poll loop
+  // into a dead panel — clearSide can't cancel a timer that didn't
+  // exist yet when the panel went away.
+  if (!document.getElementById("sc-report-card")) return;
   startScenarioReportLoop(setInterval(refreshScenarioReport, 2000));
 }
 
@@ -384,15 +389,3 @@ async function renderDefaults() {
     list.appendChild(block);
   }
 }
-
-// ─── Dashboard tiles ────────────────────────────────────────────────────────
-//
-// Aggregated metrics from the loopback Microgrid client flow into the
-// Dashboard pane via two paths: (a) /api/microgrid/latest at mode-
-// enter time so the tiles paint immediately with a real number, and
-// (b) microgrid_sample WS frames for the per-second updates. Every
-// tile selects its source via `data-stream="..."`; new tiles only
-// have to declare the right stream name to participate.
-
-
-// ─── Grid frequency bridge ──────────────────────────────────────────────────

@@ -188,7 +188,10 @@ const SPECIAL_FORMS = new Set([
 ]);
 
 function escapeHtml(s) {
-  return String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+  return String(s).replace(
+    /[<>&"']/g,
+    (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c],
+  );
 }
 
 // Render `src` as HTML with paren depth highlighting + simple

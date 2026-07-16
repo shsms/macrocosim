@@ -261,7 +261,7 @@ export const dispatchForm = (() => {
     // list; only close the dialog if it's still this submission's
     // session (not a fresh form the user has started filling in).
     if (session === mySession) dlg().close();
-    notify("dispatch created", "info");
+    notify("dispatch created", "success");
     onCreated(mg);
   }
 

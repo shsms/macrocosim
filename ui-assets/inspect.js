@@ -289,9 +289,21 @@ function jsToLispString(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-export async function evalQuoted(expr) {
+// POST one Lisp expression to /api/eval, recording an undo snapshot
+// first. `label` is the notify prefix on failure (defaults to the
+// expression itself — pass something short like "Paste failed" when
+// the expression would be unreadable in a toast). Returns the parsed
+// response ({ ok, ... }) so callers can act on success, or an
+// { ok: false } shape when transport / parsing failed.
+export async function evalQuoted(expr, label = expr) {
   await undoMgr.record();
-  const res = await fetch(mgPath("eval"), { method: "POST", body: expr });
+  let res;
+  try {
+    res = await fetch(mgPath("eval"), { method: "POST", body: expr });
+  } catch (err) {
+    notify(`${label}: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
   // res.json() can throw "JSON.parse: unexpected character" if the
   // server returned an empty / non-JSON body (e.g. a 5xx with HTML
   // error page, or a connection that died mid-response). Surface the
@@ -306,14 +318,23 @@ export async function evalQuoted(expr) {
       status: res.status,
       body: text,
     });
-    notify(`${expr}: server returned non-JSON (HTTP ${res.status})`);
-    return;
+    notify(`${label}: server returned non-JSON (HTTP ${res.status})`);
+    return { ok: false, error: `non-JSON (HTTP ${res.status})` };
   }
-  if (!data.ok) notify(`${expr}: ${data.error}`);
+  if (!data.ok) notify(`${label}: ${data.error}`);
+  return data;
 }
+
+// Bumped on every showComponent call. Rapid node selection races two
+// async renders; an await that resolves after a newer call started
+// carries a stale generation and bails out (destroying any uPlots it
+// already built) — same last-STARTED-wins guard as dispatchesPanel's
+// render and explain's refreshFormula.
+let showGen = 0;
 
 export async function showComponent(d) {
   if (!d) return;
+  const gen = ++showGen;
   openInspector("node");
   liveCharts.clear();
 
@@ -329,12 +350,38 @@ export async function showComponent(d) {
   const container = document.getElementById("charts");
   const charts = new Map(); // metric → { plot, xs, ys }
 
+  // A stale call must not leave its uPlots alive — they were never
+  // handed to liveCharts, so nothing else would ever destroy them.
+  const destroyBuilt = () => {
+    for (const { plot } of charts.values()) plot.destroy();
+  };
+
   for (const metric of metrics) {
     const slot = document.createElement("div");
     slot.className = "chart";
     container.appendChild(slot);
     const url = `${mgPath("history")}?id=${d.id}&metric=${metric}&window_s=300`;
-    const resp = await (await fetch(url)).json();
+    let resp;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      resp = await res.json();
+    } catch (err) {
+      if (gen !== showGen) {
+        destroyBuilt();
+        return;
+      }
+      // Same discipline as renderSetpoints below: one failed metric
+      // renders an "unavailable" slot instead of breaking the panel.
+      slot.innerHTML = `<p class="hint">${escapeHtml(
+        METRIC_TITLES[metric] || metric,
+      )} unavailable: ${escapeHtml(err.message)}</p>`;
+      continue;
+    }
+    if (gen !== showGen) {
+      destroyBuilt();
+      return;
+    }
     const samples = resp.samples || [];
     const xs = samples.map(([t]) => t / 1000);
     const ys = samples.map(([, v]) => v);

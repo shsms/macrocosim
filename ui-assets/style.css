@@ -770,14 +770,6 @@ body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
   border-left: 2px solid var(--accent);
   padding-left: 6px;
 }
-/* Per-component tier sections span the full dashboard width so
-   their tier rows line up across sections — the health pill in
-   column 3 of every row ends up at the same x regardless of
-   which section it lives in. (Top-level dashboard tiles still
-   wrap via the parent auto-fit grid.) */
-.dash-section {
-  grid-column: 1 / -1;
-}
 /* Standalone (non-paired) tier rows pick up an equivalent left
    offset so their column origin matches the rows inside
    .bat-pair, which are indented by the 2px border + 6px padding
@@ -1537,30 +1529,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 .link-btn:hover { background: var(--bg); border-radius: 3px; }
 
-.overrides-list {
-  list-style: none;
-  padding: 0;
-  margin: 0.25rem 0 0;
-}
-.overrides-list li {
-  display: grid;
-  grid-template-columns: 1fr 24px;
-  gap: 0.5rem;
-  align-items: start;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border);
-}
-.overrides-list pre {
-  margin: 0;
-  font-size: 12px;
-  background: var(--bg);
-  padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .defaults-entry {
   margin-bottom: 0.75rem;
 }
@@ -1768,17 +1736,6 @@ body.compact main { height: calc(100vh - 41px - 22px); }
 .disp-on  { color: var(--good); }
 .disp-off { color: var(--muted); }
 .disp-dry { color: var(--warn); }
-.disp-cmd {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 12px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  white-space: pre;
-  overflow-x: auto;
-  color: var(--fg);
-}
 body.compact #dispatches { padding: 8px; }
 
 .disp-actions { white-space: nowrap; }

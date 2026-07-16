@@ -294,7 +294,8 @@ export function setupModeToggle() {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const t = ev.target;
     const tag = t?.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || t?.isContentEditable) return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable)
+      return;
     let mode = null;
     if (ev.key === "1") mode = "microgrids";
     else if (ev.key === "2") mode = "scenarios";

@@ -131,7 +131,10 @@ export function setupCanvasControls(stripId, canvas) {
 }
 
 export function escapeHtml(s) {
-  return String(s).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" })[c]);
+  return String(s).replace(
+    /[<>&"']/g,
+    (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c],
+  );
 }
 
 // Wire the floating panels' chrome: the inspector's × (close +
@@ -225,7 +228,7 @@ export const dispatchesPanel = (() => {
     const payloadCell =
       payload === "—"
         ? "—"
-        : `<code title="${escapeHtml(payload).replace(/"/g, "&quot;")}">${escapeHtml(
+        : `<code title="${escapeHtml(payload)}">${escapeHtml(
             payload.length > 60 ? `${payload.slice(0, 59)}…` : payload,
           )}</code>`;
     const toggle = d.active ? "Pause" : "Resume";
@@ -371,7 +374,7 @@ async function init() {
   // a text editor (REPL textarea, dialog inputs) before firing, so
   // typing remains unaffected.
   document.addEventListener("keydown", (e) => {
-    const inEditable = e.target.matches?.("input, textarea, [contenteditable]");
+    const inEditable = e.target.matches?.("input, textarea, select, [contenteditable]");
     if (inEditable) return;
     // The editing shortcuts drive the Topology canvas's selection.
     // Anywhere else they must stay inert — Delete pressed on the

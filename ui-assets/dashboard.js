@@ -72,7 +72,7 @@ export const dashboardTiles = (() => {
   // inspector panel.
   function fmt(quantity, unit, value) {
     if (value == null || !Number.isFinite(value)) return "—";
-    if (quantity === "Power" || unit === "W" || unit === "VAR") {
+    if (quantity === "Power" || quantity === "ReactivePower" || unit === "W" || unit === "var") {
       const a = Math.abs(value);
       if (a >= 1e6) return `${(value / 1e6).toFixed(2)} M${unit}`;
       if (a >= 1e3) return `${(value / 1e3).toFixed(2)} k${unit}`;

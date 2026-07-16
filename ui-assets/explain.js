@@ -11,8 +11,9 @@
 // - cross-highlighting between the tree, the formula and the canvas.
 
 import { escapeHtml, notify } from "./app.js";
-import { alignMenuItems, showMenuItems, undoMgr } from "./editor.js";
-import { mgPath } from "./routing.js";
+import { alignMenuItems, showMenuItems } from "./editor.js";
+import { evalQuoted } from "./inspect.js";
+import { mgPath, readSelectedMg } from "./routing.js";
 import { createGraphCanvas } from "./topology.js";
 
 // The Formulas canvas: same snapshot as the Topology canvas, no
@@ -87,14 +88,8 @@ export async function toggleTelemetry() {
     .filter(Boolean)
     .join(" ");
   if (!sets) return;
-  await undoMgr.record();
-  const res = await fetch(mgPath("eval"), {
-    method: "POST",
-    body: `(progn ${sets})`,
-  });
-  const data = await res.json();
-  if (!data.ok) notify(`Telemetry toggle failed: ${data.error}`);
-  else {
+  const data = await evalQuoted(`(progn ${sets})`, "Telemetry toggle failed");
+  if (data.ok) {
     notify(
       `Telemetry ${anyOn ? "off" : "on"} for ${ids.length} component${ids.length > 1 ? "s" : ""} (operational mode).`,
       "success",
@@ -444,6 +439,10 @@ function showFormulaError(message) {
 }
 
 export async function refreshFormula() {
+  // A debounced call can land after the user left the microgrid.
+  // Without a selected mg, mgPath would fall back to /api/formula —
+  // a route that doesn't exist — and toast a spurious error.
+  if (readSelectedMg() == null) return;
   const formulaEl = document.getElementById("formula-view");
   const errorEl = document.getElementById("formula-error");
 

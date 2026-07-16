@@ -16,9 +16,9 @@
 // - topology.highlight(ids)      — temporary highlight (explanation hover)
 // - topology.resetLayout(name) / setSnap / alignSelection / scaleSelection
 
-import { notify, setStatus } from "./app.js";
-import { showContextMenu, undoMgr } from "./editor.js";
-import { mgPath } from "./routing.js";
+import { setStatus } from "./app.js";
+import { showContextMenu } from "./editor.js";
+import { evalQuoted } from "./inspect.js";
 
 function getCss(name) {
   return getComputedStyle(document.documentElement)
@@ -1254,18 +1254,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
 // through the eval/overrides path, and the edit context menu.
 export const topology = createGraphCanvas("topology", {
   onConnect(from, to) {
-    undoMgr
-      .record()
-      .then(() =>
-        fetch(mgPath("eval"), {
-          method: "POST",
-          body: `(connect ${from} ${to})`,
-        }),
-      )
-      .then((r) => r.json())
-      .then((res) => {
-        if (!res.ok) notify(`Connect failed: ${res.error}`);
-      });
+    evalQuoted(`(connect ${from} ${to})`, "Connect failed");
   },
   onContextMenu: showContextMenu,
   onApply(data) {

@@ -4,8 +4,8 @@
 // form, and helpers around them.
 
 import { escapeHtml, notify } from "./app.js";
-import { showComponent } from "./inspect.js";
-import { mgPath, readSelectedMg } from "./routing.js";
+import { evalQuoted, showComponent } from "./inspect.js";
+import { readSelectedMg } from "./routing.js";
 import { ALIGN_MODES, topology } from "./topology.js";
 
 function makeFnFor(c) {
@@ -220,10 +220,7 @@ export async function pasteClipboard() {
   const src = reconnects
     ? `(let* (${bindings}) ${reconnects})`
     : `(let* (${bindings}) t)`;
-  await undoMgr.record();
-  const res = await fetch(mgPath("eval"), { method: "POST", body: src });
-  const data = await res.json();
-  if (!data.ok) notify(`Paste failed: ${data.error}`);
+  await evalQuoted(src, "Paste failed");
 }
 
 export async function deleteSelection() {
@@ -234,10 +231,7 @@ export async function deleteSelection() {
   }
   const removes = ids.map((id) => `(remove-component ${id})`).join(" ");
   const src = `(progn ${removes})`;
-  await undoMgr.record();
-  const res = await fetch(mgPath("eval"), { method: "POST", body: src });
-  const data = await res.json();
-  if (!data.ok) notify(`Delete failed: ${data.error}`);
+  await evalQuoted(src, "Delete failed");
 }
 
 export async function cutSelection() {
@@ -352,13 +346,7 @@ export function setupAddForm() {
     if (!btn) return;
     btn.disabled = true;
     try {
-      await undoMgr.record();
-      const res = await fetch(mgPath("eval"), {
-        method: "POST",
-        body: `(${btn.dataset.make})`,
-      });
-      const data = await res.json();
-      if (!data.ok) notify(`Create failed: ${data.error}`);
+      await evalQuoted(`(${btn.dataset.make})`, "Create failed");
     } finally {
       btn.disabled = false;
     }
