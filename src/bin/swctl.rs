@@ -73,7 +73,7 @@ struct Cli {
     json: bool,
 
     /// Target microgrid id for per-microgrid HTTP-routed subcommands
-    /// (`pool`, `dashboard --tail`, `snapshot`). When set, swctl
+    /// (`pool`, `dashboard --tail`). When set, swctl
     /// reads from `/api/mg/{id}/...` instead of the legacy
     /// single-microgrid `/api/...` paths. Default = the lowest id
     /// reported by `GET /api/microgrids`, which matches the
@@ -1055,6 +1055,7 @@ async fn run_scenario(
                                 .get(format!("{ui_addr}/api/scenarios"))
                                 .send()
                                 .await?
+                                .error_for_status()?
                                 .json()
                                 .await?;
                             let len = list
@@ -1157,7 +1158,22 @@ async fn run_scenario(
         ScenarioCmd::Event { kind, payload } => {
             // KIND → unquoted symbol (matches the (scenario-event
             // 'symbol …) idiom in scenario scripts). PAYLOAD →
-            // Lisp string.
+            // Lisp string. Kinds are labels, not code — reject
+            // anything that would not read back as one symbol.
+            // Requiring a leading letter keeps every accepted kind
+            // out of the reader's number shapes ("42", "-5",
+            // "5_000", "1e3" all read back as numbers, not symbols).
+            if !kind.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                || !kind
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(format!(
+                    "event kind must be a plain symbol (a letter, then letters, \
+                     digits, - or _): {kind:?}"
+                )
+                .into());
+            }
             let id = eval(
                 &http,
                 ui_addr,
@@ -1175,6 +1191,7 @@ async fn run_scenario(
                 .get(format!("{ui_addr}/api/scenario"))
                 .send()
                 .await?
+                .error_for_status()?
                 .json()
                 .await?;
             print_summary(&s, json);
@@ -1188,6 +1205,7 @@ async fn run_scenario(
                 .query(&[("since", since.to_string()), ("limit", limit.to_string())])
                 .send()
                 .await?
+                .error_for_status()?
                 .json()
                 .await?;
             print_events(&e, json);
@@ -1611,7 +1629,9 @@ async fn cmd_stream(
     }
 
     let mut got = 0usize;
-    while let Some(msg) = stream.message().await? {
+    while samples != Some(got)
+        && let Some(msg) = stream.message().await?
+    {
         let Some(t) = msg.telemetry else { continue };
         if json {
             println!("{:#?}", t);
@@ -1650,11 +1670,6 @@ async fn cmd_stream(
             }
         }
         got += 1;
-        if let Some(n) = samples
-            && got >= n
-        {
-            break;
-        }
     }
     Ok(())
 }
