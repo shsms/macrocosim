@@ -148,6 +148,23 @@ impl SimulatedComponent for EvCharger {
         self.cfg.stream_jitter_pct
     }
 
+    fn set_soc_pct(&self, pct: f32) -> bool {
+        // Same contract as Battery: lets a scenario script "car
+        // arrives at 20 %" via (set-component-soc ...). Non-finite
+        // values are rejected at the door — NaN survives clamp and
+        // would poison every later SoC integration.
+        if !pct.is_finite() {
+            log::warn!("EvCharger::set_soc_pct ignored non-finite value");
+            return true;
+        }
+        self.state.lock().soc_pct = pct.clamp(0.0, 100.0);
+        true
+    }
+
+    fn takes_soc_pct(&self) -> bool {
+        true
+    }
+
     fn tick(&self, _world: &MicrogridSite, now: DateTime<Utc>, dt: Duration) {
         // 1. Drop any expired augmentations before recomputing
         //    bounds — otherwise a just-elapsed narrowing would clip
@@ -172,7 +189,10 @@ impl SimulatedComponent for EvCharger {
         //    augmentations don't overlap SoC-protected at all (rare
         //    — a client narrowed the rated range tighter than the
         //    derate), refuse to charge or discharge.
-        let aug_eff = self.bounds.lock().effective();
+        // effective_at(now), not effective(): the tick clock may be
+        // the stepped sim clock, and TTL liveness must be judged on
+        // the same time base the reap above used.
+        let aug_eff = self.bounds.lock().effective_at(now);
         let envelope = VecBounds::single(soc_lo, soc_hi).intersect(&aug_eff);
         let (lower, upper) = envelope
             .0
@@ -184,15 +204,14 @@ impl SimulatedComponent for EvCharger {
         //    envelope.
         if let Some(target) = self.delay.poll(now) {
             self.ramp.set_target(target.clamp(lower, upper));
-        } else {
-            // Pull existing target back if SoC or a fresh
-            // augmentation just narrowed it.
-            let t = self.ramp.target();
-            let clamped = t.clamp(lower, upper);
-            if (clamped - t).abs() > f32::EPSILON {
-                self.ramp.set_target(clamped);
-            }
         }
+        // No else: with no armed command the target is the 0 W park
+        // value, and 0 must stay 0. Clamping it into the envelope
+        // made an idle charger start charging on its own when an
+        // augmentation excluded 0 (e.g. a [5 kW, 22 kW] floor).
+        // Armed setpoints need no pull-back here either: poll()
+        // re-returns the armed value every tick, so the clamp above
+        // already tracks a narrowing envelope.
 
         // 5. Slew + integrate SoC. ΔSoC = P · dt / capacity, in %.
         // Clamping at the SoC boundary prevents unphysical "extra"

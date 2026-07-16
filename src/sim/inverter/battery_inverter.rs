@@ -133,7 +133,7 @@ impl SimulatedComponent for BatteryInverter {
             self.delay.reset();
             self.ramp.snap_to(0.0);
             *self.measured_w.lock() = 0.0;
-            self.reactive.reset();
+            self.reactive.trip();
             return;
         }
 
@@ -143,7 +143,10 @@ impl SimulatedComponent for BatteryInverter {
         // the children will refuse the excess via their own clamp
         // and the published battery telemetry will reveal the gap.
         if let Some(target) = self.delay.poll(now) {
-            let own = self.bounds.lock().effective();
+            // effective_at(now), not effective(): under the stepped
+            // sim clock, TTL liveness must be judged on the tick's
+            // own time base, not wall time.
+            let own = self.bounds.lock().effective_at(now);
             self.ramp.set_target(own.clamp(target));
         }
 

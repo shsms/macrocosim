@@ -81,7 +81,6 @@ impl SolarInverter {
         let bounds = ComponentBounds::rated(cfg.rated_lower_w, cfg.rated_upper_w);
         let delay = CommandDelay::new(cfg.command_delay);
         let ramp = Ramp::new(cfg.ramp_rate_w_per_s, init_p);
-        ramp.set_target(init_p);
         let reactive = ReactivePath::new(
             cfg.reactive,
             cfg.reactive_command_delay,
@@ -182,7 +181,10 @@ impl SimulatedComponent for SolarInverter {
         let envelope = {
             let mut bounds = self.bounds.lock();
             bounds.drop_expired(now);
-            bounds.effective()
+            // effective_at(now), not effective(): under the stepped
+            // sim clock, TTL liveness must be judged on the same
+            // time base the reap above used.
+            bounds.effective_at(now)
         };
         self.ramp.set_target(envelope.clamp(desired));
         let p = self.ramp.advance(dt);

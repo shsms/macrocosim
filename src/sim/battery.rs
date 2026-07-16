@@ -157,6 +157,13 @@ impl SimulatedComponent for Battery {
     }
 
     fn set_soc_pct(&self, pct: f32) -> bool {
+        // NaN survives clamp (clamp on NaN self returns NaN) and
+        // would poison every later SoC integration, so reject it at
+        // the door like Ramp does.
+        if !pct.is_finite() {
+            log::warn!("Battery::set_soc_pct ignored non-finite value");
+            return true;
+        }
         // The next tick re-derives the SoC-protected bounds from the
         // new value, so no other state needs touching here.
         self.state.lock().soc_pct = pct.clamp(0.0, 100.0);

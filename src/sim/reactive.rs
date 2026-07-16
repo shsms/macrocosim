@@ -191,6 +191,17 @@ impl ReactivePath {
         self.ramp.set_target(0.0);
         *self.published.lock() = 0.0;
     }
+
+    /// Health-trip variant of [`reset`](Self::reset): the IGBTs stop
+    /// switching, so Q drops to zero NOW rather than slewing. Without
+    /// the snap, an Error→Ok recovery would resume publishing the
+    /// stale pre-trip Q and slew it down — a re-dispatch ghost the
+    /// active path already avoids via `ramp.snap_to(0.0)`.
+    pub fn trip(&self) {
+        self.delay.reset();
+        self.ramp.snap_to(0.0);
+        *self.published.lock() = 0.0;
+    }
 }
 
 #[cfg(test)]
