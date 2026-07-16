@@ -1,7 +1,7 @@
 # switchyard
 
 A Rust microgrid simulator with a Lisp-driven config DSL. Reimplementation of
-[microsim](../microsim) where component physics lives in Rust and Lisp's job
+microsim where component physics lives in Rust and Lisp's job
 is wiring the topology + animating the environment.
 
 ## Layout

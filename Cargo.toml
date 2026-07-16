@@ -59,7 +59,6 @@ tonic-prost-build = { version = "0.14", features = ["cleanup-markdown"] }
 [dev-dependencies]
 # axum oneshot testing pattern — no live port needed
 tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"
 # Out-of-process integration tests in tests/ talk to the live
 # HTTP / gRPC surface; reqwest is already a regular dep for swctl,
 # we just need a temp dir for per-test config files.

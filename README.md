@@ -74,7 +74,7 @@ swctl tree
 swctl list --category battery
 swctl connections --from 4                                  # filter graph edges
 swctl stream 1001 --samples 5
-swctl set-power 1001 -- -5000 --lifetime 30                 # negative = discharge
+swctl set-power 1001 -5000 --lifetime 30                    # negative = discharge
 swctl augment-bounds 1001 --lower -1000 --upper 5000        # TTL-limited bounds
 swctl pool battery                                          # loopback BatteryPool snapshot
 swctl scenario report                                       # journal report / CI gate

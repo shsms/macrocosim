@@ -70,7 +70,11 @@ jobs:
       - name: Smoke-test the wheel
         if: matrix.smoke
         run: |
-          python -m pip install --find-links python/dist 'switchyard[grpc]'
+          # Install the built wheel by explicit path. A plain
+          # `pip install switchyard` could pull a foreign package with
+          # the same name from PyPI; only the extras' dependencies
+          # should come from there.
+          python -m pip install "$(ls python/dist/*.whl)[grpc]"
           python - <<'EOF'
           import switchyard  # noqa: F401
           from switchyard.runtime import which_binary

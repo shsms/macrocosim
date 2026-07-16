@@ -14,7 +14,7 @@ The framework is two layers:
   scenario-specific defuns. See `example.lisp` in this directory.
 - **Reporter** (Rust observer, always running) — accumulates peak
   main-meter power, battery charge / discharge integrals, PV
-  produced energy, SoC stats, and 15-minute window peaks.
+  produced energy, SoC stats, and 15-minute window averages.
   Resets on `scenario-start`; freezes on `scenario-stop`.
 
 ## Loading a scenario
@@ -77,7 +77,9 @@ that need to cope with stale or unresponsive sources.
 
 ## Helpers in `sim/scenarios.lisp`
 
-Loaded once per scenario via `(load "sim/scenarios.lisp")`:
+These helpers are built into the binary. Switchyard evaluates the
+`sim/*.lisp` preludes at startup, before your config runs, so no
+explicit `(load …)` is needed:
 
 - `(random-uniform LOW HIGH)` — uniform float in `[LOW, HIGH)`.
 - `(random-pick LIST)` — one element of `LIST`, uniformly. `nil`
@@ -108,14 +110,18 @@ unchanged.
 |--------------------------------|-----------------------------------------------------------|
 | `scenario_elapsed_s`           | seconds since `scenario-start`; frozen on stop            |
 | `peak_main_meter_w`            | max active-power on the main meter so far                 |
-| `main_meter_id`                | id of the meter flagged with `:main t`, or `null`         |
+| `main_meter_id`                | id of the main meter (derived from the topology — see below), or `null` |
 | `total_battery_charged_wh`     | sum across batteries; positive DC power → charging        |
 | `total_battery_discharged_wh`  | sum across batteries; negative DC power → discharging     |
 | `total_pv_produced_wh`         | sum across solar inverters; negative active P → produced  |
 | `per_battery`                  | `[{ id, charge_wh, discharge_wh }]`                       |
 | `per_pv`                       | `[{ id, produced_wh }]`                                    |
 | `soc_stats`                    | `{ mean_pct, median_pct, mode_pct }` over current SoCs   |
-| `main_meter_window_peaks`      | `[{ window_start, peak_w }]`, 15-min UTC-aligned, ≤ 96   |
+| `main_meter_window_averages`   | `[{ window_start, avg_w }]` — average main-meter power per 15-min UTC-aligned window, oldest first, ≤ 96 |
+| `name`                         | name of the running scenario; `null` before any start     |
+| `checks_passed`                | count of passed `(scenario-expect …)` checks, full run    |
+| `checks_failed`                | count of failed checks, full run                          |
+| `checks`                       | recent check results, oldest first (bounded ring)         |
 
 Peak tracking needs a main / point-of-common-coupling meter, which
 is derived from the topology: the grid connection point's sole child,
@@ -137,6 +143,17 @@ component under `csvs/`, named `<id>-<category>.csv`, with a
 uniform 5-column header (`ts_iso, active_power_w,
 reactive_power_var, dc_power_w, soc_pct`) — empty cells where a
 component doesn't publish that field. Rows write at the 1 Hz
-history-sampler cadence. `(scenario-stop)` flushes and closes
-the files; `(scenario-stop-csv)` does the same on demand
-mid-scenario.
+history-sampler cadence.
+
+Components with an active-power envelope (the ones a control app
+commands) get two extra files:
+
+- `<id>-setpoints.csv` — the control inputs the component
+  received: one row per SetActivePower / SetReactivePower /
+  AugmentBounds request (value, resolved TTL, arrival time,
+  outcome). Written on each request, not sampled.
+- `<id>-bounds.csv` — the effective active-power envelope over
+  time, sampled at the same 1 Hz pass as telemetry.
+
+`(scenario-stop)` flushes and closes all files;
+`(scenario-stop-csv)` does the same on demand mid-scenario.

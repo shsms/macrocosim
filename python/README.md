@@ -204,7 +204,7 @@ through the real gateway), and a cumulative signal's `expect` has no
 Every `*_energy` site aggregate is the integral of its `*_power`; energy
 *stored* in a battery is `bat.stored_energy`. Stimuli go over typed JSON
 control endpoints; rejections raise `ControlRejected`. See
-`docs/python-api-redesign.org` for the design.
+`../docs/python-api-redesign.org` for the design.
 
 **Scenarios** — author in Python, or run a registered Lisp scenario:
 
