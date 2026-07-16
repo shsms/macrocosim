@@ -1,7 +1,7 @@
 //! `/api/defaults` — read every `*-defaults` plist out of the
 //! running interpreter, pretty-printed for the side-panel editor.
 
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
 use crate::lisp::Config;
@@ -42,7 +42,9 @@ const DEFAULT_CATEGORIES: &[&str] = &[
     "marker",
 ];
 
-pub(in crate::ui) async fn defaults(State(config): State<Config>) -> Json<DefaultsResponse> {
+pub(in crate::ui) async fn defaults(
+    State(config): State<Config>,
+) -> Result<Json<DefaultsResponse>, (StatusCode, String)> {
     // Read each *-defaults variable via eval_silent so reading the
     // current state doesn't itself look like an edit. spawn_blocking
     // because eval acquires the std-RwLock-backed ctx.
@@ -71,6 +73,8 @@ pub(in crate::ui) async fn defaults(State(config): State<Config>) -> Json<Defaul
         out
     })
     .await
-    .unwrap_or_default();
-    Json(DefaultsResponse { entries })
+    // A panicked interpreter walk is a 500, not an empty-but-200
+    // list the UI cannot tell apart from "no defaults defined".
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(DefaultsResponse { entries }))
 }

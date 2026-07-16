@@ -69,7 +69,10 @@ fn history_body(
             format!("unknown metric '{}'", q.metric),
         )
     })?;
-    let window = ChronoDuration::seconds(q.window_s.unwrap_or(600));
+    // Clamp: chrono panics on |seconds| near i64::MAX, and a huge
+    // finite window would panic in the subtraction below. One year
+    // is far past any real query.
+    let window = ChronoDuration::seconds(q.window_s.unwrap_or(600).clamp(0, 31_536_000));
     let since: DateTime<Utc> = Utc::now() - window;
     let samples = site
         .history_window(q.id, metric, since)
@@ -105,7 +108,9 @@ pub(in crate::ui) async fn setpoints(
     State(config): State<Config>,
     Query(q): Query<SetpointsQuery>,
 ) -> Json<SetpointsResponse> {
-    let window = ChronoDuration::seconds(q.window_s.unwrap_or(600));
+    // Same clamp as history_body: keep a hostile window_s from
+    // panicking chrono.
+    let window = ChronoDuration::seconds(q.window_s.unwrap_or(600).clamp(0, 31_536_000));
     let since = Utc::now() - window;
     let events = config.site().setpoints_window(q.id, since);
     Json(SetpointsResponse { id: q.id, events })

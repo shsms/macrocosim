@@ -127,8 +127,9 @@ async fn asset_route_serves_vendored_lib() {
     let cfg = config_with("").await;
     let (status, body) = call(cfg, get("/assets/vendor/vis-network.min.js")).await;
     assert_eq!(status, StatusCode::OK);
-    // vis-network's UMD bundle exports a global `vis` namespace.
-    assert!(String::from_utf8_lossy(&body).contains("vis"));
+    // The bundle names itself throughout; "vis" alone would match
+    // almost any JS file ("visibility", "provision", ...).
+    assert!(String::from_utf8_lossy(&body).contains("vis-network"));
 }
 
 #[tokio::test]

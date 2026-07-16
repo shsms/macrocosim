@@ -86,6 +86,12 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
     // that, a forwarder for an idle microgrid parks until that
     // site's NEXT event before noticing the closed mpsc and exiting.
     let mut forwarders: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    // Subscribe BEFORE the registry snapshot below: a microgrid
+    // registered between the two then shows up either in the
+    // snapshot or on this receiver — never in neither. The
+    // subscribed_ids dedup makes the overlap safe. Wrapped in an
+    // Option so the select arm can park cleanly after Closed.
+    let mut registered_rx = Some(config.subscribe_microgrid_registered());
     {
         let reg = config.microgrids();
         let r = reg.lock();
@@ -98,7 +104,6 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
             subscribed_ids.insert(*id);
         }
     }
-    let mut registered_rx = config.subscribe_microgrid_registered();
     // Keep one clone of the fwd_tx alive on this task so fwd_rx
     // stays open across registration bursts — the per-mg forwarders
     // each hold their own clone, but a window of "no microgrids yet"
@@ -193,7 +198,12 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
             // SPA can recover via reconnect, and Closed never
             // fires since Config keeps the Sender alive for the
             // process lifetime.
-            new_id = registered_rx.recv() => match new_id {
+            new_id = async {
+                match registered_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => match new_id {
                 Ok(id) => {
                     if subscribed_ids.contains(&id) {
                         // Race-tolerant: a Lagged-driven re-snapshot
@@ -238,9 +248,12 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
                     }
                 }
                 Err(BroadcastRecv::Closed) => {
-                    // Config dropped its Sender; nothing more will arrive.
-                    // Don't break — the existing forwarders keep working.
-                    std::future::pending::<()>().await;
+                    // Config dropped its Sender; nothing more will
+                    // arrive. Park this arm via the None branch of
+                    // its future (awaiting pending() HERE would park
+                    // the whole select loop, not just this arm) —
+                    // the existing forwarders keep working.
+                    registered_rx = None;
                 }
             },
         }

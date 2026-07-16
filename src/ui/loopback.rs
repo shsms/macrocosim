@@ -39,15 +39,23 @@ use super::state::{
 /// per-component samples already use.
 pub fn spawn_microgrid_loopback(grpc_url: String, slot: SharedMicrogrid, site: MicrogridSite) {
     tokio::spawn(async move {
-        if !build_microgrid(&grpc_url, &slot, &site).await {
-            return;
+        // Subscribe BEFORE the initial build. The build can take a
+        // while (the graph build loops until it succeeds), and a
+        // topology change landing in that window must queue an
+        // event here — otherwise the loopback would serve the
+        // pre-change graph until the NEXT mutation, silently.
+        let events = site.subscribe_events();
+        if build_microgrid(&grpc_url, &slot, &site).await {
+            log::info!("microgrid loopback: connected + graph built + forwarders running");
         }
-        log::info!("microgrid loopback: connected + graph built + forwarders running");
         // Watch for topology mutations and rebuild on each. The
         // graph crate's ComponentGraph is snapshotted at try_new
         // time so formulas + subscriptions go stale once the site
-        // mutates; rebuilding picks up the new shape.
-        run_supervisor(grpc_url, slot, site).await;
+        // mutates; rebuilding picks up the new shape. Entered even
+        // when the initial build failed: a transient failure (gRPC
+        // transport hiccup) heals on the next topology event
+        // instead of leaving the dashboard 503 forever.
+        run_supervisor(grpc_url, slot, site, events).await;
     });
 }
 
@@ -150,8 +158,12 @@ async fn build_microgrid(grpc_url: &str, slot: &SharedMicrogrid, site: &Microgri
 /// every TopologyChanged. Lagged-receiver and dropped-sender
 /// events also trigger a rebuild (defensive — a missed event
 /// might have been a topology change).
-async fn run_supervisor(grpc_url: String, slot: SharedMicrogrid, site: MicrogridSite) {
-    let mut events = site.subscribe_events();
+async fn run_supervisor(
+    grpc_url: String,
+    slot: SharedMicrogrid,
+    site: MicrogridSite,
+    mut events: tokio::sync::broadcast::Receiver<SiteEvent>,
+) {
     loop {
         match events.recv().await {
             Ok(SiteEvent::TopologyChanged { .. }) => {
