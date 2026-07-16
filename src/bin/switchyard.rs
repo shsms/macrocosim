@@ -107,7 +107,11 @@ async fn main() {
     let cfg_path = args.config.clone();
     log::info!("Loading config from {}", cfg_path.display());
 
-    let config = Config::new(cfg_path.to_str().unwrap()).unwrap_or_else(|e| {
+    let cfg_path_str = cfg_path.to_str().unwrap_or_else(|| {
+        log::error!("Config path is not valid UTF-8: {}", cfg_path.display());
+        std::process::exit(1);
+    });
+    let config = Config::new(cfg_path_str).unwrap_or_else(|e| {
         log::error!("Failed to load config:\n{e}");
         std::process::exit(1);
     });
@@ -332,8 +336,19 @@ async fn main() {
         .to_string();
         if target == "-" {
             println!("{json}");
-        } else if let Err(e) = std::fs::write(target, format!("{json}\n")) {
-            log::error!("emit-endpoints write {target}: {e}");
+        } else {
+            // This file is the readiness signal a harness polls for,
+            // so a failed write must kill the process (like a failed
+            // bind) — not leave a healthy-looking server the poller
+            // can never detect. Write + rename so the file appears
+            // only once its content is complete.
+            let tmp = format!("{target}.tmp");
+            if let Err(e) = std::fs::write(&tmp, format!("{json}\n"))
+                .and_then(|()| std::fs::rename(&tmp, target))
+            {
+                log::error!("emit-endpoints write {target}: {e}");
+                std::process::exit(1);
+            }
         }
     }
 
