@@ -123,10 +123,30 @@ impl TestServer {
                 .await;
         }));
 
-        // Give axum + tonic a moment to start accepting. Without
-        // this, the first reqwest occasionally races the listener
-        // into a connection-refused.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Wait until the UI server actually answers a request
+        // instead of sleeping a fixed 50 ms — on a loaded machine
+        // the accept loops can take longer than any fixed delay,
+        // and this poll returns as soon as they are up. The gRPC
+        // listener needs no probe of its own: its socket is bound
+        // above, so connects queue until tonic starts accepting.
+        let probe = reqwest::Client::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match probe
+                .get(format!("http://{ui_addr}/api/microgrids"))
+                .send()
+                .await
+            {
+                Ok(_) => break,
+                Err(e) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "UI server at {ui_addr} not ready after 10s: {e}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+        }
 
         Self {
             grpc_url: format!("http://{grpc_addr}"),

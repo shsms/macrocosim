@@ -52,21 +52,26 @@ async fn short_lifetime_setpoint_resets_after_expiry() {
         "expected 3000 W after setpoint, got {p_before}",
     );
 
-    // Step 2: wait past the lifetime + the 100 ms timeout-loop poll
-    // cadence so the loop drains the expired entry and calls
-    // reset_setpoint on the inverter.
-    tokio::time::sleep(Duration::from_millis(400)).await;
-
-    // Step 3: tick again — the ramp's target is now 0 (the idle
-    // value the inverter reverts to). With infinite default
-    // ramp-rate, one tick is enough.
-    s.config
-        .site()
-        .tick_once(chrono::Utc::now(), Duration::from_millis(100));
-    let p_after = inv
-        .telemetry(&s.config.site())
-        .active_power_w
-        .expect("active power present");
+    // Step 2+3: wait for the timeout loop (100 ms poll cadence) to
+    // drain the expired entry and reset the setpoint, then tick so
+    // the ramp lands at 0. Polling with a deadline instead of one
+    // fixed sleep keeps a stalled CI machine from failing the test
+    // spuriously. With infinite default ramp-rate, one tick after
+    // the reset is enough.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let p_after = loop {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        s.config
+            .site()
+            .tick_once(chrono::Utc::now(), Duration::from_millis(100));
+        let p = inv
+            .telemetry(&s.config.site())
+            .active_power_w
+            .expect("active power present");
+        if p.abs() < 1.0 || tokio::time::Instant::now() >= deadline {
+            break p;
+        }
+    };
     assert!(
         p_after.abs() < 1.0,
         "expected setpoint reset to 0 W, got {p_after}",
