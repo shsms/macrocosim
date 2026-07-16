@@ -71,6 +71,6 @@ pub(super) fn register_runtime(
     queries::register(ctx, router.clone());
     world_ops::register(ctx, router.clone());
     scenarios::register_lifecycle(ctx, router, microgrids, now);
-    fs::register(ctx, load_dir);
-    super::csv_profile::register(ctx);
+    fs::register(ctx, load_dir.clone());
+    super::csv_profile::register(ctx, load_dir);
 }

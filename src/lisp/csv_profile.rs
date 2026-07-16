@@ -71,6 +71,17 @@ impl CsvLoadProfile {
             )));
         }
         let value_headers: Vec<String> = headers.map(|h| h.to_string()).collect();
+        // Duplicate headers would collapse silently in the field
+        // map below (last column wins) and serve the wrong data.
+        let mut seen = std::collections::HashSet::new();
+        for h in &value_headers {
+            if !seen.insert(h) {
+                return Err(Error::invalid_argument(format!(
+                    "csv-load {}: duplicate column header '{h}'",
+                    path.display()
+                )));
+            }
+        }
         if value_headers.is_empty() {
             return Err(Error::invalid_argument(format!(
                 "csv-load {}: no value columns after the time column",
@@ -193,11 +204,21 @@ impl CsvLoadProfile {
 }
 
 /// Register the `(csv-load)`, `(csv-fields)`, `(csv-lookup)` defuns.
-pub fn register(ctx: &mut TulispContext) {
+pub fn register(ctx: &mut TulispContext, load_dir: std::path::PathBuf) {
     ctx.defun(
         "csv-load",
-        |path: String| -> Result<Shared<dyn tulisp::TulispAny>, Error> {
-            let profile = CsvLoadProfile::load(&path)?;
+        move |path: String| -> Result<Shared<dyn tulisp::TulispAny>, Error> {
+            // Resolve relative paths against the config's load dir,
+            // like (load ...) and (file-exists-p ...) do — resolving
+            // against the process CWD made the three disagree
+            // whenever CWD ≠ config dir.
+            let p = Path::new(&path);
+            let resolved = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                load_dir.join(p)
+            };
+            let profile = CsvLoadProfile::load(&resolved)?;
             log::info!("csv-load: {}", profile);
             Ok(Shared::new(profile))
         },

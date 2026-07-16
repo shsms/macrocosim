@@ -217,7 +217,19 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             let id = id_or_next(&w, a.id)?;
             let rated_active_bounds = match (a.rated_lower, a.rated_upper) {
                 (Some(l), Some(u)) => Some((l as f32, u as f32)),
-                _ => None,
+                (None, None) => None,
+                // Real site exports can carry only one side (the
+                // importer emits each side independently), but the
+                // bounds plumbing wants a full pair — so a half pair
+                // keeps the grid unbounded. Warn instead of staying
+                // silent; one-sided support is a todo.org item.
+                (l, u) => {
+                    log::warn!(
+                        "make-grid-connection-point: only one of :rated-lower/:rated-upper \
+                         given ({l:?}, {u:?}); the grid stays unbounded"
+                    );
+                    None
+                }
             };
             let grid = Grid::new(
                 id,

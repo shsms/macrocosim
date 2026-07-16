@@ -22,6 +22,17 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             let parent = arg_to_component_id(&parent)?;
             let child = arg_to_component_id(&child)?;
             let w = r.site();
+            // Reject unknown endpoints. A dangling edge would
+            // "succeed", bump the structural fingerprint, persist to
+            // the overrides file, and come back on every reload with
+            // only a graph-validator warning as the symptom.
+            for id in [parent, child] {
+                if w.get(id).is_none() {
+                    return Err(Error::invalid_argument(format!(
+                        "connect: no component with id {id}"
+                    )));
+                }
+            }
             if !w.connect(parent, child) {
                 return Err(Error::invalid_argument(format!(
                     "connect {parent} -> {child} would create a cycle; \
@@ -70,7 +81,11 @@ fn arg_to_component_id(v: &TulispObject) -> Result<u64, Error> {
         return Ok(h.id());
     }
     if let Ok(n) = v.as_int() {
-        return Ok(n as u64);
+        // A negative id would wrap via `as u64` into a huge bogus
+        // id that some permissive paths then accept.
+        return u64::try_from(n).map_err(|_| {
+            Error::invalid_argument(format!("component id must not be negative, got {n}"))
+        });
     }
     Err(Error::type_mismatch(format!(
         "expected component id (integer) or handle, got {v}"

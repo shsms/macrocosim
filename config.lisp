@@ -1,7 +1,8 @@
 ;; Switchyard sample configuration. Reload-safe: (reset-state) cancels
-;; outstanding timers and wipes every microgrid's site, then the
-;; per-microgrid (make-microgrid …) forms under microgrids/ rebuild
-;; the topology.
+;; outstanding timers and wipes the active microgrid's site (the
+;; reload path also resets every OTHER site Rust-side before
+;; re-evaluating this file), then the per-microgrid
+;; (make-microgrid …) forms under microgrids/ rebuild the topology.
 
 ;; Load runtime helpers (every, reset-state) once. Avoids re-defining
 ;; defuns on every reload — they don't change between saves and the

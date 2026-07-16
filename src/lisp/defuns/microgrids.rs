@@ -132,6 +132,16 @@ pub(in crate::lisp) fn register(
                 let mut reg = registry.lock();
                 let id = match a.id {
                     Some(v) if v > 0 => v as u64,
+                    // Reject negative ids instead of silently
+                    // auto-allocating: a typo like :id -2200 would
+                    // otherwise boot under an auto id with the wrong
+                    // overrides file and gRPC port, no diagnostic.
+                    // (:id 0 stays the documented auto sentinel.)
+                    Some(v) if v < 0 => {
+                        return Err(tulisp::Error::invalid_argument(format!(
+                            "make-microgrid: :id {v} must not be negative"
+                        )));
+                    }
                     _ => {
                         let probed = next_free_id_in(&reg);
                         if probed == DEFAULT_MICROGRID_ID && reg.contains_key(&DEFAULT_MICROGRID_ID)

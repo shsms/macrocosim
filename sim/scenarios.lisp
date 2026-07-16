@@ -246,8 +246,11 @@ inside `at`, e.g. (at \"60s\" (event 'clouds \"rolling in\"))."
                      :every-ms (plist-get a :every-ms)))
 
 (defun scenario--at (secs thunk)
-  "Schedule THUNK to run once at scenario time SECS (seconds)."
-  (run-with-timer secs nil thunk))
+  "Schedule THUNK to run once at scenario time SECS (seconds).
+The timer goes on `active-timers' so `reset-state' cancels it: a
+config reload mid-scenario must not let stale cues and checks fire
+into the rebuilt world."
+  (setq active-timers (cons (run-with-timer secs nil thunk) active-timers)))
 
 (defun scenario--run (name seed setup drive agents cues expect record-dir)
   "Compile and start the scenario NAME: reset the journal, seed RNG,

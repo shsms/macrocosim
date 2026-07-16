@@ -197,11 +197,19 @@ impl Config {
     /// bonus the Cst keeps the user's original spelling, so the
     /// dialog shows the form as written instead of Display-normalized.
     pub fn persisted_overrides(&self) -> Vec<PersistedOverride> {
-        use tulisp_fmt::cst::CstNode;
         let Some(path) = self.overrides_path() else {
             return Vec::new();
         };
-        let Ok(text) = fs::read_to_string(&path) else {
+        Self::persisted_overrides_from(&path)
+    }
+
+    /// [`persisted_overrides`](Self::persisted_overrides) against an
+    /// already-resolved path, so callers that must resolve the
+    /// ambient scope exactly once (under the interpreter lock) can
+    /// reuse their resolution.
+    fn persisted_overrides_from(path: &Path) -> Vec<PersistedOverride> {
+        use tulisp_fmt::cst::CstNode;
+        let Ok(text) = fs::read_to_string(path) else {
             return Vec::new();
         };
         let Ok(cst) = tulisp_fmt::parse(&text) else {
@@ -221,10 +229,6 @@ impl Config {
             .collect()
     }
 
-    pub fn persisted_count(&self) -> usize {
-        self.persisted_overrides().len()
-    }
-
     /// Drop a set of persisted-override entries (by their
     /// file-position idx) and re-derive MicrogridSite state. Atomic: the
     /// override file is rewritten without those forms (temp +
@@ -242,8 +246,23 @@ impl Config {
     /// in one round trip with one reload, instead of N round trips
     /// with N reloads.
     pub fn remove_persisted_overrides(&self, indices: &[usize]) -> std::io::Result<usize> {
+        // One interpreter lock across resolve → read → rewrite →
+        // reload, resolving the path exactly once. overrides_path()
+        // follows the ambient microgrid scope, whose contract
+        // requires this lock (see SiteRouter::with_microgrid) — an
+        // unlocked call racing a scoped /api/mg/{id}/eval could
+        // resolve one microgrid's file for the read and ANOTHER's
+        // for the rename, silently overwriting that file's
+        // persisted edits.
+        let mut ctx = self.ctx.borrow_mut();
+        let Some(path) = self.overrides_path() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "no resolvable microgrid scope; can't rewrite overrides",
+            ));
+        };
         let drop: HashSet<usize> = indices.iter().copied().collect();
-        let entries = self.persisted_overrides();
+        let entries = Self::persisted_overrides_from(&path);
         let kept: Vec<String> = entries
             .iter()
             .filter(|o| !drop.contains(&o.idx))
@@ -253,17 +272,6 @@ impl Config {
         if dropped == 0 {
             return Ok(0);
         }
-        let Some(path) = self.overrides_path() else {
-            // persisted_overrides() returned entries above, so the
-            // path was resolvable then; reach here only if the
-            // current-microgrid pointer flipped to None in between.
-            // Bail rather than touch the filesystem with a nonsense
-            // path.
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "no resolvable microgrid scope; can't rewrite overrides",
-            ));
-        };
         let tmp = path.with_extension("lisp.tmp");
         {
             let mut file = fs::OpenOptions::new()
@@ -293,7 +301,7 @@ impl Config {
         // (or a manual `reload`) is the recovery path. Surface the
         // error as IO so the HTTP handler can return 5xx; the
         // user's already lost the broken forms either way.
-        if let Err(msg) = self.reload() {
+        if let Err(msg) = self.reload_locked(&mut ctx) {
             return Err(std::io::Error::other(format!(
                 "reload after rewrite failed: {msg}"
             )));
