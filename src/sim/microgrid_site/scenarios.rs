@@ -309,6 +309,14 @@ impl MicrogridSite {
         let checks: Vec<ScenarioCheck> = g.checks().cloned().collect();
         let checks_passed = g.checks_passed();
         let checks_failed = g.checks_failed();
+        // Read name/elapsed/peak under the SAME guard as the
+        // aggregates above. Re-reading them after drop(g) let a
+        // scenario-start in between attribute scenario A's numbers
+        // to scenario B's name — the exact mix-up the name field
+        // exists to prevent.
+        let name = g.name.clone();
+        let scenario_elapsed_s = g.elapsed_s(now);
+        let peak_main_meter_w = g.peak_main_meter_active_w();
         drop(g);
 
         // SoC stats: walk every registered battery, read its
@@ -325,9 +333,9 @@ impl MicrogridSite {
         let soc_stats = compute_soc_stats(&socs);
 
         ScenarioReport {
-            name: self.inner.scenario.read().name.clone(),
-            scenario_elapsed_s: self.inner.scenario.read().elapsed_s(now),
-            peak_main_meter_w: self.inner.scenario.read().peak_main_meter_active_w(),
+            name,
+            scenario_elapsed_s,
+            peak_main_meter_w,
             main_meter_id: self.main_meter_id(),
             total_battery_charged_wh: total_charged,
             total_battery_discharged_wh: total_discharged,

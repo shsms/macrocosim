@@ -65,7 +65,9 @@ impl State {
         // one at a time, so a burst never collapses into "only the
         // newest value was ever visible".
         if let Some((Some(set_at), v)) = self.executing
-            && now >= set_at + delay
+            // checked add: a saturated "forever" delay must mean
+            // the command never arms, not a panic on overflow.
+            && set_at.checked_add_signed(delay).is_some_and(|due| now >= due)
         {
             self.armed = Some(v);
             self.executing = self.waiting.take();
@@ -82,7 +84,10 @@ impl CommandDelay {
                 armed: None,
             }),
             delay,
-            delay_chrono: chrono::Duration::from_std(delay).unwrap_or(chrono::Duration::zero()),
+            // Saturate UP on overflow: an absurd :command-delay
+            // means commands never arm — falling back to zero
+            // armed them immediately instead.
+            delay_chrono: chrono::Duration::from_std(delay).unwrap_or(chrono::Duration::MAX),
         }
     }
 

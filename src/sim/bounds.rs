@@ -102,8 +102,9 @@ impl VecBounds {
     /// extreme on the cross-signed ones, matching the behaviour the
     /// inverter aggregation needs.
     ///
-    /// Empty containers are treated as zero, so `Σ` over an empty set
-    /// of children yields `[0, 0]`.
+    /// Children with no bounds are skipped; if EVERY child is
+    /// empty, the result is an empty `VecBounds` (not `[0, 0]`),
+    /// so callers can tell "no information" from "pinned at zero".
     pub fn sum_single(items: impl IntoIterator<Item = Self>) -> Self {
         let mut lower = 0.0_f32;
         let mut upper = 0.0_f32;
@@ -230,8 +231,15 @@ impl Aug {
     /// (create_ts + lifetime) — the same inclusive horizon handed back
     /// to the client.
     fn live_at(&self, now: DateTime<Utc>) -> bool {
-        let ttl = chrono::Duration::from_std(self.lifetime).unwrap_or(chrono::Duration::zero());
-        self.create_ts + ttl > now
+        // Saturate UP on overflow (both in the chrono conversion
+        // and in the timestamp addition): an absurdly long lifetime
+        // means "effectively forever", not "never live" — the old
+        // fallback to zero silently dropped the augmentation.
+        let ttl = chrono::Duration::from_std(self.lifetime).unwrap_or(chrono::Duration::MAX);
+        match self.create_ts.checked_add_signed(ttl) {
+            Some(until) => until > now,
+            None => true,
+        }
     }
 }
 

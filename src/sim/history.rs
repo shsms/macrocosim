@@ -1,15 +1,14 @@
 //! Per-component telemetry history — bounded ring buffers feeding the
-//! UI's time-series charts. Sampled by an independent task per
-//! component (see `MicrogridSite::spawn_history_samplers` in the next commit)
-//! at the component's `stream_interval`, so the UI works even with
-//! zero gRPC subscribers.
+//! UI's time-series charts. One task per site samples EVERY
+//! component at a fixed 1 Hz (see `MicrogridSite::spawn_history_sampler`
+//! in `microgrid_site/history.rs`), so the UI works even with zero
+//! gRPC subscribers.
 //!
 //! Storage is sparse per metric — a `Battery` doesn't carry AC
 //! voltage, a `Meter` doesn't carry SoC, so we only allocate a buffer
 //! for metrics each component actually publishes.
 //!
-//! Pure data structures — no async, no I/O. Integration with the
-//! MicrogridSite registry lands in the next commit.
+//! Pure data structures — no async, no I/O.
 
 use std::collections::{HashMap, VecDeque};
 

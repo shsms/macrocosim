@@ -85,7 +85,9 @@ pub fn parse_offset(s: &str) -> Option<std::time::Duration> {
         "h" | "hr" | "hrs" => v * 3600.0,
         _ => return None,
     };
-    Some(std::time::Duration::from_secs_f64(secs))
+    // try_from: from_secs_f64 panics on overflow (~5.8e11 years),
+    // and a huge finite offset like "1e30h" gets this far.
+    std::time::Duration::try_from_secs_f64(secs).ok()
 }
 
 /// Parse an absolute wall time `"HH:MM"` (24-hour) into the offset from
