@@ -536,6 +536,10 @@ to crib from), a =prost-wkt= style reflection dependency, or
 documenting the limitation honestly in =--json='s help text. Either
 fix or rename until fixed.
 
+2026-07-16 review addendum: =set-power= and =augment-bounds= do not
+even receive the =json= flag — they ignore =--json= entirely rather
+than printing Debug. Fold them into this fix.
+
 ** TODO [#C] index.html + style.css fail biome's recommended rules       :ui:
 
 CI lints only the hand-written JS (all clean). Running biome over
@@ -545,6 +549,259 @@ CI lints only the hand-written JS (all clean). Running biome over
 the stylesheet. Worth a dedicated cleanup pass that then widens the
 CI lint to the whole directory; mechanical but touches a lot of
 lines, and the specificity fixes need visual verification.
+
+* Review backlog — 2026-07-16
+
+Whole-codebase review (7-agent subsystem fan-out + clippy + full
+test suite + live smoke run; clippy and tests came back clean).
+The straightforward findings were fixed in the same pass (git
+=ed37ac2..bb85df7=); the items below each need a design call or a
+non-local change.
+
+** Correctness
+
+*** TODO [#B] Setpoint expiry-vs-renewal race can wipe a fresh command :concurrency:api:
+
+The 100 ms timeout loop first drains expired =(id, axis)= keys
+(=TimeoutTracker::remove_expired=), then calls =reset_setpoint_axis=
+outside any lock. A =SetElectricalComponentPower= landing between
+the drain and the reset (or between actuation in =server.rs= and
+=add_timeout= — two non-atomic steps) is applied, acknowledged with
+a fresh =valid_until=, and then clobbered by the reset armed for
+the stale deadline. The component parks at default while the
+client believes a 15-minute command is running; nothing corrects
+it. Fix: arm the deadline atomically with (or before) actuation,
+or give each axis a setpoint generation the reset compares.
+
+*** TODO [#B] Legacy GET endpoints race the ambient microgrid scope :concurrency:ui:
+
+=/api/topology=, =/api/history= and =/api/setpoints= resolve via
+=config.site()=, which reads =current_microgrid= without the
+interpreter lock its contract requires. While a long
+=POST /api/mg/5/eval= holds the lock with the scope flipped, a
+concurrent legacy GET returns microgrid 5's data. =control.rs=
+already dodges this by taking the first registry entry. Design
+call first: should "legacy" mean /first microgrid/ or /currently
+scoped/? (=topology.rs='s module doc says "the bootstrap site
+(legacy)", which matches neither.) Same family as the 2026-06-01
+snapshot-scope item.
+
+*** TODO [#B] Concurrent disjoint augmentations can empty the envelope :bounds:concurrency:
+
+=validate_augmentation= checks the proposed bands against
+=effective_active_bounds()= before its own =augment_active_bounds=
+applies, so two clients augmenting concurrently with mutually
+disjoint bands each see a compatible pre-state, both apply, and
+the effective envelope goes empty — every setpoint rejected while
+the running output stays unconstrained. Self-heals when a TTL
+lapses. Fix needs validate+apply under one bounds lock, i.e. a
+component-side =try_augment= API.
+
+*** TODO [#B] Inverter share divisor counts non-DC children      :fidelity:
+
+=BatteryInverter::tick= distributes the commanded value over /all/
+healthy graph children, but =set_dc_active_reactive= is a default
+no-op — a mis-wired child (say a meter connected under an inverter
+via the UI) is counted in the divisor, silently swallows its
+share, and the inverter still publishes the full commanded P with
+no telemetry revealing the gap. Options: filter to children that
+accept DC pushes (needs a trait predicate), or reject the connect
+at topology time.
+
+*** TODO [#B] Overrides removal can break the reload         :ui:lisp:reload:
+
+Deleting a =(make-* :id N)= form from the Overrides dialog while a
+later persisted =(connect P N)= (or =(set-component-operational-mode
+N ...)=) form survives leaves an orphaned reference. On the next
+reload =load-overrides= just =(load)=s the file, so the now-strict
+=connect= validation (unknown id -> error, added 2026-07-16) errors
+out of the =make-microgrid= =:topology= lambda and fails the whole
+=reload_locked= — which has ALREADY reset every site. Result: 500
+from the delete handler and every microgrid left empty until the
+file is hand-edited. Same trigger from a hand-edited or
+double-appended overrides file (this bit the shipped
+config.2203.overrides.lisp, which had a doubled site import).
+
+Verified a WIDENING of a pre-existing hazard, not new:
+=set-component-operational-mode= already errored on an unknown id
+and already persisted (it bumps the structural fingerprint), so a
+persisted operational-mode form referencing a deleted make already
+hit the same reset-then-fail path. The strict connect check just
+extends it to the far more common connect forms. Root cause is
+=reload_locked= having no rollback after the up-front reset
+(=boot.rs=; a true build-aside-and-swap is off the table because
+the physics tasks / gRPC servers / loopback all hold the site
+handles in place — see AGENTS.md).
+
+Plan is A+B (B is the guarantee, A is best-effort prevention):
+
+- *B — tolerant per-form replay (the fix).* Replace =load-overrides='s
+  =(load path)= with a Rust primitive that =parse_file='s the
+  overrides file and evals each top-level form on its own, catching
+  the error per form: a failing form is skipped with a =log::warn=
+  (surface it in the UI log / graph-status pane too) instead of
+  aborting the reload. A whole-file parse error degrades to skipping
+  the file, not aborting. This fixes EVERY path into the break
+  (dialog orphan, hand edit, doubled import) and is honest about
+  what the file is — an append-only journal of single UI edits, each
+  appended only after it succeeded once. tulisp notes: =(load)=
+  already routes through =eval_file= (not the re-entrancy-buggy
+  =eval_string=), =ctx.parse_file= returns the forms unevaluated,
+  =ctx.eval= per form is fine re-entrantly (=condition-case= does
+  exactly this), and =condition-case= exists lisp-side if a
+  lisp-only version is preferred. Mirror =load-microgrid-configs=
+  in =src/lisp/defuns/fs.rs= (already a Rust parse+eval primitive,
+  and =load_dir= is captured there for relative-path resolution).
+  Tests: orphaned-connect file and doubled-import file both reload
+  with warnings and a non-empty site.
+
+- *A — dialog-side dependency refusal (prevention/UX).* In
+  =remove_persisted_overrides= (=src/lisp/overrides.rs=), before
+  rewriting, refuse (409, not the 500 that IO errors get — map a
+  distinct =io::ErrorKind::InvalidInput= in both delete handlers)
+  when a surviving form would be left referencing a component id
+  whose only =make-= form is being dropped. Extract ids from the
+  =tulisp_fmt= Cst (=List{children}=/=Atom{text}=, already used by
+  =persisted_overrides=): defined id = the =:id N= of a top-level
+  =make-=/=%make-= form; referenced ids = integer atoms of a
+  top-level reference verb (=connect=, =disconnect=,
+  =remove-component=, =rename-component=, =set-component-*=).
+  MUST degrade gracefully: =let*= paste forms bind their own
+  handles and are self-contained (cross-form refs only use integer
+  ids), and any unrecognised head is treated as referencing nothing
+  — so A never produces a FALSE refusal that blocks a legitimate
+  delete, and B is the net for whatever A misses. A is best-effort
+  by design; do not add a per-form-type table that must track the
+  whole DSL forever.
+
+Left in chat 2026-07-17: user wants to explore the tulisp side
+(per-form eval / condition-case ergonomics) before we build B.
+
+** Design calls
+
+*** TODO [#C] TTL-expiry reset publishes one 0-sample then slews :telemetry:reactive:
+
+Both full-reset paths zero the published value immediately while
+the ramp then slews down from the old value, so a telemetry sample
+between a TTL reset and the next tick shows a one-sample glitch
+(3000 → 0 → 2900 → … → 0), on both axes. Either let the next
+tick's ramp value stand (don't zero published on a slewing reset)
+or accept the artifact. Interacts with the trip/reset split fixed
+in =0fb01e3= (health trips now snap; TTL resets still slew).
+
+*** TODO [#C] Imported sites tick parents before children     :consistency:
+
+=site_import::forms()= emits =(make-*)= forms in export order, so
+a battery can register after its inverter — the opposite tick
+order from the authored-config convention (children first, because
+Lisp evaluates =:successors= before the surrounding =make-*=). The
+inverter→battery push then lands same-tick for some imports and
+one-tick-lagged for authored configs. Settles either way; a
+topological sort of the emitted makes would normalize the step
+response.
+
+*** TODO [#C] Site-level runtime-knob setters accept unregistered ids :consistency:
+
+=set_health= / =set_telemetry_mode= / =set_command_mode= use
+=entry(id).or_default()= with no registration check (a unit test
+relies on it), while =set_operational_mode= rejects unknown ids
+with a documented rationale. A ghost entry sticks around until
+=reset()=, and a later component allocated on that id inherits the
+fault knob. The Lisp defuns validate since =fa39fc3=, so only
+direct Rust callers can still hit it — decide whether the site API
+should validate too (behavior change + test update).
+
+*** TODO [#C] Dispatch Update cannot clear a recurrence rule          :api:
+
+The update path only applies =recurrence= on =Some(rec)= — a
+masked path with a =None= value is ignored, unlike =duration=,
+where a masked =None= clears the field. So a recurring dispatch
+can never be made one-off; delete+recreate changes the id. Check
+the intended proto semantics; mirroring the duration treatment is
+a small change once decided.
+
+*** TODO [#C] Scenarios poller never pauses                            :ui:
+
+=panels.js='s =schedulePoll= never cancels, so once the Scenarios
+view has been opened, =/api/scenarios= + =/api/scenario= (+
+report/events/csv while a journal exists) poll every 3 s forever,
+on every view — the module comment says "while the mode is
+active". The header's =#active-scenarios= chip does need some
+background signal, so the fix is a cadence design call: a slower
+background poll when the mode is inactive, or a chip-only summary
+poll.
+
+*** TODO [#C] hot_reload test races watcher installation          :testing:
+
+=tests/hot_reload.rs= sleeps 200 ms before rewriting the config,
+but =Config::watch()= exposes no readiness signal — on a slow
+machine the rewrite can fire before the inotify watch exists and
+the test burns its whole 10 s poll budget. Clean fix: a readiness
+hook on =watch()= (a oneshot/=Notify= fired once =watcher.watch()=
+succeeds); the downstream version-bump poll is already correct.
+
+*** TODO [#C] One-sided rated bounds are dropped          :fidelity:bounds:
+
+Site exports can configure only one side of a component's rated
+range, and =site_import= emits =:rated-lower= / =:rated-upper=
+independently — but =rated_active_bounds= is a full =(f32, f32)=
+pair, so =%make-grid-connection-point= drops a half pair with a
+warning and the grid stays unbounded (a hard error here breaks
+booting real imported sites). Supporting one-sided bounds means
+widening the pair to optional edges through the component trait,
+the envelope math and the proto conversion.
+
+*** TODO [#C] REPL (reset-state) only resets the active site  :design:lisp:
+
+=reset-state= → =(reset-microgrid)= resets the router-resolved
+site only. On the reload path the other sites are reset Rust-side
+in =reload_locked=, so reloads are correct — but a REPL
+=(reset-state)= in a multi-microgrid setup leaves the other sites
+untouched. Fan =reset-microgrid= out registry-wide, or keep and
+document the current scope. (The stale config.lisp header comment
+was fixed in =fa39fc3=.)
+
+** Packaging / housekeeping
+
+*** TODO [#B] PyPI name =switchyard= is taken            :packaging:python:
+
+PyPI already has =switchyard= (a GPL network-teaching framework,
+v1.0.1), so =pip install switchyard= installs the foreign package
+and the planned publish (Y track / D5) cannot happen under this
+name. Rename or namespace (e.g. =switchyard-sim=) before any
+release. The wheels.yml smoke test installs by wheel path since
+=e0d48bd=, so CI no longer trips over it.
+
+*** TODO [#C] sdist is shipped but never verified installable   :packaging:
+
+=wheels.yml= builds an sdist with =manifest-path = "../Cargo.toml"=
+while =build.rs= needs the vendored proto submodules — the sdist
+likely cannot rebuild outside the repo, and nothing smoke-tests
+it. Either include the proto trees in the sdist and smoke-test the
+build, or stop shipping the artifact. Overlaps the D5
+crates-publish notes.
+
+*** TODO [#C] tulisp =etags= feature is always on                   :build:
+
+Only the feature-gated =switchyard-etags= bin needs it; default
+builds (and the wheel) pay for it. Shape: =tulisp = { features =
+["sync"] }= plus =etags = ["tulisp/etags"]= on the crate's own
+=etags= feature — verify the lib truly compiles without it first.
+
+*** TODO [#C] Orphaned data files                                 :cleanup:
+
+=sim/example_load.csv= is referenced by nothing (its shape is
+valid for =csv_profile=) — delete it or reference it from the
+csv-load docs.
+
+*** TODO [#C] integrate_energy re-aggregates every meter subtree per tick :perf:
+
+=Meter::telemetry= recomputes the recursive child aggregation on
+every call, and =integrate_energy= calls it for every component
+each physics tick (default 100 ms) just to read =active_power_w= —
+O(Σ subtree sizes) ×10/s on top of the same walk the tick
+consumers already do. Fine at current site sizes; cache the value
+on tick or add a cheaper power-only read if sites grow.
 
 * Open design questions
 
