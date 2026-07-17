@@ -839,7 +839,10 @@ impl MicrogridSite {
 
     /// Set a component's runtime command mode. Rejected when the
     /// component's operational mode does not accept control — same
-    /// rule as [`Self::set_telemetry_mode`].
+    /// rule as [`Self::set_telemetry_mode`] — and when the component's
+    /// health is `Error`: an errored device never accepts commands
+    /// (`set_health` forces the channel shut; only recovery via
+    /// `set_health(Ok)` re-opens it).
     pub fn set_command_mode(&self, id: u64, mode: CommandMode) -> Result<(), String> {
         if mode == CommandMode::Normal && !self.operational_mode(id).accepts_control() {
             return Err(format!(
@@ -848,7 +851,17 @@ impl MicrogridSite {
                 self.operational_mode(id)
             ));
         }
-        self.inner.runtime.write().entry(id).or_default().command = mode;
+        // Checked under the same write lock as the store, so a racing
+        // set_health cannot slip between the check and the write.
+        let mut runtime = self.inner.runtime.write();
+        let entry = runtime.entry(id).or_default();
+        if mode == CommandMode::Normal && entry.health == Health::Error {
+            return Err(format!(
+                "component {id} has health error, which keeps the command \
+                 channel shut; set health to ok first"
+            ));
+        }
+        entry.command = mode;
         Ok(())
     }
 
@@ -1476,6 +1489,22 @@ mod tests {
         );
     }
 
+    /// An errored device never accepts commands: `set_command_mode`
+    /// rejects `Normal` while health is `Error`, whatever the
+    /// operational mode says; recovery goes through `set_health(Ok)`.
+    #[test]
+    fn command_normal_is_rejected_while_health_is_error() {
+        let w = MicrogridSite::new();
+        w.register(Stub::new(1));
+        w.set_health(1, Health::Error);
+        assert!(w.set_command_mode(1, CommandMode::Normal).is_err());
+        assert_eq!(w.runtime_of(1).command, CommandMode::Error);
+        // Non-normal modes stay settable (e.g. scripted Timeout).
+        assert!(w.set_command_mode(1, CommandMode::Timeout).is_ok());
+        // Recovery re-opens the channel.
+        w.set_health(1, Health::Ok);
+        assert!(w.set_command_mode(1, CommandMode::Normal).is_ok());
+    }
     /// Beyond histories, `reset()` also flushes the scenario journal,
     /// the setpoint logs, and any open CSV sinks. Leaving these across a
     /// hot-reload leaks stale integrals against ids that have since been

@@ -774,6 +774,29 @@ async fn control_status_flips_health_and_rejects_bad_values() {
     );
 }
 
+/// `health=error` forces the command channel shut; an explicit
+/// `command_mode=normal` in the same request must not re-open it.
+#[tokio::test]
+async fn control_status_health_error_forbids_command_normal() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let (status, body) = call(
+        cfg.clone(),
+        post_json(
+            "/api/component/7/status",
+            r#"{"health": "error", "command_mode": "normal"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("health=error"));
+    // Nothing applied: health is still the default.
+    assert_eq!(
+        cfg.site().runtime_of(7).health,
+        crate::sim::runtime::Health::Ok
+    );
+}
+
 /// The per-microgrid variants resolve the mg first: an unregistered
 /// microgrid is a 404 before the component is even looked at.
 #[tokio::test]

@@ -114,6 +114,21 @@ fn apply_status(site: &MicrogridSite, id: u64, req: &StatusRequest) -> ControlRe
             format!("component {id} has operational mode {mode}, which accepts no commands"),
         ));
     }
+    // Health wins for an errored device: `health=error` forces the
+    // command channel to Error, and an explicit `command_mode=normal`
+    // in the same request must not re-open it. The Lisp constructors
+    // enforce the same rule (see apply_initial_modes in lisp/make.rs).
+    if health == Some(Health::Error) && command == Some(CommandMode::Normal) {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id}: health=error forbids command_mode=normal in the same request"),
+        ));
+    }
+    // NOTE: the mode checks above and the setters below take no
+    // common lock, so a concurrent (set-component-operational-mode
+    // ...) eval can still fail a setter after set_health applied.
+    // The window is a few instructions wide; closing it needs an
+    // atomic multi-knob setter on the site (tracked in todo.org).
     if let Some(h) = health {
         site.set_health(id, h);
     }
