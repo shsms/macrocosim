@@ -437,6 +437,18 @@ impl MicrogridSite {
         self.inner.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    /// Move the shared auto-id allocator past `id`. Called for every
+    /// explicit `:id` registration, so replayed overrides and imports
+    /// advance the allocator the same way live imports do — a later
+    /// auto-assigned id can never collide with a pinned one, in any
+    /// microgrid sharing the allocator. Saturating so `u64::MAX`
+    /// pins the allocator at the ceiling instead of overflowing.
+    pub fn reserve_id(&self, id: u64) {
+        self.inner
+            .next_id
+            .fetch_max(id.saturating_add(1), Ordering::SeqCst);
+    }
+
     pub fn physics_tick(&self) -> Duration {
         Duration::from_millis(self.inner.physics_tick_ms.load(Ordering::Relaxed))
     }
@@ -1505,6 +1517,25 @@ mod tests {
         w.set_health(1, Health::Ok);
         assert!(w.set_command_mode(1, CommandMode::Normal).is_ok());
     }
+
+    /// `reserve_id` moves the shared allocator past a pinned id, so a
+    /// replayed `(make-* :id N)` in one microgrid can never collide
+    /// with a later auto-assigned id in a sibling.
+    #[test]
+    fn reserve_id_advances_the_shared_allocator() {
+        let alloc = Arc::new(AtomicU64::new(FIRST_AUTO_ID));
+        let site_a = MicrogridSite::with_id_allocator(alloc.clone());
+        let site_b = MicrogridSite::with_id_allocator(alloc);
+        site_a.reserve_id(2000);
+        assert_eq!(site_b.next_id(), 2001);
+        // Reserving below the watermark is a no-op.
+        site_a.reserve_id(5);
+        assert_eq!(site_b.next_id(), 2002);
+        // The ceiling saturates instead of wrapping to 0.
+        site_a.reserve_id(u64::MAX);
+        assert_eq!(site_b.next_id(), u64::MAX);
+    }
+
     /// Beyond histories, `reset()` also flushes the scenario journal,
     /// the setpoint logs, and any open CSV sinks. Leaving these across a
     /// hot-reload leaks stale integrals against ids that have since been

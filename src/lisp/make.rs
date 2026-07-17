@@ -609,6 +609,7 @@ fn id_or_next(site: &MicrogridSite, explicit: Option<i64>) -> Result<u64, Error>
                     "component id {id} is already registered"
                 )));
             }
+            site.reserve_id(id);
             Ok(id)
         }
         None => loop {
