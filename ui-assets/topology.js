@@ -352,8 +352,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
 
   // Every selection change funnels through notifySelection, whatever
   // gesture caused it (click, shift-click, rubber band, programmatic).
+  // `focusId` is the node the gesture was aimed at (clicked,
+  // double-clicked, right-clicked): the inspector follows it, not
+  // whichever node happens to sit first in the selection set.
   let lastNotified = "";
-  function notifySelection() {
+  function notifySelection(focusId) {
     if (!network) return;
     // While an explanation hover borrows the selection, it must not
     // reach the panels as if the user selected those nodes.
@@ -362,8 +365,10 @@ export function createGraphCanvas(containerId, adapter = {}) {
     const key = sel.join(",");
     if (key === lastNotified) return;
     lastNotified = key;
-    if (sel.length && onSelect) onSelect(componentById.get(sel[0]));
-    else if (!sel.length && onDeselect) onDeselect();
+    if (sel.length && onSelect) {
+      const focus = focusId != null && sel.includes(focusId) ? focusId : sel[0];
+      onSelect(componentById.get(focus));
+    } else if (!sel.length && onDeselect) onDeselect();
   }
 
   function restoreRedHighlights() {
@@ -491,7 +496,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         } else {
           network.unselectAll();
         }
-        notifySelection();
+        notifySelection(params.nodes.length ? params.nodes[0] : undefined);
       });
       // Double-click selects the node together with everything it
       // feeds (its whole subtree), e.g. a meter with its inverters
@@ -523,7 +528,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
           queue.push(...(succs.get(id) || []));
         }
         network.selectNodes([...selected].filter((id) => componentById.has(id)));
-        notifySelection();
+        notifySelection(root);
       });
       // The rubber-band selection (shift-drag on empty canvas) changes
       // the selection without firing `click` with nodes; catch every
@@ -539,7 +544,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
           const sel = network.getSelectedNodes();
           if (!sel.includes(nodeAt)) {
             network.selectNodes([nodeAt]);
-            notifySelection();
+            notifySelection(nodeAt);
           }
         }
         if (adapter.onContextMenu) {
@@ -892,16 +897,23 @@ export function createGraphCanvas(containerId, adapter = {}) {
 
   function layoutHierarchy() {
     if (!network || !edgesDS || !nodesDS) return;
-    const tree = buildTree();
-    if (tree.ids.length <= 1) return;
+    const all = [...componentById.keys()];
+    if (all.length <= 1) return;
+    // Hidden components sit out of the layout: they are not part of
+    // the gRPC topology, and a hidden meter pulled into a lane would
+    // consume a slot and shift its visible siblings. They go in the
+    // stash row below instead.
+    const visible = all.filter((id) => !componentById.get(id)?.hidden);
+    const tree = buildTree(visible);
     const pos = new Map();
     (LAYOUTS[currentLayout] || LAYOUTS.lanes)(tree, pos);
-    // Nodes the tree walk can't reach (inside a cycle — an invalid
-    // graph, but it must still render) go in a row below everything.
+    // Stash row below everything: hidden components, and nodes the
+    // tree walk can't reach (inside a cycle — an invalid graph, but
+    // it must still render).
     let maxY = 0;
     for (const p of pos.values()) maxY = Math.max(maxY, p.y);
     let free = 0;
-    for (const id of tree.ids) {
+    for (const id of all) {
       if (!pos.has(id)) {
         pos.set(id, { x: free * 220, y: maxY + 100 });
         free += 1;
@@ -982,6 +994,14 @@ export function createGraphCanvas(containerId, adapter = {}) {
     setSelectionHandler(select, deselect) {
       onSelect = select;
       onDeselect = deselect;
+    },
+    /// Forget the last notified selection, so the next gesture
+    /// re-fires the handlers even for an unchanged selection. Call
+    /// when a panel the handlers feed (the inspector) was closed
+    /// behind notifySelection's back — e.g. a tab switch — so
+    /// re-clicking the still-selected node reopens it.
+    resetNotify() {
+      lastNotified = "";
     },
     /// Turns the magnetic drag grid on or off (the canvas header's
     /// "snap" toggle). Off, nodes drag freely; Alt axis locking works

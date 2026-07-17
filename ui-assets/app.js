@@ -41,6 +41,7 @@ import {
   setupDensityToggle,
   setupModeToggle,
   setupReplMgChip,
+  visibleSubview,
 } from "./routing.js";
 import { setupDrawerSplitter, setupFormulaDrawerSplitter } from "./splitter.js";
 import { topology } from "./topology.js";
@@ -380,15 +381,17 @@ async function init() {
     // Anywhere else they must stay inert — Delete pressed on the
     // Formulas tab, the Scenarios mode, or the microgrid list must
     // not remove whatever happens to be selected on the (hidden)
-    // Topology canvas. All three body flags must say the canvas is
-    // the visible pane; data-subview alone persists across mode
-    // switches and would leave the shortcuts armed on Scenarios.
-    const { mode, mgView, subview } = document.body.dataset;
-    const topologyVisible =
-      mode === "microgrids" && mgView === "selected" && subview === "topology";
-    if (!topologyVisible) {
+    // Topology canvas. visibleSubview() checks all three body flags.
+    const visible = visibleSubview();
+    if (visible !== "topology") {
       if (e.key === "Escape") {
-        if (subview === "formulas") formulaCanvas().select([]);
+        // Deselect on the raw subview flag, not visibleSubview():
+        // data-subview persists across mode switches, and a hidden
+        // formula canvas's surviving selection would re-apply (and
+        // re-fire the selection handlers) on subview re-entry.
+        if (document.body.dataset.subview === "formulas") {
+          formulaCanvas().select([]);
+        }
         clearSide();
       }
       return;

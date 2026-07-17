@@ -13,7 +13,7 @@
 import { escapeHtml, notify } from "./app.js";
 import { alignMenuItems, showMenuItems } from "./editor.js";
 import { evalQuoted } from "./inspect.js";
-import { mgPath, readSelectedMg } from "./routing.js";
+import { mgPath, readSelectedMg, visibleSubview } from "./routing.js";
 import { createGraphCanvas } from "./topology.js";
 
 // The Formulas canvas: same snapshot as the Topology canvas, no
@@ -683,8 +683,8 @@ export function setupExplainPanel() {
   document.addEventListener("keydown", (e) => {
     if (e.key !== "t" && e.key !== "T") return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (document.body.dataset.subview !== "formulas") return;
-    if (e.target.matches?.("input, textarea, [contenteditable]")) return;
+    if (visibleSubview() !== "formulas") return;
+    if (e.target.matches?.("input, textarea, select, [contenteditable]")) return;
     toggleTelemetry();
   });
 }

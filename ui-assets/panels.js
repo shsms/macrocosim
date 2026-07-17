@@ -87,9 +87,23 @@ export const microgridsPanel = (() => {
         notify(`${file.name}: not valid JSON (${e.message})`);
         return;
       }
-      if (parsed.electricalComponents) components = parsed;
-      else if (parsed.electricalComponentConnections) connections = parsed;
-      else {
+      // JSON.parse also accepts null / numbers / strings — anything
+      // that isn't an object with one of the two keys is an error,
+      // not a crash (`null.electricalComponents` would throw into an
+      // unhandled rejection: no toast, import silently dead).
+      if (parsed?.electricalComponents) {
+        if (components) {
+          notify(`${file.name}: second components export — pick only one`);
+          return;
+        }
+        components = parsed;
+      } else if (parsed?.electricalComponentConnections) {
+        if (connections) {
+          notify(`${file.name}: second connections export — pick only one`);
+          return;
+        }
+        connections = parsed;
+      } else {
         notify(`${file.name}: neither components nor connections export`);
         return;
       }
