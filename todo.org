@@ -803,6 +803,112 @@ O(Σ subtree sizes) ×10/s on top of the same walk the tick
 consumers already do. Fine at current site sizes; cache the value
 on tick or add a cheaper power-only read if sites grow.
 
+* Review backlog — 2026-07-17
+** TODO [#B] Atomic multi-knob apply for the status endpoint         :api:ui:
+:LOGBOOK:
+- State "TODO"       from              [2026-07-17 Fr 12:46]
+:END:
+
+apply_status pre-validates the runtime knobs against the operational
+mode, then applies health, command and telemetry with no common lock
+(control.rs notes this inline). A concurrent
+(set-component-operational-mode ...) eval can fail a setter AFTER
+set_health applied — a half-applied status the pre-check exists to
+prevent. Fix wants an atomic validate-then-apply on MicrogridSite
+taking all three knobs; that would also collapse the duplicated mode
+predicates (the handler pre-checks restate set_command_mode /
+set_telemetry_mode's own checks with different error strings).
+
+The 2026-07-17 high-effort review found a second, site-layer TOCTOU
+of the same flavor: =MicrogridSite::set_health= / =set_command_mode= /
+=set_telemetry_mode= read =operational_mode(id)= *before* taking the
+=runtime= write lock, so a concurrent =set_operational_mode= can
+complete between the mode read and the knob write — e.g.
+=set_health(Ok)= re-opens the command channel on a component whose
+config just went =inactive=. The tri-knob atomic apply alone won't
+close it: =operational_modes= is a separate lock from =runtime=, so
+the fix must also re-read (or hold) the mode under the runtime lock.
+
+** TODO [#C] Inspector setpoints pane queries the ambient site           :ui:
+:LOGBOOK:
+- State "TODO"       from              [2026-07-17 Fr 12:46]
+:END:
+
+renderSetpoints fetches the legacy /api/setpoints, which resolves via
+config.site() (ambient scope) — for a component in any non-ambient
+microgrid the "Recent setpoints" pane deterministically shows "none",
+despite live control traffic. Pre-existing (predates the
+formula-explorer branch; mgPath's comment even lists it as
+unmigrated). Same root cause family as the "Legacy GET endpoints race
+the ambient microgrid scope" entry above, but that one frames a
+concurrency race — this symptom is deterministic. Fix: a
+/api/mg/{id}/setpoints route + mgPath("setpoints") in inspect.js.
+
+** TODO [#C] One Category -> label/slug table instead of four       :cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-07-17 Fr 12:46]
+:END:
+
+Byte-identical ten-arm Category->kebab matches live in
+ui/handlers/topology.rs (category_label) and sim/scenario_csv.rs
+(category_slug); sim/marker.rs carries a name-prefix copy and
+sim/site_import.rs a SCREAMING->make-form copy. Adding a category (or
+renaming a slug) must be replayed by hand in each. Known drift
+already: swctl short_category prints "?" for the marker categories,
+and dispatch category_from_alias cannot target them. One canonical
+mapping on Category (Display or a label() impl) would collapse the
+Rust copies and give the compiler a say.
+
+** TODO [#C] SPA cleanup batch from the 2026-07-17 review        :ui:cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-07-17 Fr 12:46]
+:END:
+
+Verified-lite findings, none user-visible on their own:
+- explain.js astToHtml is a twin of formulas.js formulaToHtml (same
+  span vocabulary + layout rule), and formulas.js keeps a private
+  recursive-descent parser to rebuild the AST the formula endpoint
+  already returns as JSON. One renderer over the AST endpoint.
+- astToText re-renders each subtree per node (O(n * depth) on deep
+  formulas) and renderNumber clones Rust's number Display with known
+  drift cases; the endpoint could ship a pre-rendered text per AST
+  node (explanation nodes already carry =rendered=).
+- splitter.js setupFormulaDrawerSplitter writes localStorage and
+  forces a reflow on every mousemove; persist once on mouseup, clamp
+  against a height captured at mousedown.
+- inspect.js showComponent awaits each per-metric /history fetch
+  sequentially; Promise.all them.
+- topology.js drawSnapGrid does getElementById + clientWidth/Height
+  reads per animation frame during a drag; snapshot at dragStart.
+- explain.js refreshFormula renders the Why tree, then
+  refreshTreeFolding re-walks every row from the DOM; emit hidden +
+  chevron state directly in whyTreeHtml.
+- index.html duplicates the canvas-controls strip for both canvases;
+  render it from one table (ALIGN_MODES pattern).
+- explain.js has six copy-pasted checkbox->query-param blocks; a
+  data-param attribute + one loop, and FormulaQuery's serde(default)
+  silently accepts misspelled params.
+
+** TODO [#C] Rust cleanup batch from the 2026-07-17 review          :cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-07-17 Fr 12:46]
+:END:
+
+- ImportMicrogridResp re-declares CreateMicrogridResp's four fields
+  and copies them over one by one; serde(flatten) keeps the shapes in
+  lockstep.
+- formula.rs parse_ids re-implements the comma-separated id grammar
+  of dispatch::parse_target's numeric branch, with different
+  dedup/order behavior; share one helper.
+- make.rs threads the same four mode kwargs through all seven
+  AsPlist arg structs positionally; a shared ModeKwargs fragment
+  would centralize the field list.
+- site_import.rs lift() hand-rolls category/inverter token decoding
+  that proto.rs impl_enum_from_str + proto_conv already centralize;
+  parse to the proto enum and match exhaustively.
+- microgrids.rs import collision check takes a read lock per
+  imported id per site (O(ids x sites) acquisitions); snapshot each
+  site's id set once.
 * Open design questions
 
 ** d1. Rethink ~file-exists-p~ resolving against the config's load dir :design:lisp:
@@ -974,3 +1080,4 @@ Deferred refinements, pick up if the need shows:
 - *Net-zero edits*: an add+remove in one eval bumps the counter twice
   and persists despite changing nothing; a structure hash (old option
   A) layered on the counter would suppress it.
+
