@@ -199,6 +199,7 @@ impl Config {
             log::error!("Tulisp error:\n{formatted}");
             return Err(formatted);
         }
+        warn_orphaned_chp_defaults(&mut ctx);
 
         // Every config must register at least one microgrid via
         // `(make-microgrid …)` — there's no single-microgrid
@@ -544,6 +545,7 @@ impl Config {
             log::error!("Tulisp error:\n{formatted}");
             return Err(formatted);
         }
+        warn_orphaned_chp_defaults(ctx);
         // Belt-and-suspenders: with the keep-registry semantics above
         // this can only fire if the registry was empty before the
         // reload, which Config::new's own check rules out.
@@ -652,6 +654,21 @@ impl Config {
                 self.site.broadcast_config_error(msg);
             }
         }
+    }
+}
+
+/// `chp-defaults` was folded into `marker-defaults` when CHP became
+/// a marker category. A persisted overrides file (or a hand-written
+/// config) that still sets it evals fine, but `make-chp` no longer
+/// reads it — warn instead of silently dropping the customization.
+fn warn_orphaned_chp_defaults(ctx: &mut TulispContext) {
+    if let Ok(v) = ctx.eval_string("(and (boundp 'chp-defaults) chp-defaults)")
+        && !v.null()
+    {
+        log::warn!(
+            "chp-defaults is set but no longer read: CHP defaults \
+             moved into marker-defaults. Put the customization there."
+        );
     }
 }
 
