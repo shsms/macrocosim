@@ -550,17 +550,6 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 let a = args.into_inner();
                 let id = id_or_next(&w, a.id)?;
                 let jitter = a.stream_jitter_pct.unwrap_or(0.0) as f32;
-                if category == Category::SteamBoiler {
-                    // The served gRPC API has no steam-boiler
-                    // category yet, so clients see UNSPECIFIED —
-                    // and component-graph clients reject that.
-                    log::warn!(
-                        "Steam boiler {id}: the gRPC API has no steam-boiler \
-                         category yet. Clients see it as UNSPECIFIED. \
-                         Component-graph clients may reject it, and this \
-                         microgrid's dashboard aggregates may stop working."
-                    );
-                }
                 let h = register_with_modes(
                     &w,
                     Marker::new(id, category, jitter),

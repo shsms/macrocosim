@@ -134,7 +134,7 @@ so construction + validation stay identical.
   and ticks it each physics step — without that, no timer body
   ever runs (the same-ctx model has no background firing thread).
 - Proto roots are vendored under `submodules/`:
-  - `submodules/frequenz-api-microgrid` (pinned at v0.18.0) — override
+  - `submodules/frequenz-api-microgrid` (pinned at v0.18.1) — override
     with `SWITCHYARD_PROTO_ROOT` for a private mirror.
   - `submodules/frequenz-api-assets` (pinned at v0.1.0).
   - `submodules/frequenz-api-dispatch` (pinned at v1.0.0) — dispatch
