@@ -25,13 +25,16 @@ async fn short_lifetime_setpoint_resets_after_expiry() {
     let s = TestServer::start(INVERTER_AND_BATTERY).await;
     let client = reqwest::Client::new();
 
-    // Apply a non-zero setpoint with a 100 ms lifetime.
+    // Apply a non-zero setpoint with a 2 s lifetime.
     // (set-active-power id watts lifetime-ms) — the Lisp defun
     // doesn't enforce the gRPC handler's 10 s minimum, so this
-    // path lets us drive a fast expiry deterministically.
+    // path lets us drive a fast expiry deterministically. The
+    // lifetime must comfortably outlast the eval-to-first-assert
+    // gap, or a loaded runner expires the setpoint before step 1
+    // reads it back.
     let r = client
         .post(format!("{}/api/eval", s.ui_url))
-        .body("(set-active-power 200 3000.0 100)")
+        .body("(set-active-power 200 3000.0 2000)")
         .send()
         .await
         .unwrap();
