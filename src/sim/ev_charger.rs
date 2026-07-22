@@ -184,26 +184,30 @@ impl SimulatedComponent for EvCharger {
         };
 
         // 3. Compose the effective envelope: SoC-protected ∩ rated ∩
-        //    augmentations. Both sides are single-bucket today, so
-        //    the intersection is single-bucket too. If
-        //    augmentations don't overlap SoC-protected at all (rare
-        //    — a client narrowed the rated range tighter than the
-        //    derate), refuse to charge or discharge.
+        //    augmentations. A multi-band augmentation makes the
+        //    intersection multi-band. If augmentations don't overlap
+        //    SoC-protected at all (rare — a client narrowed the rated
+        //    range tighter than the derate), refuse to charge or
+        //    discharge.
         // effective_at(now), not effective(): the tick clock may be
         // the stepped sim clock, and TTL liveness must be judged on
         // the same time base the reap above used.
         let aug_eff = self.bounds.lock().effective_at(now);
         let envelope = VecBounds::single(soc_lo, soc_hi).intersect(&aug_eff);
-        let (lower, upper) = envelope
-            .0
-            .first()
-            .map(|b| (b.lower.unwrap_or(soc_lo), b.upper.unwrap_or(soc_hi)))
-            .unwrap_or((0.0, 0.0));
 
         // 4. Promote pending command + clamp into the composed
-        //    envelope.
+        //    envelope. Band-aware: a multi-band augmentation must
+        //    clamp into the band the setpoint sits in, not have every
+        //    band after the first silently dropped. An empty
+        //    intersection means no permitted power at all — park at 0
+        //    (VecBounds::clamp is identity on an empty envelope, so
+        //    it can't express that case itself).
         if let Some(target) = self.delay.poll(now) {
-            self.ramp.set_target(target.clamp(lower, upper));
+            if envelope.0.is_empty() {
+                self.ramp.set_target(0.0);
+            } else {
+                self.ramp.set_target(envelope.clamp(target));
+            }
         }
         // No else: with no armed command the target is the 0 W park
         // value, and 0 must stay 0. Clamping it into the envelope
@@ -346,6 +350,32 @@ mod tests {
             ev.set_active_setpoint(10_000.0),
             Err(SetpointError::OutOfBounds { .. })
         ));
+    }
+
+    /// A multi-band augmentation clamps a setpoint into the band it
+    /// sits in — the tick must not flatten the envelope to its first
+    /// band and drag a valid later-band setpoint down.
+    #[test]
+    fn multi_band_augmentation_keeps_later_band_setpoints() {
+        let w = MicrogridSite::new();
+        let ev = charger();
+        ev.augment_active_bounds(
+            Utc::now(),
+            VecBounds(vec![
+                Bounds {
+                    lower: Some(0.0),
+                    upper: Some(5_000.0),
+                },
+                Bounds {
+                    lower: Some(10_000.0),
+                    upper: Some(22_000.0),
+                },
+            ]),
+            Duration::from_secs(60),
+        );
+        assert!(ev.set_active_setpoint(15_000.0).is_ok());
+        ev.tick(&w, Utc::now(), Duration::from_millis(100));
+        assert!((ev.aggregate_power_w(&w) - 15_000.0).abs() < 1.0);
     }
 
     /// Once the augmentation's lifetime elapses, `tick` reaps it and
