@@ -184,6 +184,25 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
             format!("component {id} does not take soc_pct (not a battery)"),
         ));
     }
+    // Value sanity, same validate-first contract. The f64→f32 cast
+    // turns any JSON number beyond f32 range into ±inf, and the meter
+    // override installs whatever it's given — an inf/NaN would poison
+    // the energy integrator and every aggregate upstream. Battery /
+    // ramp guard their own doors; the meter path has no guard below.
+    for (field, v) in [
+        ("power_w", req.power_w),
+        ("sunlight_pct", req.sunlight_pct),
+        ("soc_pct", req.soc_pct),
+    ] {
+        if let Some(v) = v
+            && !(v as f32).is_finite()
+        {
+            return Err(reject(
+                StatusCode::BAD_REQUEST,
+                format!("{field} must be a finite number, got {v}"),
+            ));
+        }
+    }
     // The debug_asserts catch a takes_* predicate drifting from its
     // setter: predicate true + setter false would be a 200 that did
     // nothing, the exact silent no-op this endpoint must not produce.
