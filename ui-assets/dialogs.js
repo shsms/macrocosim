@@ -187,13 +187,18 @@ export function setupSnapshotsDialog() {
         `;
         li.querySelector(".snapshot-load").addEventListener("click", async () => {
           if (!confirm(`Load snapshot "${name}"? Current overrides will be replaced.`)) return;
-          const r = await fetch("/api/snapshots/load", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name }),
-          });
-          if (!r.ok) {
-            notify(`Load failed: ${await r.text()}`);
+          try {
+            const r = await fetch("/api/snapshots/load", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name }),
+            });
+            if (!r.ok) {
+              notify(`Load failed: ${await r.text()}`);
+              return;
+            }
+          } catch (err) {
+            notify(`Load failed: ${err.message}`);
             return;
           }
           dlg.close();
@@ -217,13 +222,18 @@ export function setupSnapshotsDialog() {
     ev.preventDefault();
     const name = input.value.trim();
     if (!name) return;
-    const r = await fetch("/api/snapshots/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (!r.ok) {
-      notify(`Save failed: ${await r.text()}`);
+    try {
+      const r = await fetch("/api/snapshots/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!r.ok) {
+        notify(`Save failed: ${await r.text()}`);
+        return;
+      }
+    } catch (err) {
+      notify(`Save failed: ${err.message}`);
       return;
     }
     input.value = "";
@@ -374,8 +384,14 @@ function renderScenarioEvents(events) {
 
 
 async function renderDefaults() {
-  const res = await fetch("/api/defaults");
-  const data = await res.json();
+  let data;
+  try {
+    const res = await fetch("/api/defaults");
+    data = await res.json();
+  } catch (err) {
+    notify(`Defaults unavailable: ${err.message}`);
+    return;
+  }
   inspectEl.innerHTML = `
     <h2>Per-category defaults</h2>
     <p class="hint">

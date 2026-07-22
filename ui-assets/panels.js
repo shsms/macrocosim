@@ -429,13 +429,21 @@ export const scenariosPanel = (() => {
 
   // ── actions ─────────────────────────────────────────────────────────
   async function startRun(name) {
-    const r = await fetch(`/api/scenarios/${encodeURIComponent(name)}/start`, { method: "POST" });
-    if (!r.ok) notify(`run failed: ${await r.text()}`);
+    try {
+      const r = await fetch(`/api/scenarios/${encodeURIComponent(name)}/start`, { method: "POST" });
+      if (!r.ok) notify(`run failed: ${await r.text()}`);
+    } catch (err) {
+      notify(`run failed: ${err.message}`);
+    }
     await refresh();
   }
   async function stopRun() {
-    const r = await fetch("/api/scenarios/stop", { method: "POST" });
-    if (!r.ok) notify(`stop failed: ${await r.text()}`);
+    try {
+      const r = await fetch("/api/scenarios/stop", { method: "POST" });
+      if (!r.ok) notify(`stop failed: ${await r.text()}`);
+    } catch (err) {
+      notify(`stop failed: ${err.message}`);
+    }
     await refresh();
   }
 
