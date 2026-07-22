@@ -62,10 +62,6 @@ impl VecBounds {
         VecBounds(bounds)
     }
 
-    pub fn into_inner(self) -> Vec<Bounds> {
-        self.0
-    }
-
     pub fn contains(&self, value: f32) -> bool {
         self.0.iter().any(|b| bounds_contains(b, value))
     }
@@ -249,18 +245,6 @@ impl ComponentBounds {
             rated: VecBounds::single(lower, upper),
             augmented: VecDeque::new(),
         }
-    }
-
-    pub fn set_rated(&mut self, lower: f32, upper: f32) {
-        self.rated = VecBounds::single(lower, upper);
-    }
-
-    pub fn rated_lower(&self) -> f32 {
-        self.rated.0.first().and_then(|b| b.lower).unwrap_or(0.0)
-    }
-
-    pub fn rated_upper(&self) -> f32 {
-        self.rated.0.first().and_then(|b| b.upper).unwrap_or(0.0)
     }
 
     pub fn add_augmentation(

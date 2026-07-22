@@ -134,11 +134,6 @@ export const liveCharts = (() => {
   };
 })();
 
-// Brighten a #rrggbb hex by `n` per channel (clamped to 255). Used to
-// derive hover + selected node-background tints from the canonical
-// category color so the same node visibly reacts to interaction
-// without us hand-picking a separate palette per state.
-
 // Categories that the gRPC server actually accepts setpoints on.
 // command-mode (timeout / error fault simulation) only makes sense
 // for these — grids and meters have no setpoint surface, so we hide

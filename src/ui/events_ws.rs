@@ -194,7 +194,7 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
             // a forwarder for its site so this WS session starts
             // receiving its sample / topology_changed events.
             // Subscribers can lag if registrations burst past the
-            // 64-slot channel — continue past Lagged because the
+            // channel capacity — continue past Lagged because the
             // SPA can recover via reconnect, and Closed never
             // fires since Config keeps the Sender alive for the
             // process lifetime.

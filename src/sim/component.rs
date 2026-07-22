@@ -219,7 +219,7 @@ impl Telemetry {
 ///   - **Inverter ↔ child wiring**: set_dc_power, set_dc_active_reactive.
 ///   - **Runtime knobs**: set_reactive_pf_limit, set_reactive_apparent_va.
 ///
-/// Every method except the four required ones (`id`, `category`,
+/// Every method except the six required ones (`id`, `category`,
 /// `name`, `stream_interval`, `tick`, `telemetry`) has a sane default
 /// — components implement only the surface they need.
 pub trait SimulatedComponent: Send + Sync + fmt::Display {

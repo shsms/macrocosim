@@ -91,10 +91,6 @@ impl CommandDelay {
         }
     }
 
-    pub fn delay(&self) -> Duration {
-        self.delay
-    }
-
     pub fn set_target(&self, value: f32) {
         let mut s = self.state.lock();
         if self.delay.is_zero() {
@@ -157,10 +153,6 @@ impl Ramp {
             }),
             rate_w_per_s,
         }
-    }
-
-    pub fn rate(&self) -> f32 {
-        self.rate_w_per_s
     }
 
     pub fn set_target(&self, target: f32) {

@@ -32,25 +32,12 @@ use axum::{
 use crate::lisp::Config;
 use events_ws::events_ws;
 
-/// Spawn the UI HTTP server on `addr`. Returns once the listener is
-/// bound and accepting connections; the server itself runs to
-/// completion of the returned future.
+/// Run the UI HTTP server on an already-bound listener.
 ///
 /// `microgrid` is the loopback client slot — the binary populates it
 /// via [`spawn_microgrid_loopback`] before / alongside the gRPC
 /// server starting. Pass an empty slot if the UI doesn't need
 /// aggregated Dashboard data (tests, etc.).
-pub async fn serve(
-    addr: std::net::SocketAddr,
-    config: Config,
-    microgrid: SharedMicrogrid,
-    loopbacks: MicrogridLoopbacks,
-) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    log::info!("Switchyard UI listening on http://{}", addr);
-    serve_with_listener(listener, config, microgrid, loopbacks).await
-}
-
 pub async fn serve_with_listener(
     listener: tokio::net::TcpListener,
     config: Config,

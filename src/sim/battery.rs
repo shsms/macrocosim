@@ -114,10 +114,6 @@ impl Battery {
             }),
         }
     }
-
-    pub fn power_w(&self) -> f32 {
-        self.state.lock().power_w
-    }
 }
 
 fn soc_protected_bounds(cfg: &BatteryConfig, soc: f32) -> (f32, f32) {

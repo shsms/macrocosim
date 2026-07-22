@@ -940,7 +940,6 @@ export function createGraphCanvas(containerId, adapter = {}) {
   return {
     apply,
     get: (id) => componentById.get(id),
-    has: (id) => componentById.has(id),
     mainMeterId: () => mainMeterId,
     parentsOf: (id) => (network ? network.getConnectedNodes(id, "from") : []),
     childrenOf: (id) => (network ? network.getConnectedNodes(id, "to") : []),
