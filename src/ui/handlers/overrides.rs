@@ -28,13 +28,37 @@ pub(in crate::ui) struct OverridesResponse {
 }
 
 pub(in crate::ui) async fn overrides_list(State(config): State<Config>) -> Json<OverridesResponse> {
+    Json(overrides_response(config.persisted_overrides()))
+}
+
+pub(in crate::ui) async fn overrides_list_for_mg(
+    State(config): State<Config>,
+    Path(mg_id): Path<u64>,
+) -> Result<Json<OverridesResponse>, (StatusCode, String)> {
+    require_mg(&config, mg_id)?;
+    Ok(Json(overrides_response(
+        config.persisted_overrides_for(mg_id),
+    )))
+}
+
+fn require_mg(config: &Config, mg_id: u64) -> Result<(), (StatusCode, String)> {
+    if config.microgrids().lock().contains_key(&mg_id) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            format!("microgrid {mg_id} not registered"),
+        ))
+    }
+}
+
+fn overrides_response(persisted: Vec<crate::lisp::PersistedOverride>) -> OverridesResponse {
     // Format each form via tulisp-fmt so the dialog shows tidy
     // Lisp (multi-line for nested forms) instead of one-liner
     // source. .trim_end() drops the formatter's file-style
     // trailing newline so adjacent <pre>s don't accumulate blank
     // lines.
-    let persisted: Vec<PersistedOverrideView> = config
-        .persisted_overrides()
+    let persisted: Vec<PersistedOverrideView> = persisted
         .into_iter()
         .map(|o| PersistedOverrideView {
             idx: o.idx,
@@ -44,7 +68,7 @@ pub(in crate::ui) async fn overrides_list(State(config): State<Config>) -> Json<
         })
         .collect();
     let count = persisted.len();
-    Json(OverridesResponse { persisted, count })
+    OverridesResponse { persisted, count }
 }
 
 /// Drop a single persisted-override entry by its file-position
@@ -64,6 +88,36 @@ pub(in crate::ui) async fn persisted_remove(
                 format!("task panicked: {e}"),
             )
         })?;
+    match result {
+        Ok(0) => Err((
+            StatusCode::NOT_FOUND,
+            format!("no persisted override at idx {idx}"),
+        )),
+        Ok(_) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write failed: {e}"),
+        )),
+    }
+}
+
+/// Per-mg twin of [`persisted_remove`]: the target file comes from
+/// the URL, not the ambient scope a concurrent scoped eval may have
+/// flipped.
+pub(in crate::ui) async fn persisted_remove_for_mg(
+    State(config): State<Config>,
+    Path((mg_id, idx)): Path<(u64, usize)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    require_mg(&config, mg_id)?;
+    let result =
+        tokio::task::spawn_blocking(move || config.remove_persisted_overrides_for(mg_id, &[idx]))
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("task panicked: {e}"),
+                )
+            })?;
     match result {
         Ok(0) => Err((
             StatusCode::NOT_FOUND,
@@ -104,6 +158,33 @@ pub(in crate::ui) async fn persisted_bulk_remove(
                     format!("task panicked: {e}"),
                 )
             })?;
+    match result {
+        Ok(removed) => Ok(Json(BulkRemoveResponse { removed })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write failed: {e}"),
+        )),
+    }
+}
+
+/// Per-mg twin of [`persisted_bulk_remove`], same scope rationale as
+/// [`persisted_remove_for_mg`].
+pub(in crate::ui) async fn persisted_bulk_remove_for_mg(
+    State(config): State<Config>,
+    Path(mg_id): Path<u64>,
+    Json(body): Json<BulkRemoveBody>,
+) -> Result<Json<BulkRemoveResponse>, (StatusCode, String)> {
+    require_mg(&config, mg_id)?;
+    let result = tokio::task::spawn_blocking(move || {
+        config.remove_persisted_overrides_for(mg_id, &body.indices)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task panicked: {e}"),
+        )
+    })?;
     match result {
         Ok(removed) => Ok(Json(BulkRemoveResponse { removed })),
         Err(e) => Err((

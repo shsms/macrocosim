@@ -24,8 +24,6 @@ pub use state::{
     SharedMicrogrid, new_microgrid_loopbacks, new_microgrid_slot,
 };
 
-use std::net::SocketAddr;
-
 use axum::{
     Extension, Router,
     routing::{delete, get, post},
@@ -43,7 +41,7 @@ use events_ws::events_ws;
 /// server starting. Pass an empty slot if the UI doesn't need
 /// aggregated Dashboard data (tests, etc.).
 pub async fn serve(
-    addr: SocketAddr,
+    addr: std::net::SocketAddr,
     config: Config,
     microgrid: SharedMicrogrid,
     loopbacks: MicrogridLoopbacks,
@@ -85,8 +83,9 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         },
         microgrids::{microgrids_create, microgrids_import, microgrids_list},
         overrides::{
-            overrides_list, overrides_text_for_mg, overrides_text_replace_for_mg,
-            persisted_bulk_remove, persisted_remove,
+            overrides_list, overrides_list_for_mg, overrides_text_for_mg,
+            overrides_text_replace_for_mg, persisted_bulk_remove, persisted_bulk_remove_for_mg,
+            persisted_remove, persisted_remove_for_mg,
         },
         scenarios::{
             scenario_csv_file, scenario_csv_list, scenario_events, scenario_report,
@@ -168,6 +167,15 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route(
             "/api/mg/{mg_id}/overrides/text",
             get(overrides_text_for_mg).post(overrides_text_replace_for_mg),
+        )
+        .route("/api/mg/{mg_id}/overrides", get(overrides_list_for_mg))
+        .route(
+            "/api/mg/{mg_id}/persisted/{idx}",
+            axum::routing::delete(persisted_remove_for_mg),
+        )
+        .route(
+            "/api/mg/{mg_id}/persisted/delete",
+            post(persisted_bulk_remove_for_mg),
         )
         .route(
             "/api/mg/{mg_id}/dispatches",

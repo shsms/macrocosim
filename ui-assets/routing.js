@@ -14,6 +14,7 @@ import {
   evRows,
   pvRows,
 } from "./dashboard.js";
+import { overrideState } from "./dialogs.js";
 import { formulaCanvas, refreshFormula } from "./explain.js";
 import { clearSide, refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
@@ -253,7 +254,11 @@ export function selectMicrogrid(id) {
   // this the canvas keeps showing the previous microgrid's
   // components until a WS topology_changed event arrives — which
   // never happens just because the selection changed client-side.
-  if (id != null) refreshTopology();
+  // Same for the overrides pill: its snapshot is per-microgrid now.
+  if (id != null) {
+    refreshTopology();
+    overrideState.refresh();
+  }
 }
 
 // REPL chip — surfaces which microgrid the REPL form's POSTs

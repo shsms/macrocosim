@@ -12,6 +12,7 @@ import {
   openInspector,
 } from "./app.js";
 import { clearSide, evalQuoted, startScenarioReportLoop } from "./inspect.js";
+import { mgPath } from "./routing.js";
 
 // Single-source-of-truth for /api/overrides. Two consumers want
 // this data (the chrome's count pill and the overrides dialog),
@@ -22,23 +23,39 @@ export const overrideState = (() => {
   let snapshot = { persisted: [], count: 0 };
   const subs = new Set();
   let inflight = null;
+  let inflightUrl = null;
+  let generation = 0;
   async function refresh() {
-    if (inflight) return inflight;
-    inflight = (async () => {
+    // Per-mg route: the ambient-scope /api/overrides answers for
+    // whatever microgrid the last eval touched, not the one selected
+    // in the chrome. The in-flight dedup is keyed by URL: switching
+    // microgrids mid-fetch must start a fresh fetch. Publication is
+    // gated on a generation counter, so an older fetch that resolves
+    // late — even for the same URL — can never publish over a newer
+    // one's snapshot.
+    const url = mgPath("overrides");
+    if (inflight && inflightUrl === url) return inflight;
+    inflightUrl = url;
+    generation += 1;
+    const gen = generation;
+    const run = (async () => {
       try {
-        const res = await fetch("/api/overrides");
-        if (res.ok) {
-          snapshot = await res.json();
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const body = await res.json();
+        if (gen === generation) {
+          snapshot = body;
           for (const fn of subs) fn(snapshot);
         }
       } catch (_) {
         // Best-effort — server unreachable just leaves the last
         // known snapshot in place so the chrome doesn't blank out.
       } finally {
-        inflight = null;
+        if (inflight === run) inflight = null;
       }
     })();
-    return inflight;
+    inflight = run;
+    return run;
   }
   return {
     get: () => snapshot,
@@ -50,11 +67,6 @@ export const overrideState = (() => {
     },
   };
 })();
-
-// Map from a topology component to its public Lisp constructor.
-// Inverters split on subtype ("battery" / "solar"); everything else
-// keys off category. Returns null for categories we don't know how
-// to clone (e.g. an unrecognised proto-derived kind).
 
 async function showOverridesDialog() {
   const dlg = document.getElementById("pending-dialog");
@@ -116,7 +128,7 @@ function renderOverridesDialog(content, data) {
           .filter((c) => c.checked)
           .map((c) => Number(c.dataset.idx));
         if (!indices.length) return;
-        const res = await fetch("/api/persisted/delete", {
+        const res = await fetch(mgPath("persisted/delete"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ indices }),

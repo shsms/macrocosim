@@ -203,6 +203,14 @@ impl Config {
         Self::persisted_overrides_from(&path)
     }
 
+    /// [`persisted_overrides`](Self::persisted_overrides) for an
+    /// explicit microgrid id. Lock-free like the ambient variant: the
+    /// per-mg file path is a pure function of the id, so no scope
+    /// pointer (and no interpreter lock) is involved.
+    pub fn persisted_overrides_for(&self, mg_id: u64) -> Vec<PersistedOverride> {
+        Self::persisted_overrides_from(&self.overrides_path_for(mg_id))
+    }
+
     /// [`persisted_overrides`](Self::persisted_overrides) against an
     /// already-resolved path, so callers that must resolve the
     /// ambient scope exactly once (under the interpreter lock) can
@@ -255,6 +263,28 @@ impl Config {
         // for the rename, silently overwriting that file's
         // persisted edits.
         let mut ctx = self.ctx.borrow_mut();
+        self.remove_persisted_overrides_locked(&mut ctx, indices)
+    }
+
+    /// [`remove_persisted_overrides`](Self::remove_persisted_overrides)
+    /// against an explicit microgrid id — the per-mg delete routes
+    /// resolve their target through the scoped-eval machinery instead
+    /// of whatever the ambient pointer happens to hold.
+    pub fn remove_persisted_overrides_for(
+        &self,
+        mg_id: u64,
+        indices: &[usize],
+    ) -> std::io::Result<usize> {
+        self.scoped(mg_id, |cfg, ctx| {
+            cfg.remove_persisted_overrides_locked(ctx, indices)
+        })
+    }
+
+    fn remove_persisted_overrides_locked(
+        &self,
+        ctx: &mut tulisp::TulispContext,
+        indices: &[usize],
+    ) -> std::io::Result<usize> {
         let Some(path) = self.overrides_path() else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -301,7 +331,7 @@ impl Config {
         // (or a manual `reload`) is the recovery path. Surface the
         // error as IO so the HTTP handler can return 5xx; the
         // user's already lost the broken forms either way.
-        if let Err(msg) = self.reload_locked(&mut ctx) {
+        if let Err(msg) = self.reload_locked(ctx) {
             return Err(std::io::Error::other(format!(
                 "reload after rewrite failed: {msg}"
             )));
@@ -383,20 +413,24 @@ impl Config {
     /// then-eval flow from writing to a meaningless
     /// `config.0.overrides.lisp`.
     pub(super) fn overrides_path(&self) -> Option<PathBuf> {
+        let mg_id = self
+            .current_microgrid
+            .read()
+            .or_else(|| self.microgrids.lock().keys().next().copied())?;
+        Some(self.overrides_path_for(mg_id))
+    }
+
+    /// [`overrides_path`](Self::overrides_path) for an explicit
+    /// microgrid id — a pure function of the id, no ambient scope.
+    pub(super) fn overrides_path_for(&self, mg_id: u64) -> PathBuf {
         let load_dir = Path::new(&self.filename)
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
-        let mg_id = self
-            .current_microgrid
-            .read()
-            .or_else(|| self.microgrids.lock().keys().next().copied())?;
-        Some(
-            load_dir
-                .join("microgrids")
-                .join(format!("config.{mg_id}.overrides.lisp")),
-        )
+        load_dir
+            .join("microgrids")
+            .join(format!("config.{mg_id}.overrides.lisp"))
     }
 }
 
