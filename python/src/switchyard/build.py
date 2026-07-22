@@ -157,9 +157,7 @@ class Component:
         if not isinstance(cid, int):
             # ValueError, like the sync client raises for the same
             # mistake — code catching one works on both flavors.
-            raise ValueError(
-                f"{self.make}: needs an explicit id= to be referenced"
-            )
+            raise ValueError(f"{self.make}: needs an explicit id= to be referenced")
         return cid
 
     def _bind(self, site: Any, mg_id: int | None = None) -> None:
