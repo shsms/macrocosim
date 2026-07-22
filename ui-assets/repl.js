@@ -19,7 +19,7 @@ import {
 } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
 import { liveCharts } from "./inspect.js";
-import { dispatchesPanel, escapeHtml, setStatus } from "./app.js";
+import { dispatchesPanel, escapeHtml, notify, setStatus } from "./app.js";
 
 
 // Log panel above the REPL. /api/logs gives the load-time backfill
@@ -149,7 +149,12 @@ export function setupRepl() {
     } catch (_) {
       return;
     }
-    if (!res.ok) return;
+    if (!res.ok) {
+      // 400 carries the parse diagnostic (unbalanced parens etc.) —
+      // a silent no-op Tab gives the user nothing to act on.
+      notify(await res.text());
+      return;
+    }
     let formatted = await res.text();
     // tulisp-fmt always emits a trailing newline; the textarea
     // looks tidier without one for typical REPL fragments.
@@ -344,6 +349,7 @@ export function openWebSocket(onTopologyChanged) {
   const MAX_DELAY = 30000;
   let delay = MIN_DELAY;
   let everConnected = false;
+  let lastConfigError = { message: null, ts_ms: 0 };
   function connect() {
     const ws = new WebSocket(url);
     ws.onopen = () => {
@@ -401,6 +407,23 @@ export function openWebSocket(onTopologyChanged) {
         pulseBar.recordSetpoint();
       } else if (ev.kind === "log") {
         appendLog(ev);
+      } else if (ev.kind === "config_error") {
+        // A failed hot-reload (site already reset) or an eval whose
+        // overrides-append failed — the one moment the user most
+        // needs an explanation, so toast it and keep it in the log.
+        // A reload failure is broadcast on every registered site's
+        // bus (the WS pump has no enterprise channel for it), so a
+        // multi-microgrid setup delivers N copies — collapse repeats
+        // of the same message arriving close together into one toast.
+        if (
+          ev.message === lastConfigError.message &&
+          ev.ts_ms - lastConfigError.ts_ms < 1000
+        ) {
+          return;
+        }
+        lastConfigError = { message: ev.message, ts_ms: ev.ts_ms };
+        notify(ev.message);
+        appendLog({ ts_ms: ev.ts_ms, level: "error", message: ev.message });
       } else if (ev.kind === "dispatch_changed") {
         // The dispatch store changed for ev.mg_id; refetch only if
         // we're actually looking at that microgrid's Dispatches tab.

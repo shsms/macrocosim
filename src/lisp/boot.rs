@@ -660,7 +660,14 @@ impl Config {
                 }
             }
             if let Err(msg) = self.reload() {
-                self.site.broadcast_config_error(msg);
+                // Fan out to every REGISTRY site: the WS event pump
+                // only spawns forwarders for registry entries, so a
+                // broadcast on the bootstrap site's bus would reach
+                // no browser. A reload failure concerns every
+                // microgrid (all were reset), so every view gets it.
+                for entry in self.microgrids.lock().values() {
+                    entry.site.broadcast_config_error(msg.clone());
+                }
             }
         }
     }
