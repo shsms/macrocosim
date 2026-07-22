@@ -76,4 +76,9 @@ def switchyard(
         yield site
         marker = request.node.get_closest_marker("switchyard_scenario")
         if marker is not None:
+            if not marker.args:
+                raise pytest.UsageError(
+                    "@pytest.mark.switchyard_scenario needs the scenario name, "
+                    'e.g. @pytest.mark.switchyard_scenario("peak-evening")'
+                )
             site.scenario(str(marker.args[0])).run(wait=True).assert_passed()
