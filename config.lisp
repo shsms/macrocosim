@@ -65,17 +65,16 @@
 ;; inverter (id 200 in the Berlin demo microgrid). Sunny first 3 min
 ;; (80%), 2-min ramp into clouds (→ 20%), 2 min cloudy, 2-min ramp
 ;; back to clear. The per-tick min-avail clamp on the solar inverter
-;; picks up each new sunlight% on the next tick.
+;; picks up each new sunlight% on the next tick. Installed as the
+;; inverter's :sunlight% lambda SOURCE in config.2200.lisp rather
+;; than an imperative `every` timer here: a timer would overwrite
+;; any scenario's numeric sunlight set within a second, while a
+;; scenario's numeric set cleanly collapses a source and takes over.
 (defun cloud-curve (t-window)
   (cond ((< t-window 180.0) 80.0)
         ((< t-window 300.0) (- 80.0 (* 0.5 (- t-window 180.0))))
         ((< t-window 420.0) 20.0)
         (t (min 80.0 (+ 20.0 (* 0.5 (- t-window 420.0)))))))
-
-(every
- :milliseconds 1000
- :call (lambda ()
-         (set-solar-sunlight 200 (cloud-curve (window-elapsed 600.0)))))
 
 ;; -----------------------------------------------------------------------------
 ;; Microgrids — one file per microgrid under microgrids/. Each file

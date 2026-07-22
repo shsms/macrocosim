@@ -29,11 +29,16 @@
                :successors
                (list (make-battery :initial-soc 85.0)))))   ; per-component override
 
-       ;; Solar branch — id 200 so the cloud-curve timer in
-       ;; config.lisp can reach it.
+       ;; Solar branch — sunlight driven by the cloud-curve defined
+       ;; in config.lisp, installed as a lambda source so a
+       ;; scenario's numeric (set-solar-sunlight 200 …) collapses it
+       ;; and takes over (an `every` timer here would overwrite the
+       ;; scenario's value on its next firing).
        (make-meter
         :successors
-        (list (make-solar-inverter :id 200 :sunlight% 80.0)))   ; scenario starting point
+        (list (make-solar-inverter
+               :id 200
+               :sunlight% (lambda () (cloud-curve (window-elapsed 600.0))))))
 
        ;; EV branch — near-full so the SoC-protect taper is observable.
        (make-meter
