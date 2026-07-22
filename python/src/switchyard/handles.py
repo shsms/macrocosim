@@ -14,9 +14,11 @@ bound to the running site; act on it by *intent*:
 ``command`` issues a control command through the real gRPC gateway (so an
 out-of-envelope value raises :class:`~switchyard.errors.SetpointRejected`, the
 production behaviour under test); ``status`` / ``drive`` are test-side stimuli
-POSTed to ``/api/eval``. The ``expect`` assertions are ``async`` (they await
-between polls): ``await site.expect.grid_power(...)`` (or ``site.microgrid(id)``
-for a non-default one).
+POSTed to the typed control API (``/api/component/{id}/status`` / ``…/drive``);
+only a ``RawLisp`` drive goes through ``/api/eval``. The ``expect``
+assertions are ``async`` (they await between polls): ``await
+site.expect.grid_power(...)`` (or ``site.microgrid(id)`` for a
+non-default one).
 
 Every ``expect`` method here is one-line sugar over the kind-aware engine
 (:func:`switchyard.assertions.expect_metric`): the metric's entry in

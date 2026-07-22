@@ -255,7 +255,8 @@ impl MicrogridSite {
         }
     }
 
-    /// Pull events with id > `since`, capped at `limit`. Used by
+    /// Pull events with id >= `since` (callers pass the cursor from
+    /// `next_event_id`), capped at `limit`. Used by
     /// `/api/scenario/events`.
     pub(crate) fn scenario_events_since(&self, since: u64, limit: usize) -> Vec<ScenarioEvent> {
         self.inner.scenario.read().events_since(since, limit)

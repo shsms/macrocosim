@@ -1,7 +1,7 @@
 """Y4/Y5 together: drive the environment, inject a fault, assert the result.
 
 Build a topology in Python, then use the component handles
-(``site.component(id).command`` / ``.fault`` / ``.drive``) and settle-aware ``expect`` to
+(``site.component(id).command`` / ``.status`` / ``.drive``) and settle-aware ``expect`` to
 exercise it the way an integration test would.
 
     SWITCHYARD_BIN=../target/debug/switchyard python examples/environment_and_faults.py

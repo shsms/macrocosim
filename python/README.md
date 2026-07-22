@@ -81,7 +81,7 @@ mg = sw.Microgrid(id=1, topology=sw.grid(id=1, successors=[
 Constructors: `grid`, `meter`, `battery_inverter`, `solar_inverter`,
 `battery`, `ev_charger`, `chp`. Kwargs mirror the plist keys
 (`snake_case` → `:kebab-case`): `rated=(lo, hi)` `Power` bounds, `capacity`
-an `Energy`, `soc` / `sunlight` a `Percentage`; `sw.raw("(lambda () …)")`
+an `Energy`, `initial_soc` / `sunlight` a `Percentage`; `sw.raw("(lambda () …)")`
 splices Lisp.
 
 Typed throughout — no bare numbers or unit strings. Knobs take enums
@@ -147,7 +147,7 @@ site[5].drive(sunlight=Percentage.from_percent(30))
 ```
 
 `command` goes through the real gRPC gateway, so an out-of-envelope value
-raises `sw.SetpointRejected` (the production behaviour under test); `fault` /
+raises `sw.SetpointRejected` (the production behaviour under test); `status` /
 `drive` are test-side stimuli.
 
 **Assert** — settle-aware `expect`, on a component (`site[id].expect`) or a

@@ -8,7 +8,7 @@
 //!   swctl stream 1001
 //!   swctl stream 1001 --samples 5 --json
 //!   swctl set-power 1001 8000
-//!   swctl set-power 1001 -- -5000 --lifetime 30   # negative → discharge
+//!   swctl set-power 1001 -5000 --lifetime 30   # negative → discharge
 //!   swctl augment-bounds 1001 --lower -15000 --upper 15000 --lifetime 60
 //!
 //! Scenario commands — HTTP (default --ui-addr http://127.0.0.1:8801):

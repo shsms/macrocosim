@@ -11,10 +11,11 @@
 ;;   curl -s http://127.0.0.1:8801/api/scenario/events   ;; journal
 ;;   curl -s http://127.0.0.1:8801/api/scenario/report   ;; metrics
 ;;
-;; Component ids referenced below match the sample config.lisp:
+;; Component ids referenced below match the sample topology in
+;; microgrids/config.2200.lisp:
 ;;
 ;;   id 2    main meter (grid's sole child → derived for peak tracking)
-;;   id 100  hidden consumer meter (driven by consumer-curve)
+;;   id 100  hidden consumer meter (driven by its inline :power lambda)
 ;;   id 200  solar inverter
 ;;   id 1000 battery, 1001 battery-inverter (auto-allocated; verify with `swctl tree`)
 
@@ -29,7 +30,7 @@
 (scenario-end-after 30)
 
 ;; ── Consumer load: end-of-window spike ─────────────────────────
-;; Replaces the gentler config.lisp `consumer-curve` with a sharper
+;; Replaces config.2200.lisp's gentler inline :power profile with a sharper
 ;; profile: 5 kW base for the first 13 minutes of every 15-minute
 ;; window, then a 25 kW spike for the last 100 seconds. This is the
 ;; classic "demand peak right before the billing window closes"

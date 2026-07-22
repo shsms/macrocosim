@@ -42,7 +42,7 @@ default knobs and `sim/common.lisp` for the runtime helpers.
 
 The proto roots ([frequenz-api-microgrid](https://github.com/frequenz-floss/frequenz-api-microgrid),
 frequenz-api-assets, frequenz-api-dispatch) are vendored as git
-submodules under `submodules/` — run `git submodule update --init`
+submodules under `submodules/` — run `git submodule update --init --recursive`
 once after cloning. `SWITCHYARD_PROTO_ROOT` overrides the microgrid
 proto root for downstream packagers with a private mirror.
 

@@ -60,7 +60,7 @@ exercises the simulator:
 | `(set-component-health ID K)`          | flip health to `'ok` / `'error` / `'standby`             |
 | `(set-component-telemetry-mode ID K)`  | `'normal` / `'silent` / `'closed`                        |
 | `(set-component-command-mode ID K)`    | `'normal` / `'timeout` / `'error`                        |
-| `(set-active-power ID W &OPTIONAL MS)` | gRPC-style setpoint with request-lifetime                |
+| `(set-active-power ID W &OPTIONAL MS CLAMP)` | gRPC-style setpoint; MS = lifetime in ms, non-nil CLAMP clamps into the live envelope instead of rejecting |
 
 `(set-meter-power 100 (lambda () (csv-lookup …)))` and
 `(set-meter-power 100 'consumer-power)` install the lambda or

@@ -8,8 +8,9 @@ environment for a downstream control app's integration tests — your app talks 
 switchyard exactly as it would to a real deployment.
 
 Switchyard runs as a **separate process**; your app connects over gRPC. There's
-nothing to link or vendor — pull the `switchyard` + `swctl` binaries (or a
-container image) and drive them from your CI.
+nothing to link or vendor — build the `switchyard` + `swctl` binaries from this
+repo (a published wheel / container image is planned, see todo.org §D5) and
+drive them from your CI.
 
 ## Two ways to test
 
@@ -41,7 +42,9 @@ state.
 #    and the endpoints file is the readiness signal.
 switchyard graph.lisp --ephemeral-ports --emit-endpoints=endpoints.json &
 SW=$!
-until [ -s endpoints.json ]; do sleep 0.1; done      # wait until bound
+# wait until bound; bail out if the simulator died at boot instead
+# of hanging the job until CI's global timeout.
+until [ -s endpoints.json ]; do kill -0 $SW 2>/dev/null || exit 1; sleep 0.1; done
 
 GRPC=$(jq -r '.microgrids[0].grpc' endpoints.json)   # e.g. [::1]:41979
 UI=$(jq -r '.ui' endpoints.json)                     # e.g. 127.0.0.1:33565
