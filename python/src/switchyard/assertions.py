@@ -161,7 +161,10 @@ class Assertion(Generic[Q]):
         A first read warms the source (opening a stream can block briefly) so
         that latency isn't counted against the window; ``None`` reads (data
         not yet published, or a transient miss) are skipped, not treated as a
-        breach — only a real out-of-bounds value fails.
+        breach — only a real out-of-bounds value fails. A window that yields
+        NO samples at all raises: an all-``None`` run means the stream is
+        dead or the component never publishes, and passing it would be
+        exactly the silent vacuous green this layer exists to prevent.
         """
         pred, desc = _predicate(within, approx, tol, max, min)
         # Prime: pay any stream-open latency before the window.
@@ -179,6 +182,11 @@ class Assertion(Generic[Q]):
                         f"{len(series)} sample(s); series={series}"
                     )
             await asyncio.sleep(interval)
+        if not series:
+            raise AssertionError(
+                f"{self._label}: no samples observed across {for_}; "
+                f"cannot assert {desc} (stream dead or component not publishing)"
+            )
         return series
 
     async def once(
