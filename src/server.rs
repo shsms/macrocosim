@@ -459,8 +459,14 @@ impl microgrid_server::Microgrid for MicrogridServer {
         // (gate_runtime_faults pends until the client cancels), so the
         // tail logging below would never run — yet the stuck-component
         // case is exactly what the setpoint inspector exists to
-        // surface. Log the attempt up front for those.
-        if site.get(id).is_some() && site.runtime_of(id).command == CommandMode::Timeout {
+        // surface. Log the attempt up front for those. Skip non-finite
+        // values: do_set_power rejects them BEFORE the fault gate, so
+        // they never park and the tail log below records the real
+        // rejection — a pre-log here would be a phantom entry.
+        if req.power.is_finite()
+            && site.get(id).is_some()
+            && site.runtime_of(id).command == CommandMode::Timeout
+        {
             site.log_setpoint(
                 id,
                 SetpointEvent {
