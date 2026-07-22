@@ -86,6 +86,12 @@ export const undoMgr = (() => {
     try {
       const snap = await fetchText(mgId);
       const u = stackFor(undoStacks, mgId);
+      // Runtime pokes (health flips, knob sets) never touch the
+      // overrides file, so their snapshots are byte-identical to
+      // the stack top — pushing them would make Ctrl+Z a no-op
+      // press (that still rewrites the file and reloads the mg)
+      // for each poke since the last structural edit.
+      if (u.length && u[u.length - 1] === snap) return;
       u.push(snap);
       while (u.length > MAX_DEPTH) u.shift();
       redoStacks.set(mgId, []);
@@ -107,7 +113,16 @@ export const undoMgr = (() => {
       notify(`Undo failed: ${e.message}`);
       return;
     }
-    const target = u.pop();
+    // Snapshots identical to the current bytes (pre-dedup stacks)
+    // restore nothing — posting one would only force a pointless
+    // reload (resetting live ramp/SoC state). Fall through to the
+    // first entry that differs so no keypress is a dead no-op.
+    let target = u.pop();
+    while (target === current && u.length) target = u.pop();
+    if (target === current) {
+      notify("Nothing to undo on this microgrid.");
+      return;
+    }
     try {
       await postText(mgId, target);
     } catch (e) {
@@ -131,7 +146,12 @@ export const undoMgr = (() => {
       notify(`Redo failed: ${e.message}`);
       return;
     }
-    const target = r.pop();
+    let target = r.pop();
+    while (target === current && r.length) target = r.pop();
+    if (target === current) {
+      notify("Nothing to redo on this microgrid.");
+      return;
+    }
     try {
       await postText(mgId, target);
     } catch (e) {
