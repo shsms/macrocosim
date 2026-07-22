@@ -140,8 +140,8 @@ impl DispatchStore {
     /// [`alloc_id`](Self::alloc_id), so it can't collide.
     pub fn insert(&self, microgrid_id: u64, dispatch: pb::Dispatch) {
         let id = dispatch_id_of(&dispatch);
-        self.inner
-            .write()
+        let mut guard = self.inner.write();
+        guard
             .entry(microgrid_id)
             .or_default()
             .insert(id, dispatch.clone());
@@ -153,12 +153,10 @@ impl DispatchStore {
     /// that id exists for the microgrid.
     pub fn replace(&self, microgrid_id: u64, dispatch: pb::Dispatch) -> bool {
         let id = dispatch_id_of(&dispatch);
-        {
-            let mut guard = self.inner.write();
-            match guard.get_mut(&microgrid_id).and_then(|m| m.get_mut(&id)) {
-                Some(slot) => *slot = dispatch.clone(),
-                None => return false,
-            }
+        let mut guard = self.inner.write();
+        match guard.get_mut(&microgrid_id).and_then(|m| m.get_mut(&id)) {
+            Some(slot) => *slot = dispatch.clone(),
+            None => return false,
         }
         self.broadcast(microgrid_id, DispatchChange::Updated, dispatch);
         true
@@ -167,18 +165,15 @@ impl DispatchStore {
     /// Remove a dispatch, returning it (and broadcasting `Deleted`) if
     /// it existed.
     pub fn remove(&self, microgrid_id: u64, dispatch_id: u64) -> Option<pb::Dispatch> {
-        let removed = {
-            let mut guard = self.inner.write();
-            let gone = guard
-                .get_mut(&microgrid_id)
-                .and_then(|m| m.remove(&dispatch_id));
-            // Drop the now-empty per-microgrid map so an idle microgrid
-            // doesn't linger in the outer map forever.
-            if guard.get(&microgrid_id).is_some_and(|m| m.is_empty()) {
-                guard.remove(&microgrid_id);
-            }
-            gone
-        };
+        let mut guard = self.inner.write();
+        let removed = guard
+            .get_mut(&microgrid_id)
+            .and_then(|m| m.remove(&dispatch_id));
+        // Drop the now-empty per-microgrid map so an idle microgrid
+        // doesn't linger in the outer map forever.
+        if guard.get(&microgrid_id).is_some_and(|m| m.is_empty()) {
+            guard.remove(&microgrid_id);
+        }
         if let Some(dispatch) = &removed {
             self.broadcast(microgrid_id, DispatchChange::Deleted, dispatch.clone());
         }
@@ -237,16 +232,14 @@ impl DispatchStore {
         dispatch_id: u64,
         f: impl FnOnce(&mut pb::Dispatch),
     ) -> Result<pb::Dispatch, DispatchError> {
-        let updated = {
-            let mut guard = self.inner.write();
-            let slot = guard
-                .get_mut(&microgrid_id)
-                .and_then(|m| m.get_mut(&dispatch_id))
-                .ok_or(DispatchError::NotFound)?;
-            f(slot);
-            stamp_updated(slot);
-            slot.clone()
-        };
+        let mut guard = self.inner.write();
+        let slot = guard
+            .get_mut(&microgrid_id)
+            .and_then(|m| m.get_mut(&dispatch_id))
+            .ok_or(DispatchError::NotFound)?;
+        f(slot);
+        stamp_updated(slot);
+        let updated = slot.clone();
         self.broadcast(microgrid_id, DispatchChange::Updated, updated.clone());
         Ok(updated)
     }
@@ -291,6 +284,9 @@ impl DispatchStore {
         self.inner.read().values().map(BTreeMap::len).sum()
     }
 
+    /// Callers hold the `inner` write lock across this send so the
+    /// event stream order matches store commit order; `send` never
+    /// blocks, so holding the guard is safe.
     fn broadcast(&self, microgrid_id: u64, change: DispatchChange, dispatch: pb::Dispatch) {
         let _ = self.changes.send(DispatchEvent {
             microgrid_id,
