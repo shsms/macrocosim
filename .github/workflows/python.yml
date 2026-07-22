@@ -34,11 +34,14 @@ jobs:
       - name: Sync dev tools
         run: uv sync --no-install-project
 
+      # `--no-sync` keeps `uv run` from re-syncing WITH the project,
+      # which would defeat `--no-install-project` above and kick off
+      # the maturin build after all.
       - name: Ruff lint
-        run: uv run ruff check src tests examples
+        run: uv run --no-sync ruff check src tests examples
 
       - name: Ruff format
-        run: uv run ruff format --check src tests examples
+        run: uv run --no-sync ruff format --check src tests examples
 
       - name: Type check (ty, all rules as errors)
-        run: uv run ty check --error all src
+        run: uv run --no-sync ty check --error all src
