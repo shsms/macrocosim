@@ -272,7 +272,9 @@ Remaining before a public release:
   job; today only a hand-built linux-x86_64 wheel exists.
 - Optional: a Docker image (GPL) consumers run in CI — no source, no linking.
 - A crates.io publish of switchyard itself also needs the vendored proto build
-  buildable from the published crate (git submodule today).
+  buildable from the published crate (git submodule today), and the
+  =frequenz-microgrid-component-graph= dependency moved off its git pin
+  (=git = …, rev = "8bab132"= in Cargo.toml) — crates.io rejects git deps.
 
 *** TODO D7. Per-microgrid scenario scope                            :scenarios:
 
@@ -909,6 +911,157 @@ Verified-lite findings, none user-visible on their own:
 - microgrids.rs import collision check takes a read lock per
   imported id per site (O(ids x sites) acquisitions); snapshot each
   site's id set once.
+* Review backlog — 2026-07-22
+
+Whole-codebase review (8-agent subsystem fan-out + clippy + fmt +
+full Rust/Python test suites + biome + ruff/ty + live smoke run; all
+checks green before and after). The mechanical findings were fixed
+in the same pass; the items below each need a design call.
+
+** Fidelity / API semantics
+
+*** TODO [#B] EvCharger has no own-health gate                :fidelity:
+An =:health 'error= / ='standby= charger keeps charging at its armed
+setpoint (=ev_charger.rs tick= has no trip; both inverters trip to
+zero). Contradicts =integrate_energy=, which freezes the errored
+component's energy cursor while meter aggregates keep accruing the
+same watts. Decision: give it the inverter-style trip — and pick the
+recovery semantic (await re-dispatch like the battery inverter, or
+auto-resume).
+
+*** TODO [#B] PV health-trip never trips the reactive ramp :reactive:fidelity:
+=solar_inverter.rs= zeroes published Q while tripped but leaves
+=reactive.ramp.actual= and the armed command; recovery teleports Q
+back (~5 kVAR in one tick), skipping the slew =ReactivePath::trip='s
+own doc says the snap exists to prevent. Decision: full
+=reactive.trip()= (battery-inverter parity, drops the Volt/VAR
+command) vs keep the armed command but snap the ramp actual to 0
+(needs a small ReactivePath API addition).
+
+*** TODO [#B] Augment on a non-augmentable component is ACKed :api:bounds:
+=augment_active_bounds= is a default no-op (only inverters + EV
+charger override), and the gRPC handler ACKs with a =valid_until= —
+a bounds-driving app augmenting a battery/meter/grid believes a cap
+is armed that doesn't exist. The setpoint path is honest
+(=Unsupported= → =UNIMPLEMENTED=). Found independently by two
+reviewers. Decision: add a supported/unsupported signal to the trait
+and reject at the gateway (which status — UNIMPLEMENTED to mirror
+setpoints, or INVALID_ARGUMENT?), or implement augmentation storage
+for more categories.
+
+*** TODO [#C] EvCharger TTL-expiry snaps to 0, inverters slew :fidelity:
+=EvCharger::reset_setpoint= uses =snap_to= (22 kW → 0 in one tick)
+while both inverters treat the same reset as "a control event, not a
+physical discontinuity" and slew down. Decision: align on slew-down
+or document snap-to-park as intended for chargers.
+
+*** TODO [#C] SetPower response stream skips the ACCEPTED phase   :api:
+The proto documents initial-response (ACCEPTED) then final
+(SUCCESS/FAILED/OVERRIDDEN); switchyard sends one SUCCESS and closes
+(=server.rs do_set_power=). Known frequenz clients tolerate it.
+Decision: emit ACCEPTED-then-SUCCESS for fidelity, or document the
+single-message simplification.
+
+*** TODO [#C] Augment lifetime fallback is 60 s, proto says 5 s   :api:
+An absent =request_lifetime= on Augment falls back to the shared
+=default_request_lifetime= (60 s); the vendored proto documents 5 s
+for Augment (60 s matches only SetPower). Recovery-timing tests
+against switchyard run differently than against production.
+Decision: per-RPC fallbacks or one knob + documented deviation.
+
+** Config semantics
+
+*** TODO [#C] set-physics-tick-ms in config.lisp is a no-op   :lisp:design:
+It runs while the registry is empty (before =load-microgrid-configs=),
+so it configures the never-ticking bootstrap site; each real
+microgrid gets the built-in default. After a hot reload it applies
+to only the first registry entry — boot vs reload asymmetry.
+Decision: make unscoped =set-physics-tick-ms= (and arguably
+=set-voltage-per-phase=) fan out registry-wide, or move the call
+inside each per-mg =:topology= and fix the section comment.
+
+*** TODO [#C] Scenario-collapsed sunlight never returns to ambient :scenarios:design:
+The cloud curve rides the demo inverter's =:sunlight%= lambda source
+now, so a scenario's numeric =set-solar-sunlight= collapses it — and
+with the old =every= timer gone, nothing reinstalls the ambient
+curve when the scenario ends: the demo PV stays at the scenario's
+last constant until a config reload. Decide whether scenario end
+should restore displaced dynamic sources (snapshot + reinstall in
+the runner) or whether last-state-wins is the intended sim semantic
+(then say so in the scenario docs).
+
+*** TODO [#C] scenario-record-csv resolves DIR against CWD    :lisp:design:
+Unlike =csv-load= / =file-exists-p= / =watch-file= / =(load …)=,
+which all resolve against the config's load dir (the divergence
+d1/csv_profile already litigated). A server launched outside the
+repo dir scatters =csvs/= wherever the process runs. Decision:
+outputs-relative-to-CWD is defensible (README says "into ./csvs/"),
+but if the convention is load-dir the fix is the same
+=load_dir.join= csv_profile uses.
+
+** Python client
+
+*** TODO [#B] A dead metric pump serves frozen values forever :python:api:
+=_grpc.py= (both flavors): a stream the server ends cleanly (e.g.
+=TelemetryMode.CLOSED=) exhausts the pump; =GrpcStreamBroadcaster=
+only retries gRPC errors, so after the fault knob is restored every
+read — and every settle-aware =expect= — polls the stale cached
+sample until timeout, or passes against pre-fault data. Decision: on
+pump exit, evict the cached value (reads return None) and/or re-open
+the stream on the next read.
+
+*** TODO [#C] assert_passed() passes when zero checks ran :python:scenarios:
+A scenario stopped before its first =(check …)= fires reports
+=checks_failed: 0= and the gate goes green having verified nothing.
+Decision: fail (or warn) when =checks_passed + checks_failed == 0=,
+or compare against the authored =Scenario._checks= count when the
+client authored the scenario.
+
+*** TODO [#C] pytest marker gate runs after an already-failed test :python:testing:
+The =switchyard_scenario= marker path runs-and-gates the scenario in
+fixture teardown even when the test body failed (spending the full
+scenario length on a red test), and a failed gate surfaces as a
+teardown ERROR, not the FAILURE the docstring promises. Decision:
+observe the test outcome via a =pytest_runtest_makereport= hook and
+skip the gate on failure, or document the teardown-error semantics.
+
+*** TODO [#C] Sync Site close-race comments overstate the locks :python:cleanup:
+A =to_thread= read blocked on =_grpc_lock=/=_pump_lock= during
+=close()= proceeds after the drain and inserts a fresh client/pump
+that is never closed — the "must not slip a fresh client past the
+drain" claim isn't actually enforced (impact bounded: daemon
+threads, the racing assertion times out). Decision: a =_closed= flag
+raising after close, or reword the comments to what the locks do
+guarantee.
+
+** UI
+
+*** TODO [#C] Dispatch form's Start-at picker uses the browser TZ  :ui:
+=dispatch-form.js= interprets the =datetime-local= value in the
+browser's zone while every displayed timestamp (including the
+resulting dispatch row) renders in the sim TZ from the TZ chip — a
+UTC-browser operator scheduling "14:00" sees the table show 16:00.
+Decision: interpret the picker in =clockState.tzInUse()= or label
+the field with the browser zone.
+
+** Tests / CI / packaging
+
+*** TODO [#C] scenario.rs energy-integral tolerance can flake :testing:
+=driver_run_aggregates…= asserts 8..=12 Wh around an analytic 10 Wh
+from manual timestamp-driven ticks, but the fixture's background
+physics loop concurrently advances the same accumulator at wall
+clock (~1 Wh/s at the 3.6 kW setpoint) — a ~2 s scheduler stall
+pushes past 12. Decision: widen the tolerance, or add a fixture flag
+that skips background physics for manually-ticked tests.
+
+*** TODO [#C] wheels.yml path filter omits python/src/**      :packaging:ci:
+The pull_request filter covers packaging manifests but not the pure-
+Python package the wheel bundles, so a PR breaking =runtime.py='s
+import passes python.yml (lint/type only) and surfaces at the next
+tag build. The filter's comment documents the cost tradeoff for the
+Rust globs only. Decision: add =python/src/**= (each entry is a full
+wheel-matrix build) or note the exclusion as deliberate.
+
 * Open design questions
 
 ** d1. Rethink ~file-exists-p~ resolving against the config's load dir :design:lisp:
