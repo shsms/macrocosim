@@ -57,7 +57,6 @@ impl Config {
         let site = MicrogridSite::with_id_allocator(enterprise_id_allocator.clone());
         let metadata = Arc::new(RwLock::new(Metadata::default()));
         let extra_watches = Arc::new(Mutex::new(HashSet::new()));
-        let graph_status: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
         let clock = crate::sim::clock::new_clock();
         let scenarios = crate::sim::scenarios::new_registry();
         let microgrids = crate::sim::microgrids::new_registry();
@@ -213,8 +212,14 @@ impl Config {
                 .to_string());
         }
 
-        let initial_status = log_topology_validation(&site, "boot");
-        *graph_status.write() = initial_status;
+        // Validate every registered site, not the (always-empty)
+        // bootstrap: components live in the per-mg sites created by
+        // `(make-microgrid …)`. The UI reads validation per request
+        // via /api/topology; these calls exist for the boot log.
+        for (id, entry) in microgrids.lock().iter() {
+            log_topology_validation(&entry.site, &format!("boot (microgrid {id})"));
+        }
+
 
         let ctx = SharedMut::new(ctx);
 
@@ -250,7 +255,6 @@ impl Config {
             site,
             metadata,
             extra_watches,
-            graph_status,
             clock,
             scenarios,
             microgrids,
@@ -561,8 +565,8 @@ impl Config {
         // so per-mg UI subscribers all see the rebuild — the router-
         // resolved `cfg.site()` reads from the first registry entry,
         // not the bootstrap site we reset above.
-        *self.graph_status.write() = log_topology_validation(&self.router.site(), "reload");
-        for entry in self.microgrids.lock().values() {
+        for (id, entry) in self.microgrids.lock().iter() {
+            log_topology_validation(&entry.site, &format!("reload (microgrid {id})"));
             entry.site.bump_version();
         }
         log::info!(
@@ -681,23 +685,18 @@ fn warn_orphaned_chp_defaults(ctx: &mut TulispContext) {
 /// `GridConnectionPoint` and rejects empty graphs — test fixtures
 /// that wire up `Config` against `""` would otherwise fail.
 /// Non-empty worlds that fail validation surface as a `log::warn!`
-/// in the simulator log and as a ⚠ on the pulse bar's graph pill
-/// (via [`Config::graph_status`] on `/api/topology`).
+/// in the simulator log; the pulse bar's graph pill gets its ⚠ from
+/// `/api/topology`, which validates the requested site per request.
 ///
 /// On success the log line includes a one-line summary so a dev
 /// reading the log can confirm switchyard parsed the topology the
 /// same way `frequenz-microgrid` would.
-///
-/// Returns the human-readable error the validator produced. `None`
-/// = the graph crate accepted the topology (or the site is empty /
-/// hidden-only); `Some(msg)` = the failure message, which the
-/// caller stores in [`Config::graph_status`].
-fn log_topology_validation(site: &MicrogridSite, phase: &str) -> Option<String> {
+fn log_topology_validation(site: &MicrogridSite, phase: &str) {
     let (nodes, edges) = crate::sim::graph_adapter::snapshot(site);
     let visible_count = nodes.len();
     if visible_count == 0 {
         log::debug!("graph: {phase} skipped (no visible components)");
-        return None;
+        return;
     }
     match crate::sim::graph_adapter::build_from(nodes, edges) {
         Ok(graph) => {
@@ -710,14 +709,11 @@ fn log_topology_validation(site: &MicrogridSite, phase: &str) -> Option<String> 
             log::info!(
                 "graph: {phase} validated ({visible_count} visible, {logical_count} after pass-through elision)"
             );
-            None
         }
         Err(e) => {
-            let msg = format!("{e}");
             log::warn!(
-                "graph: {phase} validation failed — {visible_count} visible components rejected by frequenz-microgrid-component-graph: {msg}"
+                "graph: {phase} validation failed — {visible_count} visible components rejected by frequenz-microgrid-component-graph: {e}"
             );
-            Some(msg)
         }
     }
 }

@@ -172,6 +172,19 @@ pub fn build(
     build_from(nodes, edges)
 }
 
+/// Validation outcome for a site, as the UI consumes it: `None` when
+/// the graph crate accepts the topology (or the site is empty /
+/// hidden-only — the crate requires exactly one grid connection
+/// point, and empty test fixtures must not read as broken), `Some`
+/// with the human-readable error otherwise.
+pub fn validation_error(site: &MicrogridSite) -> Option<String> {
+    let (nodes, edges) = snapshot(site);
+    if nodes.is_empty() {
+        return None;
+    }
+    build_from(nodes, edges).err().map(|e| format!("{e}"))
+}
+
 /// Validation core, split out from [`build`] so tests can drive the
 /// graph crate against hand-rolled node + edge lists without going
 /// through `MicrogridSite`'s real component constructors.

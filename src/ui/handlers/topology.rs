@@ -65,7 +65,7 @@ struct ComponentSummary {
 }
 
 pub(in crate::ui) async fn topology(State(config): State<Config>) -> Json<TopologySnapshot> {
-    Json(topology_snapshot(&config, &config.site()))
+    Json(topology_snapshot(&config.site()))
 }
 
 pub(in crate::ui) async fn topology_for_mg(
@@ -73,10 +73,10 @@ pub(in crate::ui) async fn topology_for_mg(
     Path(mg_id): Path<u64>,
 ) -> Result<Json<TopologySnapshot>, (StatusCode, String)> {
     let site = resolve_site(&config, mg_id)?;
-    Ok(Json(topology_snapshot(&config, &site)))
+    Ok(Json(topology_snapshot(&site)))
 }
 
-fn topology_snapshot(config: &Config, site: &crate::sim::MicrogridSite) -> TopologySnapshot {
+fn topology_snapshot(site: &crate::sim::MicrogridSite) -> TopologySnapshot {
     let components = site
         .components()
         .iter()
@@ -103,7 +103,10 @@ fn topology_snapshot(config: &Config, site: &crate::sim::MicrogridSite) -> Topol
         components,
         connections: site.connections(),
         hidden_connections: site.hidden_connections(),
-        graph_status: config.graph_status(),
+        // Computed per request from THIS site — a process-global
+        // status can't answer for the microgrid actually being
+        // viewed. Sites are small; the graph build is cheap.
+        graph_status: crate::sim::graph_adapter::validation_error(site),
         main_meter_id: site.main_meter_id(),
     }
 }

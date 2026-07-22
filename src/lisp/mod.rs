@@ -115,13 +115,6 @@ pub struct Config {
     /// the entry-point config. Set semantics — duplicate registrations
     /// (from re-runs of the config during reload) are no-ops.
     pub(crate) extra_watches: Arc<Mutex<HashSet<PathBuf>>>,
-    /// Latest topology-validation outcome from the graph crate.
-    /// `None` = healthy; `Some(message)` = the validator rejected the
-    /// current site. `boot::log_topology_validation` updates this on
-    /// every boot + reload; `/api/topology` exposes it so the pulse-
-    /// bar graph pill can flip between ✓ and ⚠ without polling a
-    /// separate endpoint.
-    pub(crate) graph_status: Arc<RwLock<Option<String>>>,
     /// Configured display timezone. UI's TZ toggle reads the IANA
     /// name from /api/clock and formats timestamps client-side via
     /// `Intl.DateTimeFormat(..., { timeZone })`. Mutated by
@@ -288,16 +281,6 @@ impl Config {
 
     pub fn site(&self) -> MicrogridSite {
         self.router.site()
-    }
-
-    /// Latest graph-validator outcome. `None` = the graph crate
-    /// accepted the topology at the last config-load / reload (or
-    /// the site is empty); `Some(msg)` = it rejected, with the
-    /// human-readable error. `/api/topology` serialises this so
-    /// the pulse-bar graph pill flips to ⚠ + opens-on-click with
-    /// the message.
-    pub fn graph_status(&self) -> Option<String> {
-        self.graph_status.read().clone()
     }
 
     /// IANA name of the configured display zone (default
