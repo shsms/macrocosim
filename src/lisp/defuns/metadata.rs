@@ -13,6 +13,13 @@ use super::super::Metadata;
 pub(super) fn register(ctx: &mut TulispContext, metadata: Arc<RwLock<Metadata>>) {
     let m = metadata.clone();
     ctx.defun("set-enterprise-id", move |id: i64| -> Result<bool, Error> {
+        if id < 0 {
+            // The proto id is unsigned; `as u64` would wrap a
+            // negative into an 18-quintillion enterprise id.
+            return Err(Error::invalid_argument(format!(
+                "set-enterprise-id: id must be non-negative, got {id}"
+            )));
+        }
         m.write().enterprise_id = id as u64;
         Ok(true)
     });

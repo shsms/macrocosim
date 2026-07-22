@@ -168,7 +168,25 @@ pub(in crate::lisp) fn register(
                     }
                     None => {
                         let grpc_port = match a.grpc_port {
-                            Some(p) => p as u16,
+                            Some(p) => {
+                                let p = p as u16;
+                                // A collision registers cleanly here but
+                                // the binary's spawner then fails the
+                                // bind and SKIPS this microgrid's gRPC
+                                // server with only a log line — a
+                                // registry entry that looks healthy and
+                                // serves nothing. Reject up front, under
+                                // the same lock as the insert.
+                                if let Some((other, _)) =
+                                    reg.iter().find(|(_, e)| e.def.grpc_port == p)
+                                {
+                                    return Err(tulisp::Error::invalid_argument(format!(
+                                        "make-microgrid #{id}: :grpc-port {p} is already \
+                                         bound by microgrid {other}"
+                                    )));
+                                }
+                                p
+                            }
                             None => next_free_port_in(&reg),
                         };
                         // Fresh site per microgrid that shares the

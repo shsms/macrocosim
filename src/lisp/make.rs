@@ -231,9 +231,19 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                     None
                 }
             };
+            let fuse = match a.rated_fuse_current.unwrap_or(0) {
+                // The proto field is unsigned; a negative here would
+                // wrap through `as u32` into a ~4 GA fuse.
+                f if f < 0 => {
+                    return Err(Error::invalid_argument(format!(
+                        ":rated-fuse-current must be non-negative, got {f}"
+                    )));
+                }
+                f => f as u32,
+            };
             let grid = Grid::new(
                 id,
-                a.rated_fuse_current.unwrap_or(0) as u32,
+                fuse,
                 rated_active_bounds,
                 a.stream_jitter_pct.unwrap_or(0.0) as f32,
             );
@@ -359,7 +369,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 cfg.command_delay = Duration::from_millis(v.max(0) as u64);
             }
             if let Some(v) = a.ramp_rate {
-                cfg.ramp_rate_w_per_s = v as f32;
+                cfg.ramp_rate_w_per_s = checked_ramp_rate(":ramp-rate", v)?;
             }
             if let Some(v) = a.stream_jitter_pct {
                 cfg.stream_jitter_pct = v as f32;
@@ -388,7 +398,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 cfg.reactive_command_delay = Duration::from_millis(v.max(0) as u64);
             }
             if let Some(v) = a.reactive_ramp_rate {
-                cfg.reactive_ramp_rate_var_per_s = v as f32;
+                cfg.reactive_ramp_rate_var_per_s = checked_ramp_rate(":reactive-ramp-rate", v)?;
             }
             let h = register_with_modes(
                 &w,
@@ -440,7 +450,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 cfg.command_delay = Duration::from_millis(v.max(0) as u64);
             }
             if let Some(v) = a.ramp_rate {
-                cfg.ramp_rate_w_per_s = v as f32;
+                cfg.ramp_rate_w_per_s = checked_ramp_rate(":ramp-rate", v)?;
             }
             if let Some(v) = a.stream_jitter_pct {
                 cfg.stream_jitter_pct = v as f32;
@@ -460,7 +470,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 cfg.reactive_command_delay = Duration::from_millis(v.max(0) as u64);
             }
             if let Some(v) = a.reactive_ramp_rate {
-                cfg.reactive_ramp_rate_var_per_s = v as f32;
+                cfg.reactive_ramp_rate_var_per_s = checked_ramp_rate(":reactive-ramp-rate", v)?;
             }
             let inverter = SolarInverter::new(id, interval, cfg);
             if let Some(scalar) = dynamic_sunlight {
@@ -513,7 +523,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 cfg.command_delay = Duration::from_millis(v.max(0) as u64);
             }
             if let Some(v) = a.ramp_rate {
-                cfg.ramp_rate_w_per_s = v as f32;
+                cfg.ramp_rate_w_per_s = checked_ramp_rate(":ramp-rate", v)?;
             }
             if let Some(v) = a.stream_jitter_pct {
                 cfg.stream_jitter_pct = v as f32;
@@ -583,6 +593,19 @@ fn connect_successors(
 
 fn ms_to_duration(ms: Option<i64>, default_ms: u64) -> Duration {
     Duration::from_millis(ms.map(|x| x.max(0) as u64).unwrap_or(default_ms))
+}
+
+/// A ramp rate must be a non-negative, non-NaN number: `Ramp::advance`
+/// steps `actual` by `rate · dt` toward the target, so a negative rate
+/// walks away from the target without bound and NaN never satisfies
+/// the arrival test.
+fn checked_ramp_rate(kw: &str, v: f64) -> Result<f32, Error> {
+    if v.is_nan() || v < 0.0 {
+        return Err(Error::invalid_argument(format!(
+            "{kw} must be a non-negative rate, got {v}"
+        )));
+    }
+    Ok(v as f32)
 }
 
 /// Resolve the component id from an `:id` plist value, falling back to
