@@ -381,10 +381,56 @@ pub fn parse(
             edges.push(edge);
         }
     }
+    // Cycles must fail the whole request here: the site-side `connect`
+    // refuses them one edge at a time, which would abort the import
+    // mid-eval with the microgrid already created and half-built.
+    for &(src, dst) in &edges {
+        if src == dst {
+            return Err(format!("connection {src} → {dst} is a self-edge"));
+        }
+    }
+    if let Some((src, dst)) = cycle_edge(&edges) {
+        return Err(format!(
+            "the connections contain a cycle (reachable through {src} → {dst})"
+        ));
+    }
     Ok(SiteImport {
         components,
         connections: edges,
     })
+}
+
+/// Kahn topological sort over the connection edges; on a cycle,
+/// returns an edge between two of the unresolvable nodes so the
+/// error can name where to look.
+fn cycle_edge(edges: &[(u64, u64)]) -> Option<(u64, u64)> {
+    use std::collections::{BTreeMap, VecDeque};
+    let mut indegree: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut out: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    for &(src, dst) in edges {
+        indegree.entry(src).or_default();
+        *indegree.entry(dst).or_default() += 1;
+        out.entry(src).or_default().push(dst);
+    }
+    let mut queue: VecDeque<u64> = indegree
+        .iter()
+        .filter(|(_, d)| **d == 0)
+        .map(|(n, _)| *n)
+        .collect();
+    while let Some(n) = queue.pop_front() {
+        for &m in out.get(&n).into_iter().flatten() {
+            let d = indegree.get_mut(&m).expect("edge target has an indegree");
+            *d -= 1;
+            if *d == 0 {
+                queue.push_back(m);
+            }
+        }
+        indegree.remove(&n);
+    }
+    edges
+        .iter()
+        .copied()
+        .find(|(s, d)| indegree.contains_key(s) && indegree.contains_key(d))
 }
 
 impl SiteImport {
@@ -506,6 +552,29 @@ mod tests {
         let err = parse(untyped, None).unwrap_err();
         assert!(err.contains("component 7"));
         assert!(err.contains("UNSPECIFIED"));
+    }
+
+    #[test]
+    fn import_rejects_self_edges_and_cycles() {
+        let cyclic: ConnectionsFile = serde_json::from_str(
+            r#"{"electricalComponentConnections": [
+                {"sourceElectricalComponentId": "1", "destinationElectricalComponentId": "2"},
+                {"sourceElectricalComponentId": "2", "destinationElectricalComponentId": "3"},
+                {"sourceElectricalComponentId": "3", "destinationElectricalComponentId": "1"}
+            ]}"#,
+        )
+        .unwrap();
+        let err = parse(generic_components(), Some(cyclic)).unwrap_err();
+        assert!(err.contains("cycle"), "{err}");
+
+        let self_edge: ConnectionsFile = serde_json::from_str(
+            r#"{"electricalComponentConnections": [
+                {"sourceElectricalComponentId": "2", "destinationElectricalComponentId": "2"}
+            ]}"#,
+        )
+        .unwrap();
+        let err = parse(generic_components(), Some(self_edge)).unwrap_err();
+        assert!(err.contains("self-edge"), "{err}");
     }
 
     /// Wind turbines, steam boilers, power transformers and breakers
