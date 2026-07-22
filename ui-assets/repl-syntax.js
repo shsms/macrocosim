@@ -160,8 +160,8 @@ export function wordAtCursor(input) {
   const v = input.value;
   const c = input.selectionStart;
   let start = c;
-  // Lisp identifiers: alnum + - _ % . :
-  while (start > 0 && /[a-zA-Z0-9_%\-.:]/.test(v[start - 1])) start--;
+  // Lisp identifiers: alnum + - _ % . : * (let*, %make-*)
+  while (start > 0 && /[a-zA-Z0-9_%\-.:*]/.test(v[start - 1])) start--;
   return { prefix: v.slice(start, c), start, end: c };
 }
 
