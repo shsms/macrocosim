@@ -188,6 +188,16 @@ export const dashboardTiles = (() => {
         reseedVisHandler = null;
       }
     },
+    // Clear one stream's sparkline ring. For feeders that backfill
+    // a stream from outside this module's history map (the grid-
+    // frequency tile) — without the reset, each dashboard re-enter
+    // appends the same 60 s of history again and the trace renders
+    // a falsely repeated pattern.
+    resetStream(stream) {
+      const b = buf(stream);
+      b.values.fill(NaN);
+      b.cursor = 0;
+    },
     async backfill() {
       // Past 15 min of samples per stream, server-side. Pre-populate
       // the ring so the spark shows the historical trend right away

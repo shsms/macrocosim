@@ -26,11 +26,17 @@ export const gridFrequency = (() => {
   async function backfill() {
     if (mainId == null) return;
     try {
+      // window_s=600 is the server ring's full depth (10 min) — the
+      // most a re-entry can restore toward the 15-min sparkline.
       const r = await fetch(
-        `${mgPath("history")}?id=${mainId}&metric=frequency_hz&window_s=60`,
+        `${mgPath("history")}?id=${mainId}&metric=frequency_hz&window_s=600`,
       );
       if (!r.ok) return;
       const j = await r.json();
+      // Fresh ring per backfill — re-entering the dashboard would
+      // otherwise append the same history again and render a falsely
+      // repeated pattern.
+      dashboardTiles.resetStream("grid_frequency");
       for (const [ts_ms, value] of j.samples || []) {
         dashboardTiles.applySample({
           stream: "grid_frequency",
