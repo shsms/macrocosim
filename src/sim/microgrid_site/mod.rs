@@ -500,12 +500,15 @@ impl MicrogridSite {
         // Default runtime mode: every flag at "Normal" — i.e. emit
         // telemetry, accept commands, report physics-derived state.
         self.inner.runtime.write().entry(id).or_default();
-        // A fresh component starts its energy from zero: drop any leftover
-        // accumulator and scenario baseline under this id (a removal that
-        // raced the physics tick can leave a re-created entry behind, and
-        // its stale cursor would integrate the removal-to-reregister gap).
+        // A fresh component starts its history from zero: drop any leftover
+        // energy accumulator, scenario baseline, chart history, and setpoint
+        // ring under this id (a removal that raced the history sampler or a
+        // gRPC setpoint log can leave a re-created entry behind, and a stale
+        // energy cursor would integrate the removal-to-reregister gap).
         self.inner.component_energy.write().remove(&id);
         self.inner.scenario.write().energy_baseline_wh.remove(&id);
+        self.inner.histories.write().remove(&id);
+        self.inner.setpoint_logs.write().remove(&id);
         ComponentHandle::from_arc(c)
     }
 
