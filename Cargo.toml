@@ -33,7 +33,7 @@ frequenz-microgrid-component-graph = { git = "https://github.com/shsms/frequenz-
 # Dashboard tiles read from the same
 # LogicalMeterHandle::xxx<M>().subscribe() streams a production
 # downstream control app would consume.
-frequenz-microgrid = "0.5"
+frequenz-microgrid = "0.6"
 log = "0.4.22"
 simplelog = "0.12.2"
 rand = { version = "0.8.5", features = ["small_rng"] }

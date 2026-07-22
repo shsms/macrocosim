@@ -492,13 +492,13 @@ dependencies = [
 
 [[package]]
 name = "frequenz-microgrid"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d282308817a06275b323acf6aeb2e842c635fd814df4295ce6926af6f66ed44"
+checksum = "d81ebb809d19a8f1219c58253e2e9e25153b9639b7a0404b629a8b73a5c435fd"
 dependencies = [
  "async-trait",
  "chrono",
- "frequenz-microgrid-component-graph 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "frequenz-microgrid-component-graph 0.6.0",
  "frequenz-microgrid-formula-engine",
  "frequenz-resampling",
  "futures",
@@ -514,20 +514,20 @@ dependencies = [
 [[package]]
 name = "frequenz-microgrid-component-graph"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2ae40700292e149155d32a2267f93c48fdf1749a2176bbd7f4b0b0fa643396c"
+source = "git+https://github.com/shsms/frequenz-microgrid-component-graph-rs?rev=8bab132#8bab13290ccf9a979edec9e3adfeca0fad155e19"
 dependencies = [
  "petgraph 0.6.5",
+ "serde",
  "tracing",
 ]
 
 [[package]]
 name = "frequenz-microgrid-component-graph"
-version = "0.5.0"
-source = "git+https://github.com/shsms/frequenz-microgrid-component-graph-rs?rev=8bab132#8bab13290ccf9a979edec9e3adfeca0fad155e19"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7271ff70b07a8106977e472d30bd3316ae2e46b22c1aaf9bdf6851d083916370"
 dependencies = [
  "petgraph 0.6.5",
- "serde",
  "tracing",
 ]
 
@@ -2038,7 +2038,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "frequenz-microgrid",
- "frequenz-microgrid-component-graph 0.5.0 (git+https://github.com/shsms/frequenz-microgrid-component-graph-rs?rev=8bab132)",
+ "frequenz-microgrid-component-graph 0.5.0",
  "futures",
  "log",
  "notify",
