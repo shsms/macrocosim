@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from frequenz.quantities import Energy, Percentage, Power
@@ -70,12 +72,14 @@ class Site:
         assets: str | None = None,
         dispatch: str | None = None,
         process: subprocess.Popen[bytes] | None = None,
+        tmpdir: Path | None = None,
     ) -> None:
         self.ui = ui
         self.microgrids = microgrids
         self.assets = assets
         self.dispatch = dispatch
         self._process = process
+        self._tmpdir = tmpdir
         self._http = HttpClient(f"http://{ui}")
         self._grpc_clients: dict[int, GrpcClient] = {}
         # Assertion reads run on asyncio.to_thread worker threads, so two
@@ -336,6 +340,12 @@ class Site:
             self._grpc_clients.clear()
         self._http.close()
         terminate(self._process)
+        # The launch tmpdir (rendered config + endpoints + log) is only
+        # debris once its process is gone. `launch` failure paths never
+        # reach here, so the log survives for post-mortem reading there.
+        if self._tmpdir is not None:
+            shutil.rmtree(self._tmpdir, ignore_errors=True)
+            self._tmpdir = None
 
     def __enter__(self) -> Site:
         return self
@@ -345,7 +355,9 @@ class Site:
 
 
 def _site_from_endpoints(
-    endpoints: dict[str, Any], process: subprocess.Popen[bytes] | None
+    endpoints: dict[str, Any],
+    process: subprocess.Popen[bytes] | None,
+    tmpdir: Path | None = None,
 ) -> Site:
     microgrids = {
         int(m["id"]): MicrogridEndpoint(id=int(m["id"]), name=m["name"], grpc=m["grpc"])
@@ -357,6 +369,7 @@ def _site_from_endpoints(
         assets=endpoints.get("assets"),
         dispatch=endpoints.get("dispatch"),
         process=process,
+        tmpdir=tmpdir,
     )
 
 
@@ -393,8 +406,14 @@ def launch(
             )
         time.sleep(0.1)
 
-    endpoints = json.loads(spawned.endpoints_file.read_text())
-    return _site_from_endpoints(endpoints, spawned.process)
+    # Any failure after the handshake must not leak the just-booted
+    # simulator (mirrors the aio twin's finally-terminate).
+    try:
+        endpoints = json.loads(spawned.endpoints_file.read_text())
+        return _site_from_endpoints(endpoints, spawned.process, spawned.tmpdir)
+    except BaseException:
+        terminate(spawned.process)
+        raise
 
 
 def connect(

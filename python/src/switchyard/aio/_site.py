@@ -25,11 +25,13 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import shutil
 import subprocess
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from frequenz.quantities import Energy, Percentage, Power, Quantity
@@ -86,12 +88,14 @@ class Site:
         assets: str | None = None,
         dispatch: str | None = None,
         process: subprocess.Popen[bytes] | None = None,
+        tmpdir: Path | None = None,
     ) -> None:
         self.ui = ui
         self.microgrids = microgrids
         self.assets = assets
         self.dispatch = dispatch
         self._process = process
+        self._tmpdir = tmpdir
         self._http = AsyncHttpClient(f"http://{ui}")
         # Single-loop by design: creation is not racy, no lock needed.
         self._grpc_clients: dict[int, AsyncGrpcClient] = {}
@@ -342,6 +346,15 @@ class Site:
         self._grpc_clients.clear()
         await self._http.aclose()
         terminate(self._process)
+        # The launch tmpdir (rendered config + endpoints + log) is only
+        # debris once its process is gone. A launch that fails before
+        # the handshake never builds a Site, so its log survives for
+        # post-mortem reading (a post-handshake bind failure does tear
+        # the Site down — that is a client-side error whose diagnosis
+        # doesn't need the sim log).
+        if self._tmpdir is not None:
+            shutil.rmtree(self._tmpdir, ignore_errors=True)
+            self._tmpdir = None
 
     async def __aenter__(self) -> Site:
         return self
@@ -711,6 +724,7 @@ async def launch(
             assets=endpoints.get("assets"),
             dispatch=endpoints.get("dispatch"),
             process=spawned.process,
+            tmpdir=spawned.tmpdir,
         )
         # Bind the topology objects: from here on, the builders are the
         # live handles (LOAD.power.set(...), BAT.soc.read(), ...).

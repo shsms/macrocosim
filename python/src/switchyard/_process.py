@@ -88,6 +88,11 @@ class SpawnedSwitchyard:
     log_file: Path
     """The process's combined stdout+stderr, for failure diagnostics."""
 
+    tmpdir: Path
+    """Holds the rendered config + endpoints + log. Removed by
+    ``Site.close()`` on the happy path; deliberately kept when a launch
+    fails so the log survives for post-mortem reading."""
+
     def fail(self, exc_type: type[Exception], message: str) -> None:
         """Stop the process and raise ``exc_type`` with the log tail attached."""
         terminate(self.process)
@@ -123,7 +128,10 @@ def spawn_switchyard(
             stderr=subprocess.STDOUT,
         )
     return SpawnedSwitchyard(
-        process=process, endpoints_file=endpoints_file, log_file=log_file
+        process=process,
+        endpoints_file=endpoints_file,
+        log_file=log_file,
+        tmpdir=tmpdir,
     )
 
 

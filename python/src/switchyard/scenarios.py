@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -344,26 +345,44 @@ def run_scenario_stepped(
     binary = resolve_binary(
         "swctl", env_var="SWCTL_BIN", explicit=swctl_bin, flag="swctl_bin"
     )
-    tmpdir = Path(tempfile.mkdtemp(prefix="switchyard-py-"))
-    config_path = render_config(config, tmpdir)
-    args = [
-        binary,
-        "scenario",
-        "run",
-        name,
-        "--stepped",
-        "--config",
-        str(config_path),
-        "--json",
-    ]
-    if until is not None:
-        args += ["--until", str(int(until.total_seconds()))]
-    if step is not None:
-        args += ["--step", str(int(step))]
-    if assert_pass:
-        args += ["--assert"]
+    # Only builder objects need rendering to a temp file; a .lisp path
+    # is used as-is, and minting (and leaking) a tmpdir for it would
+    # accumulate one empty directory per run.
+    tmpdir: Path | None = None
+    try:
+        if isinstance(config, (str, os.PathLike)):
+            # Same spurious Protocol-and-PathLike intersection
+            # render_config works around; the runtime narrowing is
+            # str | PathLike here.
+            config_path = Path(config)  # ty: ignore[invalid-argument-type]
+        else:
+            tmpdir = Path(tempfile.mkdtemp(prefix="switchyard-py-"))
+            config_path = render_config(config, tmpdir)
+        args = [
+            binary,
+            "scenario",
+            "run",
+            name,
+            "--stepped",
+            "--config",
+            str(config_path),
+            "--json",
+        ]
+        if until is not None:
+            args += ["--until", str(int(until.total_seconds()))]
+        if step is not None:
+            args += ["--step", str(int(step))]
+        if assert_pass:
+            args += ["--assert"]
 
-    result = subprocess.run(args, capture_output=True, text=True, check=False)
+        result = subprocess.run(args, capture_output=True, text=True, check=False)
+    finally:
+        # The rendered config has served its purpose; failure diagnostics
+        # come from swctl's captured output, not the tmpdir — clean up
+        # even when rendering or the run itself raises (bad builder,
+        # Ctrl-C, exec failure).
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)
     report: ScenarioReport | None
     try:
         report = json.loads(result.stdout)

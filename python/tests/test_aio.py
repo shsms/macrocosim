@@ -158,7 +158,10 @@ def _fake_spawn(tmp_path, monkeypatch) -> None:
 
     def spawn(config, bin):
         return proc_mod.SpawnedSwitchyard(
-            process=_FakeProcess(), endpoints_file=endpoints, log_file=log
+            process=_FakeProcess(),
+            endpoints_file=endpoints,
+            log_file=log,
+            tmpdir=tmp_path,
         )
 
     monkeypatch.setattr(site_mod, "spawn_switchyard", spawn)
