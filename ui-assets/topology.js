@@ -554,8 +554,15 @@ export function createGraphCanvas(containerId, adapter = {}) {
       if (adapter.onConnect) {
         // Ctrl/Cmd toggles vis-network's addEdge mode. Hold Ctrl
         // (Cmd on Mac), drag from one node to another to wire them.
+        // Gated on this canvas actually being visible (offsetParent
+        // is null while its subview is hidden) so Ctrl-chords typed
+        // in the REPL or on other views don't arm edit mode.
         document.addEventListener("keydown", (e) => {
-          if ((e.key === "Control" || e.key === "Meta") && network) {
+          if (
+            (e.key === "Control" || e.key === "Meta") &&
+            network &&
+            el.offsetParent !== null
+          ) {
             network.addEdgeMode();
           }
         });
@@ -563,6 +570,12 @@ export function createGraphCanvas(containerId, adapter = {}) {
           if ((e.key === "Control" || e.key === "Meta") && network) {
             network.disableEditMode();
           }
+        });
+        // Cmd+Tab / window switches swallow the keyup, leaving
+        // addEdge mode permanently armed — the next node drag would
+        // silently eval a persisted (connect a b). Disarm on blur.
+        window.addEventListener("blur", () => {
+          if (network) network.disableEditMode();
         });
       }
       // Capture the selection state at mousedown — vis-network's

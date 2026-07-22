@@ -408,15 +408,16 @@ async function init() {
       // Common Windows-style redo alias.
       e.preventDefault();
       undoMgr.redo();
-    } else if (meta && key === "c") {
+    } else if (meta && (key === "c" || key === "v" || key === "x")) {
+      // With text selected somewhere on the page (inspector, log
+      // panel, REPL output), the user means the NATIVE clipboard —
+      // hijacking Ctrl+C there loses the copy, and Ctrl+X would
+      // delete canvas components when they only meant text.
+      if (!window.getSelection().isCollapsed) return;
       e.preventDefault();
-      copySelection();
-    } else if (meta && key === "v") {
-      e.preventDefault();
-      pasteClipboard();
-    } else if (meta && key === "x") {
-      e.preventDefault();
-      cutSelection();
+      if (key === "c") copySelection();
+      else if (key === "v") pasteClipboard();
+      else cutSelection();
     } else if (meta && key === "a") {
       e.preventDefault();
       selectAllVisible();
