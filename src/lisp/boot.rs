@@ -26,9 +26,10 @@ impl Config {
     /// Build a config from `filename`. Returns the formatted lisp
     /// error on parse / eval failure — caller decides whether to
     /// panic (binary boot) or surface in the UI (hot reload). On
-    /// error the site is left empty (no components registered)
-    /// rather than partially built; the caller is expected to retry
-    /// or abort.
+    /// error no background loops have been spawned and nothing is
+    /// ticking (the binary spawns each site's physics only after a
+    /// successful `new`); sites the failed eval already registered
+    /// are dropped with the registry Arcs.
     pub fn new(filename: &str) -> Result<Self, String> {
         Self::new_inner(filename, false)
     }
@@ -78,13 +79,12 @@ impl Config {
         // both attach to this slot.
         let grid_frequency = crate::sim::frequency::new_shared();
         site.set_grid_frequency(grid_frequency.clone());
-        // A headless run drives every tick itself; the wall-clock
-        // background loops (frequency driver here, plus the timeout
-        // sweep / lisp refresh / scenario auto-advance below) would race
-        // the stepped driver, so they're only spawned for a live build.
-        if !headless {
-            crate::sim::frequency::spawn_driver(grid_frequency.clone());
-        }
+        // The wall-clock background loops (frequency driver, timeout
+        // sweep, lisp refresh) are spawned only after the config
+        // evals successfully, below — a failed `Config::new` must
+        // not leave orphan loops ticking. A headless run never
+        // spawns them: it drives every tick itself, and the loops
+        // would race the stepped driver.
 
         // `Path::parent()` returns `Some("")` for bare filenames like
         // "config.lisp" — tulisp rejects empty paths, so fall back to
@@ -183,16 +183,6 @@ impl Config {
             }
         }
 
-        // One-per-process loop that walks every registered
-        // MicrogridSite's TimeoutTracker and calls reset_setpoint on
-        // each elapsed entry. Both gRPC's SetElectricalComponentPower
-        // and the Lisp `(set-active-power …)` defun add to the
-        // tracker; this loop is what makes their request-lifetime
-        // semantics visible.
-        if !headless {
-            Self::start_timeout_loop(microgrids.clone());
-        }
-
         if let Err(e) = ctx.eval_file(filename) {
             let formatted = e.format(&ctx);
             log::error!("Tulisp error:\n{formatted}");
@@ -220,6 +210,21 @@ impl Config {
             log_topology_validation(&entry.site, &format!("boot (microgrid {id})"));
         }
 
+        // Wall-clock background loops, spawned only now that the
+        // config evaluated: an eval error returns above, and loops
+        // spawned earlier would keep ticking (and keep the registry
+        // Arcs alive) with no handle to stop them.
+        if !headless {
+            crate::sim::frequency::spawn_driver(grid_frequency.clone());
+            // One-per-process loop that walks every registered
+            // MicrogridSite's TimeoutTracker and calls reset_setpoint
+            // on each elapsed entry. Both gRPC's
+            // SetElectricalComponentPower and the Lisp
+            // `(set-active-power …)` defun add to the tracker; this
+            // loop is what makes their request-lifetime semantics
+            // visible.
+            Self::start_timeout_loop(microgrids.clone());
+        }
 
         let ctx = SharedMut::new(ctx);
 
