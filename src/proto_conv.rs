@@ -16,14 +16,14 @@ use crate::{
         },
         microgrid::electrical_components::{
             Battery, BatteryType, ElectricalComponent, ElectricalComponentCategory,
-            ElectricalComponentCategorySpecificInfo, ElectricalComponentStateCode,
-            ElectricalComponentStateSnapshot, ElectricalComponentTelemetry, EvCharger,
-            EvChargerType, GridConnectionPoint, Inverter, InverterType, MetricConfigBounds,
-            electrical_component_category_specific_info::Kind,
+            ElectricalComponentCategorySpecificInfo, ElectricalComponentOperationalMode,
+            ElectricalComponentStateCode, ElectricalComponentStateSnapshot,
+            ElectricalComponentTelemetry, EvCharger, EvChargerType, GridConnectionPoint, Inverter,
+            InverterType, MetricConfigBounds, electrical_component_category_specific_info::Kind,
         },
     },
     proto::microgrid::ReceiveElectricalComponentTelemetryStreamResponse,
-    sim::{Category, SimulatedComponent, Telemetry},
+    sim::{Category, MicrogridSite, OperationalMode, SimulatedComponent, Telemetry},
 };
 
 /// Subscriber's metric allowlist. `None` means "all metrics"; `Some`
@@ -53,12 +53,32 @@ pub fn category_to_proto(c: Category) -> ElectricalComponentCategory {
     }
 }
 
+fn operational_mode_to_proto(m: OperationalMode) -> ElectricalComponentOperationalMode {
+    match m {
+        OperationalMode::Unspecified => ElectricalComponentOperationalMode::Unspecified,
+        OperationalMode::Inactive => ElectricalComponentOperationalMode::Inactive,
+        // "Telemtry" is the upstream proto's own spelling.
+        OperationalMode::TelemetryOnly => ElectricalComponentOperationalMode::TelemtryOnly,
+        OperationalMode::ControlOnly => ElectricalComponentOperationalMode::ControlOnly,
+        OperationalMode::ControlAndTelemetry => {
+            ElectricalComponentOperationalMode::ControlAndTelemetry
+        }
+    }
+}
+
 /// Build the static, type-defining `ElectricalComponent` for a
 /// component (used by `ListElectricalComponents` and the assets
 /// listing). `microgrid_id` comes from the caller — the per-port
 /// Microgrid server knows its own id, the assets server takes it
 /// from the request — so multi-microgrid clients can route by it.
-pub fn make_component_proto(c: &dyn SimulatedComponent, microgrid_id: u64) -> ElectricalComponent {
+/// `site` resolves the display-name override (`:name` /
+/// `rename-component` land in the site's `name_overrides`, not on the
+/// component) and the operational mode.
+pub fn make_component_proto(
+    c: &dyn SimulatedComponent,
+    site: &MicrogridSite,
+    microgrid_id: u64,
+) -> ElectricalComponent {
     let cat = category_to_proto(c.category());
     let kind = match cat {
         ElectricalComponentCategory::Inverter => Some(Kind::Inverter(Inverter {
@@ -127,9 +147,12 @@ pub fn make_component_proto(c: &dyn SimulatedComponent, microgrid_id: u64) -> El
 
     ElectricalComponent {
         id: c.id(),
-        name: c.name().to_string(),
+        name: site
+            .display_name(c.id())
+            .unwrap_or_else(|| c.name().to_string()),
         category: cat as i32,
         microgrid_id,
+        operational_mode: operational_mode_to_proto(site.operational_mode(c.id())) as i32,
         category_specific_info: Some(ElectricalComponentCategorySpecificInfo { kind }),
         metric_config_bounds: bounds,
         ..Default::default()
