@@ -95,12 +95,68 @@ impl Config {
     /// pokes like `set-meter-power`, health flips, timers, queries —
     /// runs but is not replayed by `load-overrides` on the next
     /// reload; pre-gate, a REPL poke silently resurrected as config.
+    ///
+    /// A `(load "file")` eval is the exception on the structural
+    /// side: the FILE is the persistent artifact, so its resolved
+    /// path goes onto the reload-replay list instead of the `(load
+    /// …)` form landing in an overrides journal (which would tie the
+    /// file's world to whichever microgrid scope happened to be
+    /// ambient). The same gate applies as for inline forms — only a
+    /// load that moved the structural fingerprint is recorded. A
+    /// purely imperative script (a scenario driver, a batch of
+    /// pokes) stays transient, exactly as the same forms typed into
+    /// the REPL would: replaying one on every reload would restart
+    /// its scenario / re-arm its timers forever.
     fn eval_locked(&self, ctx: &mut tulisp::TulispContext, src: &str) -> Result<String, String> {
         let before = self.structural_fingerprint();
         let result = match ctx.eval_string(src) {
             Ok(v) => Ok(v.to_string()),
             Err(e) => Err(e.format(ctx)),
         };
+        let (loads, has_other_forms) = top_level_load_paths(src);
+        if result.is_ok() && !loads.is_empty() {
+            let structural = self.structural_fingerprint() != before;
+            if structural {
+                for path in loads {
+                    let resolved = if path.is_absolute() {
+                        path
+                    } else {
+                        self.state_dir.join(path)
+                    };
+                    // Canonicalized so a relative and an absolute
+                    // spelling of the same file dedup to one replay
+                    // entry (tulisp canonicalizes its load path the
+                    // same way).
+                    match resolved.canonicalize() {
+                        Ok(canonical) => self.record_loaded_file(canonical),
+                        Err(_) => {
+                            // (load) resolved it some other way or the
+                            // file moved mid-eval; reload just won't
+                            // replay it.
+                            log::warn!(
+                                "eval loaded {} but the path does not resolve under {}; \
+                                 it will not survive a reload",
+                                resolved.display(),
+                                self.state_dir.display()
+                            );
+                        }
+                    }
+                }
+            }
+            if has_other_forms && (structural || contains_defaults_setq(src)) {
+                // Same "applied but won't survive a reload" condition
+                // the journal-append failure below banners — a
+                // server-side log alone would leave the REPL user
+                // with ok:true and silent data loss.
+                let msg = "eval mixed (load …) with other top-level forms; only the \
+                           loaded files are recorded for reload — the other forms \
+                           are not journaled and will not survive a reload";
+                log::warn!("{msg}");
+                self.router.site().broadcast_config_error(msg.to_string());
+            }
+            self.router.site().bump_version();
+            return result;
+        }
         if result.is_ok()
             && (self.structural_fingerprint() != before || contains_defaults_setq(src))
             && let Err(e) = self.append_to_overrides_file(src)
@@ -429,6 +485,47 @@ impl Config {
     }
 }
 
+/// Top-level `(load "…")` targets in `src`, plus whether any OTHER
+/// top-level expression form rides along. Only string-literal
+/// arguments count — a computed path `(load (concat …))` can't be
+/// resolved statically and simply isn't recorded for reload.
+fn top_level_load_paths(src: &str) -> (Vec<PathBuf>, bool) {
+    use tulisp_fmt::cst::CstNode;
+    let Ok(cst) = tulisp_fmt::parse(src) else {
+        return (Vec::new(), false);
+    };
+    let mut loads = Vec::new();
+    let mut other = false;
+    for n in &cst.nodes {
+        match n {
+            CstNode::Comment { .. } | CstNode::LineBreak { .. } => {}
+            CstNode::List { children, .. } => {
+                let mut atoms = children.iter().filter_map(|c| match c {
+                    CstNode::Atom { text, .. } => Some(text.as_str()),
+                    _ => None,
+                });
+                let is_load = atoms.next() == Some("load");
+                let arg = atoms.next();
+                match (is_load, arg) {
+                    (true, Some(s)) if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 => {
+                        // Lisp string literal → path. Escapes other
+                        // than \\ and \" don't appear in file paths
+                        // in practice; unescape just those two.
+                        let unescaped = s[1..s.len() - 1]
+                            .replace("\\\\", "\\")
+                            .replace("\\\"", "\"");
+                        loads.push(PathBuf::from(unescaped));
+                    }
+                    (true, _) => other = true,
+                    (false, _) => other = true,
+                }
+            }
+            _ => other = true,
+        }
+    }
+    (loads, other)
+}
+
 /// Does `src` contain a top-level defaults edit — `(setq <sym>-defaults …)`?
 /// The Defaults panel saves through eval; those shape FUTURE `make-*`
 /// calls rather than the live graph, so the structural gate alone would
@@ -453,6 +550,56 @@ fn contains_defaults_setq(src: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::config_with;
+
+    /// A `(load "file")` eval records the file for reload replay
+    /// instead of journaling the form: the file itself is the
+    /// persistent artifact.
+    #[test]
+    fn load_evals_are_recorded_not_journaled() {
+        let (cfg, dir) = config_with("nil");
+        let extra = dir.join("extra-mg.lisp");
+        std::fs::write(
+            &extra,
+            "(make-microgrid :id 55 :grpc-port 8855 :topology (lambda () nil))",
+        )
+        .unwrap();
+        cfg.eval("(load \"extra-mg.lisp\")").unwrap();
+        assert!(cfg.microgrids().lock().contains_key(&55));
+        // No overrides journal picked up the (load …) form.
+        let mg_dir = dir.join("microgrids");
+        if let Ok(entries) = std::fs::read_dir(&mg_dir) {
+            for e in entries.flatten() {
+                let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+                assert!(
+                    !text.contains("extra-mg"),
+                    "(load …) form must not be journaled; found in {}",
+                    e.path().display()
+                );
+            }
+        }
+        // The recorded file replays on reload.
+        cfg.reload().expect("reload");
+        assert!(cfg.microgrids().lock().contains_key(&55));
+    }
+
+    /// A load that registered nothing structural — a scenario driver,
+    /// a batch of pokes — stays transient: recording it would restart
+    /// its side effects on every reload, the exact resurrection the
+    /// persist gate exists to prevent.
+    #[test]
+    fn transient_loads_are_not_recorded() {
+        let (cfg, dir) = config_with("nil");
+        let script = dir.join("poke.lisp");
+        std::fs::write(&script, "(setq some-transient-var 42)").unwrap();
+        cfg.eval("(load \"poke.lisp\")").unwrap();
+        assert!(
+            !cfg.loaded_files
+                .lock()
+                .iter()
+                .any(|p| p.ends_with("poke.lisp")),
+            "non-structural load must not join the reload-replay list"
+        );
+    }
 
     /// Every successful eval appends to the override file
     /// immediately — that's how an edit survives a reload (the
