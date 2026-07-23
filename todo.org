@@ -120,6 +120,43 @@ Acceptance: CI green on this PR; introducing a UI regression
 flips it red and the artifact contains a trace pointing at the
 broken assertion.
 
+** U. On-demand microgrid lifecycle
+
+*** TODO U1. Unload/drop a loaded microgrid from memory      :rust:design:
+
+Counterpart to on-demand loading (the config.lisp-dissolution
+track, discussed 2026-07-23): drop a registered microgrid and its
+runtime without touching its files on disk — load brings it back.
+
+The enabler is a per-mg runtime-handle bundle plus a symmetric
+=microgrid_unregistered= event, mirroring how dynamic ADD already
+works end to end (=make-microgrid= → =microgrid_registered= → the
+binary spawns gRPC listener / physics / history sampler / loopback,
+the WS pump adds a forwarder):
+
+- Binary: keep {gRPC shutdown trigger (=serve_with_shutdown=),
+  physics + sampler JoinHandles, loopback abort} per mg id,
+  populated in both spawn sites (boot loop and the registered-event
+  arm — near-identical code, could unify while at it). On
+  unregistered: trigger the gRPC shutdown FIRST — in-flight
+  telemetry stream tasks hold component Arcs and would keep
+  streaming a frozen site; killing the transport ends them — then
+  abort the rest and drop the bundle.
+- Lib: =(unload-microgrid ID)= under the interpreter lock — guard
+  against a running scenario (v1: refuse; D7's per-mg scenario
+  scope is the real fix), remove the registry entry, clear
+  =current_microgrid= if it points there, emit unregistered. WS
+  forwarders need nothing: last site Arc drops → event Sender
+  closes → the forwarder's =RecvError::Closed= arm exits.
+- Wrappers: =DELETE /api/mg/{id}=, a swctl verb, a UI button.
+- Ports rebind on re-load; the make-microgrid port-collision check
+  errors cleanly if something else took the port meanwhile.
+
+Open decisions: drop the mg's dispatches on unload (with Deleted
+events so streams + UI update) vs. keep them for the next load;
+and whether unload-by-script (a script may register several mgs)
+is worth a verb on top of unload-by-id.
+
 ** S. Additional gRPC services
 
 *** TODO S1. Expose the reporting API                              :rust:api:
