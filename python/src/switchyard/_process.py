@@ -114,6 +114,18 @@ def spawn_switchyard(
     )
     tmpdir = Path(tempfile.mkdtemp(prefix="switchyard-py-"))
     config_path = render_config(config, tmpdir)
+    # Rendered configs (builder objects) anchor their persistent state
+    # (overrides journals, snapshots, created-microgrid stubs) in the
+    # tempdir — a test's structural evals must never litter the
+    # process cwd, and the dir is cleaned up with the Site. A
+    # user-supplied .lisp path keeps its long-standing contract
+    # instead: relative (load …)s and journals anchor next to the
+    # config file, as when the binary derived the anchor from the
+    # config's own location.
+    if isinstance(config, (str, os.PathLike)):
+        state_dir = config_path.parent
+    else:
+        state_dir = tmpdir
     endpoints_file = tmpdir / "endpoints.json"
     log_file = tmpdir / "switchyard.log"
     with log_file.open("wb") as log:
@@ -123,6 +135,7 @@ def spawn_switchyard(
                 str(config_path),
                 "--ephemeral-ports",
                 f"--emit-endpoints={endpoints_file}",
+                f"--state-dir={state_dir}",
             ],
             stdout=log,
             stderr=subprocess.STDOUT,

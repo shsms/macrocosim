@@ -410,6 +410,17 @@ def launch(
     # simulator (mirrors the aio twin's finally-terminate).
     try:
         endpoints = json.loads(spawned.endpoints_file.read_text())
+        # The binary boots (and reports ready) even when the config
+        # registered no microgrid — a legitimate state for the
+        # interactive bare engine, but a dead end for a client whose
+        # config was supposed to build a topology. Fail fast with the
+        # config's likely mistake (and the log tail, via fail()).
+        if not endpoints.get("microgrids"):
+            spawned.fail(
+                RuntimeError,
+                "switchyard booted but the config registered no microgrids "
+                "— does it call (make-microgrid …)?",
+            )
         return _site_from_endpoints(endpoints, spawned.process, spawned.tmpdir)
     except BaseException:
         terminate(spawned.process)

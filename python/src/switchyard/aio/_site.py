@@ -712,6 +712,16 @@ async def launch(
                 )
             await asyncio.sleep(0.1)
         endpoints = json.loads(spawned.endpoints_file.read_text())
+        # Mirror the sync launch guard: the binary reports ready even
+        # with an empty registry (the interactive bare-engine state),
+        # but a client's config was supposed to build a topology.
+        # fail() attaches the log tail.
+        if not endpoints.get("microgrids"):
+            spawned.fail(
+                RuntimeError,
+                "switchyard booted but the config registered no microgrids "
+                "— does it call (make-microgrid …)?",
+            )
         microgrids = {
             int(m["id"]): MicrogridEndpoint(
                 id=int(m["id"]), name=m["name"], grpc=m["grpc"]
