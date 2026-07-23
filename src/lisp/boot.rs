@@ -23,15 +23,39 @@ use crate::sim::microgrids::SiteRouter;
 use super::{Config, Metadata, defuns};
 
 impl Config {
-    /// Build a config from `filename`. Returns the formatted lisp
-    /// error on parse / eval failure — caller decides whether to
-    /// panic (binary boot) or surface in the UI (hot reload). On
-    /// error no background loops have been spawned and nothing is
-    /// ticking (the binary spawns each site's physics only after a
-    /// successful `new`); sites the failed eval already registered
-    /// are dropped with the registry Arcs.
+    /// Build a config from one script file — the single-script
+    /// convenience for embedders and tests. The state dir is the
+    /// script's directory, which keeps journals / snapshots /
+    /// runtime-created stubs next to the script — the entry-config
+    /// contract this constructor has always had. (The binary's CLI
+    /// goes through [`Config::new_with`], whose default is the cwd.)
+    /// Returns the formatted lisp error on parse / eval failure —
+    /// caller decides whether to panic (binary boot) or surface in
+    /// the UI (hot reload). On error no background loops have been
+    /// spawned and nothing is ticking (the binary spawns each site's
+    /// physics only after a successful `new`); sites the failed eval
+    /// already registered are dropped with the registry Arcs.
     pub fn new(filename: &str) -> Result<Self, String> {
-        Self::new_inner(filename, false)
+        let scripts = vec![filename.to_string()];
+        let state_dir = script_parent_dir(filename);
+        Self::new_inner(scripts, state_dir, false)
+    }
+
+    /// Build a config from zero or more boot scripts. With none, the
+    /// engine boots bare: empty registry, full DSL live via the
+    /// embedded prelude — topologies then arrive at runtime through
+    /// `(load …)` / the REPL / the HTTP create + import endpoints.
+    ///
+    /// `state_dir` anchors everything persistent (overrides journals,
+    /// `snapshots/`, runtime-created microgrid stubs) and the
+    /// relative-path resolution of `(load …)` / `(file-exists-p …)`.
+    /// `None` falls back to the process cwd — one anchor regardless
+    /// of where the scripts live, so a `(load …)` typed into the
+    /// REPL resolves the same whether the world came from a boot
+    /// script or a runtime load.
+    pub fn new_with(scripts: &[String], state_dir: Option<PathBuf>) -> Result<Self, String> {
+        let state_dir = state_dir.unwrap_or_else(|| PathBuf::from("."));
+        Self::new_inner(scripts.to_vec(), state_dir, false)
     }
 
     /// Build a *headless* `Config` for deterministic, faster-than-real-
@@ -42,7 +66,17 @@ impl Config {
     /// driver) are NOT spawned — the caller steps the simulation itself
     /// via [`Config::sim_step`]. Used for CI scenario assertions.
     pub fn new_headless(filename: &str) -> Result<(Self, Arc<tulisp_async::ManualClock>), String> {
-        let cfg = Self::new_inner(filename, true)?;
+        let scripts = vec![filename.to_string()];
+        let state_dir = script_parent_dir(filename);
+        let cfg = Self::new_inner(scripts, state_dir, true)?;
+        // A stepped run has no UI and no REPL — nothing can load a
+        // topology later, so an empty registry here is a dead run,
+        // not a bare boot waiting for input.
+        if cfg.microgrids.lock().is_empty() {
+            return Err("config loaded but no (make-microgrid …) form ran — \
+                 a headless run needs its config to register a microgrid"
+                .to_string());
+        }
         let clock = cfg
             .sim_clock
             .clone()
@@ -50,7 +84,7 @@ impl Config {
         Ok((cfg, clock))
     }
 
-    fn new_inner(filename: &str, headless: bool) -> Result<Self, String> {
+    fn new_inner(scripts: Vec<String>, state_dir: PathBuf, headless: bool) -> Result<Self, String> {
         use std::sync::atomic::AtomicU64;
         let mut ctx = TulispContext::new();
         let enterprise_id_allocator =
@@ -86,16 +120,14 @@ impl Config {
         // spawns them: it drives every tick itself, and the loops
         // would race the stepped driver.
 
-        // `Path::parent()` returns `Some("")` for bare filenames like
-        // "config.lisp" — tulisp rejects empty paths, so fall back to
-        // the current directory in that case.
-        let config_path = Path::new(filename);
-        let load_dir: PathBuf = match config_path.parent() {
-            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-            _ => PathBuf::from("."),
-        };
-        ctx.set_load_path(Some(&load_dir))
-            .map_err(|e| format!("set_load_path({}): {e}", load_dir.display()))?;
+        // tulisp canonicalizes the load path, which requires the
+        // directory to exist — create it up front so a fresh
+        // `--state-dir` fails with a clear message (every other
+        // consumer create_dir_all's lazily anyway).
+        std::fs::create_dir_all(&state_dir)
+            .map_err(|e| format!("state dir {} cannot be created: {e}", state_dir.display()))?;
+        ctx.set_load_path(Some(&state_dir))
+            .map_err(|e| format!("set_load_path({}): {e}", state_dir.display()))?;
 
         // Headless builds run the timer queue + scenario time on a
         // hand-advanced ManualClock so a scenario can be stepped
@@ -118,12 +150,12 @@ impl Config {
             &mut ctx,
             router.clone(),
             metadata.clone(),
-            load_dir.clone(),
+            state_dir.clone(),
             microgrids.clone(),
             now.clone(),
         );
         defuns::register_clock(&mut ctx, clock.clone());
-        defuns::register_watches(&mut ctx, load_dir.clone(), extra_watches.clone());
+        defuns::register_watches(&mut ctx, state_dir.clone(), extra_watches.clone());
         defuns::register_scenarios(&mut ctx, scenarios.clone());
         defuns::register_microgrids(
             &mut ctx,
@@ -183,23 +215,34 @@ impl Config {
             }
         }
 
-        if let Err(e) = ctx.eval_file(filename) {
-            let formatted = e.format(&ctx);
-            log::error!("Tulisp error:\n{formatted}");
-            return Err(formatted);
+        for script in &scripts {
+            if let Err(e) = ctx.eval_file(script) {
+                let formatted = e.format(&ctx);
+                log::error!("Tulisp error in {script}:\n{formatted}");
+                return Err(formatted);
+            }
         }
         warn_orphaned_chp_defaults(&mut ctx);
 
-        // Every config must register at least one microgrid via
-        // `(make-microgrid …)` — there's no single-microgrid
-        // fallback. A bare config that forgets the form would
-        // boot a binary with no gRPC servers, no loopback, and
-        // an empty Microgrids UI; surface that as a hard error
-        // instead.
+        // An empty registry is a legitimate live state: a bare boot
+        // (no scripts) serves the UI + REPL and topologies arrive on
+        // demand via `(load …)` or the create/import endpoints. Warn
+        // when scripts WERE given and registered nothing — that is
+        // almost certainly a config mistake, but with the UI up the
+        // user can still recover interactively. The headless path
+        // hard-errors instead (see `new_headless`).
         if microgrids.lock().is_empty() {
-            return Err("config loaded but no (make-microgrid …) form ran — \
-                 every config must register at least one microgrid"
-                .to_string());
+            if scripts.is_empty() {
+                log::info!(
+                    "bare boot: no microgrids registered — load a script from \
+                     the UI or REPL, e.g. (load \"examples/berlin-demo.lisp\")"
+                );
+            } else {
+                log::warn!(
+                    "boot scripts registered no microgrids — no gRPC servers \
+                     will be up until a (make-microgrid …) form runs"
+                );
+            }
         }
 
         // Validate every registered site, not the (always-empty)
@@ -255,7 +298,20 @@ impl Config {
         // introspectable but not yet runnable from the registry.
 
         Ok(Self {
-            filename: filename.to_string(),
+            // Canonicalized so the same file spelled differently
+            // (relative argv vs an absolute runtime (load …)) dedups
+            // to one replay entry; the scripts eval'd above, so they
+            // exist and canonicalize cleanly.
+            loaded_files: Arc::new(Mutex::new(
+                scripts
+                    .iter()
+                    .map(|s| {
+                        let p = PathBuf::from(s);
+                        p.canonicalize().unwrap_or(p)
+                    })
+                    .collect(),
+            )),
+            state_dir,
             ctx,
             site,
             metadata,
@@ -513,10 +569,11 @@ impl Config {
         ctx.tags_table(Some(roots))
     }
 
-    /// Re-evaluate the config file, resetting MicrogridSite state first.
-    /// Returns the formatted lisp error on failure — the site is
-    /// left in its post-reset (empty) state in that case so the
-    /// next reload starts from a known baseline.
+    /// Reset every site and timer, then replay the loaded-file list
+    /// in load order. Returns the formatted lisp error on failure —
+    /// files before the failing one have been rebuilt, the failing
+    /// and later files' microgrids stay reset-empty; the next
+    /// successful reload converges the whole world again.
     pub fn reload(&self) -> Result<(), String> {
         let mut ctx = self.ctx.borrow_mut();
         self.reload_locked(&mut ctx)
@@ -549,19 +606,32 @@ impl Config {
         for entry in self.microgrids.lock().values() {
             entry.site.reset();
         }
-        if let Err(e) = ctx.eval_file(&self.filename) {
-            let formatted = e.format(ctx);
-            log::error!("Tulisp error:\n{formatted}");
-            return Err(formatted);
+        // Replay every loaded file in load order: the boot scripts
+        // plus everything that arrived at runtime — `(load …)` evals
+        // and the stubs the create/import endpoints wrote. The world
+        // is the sum of loaded files, not of one entry config, so the
+        // replay list is the source of truth here. A file that
+        // vanished since it was loaded is skipped with a warning (its
+        // microgrids stay reset-empty) rather than aborting the whole
+        // reload.
+        let files: Vec<PathBuf> = self.loaded_files.lock().clone();
+        for file in &files {
+            if !file.exists() {
+                log::warn!(
+                    "reload: {} no longer exists; skipping (its microgrids stay empty)",
+                    file.display()
+                );
+                continue;
+            }
+            if let Err(e) = ctx.eval_file(&file.to_string_lossy()) {
+                let formatted = e.format(ctx);
+                log::error!("Tulisp error in {}:\n{formatted}", file.display());
+                return Err(formatted);
+            }
         }
         warn_orphaned_chp_defaults(ctx);
-        // Belt-and-suspenders: with the keep-registry semantics above
-        // this can only fire if the registry was empty before the
-        // reload, which Config::new's own check rules out.
         if self.microgrids.lock().is_empty() {
-            return Err("reloaded config registered no microgrids — \
-                 every config must call (make-microgrid …) at least once"
-                .to_string());
+            log::warn!("reload left the registry empty — no loaded file registers a microgrid");
         }
         // Tell UI subscribers the MicrogridSite rebuilt. Catches the
         // "removed the only pending entry" case where remove_pending
@@ -602,24 +672,29 @@ impl Config {
                 return;
             }
         };
-        if let Err(e) = watcher.watch(
-            Path::new(&self.filename),
-            notify::RecursiveMode::NonRecursive,
-        ) {
-            log::error!(
-                "watch: registering {}: {e}; hot-reload disabled",
-                self.filename
-            );
-            return;
-        }
-        // Add every path the config registered via `(watch-file …)`.
-        // Snapshotted now; reload-time additions take effect on the
-        // next process restart (the live notify watcher isn't held
-        // across reloads, by design — keeps the watch lifecycle simple).
-        for path in self.extra_watches.lock().iter() {
-            if let Err(e) = watcher.watch(path, notify::RecursiveMode::NonRecursive) {
-                log::warn!("watch-file {}: {}", path.display(), e);
+        // Watch the boot scripts plus every `(watch-file …)`
+        // registration. Snapshotted now; files loaded at runtime take
+        // effect on the next process restart (the live notify watcher
+        // isn't held across reloads, by design — keeps the watch
+        // lifecycle simple; `(watch-file PATH)` in a script opts it
+        // in explicitly).
+        let mut watched = 0usize;
+        let mut requested = 0usize;
+        let boot_files: Vec<PathBuf> = self.loaded_files.lock().clone();
+        for path in boot_files.iter().chain(self.extra_watches.lock().iter()) {
+            requested += 1;
+            match watcher.watch(path, notify::RecursiveMode::NonRecursive) {
+                Ok(()) => watched += 1,
+                Err(e) => log::warn!("watch {}: {}", path.display(), e),
             }
+        }
+        if watched == 0 {
+            if requested == 0 {
+                log::info!("watch: nothing to watch (bare boot); hot-reload idle");
+            } else {
+                log::error!("watch: no watch could be registered; hot-reload disabled");
+            }
+            return;
         }
 
         // Debounce window. Editors typically fire several notify
@@ -688,6 +763,18 @@ fn warn_orphaned_chp_defaults(ctx: &mut TulispContext) {
     }
 }
 
+/// The script's directory, for the single-script constructors that
+/// anchor state next to the script. `Path::parent()` returns
+/// `Some("")` for bare filenames like "config.lisp" — tulisp rejects
+/// empty paths, so those fall back to the cwd.
+fn script_parent_dir(script: &str) -> PathBuf {
+    Path::new(script)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Run the component-graph validator on the current `MicrogridSite` and
 /// log the outcome. `phase` is one of "boot" / "reload" so the log
 /// line tags which path triggered the check.
@@ -734,6 +821,51 @@ fn log_topology_validation(site: &MicrogridSite, phase: &str) {
 mod tests {
     use super::super::Config;
     use super::super::test_support::{config_with, next_unique};
+
+    /// A bare boot (no scripts) is a legitimate live state: empty
+    /// registry, DSL live, topologies arrive on demand.
+    #[test]
+    fn bare_boot_has_empty_registry() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "switchyard-bare-{}-{}",
+            std::process::id(),
+            next_unique(),
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let cfg = rt
+            .block_on(async { Config::new_with(&[], Some(dir)) })
+            .expect("bare boot must succeed");
+        std::mem::forget(rt);
+        assert!(cfg.microgrids().lock().is_empty());
+        // The DSL is live: a runtime eval can still build a world.
+        let out = cfg
+            .eval("(make-microgrid :id 7 :grpc-port 8807 :topology (lambda () nil))")
+            .expect("runtime make-microgrid");
+        assert!(!out.is_empty());
+        assert!(cfg.microgrids().lock().contains_key(&7));
+    }
+
+    /// Reload replays the loaded-file list, so a file recorded after
+    /// boot (a runtime `(load …)` or a create-endpoint stub) brings
+    /// its microgrid back instead of being forgotten.
+    #[test]
+    fn reload_replays_recorded_files() {
+        let (cfg, dir) = config_with("nil");
+        let extra = dir.join("extra-mg.lisp");
+        std::fs::write(
+            &extra,
+            "(make-microgrid :id 42 :grpc-port 8842 :topology (lambda () nil))",
+        )
+        .unwrap();
+        cfg.record_loaded_file(extra);
+        cfg.reload().expect("reload");
+        let reg = cfg.microgrids();
+        let reg = reg.lock();
+        assert!(reg.contains_key(&42), "recorded file must be replayed");
+        assert!(reg.len() >= 2, "boot script's microgrid must survive too");
+    }
 
     /// `Config::new` returns Err on lisp eval failure rather than
     /// silently logging — the binary panics with a useful message

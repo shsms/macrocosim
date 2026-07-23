@@ -28,7 +28,7 @@ pub mod value;
 mod test_support;
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -105,7 +105,17 @@ impl Default for Metadata {
 
 #[derive(Clone)]
 pub struct Config {
-    pub(crate) filename: String,
+    /// Every file whose eval built the current world, in load order:
+    /// the boot scripts, then anything added at runtime — successful
+    /// top-level `(load …)` evals and the stubs the create / import
+    /// endpoints write. `reload` replays exactly this list, so a
+    /// microgrid loaded (or created) after boot survives a reload
+    /// the same way boot-script ones do.
+    pub(crate) loaded_files: Arc<Mutex<Vec<PathBuf>>>,
+    /// Anchor for everything persistent — overrides journals,
+    /// `snapshots/`, runtime-created microgrid stubs — and for the
+    /// relative-path resolution of `(load …)` / `(file-exists-p …)`.
+    pub(crate) state_dir: PathBuf,
     pub(crate) ctx: SharedMut<TulispContext>,
     pub(crate) site: MicrogridSite,
     pub(crate) metadata: Arc<RwLock<Metadata>>,
@@ -293,15 +303,26 @@ impl Config {
     }
 
     /// Directory holding per-microgrid `config.<id>.lisp` +
-    /// `config.<id>.overrides.lisp` files, next to the entry config.
+    /// `config.<id>.overrides.lisp` files, under the state dir.
     /// The HTTP create endpoint writes runtime-created microgrid
-    /// stubs here so they survive process restarts.
+    /// stubs here; restoring one after a restart is a manual
+    /// `(load …)` / CLI argument — nothing scans this directory.
     pub fn microgrids_dir(&self) -> PathBuf {
-        let load_dir = Path::new(&self.filename)
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        load_dir.join("microgrids")
+        self.state_dir.join("microgrids")
+    }
+
+    /// Append `path` to the reload-replay list (dedup'd): the file's
+    /// eval contributed to the current world, so `reload` must replay
+    /// it. Called for runtime `(load …)` evals and for the stub files
+    /// the create / import endpoints write.
+    pub(crate) fn record_loaded_file(&self, path: PathBuf) {
+        // Canonical form so every spelling of the same file (relative
+        // argv, absolute REPL path, handler-built stub path) dedups
+        // to one replay entry.
+        let path = path.canonicalize().unwrap_or(path);
+        let mut files = self.loaded_files.lock();
+        if !files.contains(&path) {
+            files.push(path);
+        }
     }
 }

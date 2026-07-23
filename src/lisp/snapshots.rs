@@ -14,15 +14,10 @@ use super::Config;
 
 impl Config {
     /// Directory snapshots are stored in: a `snapshots/` subdirectory
-    /// next to the loaded config file. Lazily created on the first
+    /// under the state dir. Lazily created on the first
     /// `save_snapshot` call.
     pub fn snapshots_dir(&self) -> PathBuf {
-        let load_dir = Path::new(&self.filename)
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        load_dir.join("snapshots")
+        self.state_dir.join("snapshots")
     }
 
     /// Copy the current per-microgrid overrides file to

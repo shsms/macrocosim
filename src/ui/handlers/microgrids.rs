@@ -297,5 +297,10 @@ fn write_microgrid_stub(
         \x20  (load-overrides)))\n",
         name_esc = esc(name),
     );
-    std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))
+    std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    // Reload replays the loaded-file list; without this the created
+    // microgrid would come back EMPTY from the next reload (its stub
+    // is only read at load time, and nothing scans the stub dir).
+    config.record_loaded_file(path);
+    Ok(())
 }

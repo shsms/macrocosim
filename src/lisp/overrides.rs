@@ -423,12 +423,7 @@ impl Config {
     /// [`overrides_path`](Self::overrides_path) for an explicit
     /// microgrid id — a pure function of the id, no ambient scope.
     pub(super) fn overrides_path_for(&self, mg_id: u64) -> PathBuf {
-        let load_dir = Path::new(&self.filename)
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        load_dir
+        self.state_dir
             .join("microgrids")
             .join(format!("config.{mg_id}.overrides.lisp"))
     }

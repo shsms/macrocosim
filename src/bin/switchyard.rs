@@ -22,9 +22,17 @@ use tokio_stream::wrappers::TcpListenerStream;
 /// Headless switchyard microgrid simulator.
 #[derive(Parser)]
 struct Args {
-    /// Config file to load.
-    #[arg(default_value = "config.lisp")]
-    config: PathBuf,
+    /// Lisp scripts to evaluate at boot, in order. With none, the
+    /// engine boots bare: UI + REPL up, empty registry — load a
+    /// topology on demand with `(load "…")` from the REPL or the
+    /// Microgrids tab.
+    scripts: Vec<PathBuf>,
+
+    /// Anchor directory for persistent state (overrides journals,
+    /// snapshots/, runtime-created microgrid stubs) and for relative
+    /// `(load …)` paths. Defaults to the current directory.
+    #[arg(long, value_name = "DIR")]
+    state_dir: Option<PathBuf>,
 
     /// UI HTTP port (0 = OS-chosen). Ignored under --ephemeral-ports.
     #[arg(long, default_value_t = 8801)]
@@ -104,15 +112,23 @@ async fn main() {
     ])
     .unwrap();
 
-    let cfg_path = args.config.clone();
-    log::info!("Loading config from {}", cfg_path.display());
-
-    let cfg_path_str = cfg_path.to_str().unwrap_or_else(|| {
-        log::error!("Config path is not valid UTF-8: {}", cfg_path.display());
-        std::process::exit(1);
-    });
-    let config = Config::new(cfg_path_str).unwrap_or_else(|e| {
-        log::error!("Failed to load config:\n{e}");
+    let scripts: Vec<String> = args
+        .scripts
+        .iter()
+        .map(|p| {
+            p.to_str().map(str::to_owned).unwrap_or_else(|| {
+                log::error!("Script path is not valid UTF-8: {}", p.display());
+                std::process::exit(1);
+            })
+        })
+        .collect();
+    if scripts.is_empty() {
+        log::info!("No boot scripts given — starting a bare engine");
+    } else {
+        log::info!("Evaluating boot script(s): {}", scripts.join(", "));
+    }
+    let config = Config::new_with(&scripts, args.state_dir.clone()).unwrap_or_else(|e| {
+        log::error!("Failed to eval boot scripts:\n{e}");
         std::process::exit(1);
     });
 
@@ -132,10 +148,6 @@ async fn main() {
             )
         })
         .collect();
-    if entries.is_empty() {
-        log::error!("Boot produced no microgrids in the registry — config eval bug?");
-        std::process::exit(1);
-    }
     log::info!(
         "Enterprise carries {} microgrid(s); spawning per-microgrid runtimes",
         entries.len()
@@ -208,18 +220,21 @@ async fn main() {
     // looks up the right slot; the legacy /api/microgrid/* endpoints
     // read the *first* microgrid's slot for backward compat.
     let loopbacks = ui::new_microgrid_loopbacks();
-    let first_id = bound[0].0;
+    let first_id = bound.first().map(|b| b.0);
     let mut primary_slot: Option<ui::SharedMicrogrid> = None;
     for (id, name, site, _listener, addr) in &bound {
         let slot = ui::new_microgrid_slot();
         ui::spawn_microgrid_loopback(format!("http://{addr}"), slot.clone(), site.clone());
         loopbacks.write().insert(*id, slot.clone());
-        if *id == first_id {
+        if Some(*id) == first_id {
             primary_slot = Some(slot);
         }
         log::info!("Microgrid #{id} {name:?} loopback client spawned");
     }
-    let microgrid = primary_slot.expect("primary loopback slot");
+    // Bare boot: the legacy /api/microgrid/* endpoints read this
+    // slot; with no boot-time microgrids it stays an empty,
+    // never-connected slot (the per-mg routes serve runtime loads).
+    let microgrid = primary_slot.unwrap_or_else(ui::new_microgrid_slot);
 
     // Runtime-create callback: when POST /api/microgrids/create
     // inserts a new entry into the registry, this closure spawns
