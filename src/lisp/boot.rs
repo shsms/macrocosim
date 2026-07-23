@@ -606,6 +606,18 @@ impl Config {
         for entry in self.microgrids.lock().values() {
             entry.site.reset();
         }
+        // Cancel every live timer centrally before the replay: each
+        // replayed file re-registers its own `every` blocks, so this
+        // is what keeps timer hygiene ORDER-INDEPENDENT. A per-script
+        // `(cancel-timers)` call could not be: replayed after another
+        // script, it would cancel that script's just-re-registered
+        // timers, permanently freezing the earlier world's animation.
+        // Top-level eval_string here is fine — no caller of reload
+        // sits inside an eval frame (the 0.29.0 hazard is re-entrant
+        // eval_string only).
+        if let Err(e) = ctx.eval_string("(cancel-timers)") {
+            log::warn!("reload: cancel-timers failed: {}", e.format(ctx));
+        }
         // Replay every loaded file in load order: the boot scripts
         // plus everything that arrived at runtime — `(load …)` evals
         // and the stubs the create/import endpoints wrote. The world
@@ -965,17 +977,16 @@ mod tests {
         );
     }
 
-    /// The shipped `config.lisp` boots cleanly and its starter library
-    /// registers — a guard against a `define-scenario` schema change
-    /// (e.g. dropping the day-stage `:stages` key) silently breaking
-    /// default boot, since nothing else exercises the real config end
-    /// to end.
+    /// The shipped demo script boots cleanly and its scenarios
+    /// register — a guard against a `define-scenario` schema change
+    /// silently breaking the example, since nothing else exercises
+    /// the real shipped script end to end.
     #[test]
     fn default_config_boots_and_registers_library_scenarios() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (cfg, _clock) = rt
-            .block_on(async { Config::new_headless("config.lisp") })
-            .expect("shipped config.lisp boots headless");
+            .block_on(async { Config::new_headless("examples/berlin-demo.lisp") })
+            .expect("shipped berlin-demo.lisp boots headless");
         std::mem::forget(rt);
         let names: Vec<String> = cfg.scenarios().lock().keys().cloned().collect();
         assert!(

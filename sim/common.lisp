@@ -27,14 +27,24 @@
 (unless (boundp 'active-timers)
   (setq active-timers nil))
 
-(defun reset-state ()
+(defun cancel-timers ()
   "Cancel every timer tracked on `active-timers` (pushed by `every`,
-`scenario-end-after`, and the random-outage chain), then wipe the
-active microgrid's components. Call this at the top of
-your config so a hot-reload starts from a clean slate."
+`scenario-end-after`, and the random-outage chain). Process-wide.
+Reload calls this centrally before replaying the loaded files, so
+scripts do NOT call it themselves — a script's own call, replayed
+after another script, would cancel that script's freshly
+re-registered timers. Call it manually only before re-(load)ing a
+script into a live world."
   (dolist (tm active-timers)
     (cancel-timer tm))
-  (setq active-timers nil)
+  (setq active-timers nil))
+
+(defun reset-state ()
+  "`cancel-timers`, then wipe the active microgrid's components.
+For scripts that own their whole world; a script loaded into a
+live multi-microgrid engine usually wants plain `cancel-timers`,
+which leaves the ambient microgrid's site alone."
+  (cancel-timers)
   (reset-microgrid))
 
 ;; -----------------------------------------------------------------------------

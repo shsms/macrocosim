@@ -1,26 +1,26 @@
-;; scenarios/example.lisp — a 30-minute demo scenario.
+;; A 30-minute imperative demo scenario, driving the Berlin demo
+;; world (load examples/berlin-demo.lisp first).
 ;;
-;; Run from the REPL or chain into config.lisp:
+;; Run from the REPL:
 ;;
-;;   (load "scenarios/example.lisp")
+;;   (load "examples/scenario-driving.lisp")
 ;;
-;; The scenario starts on load. Watch progress in the UI's "Report"
-;; side panel, or curl the JSON endpoints:
+;; The scenario starts on load and runs ONCE: a purely imperative
+;; script registers no topology, so it is not replayed on reloads.
+;; Watch progress in the UI's "Report" side panel, or curl the JSON
+;; endpoints:
 ;;
 ;;   curl -s http://127.0.0.1:8801/api/scenario          ;; lifecycle
 ;;   curl -s http://127.0.0.1:8801/api/scenario/events   ;; journal
 ;;   curl -s http://127.0.0.1:8801/api/scenario/report   ;; metrics
 ;;
-;; Component ids referenced below match the sample topology in
-;; microgrids/config.2200.lisp:
+;; Component ids referenced below match berlin-demo.lisp's pinned
+;; topology:
 ;;
 ;;   id 2    main meter (grid's sole child → derived for peak tracking)
 ;;   id 100  hidden consumer meter (driven by its inline :power lambda)
 ;;   id 200  solar inverter
-;;   id 1000 battery, 1001 battery-inverter (auto-allocated; verify with `swctl tree`)
-
-;; Random helpers — random-pick / random-uniform / random-outage.
-(load "sim/scenarios.lisp")
+;;   id 1000 battery, 1001 battery-inverter
 
 ;; ── Lifecycle ──────────────────────────────────────────────────
 (scenario-start "example-30min")
@@ -30,7 +30,7 @@
 (scenario-end-after 30)
 
 ;; ── Consumer load: end-of-window spike ─────────────────────────
-;; Replaces config.2200.lisp's gentler inline :power profile with a sharper
+;; Replaces berlin-demo.lisp's gentler inline :power profile with a sharper
 ;; profile: 5 kW base for the first 13 minutes of every 15-minute
 ;; window, then a 25 kW spike for the last 100 seconds. This is the
 ;; classic "demand peak right before the billing window closes"

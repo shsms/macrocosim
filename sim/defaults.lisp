@@ -1,7 +1,9 @@
 ;; switchyard per-category defaults + bare-name shorthand DSL.
 ;;
-;; Loaded by config.lisp; edits to either half re-trigger the sim
-;; reload (config.lisp registers this file via `(watch-file …)`).
+;; Part of the embedded prelude (compiled into the binary via
+;; include_str!), so editing this file needs a rebuild. A script
+;; that wants live defaults-editing can `(load "sim/defaults.lisp")`
+;; and `(watch-file …)` it explicitly.
 ;;
 ;; Two halves:
 ;;
