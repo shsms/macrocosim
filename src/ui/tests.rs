@@ -113,6 +113,48 @@ async fn index_serves_embedded_shell() {
 }
 
 #[tokio::test]
+async fn scripts_listing_walks_the_state_dir_and_rejects_escapes() {
+    let cfg = config_with("").await;
+    let root = cfg.state_dir().to_path_buf();
+    std::fs::create_dir_all(root.join("examples")).unwrap();
+    std::fs::write(root.join("examples/demo.lisp"), "nil").unwrap();
+    std::fs::write(root.join("notes.txt"), "not lisp").unwrap();
+
+    let (status, body) = call(cfg.clone(), get("/api/scripts")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(v["parent"].is_null());
+    assert!(
+        v["dirs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d == "examples")
+    );
+    // config.lisp is listed, the .txt is not.
+    let files = v["files"].as_array().unwrap();
+    assert!(files.iter().any(|f| f == "config.lisp"));
+    assert!(!files.iter().any(|f| f == "notes.txt"));
+
+    let (status, body) = call(cfg.clone(), get("/api/scripts?dir=examples")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["parent"], "");
+    assert!(
+        v["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f == "demo.lisp")
+    );
+
+    let (status, _) = call(cfg.clone(), get("/api/scripts?dir=..")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(cfg, get("/api/scripts?dir=%2Fetc")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn asset_route_serves_embedded_files() {
     let cfg = config_with("").await;
     let (status, body) = call(cfg, get("/assets/app.js")).await;

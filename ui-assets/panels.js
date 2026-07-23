@@ -70,36 +70,112 @@ export const microgridsPanel = (() => {
       document.getElementById("import-files").click();
     });
     grid.appendChild(importCard);
-    // Trailing [▶ Load script…] card: evals a (load "path") so an
-    // on-disk lisp script (e.g. examples/berlin-demo.lisp) builds
-    // its world at runtime — the on-demand path for a bare boot.
+    // Trailing [▶ Load script…] card: opens the server-side file
+    // browser dialog, which evals a (load "path") so an on-disk lisp
+    // script (e.g. examples/berlin-demo.lisp) builds its world at
+    // runtime — the on-demand path for a bare boot.
     const loadCard = document.createElement("button");
     loadCard.type = "button";
     loadCard.className = "mglist-card mglist-new";
     loadCard.id = "mglist-load-btn";
     loadCard.title =
-      "Eval a lisp script on the server; relative paths resolve against the state dir";
+      "Browse the server's state dir for a lisp script to load, or type a path";
     loadCard.innerHTML = `<span class="mglist-plus">▶</span><span>Load script…</span>`;
-    loadCard.addEventListener("click", async () => {
-      const path = prompt(
-        "Path to a lisp script (server-side):",
-        "examples/berlin-demo.lisp",
-      );
-      if (!path) return;
-      const lispPath = path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-      try {
-        const res = await fetch("/api/eval", {
-          method: "POST",
-          body: `(load "${lispPath}")`,
-        });
-        const body = await res.json();
-        if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
-        await refresh();
-      } catch (e) {
-        notify(`Load failed: ${e.message}`);
-      }
-    });
+    loadCard.addEventListener("click", () => showLoadScriptDialog());
     grid.appendChild(loadCard);
+  }
+
+  // Eval a (load "path") on the server; path is state-dir-relative
+  // (or absolute). Returns true when the load succeeded.
+  async function loadScript(path) {
+    const lispPath = path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    try {
+      const res = await fetch("/api/eval", {
+        method: "POST",
+        body: `(load "${lispPath}")`,
+      });
+      const body = await res.json();
+      if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      await refresh();
+      return true;
+    } catch (e) {
+      notify(`Load failed: ${e.message}`);
+      return false;
+    }
+  }
+
+  // Server-side file browser over GET /api/scripts. The browser's
+  // native picker can't drive this: it selects a client-side file
+  // and never reveals a server path, while (load …) needs the file
+  // on the server's disk (that's what reload replays and watch-file
+  // can watch). The free-text field covers paths outside the
+  // state-dir subtree the listing is confined to.
+  function showLoadScriptDialog() {
+    const dlg = document.getElementById("load-script-dialog");
+    const list = document.getElementById("load-script-list");
+    const crumb = document.getElementById("load-script-breadcrumb");
+    async function browse(dir) {
+      let data;
+      try {
+        const res = await fetch(`/api/scripts?dir=${encodeURIComponent(dir)}`);
+        if (!res.ok) throw new Error(await res.text());
+        data = await res.json();
+      } catch (e) {
+        notify(`Listing failed: ${e.message}`);
+        return;
+      }
+      crumb.textContent = `state dir${data.dir ? ` / ${data.dir}` : ""}`;
+      list.innerHTML = "";
+      const addRow = (label, onClick) => {
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = label;
+        btn.addEventListener("click", onClick);
+        li.appendChild(btn);
+        list.appendChild(li);
+      };
+      if (data.parent !== null) {
+        addRow("📁 ..", () => browse(data.parent));
+      }
+      for (const d of data.dirs) {
+        addRow(`📁 ${d}`, () => browse(data.dir ? `${data.dir}/${d}` : d));
+      }
+      for (const f of data.files) {
+        const rel = data.dir ? `${data.dir}/${f}` : f;
+        addRow(f, async () => {
+          if (await loadScript(rel)) dlg.close();
+        });
+      }
+      if (!data.dirs.length && !data.files.length) {
+        list.innerHTML = '<li class="hint">no .lisp files here</li>';
+      }
+    }
+    browse("");
+    dlg.showModal();
+  }
+
+  function setupLoadScriptDialog() {
+    const dlg = document.getElementById("load-script-dialog");
+    if (!dlg) return;
+    document
+      .getElementById("load-script-close")
+      .addEventListener("click", () => dlg.close());
+    dlg.addEventListener("click", (e) => {
+      if (e.target === dlg) dlg.close();
+    });
+    document
+      .getElementById("load-script-form")
+      .addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const input = document.getElementById("load-script-path");
+        const path = input.value.trim();
+        if (!path) return;
+        if (await loadScript(path)) {
+          input.value = "";
+          dlg.close();
+        }
+      });
   }
 
   // The site-export files are identified by content — the object key
@@ -216,6 +292,7 @@ export const microgridsPanel = (() => {
     if (files.length) importSiteFiles(files);
   });
 
+  setupLoadScriptDialog();
   return { refresh };
 })();
 

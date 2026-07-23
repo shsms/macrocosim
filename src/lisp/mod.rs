@@ -302,6 +302,11 @@ impl Config {
         self.clock.read().tz_name()
     }
 
+    /// The persistence anchor — see the field doc on `state_dir`.
+    pub fn state_dir(&self) -> &std::path::Path {
+        &self.state_dir
+    }
+
     /// Directory holding per-microgrid `config.<id>.lisp` +
     /// `config.<id>.overrides.lisp` files, under the state dir.
     /// The HTTP create endpoint writes runtime-created microgrid

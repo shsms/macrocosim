@@ -113,6 +113,7 @@ header strong {
 
 dialog#pending-dialog,
 dialog#help-dialog,
+dialog#load-script-dialog,
 dialog#dispatch-dialog {
   background: var(--bg-elev);
   color: var(--fg);
@@ -125,11 +126,13 @@ dialog#dispatch-dialog {
 }
 dialog#pending-dialog::backdrop,
 dialog#help-dialog::backdrop,
+dialog#load-script-dialog::backdrop,
 dialog#dispatch-dialog::backdrop {
   background: rgba(0, 0, 0, 0.55);
 }
 dialog#pending-dialog header,
 dialog#help-dialog header,
+dialog#load-script-dialog header,
 dialog#dispatch-dialog header {
   display: flex;
   align-items: center;
@@ -140,6 +143,7 @@ dialog#dispatch-dialog header {
 }
 dialog#pending-dialog header h3,
 dialog#help-dialog header h3,
+dialog#load-script-dialog header h3,
 dialog#dispatch-dialog header h3 {
   margin: 0;
   font-family: var(--font-mono);
@@ -148,6 +152,7 @@ dialog#dispatch-dialog header h3 {
 }
 dialog#pending-dialog header button,
 dialog#help-dialog header button,
+dialog#load-script-dialog header button,
 dialog#dispatch-dialog header button {
   background: none;
   border: none;
@@ -159,9 +164,11 @@ dialog#dispatch-dialog header button {
 }
 dialog#pending-dialog header button:hover,
 dialog#help-dialog header button:hover,
+dialog#load-script-dialog header button:hover,
 dialog#dispatch-dialog header button:hover { color: var(--fg); }
 #pending-dialog-content,
-#help-dialog-content {
+#help-dialog-content,
+#load-script-content {
   overflow-y: auto;
   padding: 0.75rem 1rem 1rem;
   max-height: calc(80vh - 60px);
@@ -991,6 +998,61 @@ body.compact .envelope-marker { width: 10px; height: 10px; margin-left: -5px; ma
   font-size: 13px;
 }
 #snapshots-list { list-style: none; padding: 0; margin: 0; }
+#load-script-breadcrumb {
+  font-family: var(--font-mono);
+  margin-bottom: 6px;
+}
+#load-script-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+#load-script-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+#load-script-list li:last-child button { border-bottom: none; }
+#load-script-list button:hover {
+  background: var(--bg);
+  color: var(--accent);
+}
+#load-script-list .hint { padding: 7px 10px; }
+#load-script-dialog #load-script-form {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+#load-script-dialog #load-script-form label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#load-script-dialog #load-script-path {
+  background: var(--bg-deep, #1b1f27);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
 .snapshot-row {
   display: flex;
   justify-content: space-between;

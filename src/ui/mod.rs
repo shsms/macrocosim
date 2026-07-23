@@ -78,6 +78,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
             scenario_csv_file, scenario_csv_list, scenario_events, scenario_report,
             scenario_summary, scenarios_list, scenarios_start, scenarios_stop,
         },
+        scripts::scripts_list,
         snapshots::{snapshots_list, snapshots_load, snapshots_save},
         topology::{topology, topology_for_mg},
     };
@@ -115,6 +116,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/api/scenarios", get(scenarios_list))
         .route("/api/scenarios/stop", post(scenarios_stop))
         .route("/api/scenarios/{name}/start", post(scenarios_start))
+        .route("/api/scripts", get(scripts_list))
         .route("/api/microgrids", get(microgrids_list))
         .route("/api/microgrids/create", post(microgrids_create))
         .route(

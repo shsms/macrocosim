@@ -19,6 +19,7 @@ pub(in crate::ui) mod microgrid_data;
 pub(in crate::ui) mod microgrids;
 pub(in crate::ui) mod overrides;
 pub(in crate::ui) mod scenarios;
+pub(in crate::ui) mod scripts;
 pub(in crate::ui) mod snapshots;
 pub(in crate::ui) mod topology;
 

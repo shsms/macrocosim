@@ -378,6 +378,29 @@
         </p>
       </div>
     </dialog>
+    <dialog id="load-script-dialog">
+      <header>
+        <h3>Load script</h3>
+        <button id="load-script-close" type="button">×</button>
+      </header>
+      <div id="load-script-content">
+        <div id="load-script-breadcrumb" class="hint"></div>
+        <ul id="load-script-list"></ul>
+        <form id="load-script-form">
+          <label>
+            <span>or type a path</span>
+            <input type="text" id="load-script-path"
+                   placeholder="examples/berlin-demo.lisp" autocomplete="off" />
+          </label>
+          <button type="submit" class="hdr-btn primary">Load</button>
+        </form>
+        <p class="hint">
+          Evals <code>(load "…")</code> on the server. The browser and
+          the typed path both resolve against the server's state dir.
+        </p>
+      </div>
+    </dialog>
+
     <dialog id="dispatch-dialog">
       <header>
         <h3>New dispatch</h3>
