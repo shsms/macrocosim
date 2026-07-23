@@ -70,6 +70,36 @@ export const microgridsPanel = (() => {
       document.getElementById("import-files").click();
     });
     grid.appendChild(importCard);
+    // Trailing [▶ Load script…] card: evals a (load "path") so an
+    // on-disk lisp script (e.g. examples/berlin-demo.lisp) builds
+    // its world at runtime — the on-demand path for a bare boot.
+    const loadCard = document.createElement("button");
+    loadCard.type = "button";
+    loadCard.className = "mglist-card mglist-new";
+    loadCard.id = "mglist-load-btn";
+    loadCard.title =
+      "Eval a lisp script on the server; relative paths resolve against the state dir";
+    loadCard.innerHTML = `<span class="mglist-plus">▶</span><span>Load script…</span>`;
+    loadCard.addEventListener("click", async () => {
+      const path = prompt(
+        "Path to a lisp script (server-side):",
+        "examples/berlin-demo.lisp",
+      );
+      if (!path) return;
+      const lispPath = path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      try {
+        const res = await fetch("/api/eval", {
+          method: "POST",
+          body: `(load "${lispPath}")`,
+        });
+        const body = await res.json();
+        if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
+        await refresh();
+      } catch (e) {
+        notify(`Load failed: ${e.message}`);
+      }
+    });
+    grid.appendChild(loadCard);
   }
 
   // The site-export files are identified by content — the object key
