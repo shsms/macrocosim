@@ -32,13 +32,26 @@ The simulator exposes three surfaces:
 
 ```sh
 cargo build
-cargo run --bin switchyard config.lisp
+cargo run --bin switchyard examples/berlin-demo.lisp
 ```
 
-`config.lisp` is the entry-point: it wires the topology, sets the
-microgrid id, and animates the AC environment. Saving the file
-hot-reloads the world. See `sim/defaults.lisp` for the per-category
-default knobs and `sim/common.lisp` for the runtime helpers.
+The binary takes zero or more Lisp scripts. Each script is a
+self-contained world — `examples/berlin-demo.lisp` wires a demo
+topology, animates its AC environment, and registers seven starter
+scenarios; saving the file hot-reloads the world. With no scripts
+the engine boots bare: UI + REPL up, no microgrids, and you load a
+script on demand from the Microgrids tab or the REPL:
+
+```lisp
+(load "examples/berlin-demo.lisp")
+```
+
+Relative paths (and all persistent state: overrides journals,
+`snapshots/`, runtime-created microgrid stubs) anchor to
+`--state-dir`, defaulting to the directory the server was started
+from. See `sim/defaults.lisp` for the per-category default knobs and
+`sim/common.lisp` for the runtime helpers — both are embedded into
+the binary, so a script never needs to load them.
 
 The proto roots ([frequenz-api-microgrid](https://github.com/frequenz-floss/frequenz-api-microgrid),
 frequenz-api-assets, frequenz-api-dispatch) are vendored as git
@@ -52,12 +65,12 @@ A scenario is a Lisp script that drives the simulator through stress
 events (load spikes, cloud cover, random outages, silent components)
 while a Rust reporter records peak / charge / discharge / SoC stats
 and per-15-minute averages. See [`scenarios/README.md`](scenarios/README.md)
-for the framework, [`scenarios/example.lisp`](scenarios/example.lisp)
+for the framework, [`examples/scenario-driving.lisp`](examples/scenario-driving.lisp)
 for a runnable 30-minute sample.
 
 ```sh
 swctl scenario start "demo"
-swctl scenario load scenarios/example.lisp
+swctl scenario load examples/scenario-driving.lisp
 swctl scenario report
 swctl scenario events --since 0 --limit 20
 swctl scenario stop

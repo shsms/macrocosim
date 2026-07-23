@@ -11,7 +11,7 @@ The framework is two layers:
 
 - **Driver** (the script you write) — schedules events using
   `(every …)` and `(run-with-timer …)` plus a small set of
-  scenario-specific defuns. See `example.lisp` in this directory.
+  scenario-specific defuns. See `examples/scenario-driving.lisp`.
 - **Reporter** (Rust observer, always running) — accumulates peak
   main-meter power, battery charge / discharge integrals, PV
   produced energy, SoC stats, and 15-minute window averages.
@@ -22,14 +22,14 @@ The framework is two layers:
 There's no auto-discovery. Load explicitly from the REPL —
 
 ```lisp
-(load "scenarios/example.lisp")
+(load "examples/scenario-driving.lisp")
 ```
 
-— or chain it into `config.lisp` so it runs at startup.
-`(load …)` resolves relative to the directory the running
-config lives in (the same dir tulisp's load path uses), so
-`scenarios/example.lisp` works from a normal `cargo run` in this
-repo.
+— or put the forms in the world script itself so they run at load
+time (`examples/berlin-demo.lisp` registers its seven
+`define-scenario`s that way). `(load …)` resolves relative to the
+server's state dir (`--state-dir`, default: the directory the
+server was started from).
 
 ## Lifecycle defuns
 
@@ -49,8 +49,8 @@ repo.
 ## Driving the environment
 
 These setters work outside scenarios too — they're the same
-animation knobs `config.lisp` uses for its built-in load and
-cloud curves — but inside a scenario they're how a script
+animation knobs `examples/berlin-demo.lisp` uses for its built-in
+load and cloud curves — but inside a scenario they're how a script
 exercises the simulator:
 
 | Defun                                  | Effect                                                   |
@@ -132,7 +132,7 @@ when that child is a meter.
   :successors (list (make-meter :id 2 :successors …)))
 ```
 
-The sample `config.lisp` already has this shape. If the grid has no
+The sample `examples/berlin-demo.lisp` already has this shape. If the grid has no
 child, more than one child, or a single non-meter child, there is no
 unambiguous main meter and peak tracking stays idle.
 

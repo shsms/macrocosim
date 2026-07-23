@@ -2,7 +2,7 @@
 //! known charge/discharge cycle, snapshots the report, and asserts
 //! the peak / integral / SoC numbers match the analytical
 //! expectation within tolerance. Exercises the same boot path the
-//! sample scenarios/example.lisp uses.
+//! sample examples/scenario-driving.lisp uses.
 
 mod common;
 

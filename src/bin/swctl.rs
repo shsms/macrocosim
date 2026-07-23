@@ -14,7 +14,7 @@
 //! Scenario commands — HTTP (default --ui-addr http://127.0.0.1:8801):
 //!   swctl scenario start "demo"
 //!   swctl scenario event outage "bat-1003"
-//!   swctl scenario load scenarios/example.lisp
+//!   swctl scenario load examples/scenario-driving.lisp
 //!   swctl scenario report
 //!   swctl scenario events --since 0 --limit 20
 //!   swctl scenario summary
@@ -353,10 +353,10 @@ enum ScenarioCmd {
     },
 
     /// Load a hand-written scenario file via `(load PATH)`. Path
-    /// is resolved against the running config.lisp's load
-    /// directory, same as `(load …)` from the REPL.
+    /// is resolved against the server's state dir, same as
+    /// `(load …)` from the REPL.
     Load {
-        /// Path to the scenario file (e.g. `scenarios/example.lisp`).
+        /// Path to the scenario file (e.g. `examples/scenario-driving.lisp`).
         path: String,
     },
 

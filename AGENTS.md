@@ -55,8 +55,14 @@ is wiring the topology + animating the environment.
 - `src/timeout_tracker.rs` — request lifetime → `reset_setpoint` expiry
 - `src/bin/switchyard.rs` — headless server
 - `src/bin/swctl.rs` — clap-based client CLI
-- `sim/common.lisp` — Lisp helpers (`every`, `reset-state`)
-- `config.lisp` — sample topology + environment animation
+- `sim/common.lisp` — Lisp helpers (`every`, `cancel-timers`,
+  `reset-state`); embedded into the binary with `defaults.lisp` +
+  `scenarios.lisp` as the prelude
+- `examples/berlin-demo.lisp` — self-contained demo world: topology
+  + environment animation + the seven starter scenarios. Boot
+  scripts are optional (`switchyard [script …]`); a bare boot loads
+  worlds on demand via `(load …)` / the Microgrids tab, and
+  `--state-dir` anchors journals / snapshots / relative paths
 
 ## Architectural rules
 
@@ -87,7 +93,7 @@ is wiring the topology + animating the environment.
 ```sh
 cargo build
 cargo test                                # unit tests for bounds/ramp/decay
-cargo run --bin switchyard config.lisp
+cargo run --bin switchyard examples/berlin-demo.lisp
 cargo run --bin swctl -- info
 cargo run --bin swctl -- tree
 cargo run --bin swctl -- stream 1001 --samples 5
@@ -174,10 +180,10 @@ Per-component plist args win without any special handling — AsPlist!
 takes the last occurrence of each key and the wrapper's defaults
 appear first in the merged plist.
 
-`config.lisp` loads `sim/defaults.lisp` outside its boundp guard so
-edits re-apply on reload, and registers it via `(watch-file …)` so
-saving defaults.lisp triggers the reload watcher just like saving
-config.lisp does.
+The prelude (common / defaults / scenarios) is compiled into the
+binary via `include_str!`, so editing `sim/defaults.lisp` needs a
+rebuild; a script that wants live defaults-editing can still
+`(load "sim/defaults.lisp")` and `(watch-file …)` it explicitly.
 
 ## Lisp value adapters
 
@@ -222,7 +228,8 @@ config.lisp does.
 2. (If runtime-mutable) trait method override + `MicrogridSite` setter + Lisp defun
    in the matching `src/lisp/defuns/` file. Use `(every …)` or
    `(run-with-timer …)` from the config to script behaviour over time.
-3. Demonstrate via a new line in `config.lisp` and verify via swctl.
+3. Demonstrate via a new line in `examples/berlin-demo.lisp` and
+   verify via swctl.
 
 ## Testing an external bounds-driving app
 

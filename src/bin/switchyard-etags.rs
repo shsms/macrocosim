@@ -10,8 +10,8 @@
 //! Usage:
 //!
 //!   switchyard-etags                              # ./config.lisp → ./TAGS
-//!   switchyard-etags config.lisp scenarios/example.lisp
-//!   switchyard-etags config.lisp -o /tmp/TAGS
+//!   switchyard-etags examples/berlin-demo.lisp examples/scenario-driving.lisp
+//!   switchyard-etags examples/berlin-demo.lisp -o /tmp/TAGS
 
 use std::{env, io::Write as _, path::Path, process};
 
