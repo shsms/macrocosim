@@ -11,18 +11,18 @@
 // - cross-highlighting between the tree, the formula and the canvas.
 
 import { escapeHtml, notify } from "./app.js";
-import { alignMenuItems, showMenuItems } from "./editor.js";
+import { alignMenuItems, modeMenuItems, showMenuItems } from "./editor.js";
 import { evalQuoted } from "./inspect.js";
 import { mgPath, readSelectedMg, visibleSubview } from "./routing.js";
 import { createGraphCanvas } from "./topology.js";
 
 // The Formulas canvas: same snapshot as the Topology canvas, no
-// structural editing — the context menu only arranges, and the one
-// mutation it offers is the telemetry toggle, which flips the
-// selection's operational mode (a config edit, persisted and
-// undoable). Created lazily: module bodies in this SPA form import
-// cycles, so building the canvas at import time could catch
-// topology.js half-initialized.
+// structural editing — the context menu only arranges, and the only
+// mutations it offers are operational-mode edits (config, persisted
+// and undoable): the telemetry toggle plus the same "Mode: …"
+// entries as the Topology menu. Created lazily: module bodies in
+// this SPA form import cycles, so building the canvas at import
+// time could catch topology.js half-initialized.
 let canvas = null;
 export function formulaCanvas() {
   if (!canvas) {
@@ -36,6 +36,7 @@ export function formulaCanvas() {
             shortcut: "T",
             action: toggleTelemetry,
           });
+          items.push(...modeMenuItems(sel));
         }
         if (sel.length >= 2) items.push(...alignMenuItems(canvas));
         if (!items.length) return;

@@ -1184,6 +1184,10 @@ async fn operational_mode_eval_persists_and_derives() {
     let c = &parsed["components"][0];
     assert_eq!(c["operational_mode"], "control-only");
     assert_eq!(c["telemetry_mode"], "silent");
+    // The capability booleans the inspect panel keys its knob
+    // gating off — derived server-side so the rule stays in Rust.
+    assert_eq!(c["provides_telemetry"], false);
+    assert_eq!(c["accepts_control"], true);
 
     // Enforced: poking the stream back to normal is rejected while
     // the mode forbids telemetry.

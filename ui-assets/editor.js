@@ -4,7 +4,7 @@
 // form, and helpers around them.
 
 import { escapeHtml, notify } from "./app.js";
-import { evalQuoted, showComponent } from "./inspect.js";
+import { evalQuoted, OPERATIONAL_MODES, showComponent } from "./inspect.js";
 import { readSelectedMg } from "./routing.js";
 import { ALIGN_MODES, topology } from "./topology.js";
 
@@ -322,10 +322,39 @@ export function showMenuItems(menu, items, x, y) {
   }
 }
 
+// Bulk operational-mode set: one progn over the whole selection, so
+// a single undo (and one overrides-journal entry) covers the batch.
+// A config edit like the Formulas tab's telemetry toggle — it
+// persists and re-derives the runtime knobs server-side.
+async function setSelectionMode(ids, mode) {
+  const sets = ids
+    .map((id) => `(set-component-operational-mode ${id} '${mode})`)
+    .join(" ");
+  const data = await evalQuoted(`(progn ${sets})`, "Mode change failed");
+  if (data.ok) {
+    notify(
+      `Operational mode ${mode} for ${ids.length} component${ids.length > 1 ? "s" : ""}.`,
+      "success",
+    );
+  }
+}
+
+// Shared with the Formulas canvas's menu (explain.js), so both
+// screens offer the same operational-mode vocabulary.
+export function modeMenuItems(ids) {
+  return OPERATIONAL_MODES.map((m, i) => ({
+    label: `Mode: ${m.value}`,
+    title: m.hint,
+    separator: i === 0,
+    action: () => setSelectionMode(ids, m.value),
+  }));
+}
+
 // The Topology canvas's right-click menu. Items are context-
-// dependent: Copy + Cut + Delete when something's selected, Paste
-// when nothing's selected and the clipboard has content, and the
-// align section when two or more nodes are selected.
+// dependent: Copy + Cut + Delete when something's selected (plus
+// the operational-mode section), Paste when nothing's selected and
+// the clipboard has content, and the align section when two or more
+// nodes are selected.
 export function showContextMenu(x, y) {
   const menu = document.getElementById("ctx-menu");
   const sel = topology.selectedIds();
@@ -334,6 +363,7 @@ export function showContextMenu(x, y) {
     items.push({ label: "Copy", shortcut: "Ctrl/Cmd+C", action: copySelection });
     items.push({ label: "Cut", shortcut: "Ctrl/Cmd+X", action: cutSelection });
     items.push({ label: "Delete", shortcut: "Del", action: deleteSelection });
+    items.push(...modeMenuItems(sel));
   } else if (!clipboard.isEmpty()) {
     items.push({ label: "Paste", shortcut: "Ctrl/Cmd+V", action: pasteClipboard });
   }

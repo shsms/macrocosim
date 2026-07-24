@@ -134,6 +134,18 @@ export const liveCharts = (() => {
   };
 })();
 
+// The operational modes a component can be declared with, plus a
+// hover hint each — shared with the topology context menu's bulk
+// set so the two surfaces offer the same vocabulary. The tokens
+// round-trip through (set-component-operational-mode …) verbatim.
+export const OPERATIONAL_MODES = [
+  { value: "unspecified", hint: "not explicitly set; treated as full capability" },
+  { value: "inactive", hint: "no telemetry, no control" },
+  { value: "telemetry-only", hint: "streams telemetry, rejects commands" },
+  { value: "control-only", hint: "accepts commands, streams no telemetry" },
+  { value: "control-and-telemetry", hint: "full capability, explicitly declared" },
+];
+
 // Categories that the gRPC server actually accepts setpoints on.
 // command-mode (timeout / error fault simulation) only makes sense
 // for these — grids and meters have no setpoint surface, so we hide
@@ -196,12 +208,16 @@ function renderInspect(d, parentIds, childIds) {
       <dt>category</dt><dd>${d.category}</dd>
       <dt>subtype</dt><dd>${d.subtype || "—"}</dd>
     </dl>
+    <h3>Config</h3>
+    <dl>
+      <dt>mode</dt><dd>${selectField("operational-mode", d.operational_mode, OPERATIONAL_MODES.map((m) => m.value))}</dd>
+    </dl>
     <h3>Runtime</h3>
     <dl>
       <dt>health</dt><dd>${selectField("health", d.health, ["ok", "error", "standby"])}</dd>
-      <dt>telemetry</dt><dd>${selectField("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"])}</dd>
+      <dt>telemetry</dt><dd>${selectField("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"], d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null)}</dd>
       ${ACCEPTS_SETPOINTS.has(d.category)
-        ? `<dt>commands</dt><dd>${selectField("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"])}</dd>`
+        ? `<dt>commands</dt><dd>${selectField("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"], d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null)}</dd>`
         : ""}
     </dl>
     ${(() => {
@@ -236,6 +252,7 @@ function renderInspect(d, parentIds, childIds) {
     evalQuoted(`(rename-component ${d.id} "${jsToLispString(name)}")`);
   });
   for (const [key, defun] of [
+    ["operational-mode", "set-component-operational-mode"],
     ["health", "set-component-health"],
     ["telemetry-mode", "set-component-telemetry-mode"],
     ["command-mode", "set-component-command-mode"],
@@ -271,13 +288,19 @@ function renderInspect(d, parentIds, childIds) {
   }
 }
 
-function selectField(knob, current, options) {
+// `disabledReason` (a string) greys the select out and becomes its
+// hover tooltip — used when the operational mode forbids the knob,
+// where the backend would reject the set with the same message.
+function selectField(knob, current, options, disabledReason = null) {
   const opts = options
     .map(
       (o) => `<option value="${o}"${o === current ? " selected" : ""}>${o}</option>`,
     )
     .join("");
-  return `<select data-knob="${knob}">${opts}</select>`;
+  const attrs = disabledReason
+    ? ` disabled title="${escapeHtml(disabledReason)}"`
+    : "";
+  return `<select data-knob="${knob}"${attrs}>${opts}</select>`;
 }
 
 function jsToLispString(s) {

@@ -62,6 +62,9 @@ struct ComponentSummary {
     /// boolean so the UI never re-derives it from the mode string —
     /// Rust stays the single source of that rule.
     provides_telemetry: bool,
+    /// Whether the operational mode accepts control commands — the
+    /// same single-source rule as `provides_telemetry`.
+    accepts_control: bool,
 }
 
 pub(in crate::ui) async fn topology(State(config): State<Config>) -> Json<TopologySnapshot> {
@@ -96,6 +99,7 @@ fn topology_snapshot(site: &crate::sim::MicrogridSite) -> TopologySnapshot {
                 command_mode: runtime.command.to_string(),
                 operational_mode: mode.to_string(),
                 provides_telemetry: mode.provides_telemetry(),
+                accepts_control: mode.accepts_control(),
             }
         })
         .collect();
