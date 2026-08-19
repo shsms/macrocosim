@@ -474,10 +474,7 @@ fn str_err(e: String) -> Box<dyn std::error::Error> {
 
 fn rfc3339_to_ts(s: &str) -> Result<prost_types::Timestamp, Box<dyn std::error::Error>> {
     let dt = chrono::DateTime::parse_from_rfc3339(s)?.with_timezone(&chrono::Utc);
-    Ok(prost_types::Timestamp {
-        seconds: dt.timestamp(),
-        nanos: dt.timestamp_subsec_nanos() as i32,
-    })
+    Ok(switchyard::proto_conv::datetime_to_ts(dt))
 }
 
 /// One-line dispatch summary for `dispatch list`.

@@ -26,6 +26,17 @@ use crate::{
     sim::{Category, MicrogridSite, OperationalMode, SimulatedComponent, Telemetry},
 };
 
+/// The one chrono→proto Timestamp conversion. The nanos cast is
+/// subtle enough (`timestamp_subsec_nanos` is u32, proto wants i32)
+/// that every hand-rolled copy is a drift hazard — the dispatch
+/// store, the gRPC servers, and swctl all funnel through here.
+pub fn datetime_to_ts(dt: chrono::DateTime<chrono::Utc>) -> Timestamp {
+    Timestamp {
+        seconds: dt.timestamp(),
+        nanos: dt.timestamp_subsec_nanos() as i32,
+    }
+}
+
 /// Subscriber's metric allowlist. `None` means "all metrics"; `Some`
 /// is the set of `Metric as i32` values the client asked for.
 pub type MetricFilter<'a> = Option<&'a HashSet<i32>>;
@@ -182,48 +193,48 @@ pub fn telemetry_to_proto(
     {
         samples.push(simple_sample(now, Metric::AcFrequency, s));
     }
-    if let Some((v1, v2, v3)) = t.per_phase_voltage_v {
-        if allowed(filter, Metric::AcVoltagePhase1N) {
-            samples.push(simple_sample(now, Metric::AcVoltagePhase1N, v1));
-        }
-        if allowed(filter, Metric::AcVoltagePhase2N) {
-            samples.push(simple_sample(now, Metric::AcVoltagePhase2N, v2));
-        }
-        if allowed(filter, Metric::AcVoltagePhase3N) {
-            samples.push(simple_sample(now, Metric::AcVoltagePhase3N, v3));
-        }
-    }
-    if let Some((p1, p2, p3)) = t.per_phase_current_a {
-        if allowed(filter, Metric::AcCurrentPhase1) {
-            samples.push(simple_sample(now, Metric::AcCurrentPhase1, p1));
-        }
-        if allowed(filter, Metric::AcCurrentPhase2) {
-            samples.push(simple_sample(now, Metric::AcCurrentPhase2, p2));
-        }
-        if allowed(filter, Metric::AcCurrentPhase3) {
-            samples.push(simple_sample(now, Metric::AcCurrentPhase3, p3));
-        }
-    }
-    if let Some((p1, p2, p3)) = t.per_phase_active_w {
-        if allowed(filter, Metric::AcPowerActivePhase1) {
-            samples.push(simple_sample(now, Metric::AcPowerActivePhase1, p1));
-        }
-        if allowed(filter, Metric::AcPowerActivePhase2) {
-            samples.push(simple_sample(now, Metric::AcPowerActivePhase2, p2));
-        }
-        if allowed(filter, Metric::AcPowerActivePhase3) {
-            samples.push(simple_sample(now, Metric::AcPowerActivePhase3, p3));
-        }
-    }
-    if let Some((q1, q2, q3)) = t.per_phase_reactive_var {
-        if allowed(filter, Metric::AcPowerReactivePhase1) {
-            samples.push(simple_sample(now, Metric::AcPowerReactivePhase1, q1));
-        }
-        if allowed(filter, Metric::AcPowerReactivePhase2) {
-            samples.push(simple_sample(now, Metric::AcPowerReactivePhase2, q2));
-        }
-        if allowed(filter, Metric::AcPowerReactivePhase3) {
-            samples.push(simple_sample(now, Metric::AcPowerReactivePhase3, q3));
+    // Per-phase triples all convert the same way: one metric per
+    // phase, filter-gated.
+    let per_phase = [
+        (
+            t.per_phase_voltage_v,
+            [
+                Metric::AcVoltagePhase1N,
+                Metric::AcVoltagePhase2N,
+                Metric::AcVoltagePhase3N,
+            ],
+        ),
+        (
+            t.per_phase_current_a,
+            [
+                Metric::AcCurrentPhase1,
+                Metric::AcCurrentPhase2,
+                Metric::AcCurrentPhase3,
+            ],
+        ),
+        (
+            t.per_phase_active_w,
+            [
+                Metric::AcPowerActivePhase1,
+                Metric::AcPowerActivePhase2,
+                Metric::AcPowerActivePhase3,
+            ],
+        ),
+        (
+            t.per_phase_reactive_var,
+            [
+                Metric::AcPowerReactivePhase1,
+                Metric::AcPowerReactivePhase2,
+                Metric::AcPowerReactivePhase3,
+            ],
+        ),
+    ];
+    for (triple, metrics) in per_phase {
+        let Some((v1, v2, v3)) = triple else { continue };
+        for (metric, value) in metrics.into_iter().zip([v1, v2, v3]) {
+            if allowed(filter, metric) {
+                samples.push(simple_sample(now, metric, value));
+            }
         }
     }
     if let Some(p) = t.active_power_w

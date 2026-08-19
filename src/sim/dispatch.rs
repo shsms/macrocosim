@@ -306,12 +306,7 @@ fn dispatch_id_of(d: &pb::Dispatch) -> u64 {
 // and the gRPC server's field-mask update. Kept here so the one
 // definition of "how end_time is derived" serves every write path.
 
-pub(crate) fn to_ts(dt: DateTime<Utc>) -> Timestamp {
-    Timestamp {
-        seconds: dt.timestamp(),
-        nanos: dt.timestamp_subsec_nanos() as i32,
-    }
-}
+pub(crate) use crate::proto_conv::datetime_to_ts as to_ts;
 
 pub(crate) fn ts_to_dt(ts: &Timestamp) -> Option<DateTime<Utc>> {
     Utc.timestamp_opt(ts.seconds, ts.nanos.max(0) as u32)

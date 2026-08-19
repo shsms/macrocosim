@@ -722,10 +722,9 @@ impl microgrid_server::Microgrid for MicrogridServer {
                             let expiry = now + chrono::Duration::seconds(lifetime_s);
                             Ok(tonic::Response::new(
                                 AugmentElectricalComponentBoundsResponse {
-                                    valid_until_time: Some(prost_types::Timestamp {
-                                        seconds: expiry.timestamp(),
-                                        nanos: expiry.timestamp_subsec_nanos() as i32,
-                                    }),
+                                    valid_until_time: Some(crate::proto_conv::datetime_to_ts(
+                                        expiry,
+                                    )),
                                 },
                             ))
                         }
