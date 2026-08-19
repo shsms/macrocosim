@@ -222,16 +222,7 @@ impl SimulatedComponent for SolarInverter {
     }
 
     fn set_active_setpoint(&self, power_w: f32) -> Result<(), SetpointError> {
-        // 0 W (the fail-safe park) is always accepted, even when an
-        // augmentation has narrowed the envelope to exclude it — a
-        // controller can always stop the component.
-        let envelope = self.bounds.lock().effective();
-        if power_w != 0.0 && !envelope.contains(power_w) {
-            return Err(SetpointError::OutOfBounds {
-                value: power_w,
-                envelope,
-            });
-        }
+        self.bounds.lock().validate_active_setpoint(power_w)?;
         self.delay.set_target(power_w);
         Ok(())
     }

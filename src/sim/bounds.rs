@@ -293,6 +293,26 @@ impl ComponentBounds {
         self.effective().contains(value)
     }
 
+    /// Gate an active-power setpoint against the effective envelope
+    /// (rated ∩ live augmentations). 0 W (the fail-safe park) is
+    /// always accepted, even when an augmentation has narrowed the
+    /// envelope to exclude it — a controller can always stop the
+    /// component. Shared by every setpoint-taking component so the
+    /// park rule has one home.
+    pub fn validate_active_setpoint(
+        &self,
+        power_w: f32,
+    ) -> Result<(), crate::sim::component::SetpointError> {
+        let envelope = self.effective();
+        if power_w != 0.0 && !envelope.contains(power_w) {
+            return Err(crate::sim::component::SetpointError::OutOfBounds {
+                value: power_w,
+                envelope,
+            });
+        }
+        Ok(())
+    }
+
     pub fn clamp(&self, value: f32) -> f32 {
         self.effective().clamp(value)
     }
@@ -366,5 +386,29 @@ mod tests {
                 .0
                 .is_empty()
         );
+    }
+
+    /// The fail-safe park: 0 W is accepted even when an augmentation
+    /// narrows the envelope to exclude it, while other out-of-envelope
+    /// values are still rejected. Pins the `power_w != 0.0` short
+    /// circuit in `validate_active_setpoint` — every setpoint-taking
+    /// component relies on it to guarantee "a controller can always
+    /// stop the component".
+    #[test]
+    fn park_zero_accepted_outside_envelope() {
+        let mut cb = ComponentBounds::rated(-100.0, 100.0);
+        cb.add_augmentation(
+            Utc::now(),
+            VecBounds::single(50.0, 100.0),
+            std::time::Duration::from_secs(60),
+        );
+        // Effective envelope is rated ∩ augmentation = [50, 100]:
+        // 0 W is outside it but must still be accepted.
+        assert!(cb.validate_active_setpoint(0.0).is_ok());
+        assert!(matches!(
+            cb.validate_active_setpoint(40.0),
+            Err(crate::sim::component::SetpointError::OutOfBounds { .. })
+        ));
+        assert!(cb.validate_active_setpoint(60.0).is_ok());
     }
 }
