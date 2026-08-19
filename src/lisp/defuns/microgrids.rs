@@ -10,7 +10,6 @@ use tokio::sync::broadcast;
 use tulisp::{TulispContext, TulispObject};
 
 use crate::sim::MicrogridSite;
-use crate::sim::microgrids::SharedSiteRouter;
 
 tulisp::AsPlist! {
     pub struct MakeMicrogridArgs {
@@ -39,16 +38,9 @@ tulisp::AsPlist! {
 /// (whose body's make-* calls then register into the new site
 /// via the router's per-call dispatch), and finally restores the
 /// previous pointer.
-//
-// Seven args trips clippy's `too_many_arguments` threshold; the
-// review item A6 plans to bundle the shared state into a single
-// `RuntimeHandles` struct that drops the count cleanly. Until
-// then, the explicit list is more readable than a one-off tuple.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::lisp) fn register(
     ctx: &mut TulispContext,
     registry: crate::sim::microgrids::SharedMicrogrids,
-    router: SharedSiteRouter,
     current: crate::sim::microgrids::CurrentMicrogrid,
     id_allocator: Arc<std::sync::atomic::AtomicU64>,
     registered_tx: Arc<broadcast::Sender<u64>>,
@@ -93,7 +85,6 @@ pub(in crate::lisp) fn register(
         DEFAULT_MICROGRID_ID, DEFAULT_MICROGRID_NAME, MicrogridDef, MicrogridEntry,
         next_free_id_in, next_free_port_in, with_microgrid,
     };
-    let _ = router;
     ctx.defun(
         "make-microgrid",
         move |ctx: &mut TulispContext,

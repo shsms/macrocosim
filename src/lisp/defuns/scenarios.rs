@@ -312,11 +312,7 @@ pub(super) fn register_lifecycle(
             // scripts can write `(scenario-event 'outage "bat-1003")`
             // alongside `(scenario-event "note" "warming up")`.
             // Payload renders via Display so any Lisp value works.
-            let kind_str = if kind.symbolp() {
-                kind.to_string()
-            } else {
-                String::try_from(kind)?
-            };
+            let kind_str = sym_name(&kind)?;
             let payload_str = payload.to_string();
             let id = w.scenario_record(kind_str, payload_str, nowsrc.now());
             Ok(id as i64)
@@ -339,11 +335,7 @@ pub(super) fn register_lifecycle(
               -> Result<bool, Error> {
             let a = args.into_inner();
             let metric_obj = a.metric.into_inner();
-            let metric_name = if metric_obj.symbolp() {
-                metric_obj.to_string()
-            } else {
-                String::try_from(metric_obj)?
-            };
+            let metric_name = sym_name(&metric_obj)?;
             let metric = parse_expect_metric(&metric_name).ok_or_else(|| {
                 Error::os_error(format!("scenario-expect: unknown metric {metric_name:?}"))
             })?;

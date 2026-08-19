@@ -160,7 +160,6 @@ impl Config {
         defuns::register_microgrids(
             &mut ctx,
             microgrids.clone(),
-            router.clone(),
             current_microgrid.clone(),
             enterprise_id_allocator.clone(),
             microgrid_registered.clone(),
