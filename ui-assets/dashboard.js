@@ -73,18 +73,6 @@ export const dashboardTiles = (() => {
     b.values[b.cursor] = value == null ? NaN : value;
     b.cursor = (b.cursor + 1) % SPARK_LEN;
   }
-  // Ordered iterator over the ring — oldest to newest, skipping
-  // empty slots before the first sample lands. Returns array of
-  // {idx, value} where idx is the linearised position 0..SPARK_LEN-1.
-  function orderedSamples(b) {
-    const out = [];
-    for (let i = 0; i < SPARK_LEN; i++) {
-      const slot = (b.cursor + i) % SPARK_LEN;
-      const v = b.values[slot];
-      if (!Number.isNaN(v)) out.push({ idx: i, value: v });
-    }
-    return out;
-  }
   function findEls(stream) {
     // Any non-svg element tagged with this stream — covers the main
     // .dash-value number plus envelope `.env-lo` / `.env-hi`
@@ -95,38 +83,52 @@ export const dashboardTiles = (() => {
     return document.querySelectorAll(`.dash-spark[data-stream="${stream}"]`);
   }
   function renderSpark(stream) {
+    const svgs = findSparks(stream);
+    if (!svgs.length) return;
+    // This runs per stream per 1 Hz WS sample over a 900-slot ring,
+    // so it works straight off the Float32Array without building
+    // intermediate arrays: one pass for min/max/count, one for the
+    // points string, and the markup is built once however many svgs
+    // carry the stream. Ring order is oldest to newest; a slot's
+    // linearised position keeps its temporal x even across NaN gaps.
     const b = buf(stream);
-    const samples = orderedSamples(b);
-    for (const svg of findSparks(stream)) {
-      if (samples.length < 2) {
-        // Not enough points to draw a line — show nothing rather
-        // than a misleading single dot.
-        svg.innerHTML = "";
-        continue;
-      }
-      const vals = samples.map((s) => s.value);
-      const min = Math.min(...vals);
-      const max = Math.max(...vals);
-      const range = max - min || 1;
-      // viewBox = 0..100 wide, 0..30 tall. 1 px padding top + bottom
-      // so the line never clips at the edges.
-      const points = samples
-        .map((s) => {
-          const x = (s.idx / (SPARK_LEN - 1)) * 100;
-          const y = 30 - (((s.value - min) / range) * 28 + 1);
-          return `${x.toFixed(1)},${y.toFixed(1)}`;
-        })
-        .join(" ");
-      // Draw a y=0 baseline only when the window crosses zero —
-      // for power tiles this is the import/export divider, and
-      // it's noise on a constant-positive (e.g. consumer) tile.
-      let baseline = "";
-      if (min < 0 && max > 0) {
-        const yZero = 30 - (((0 - min) / range) * 28 + 1);
-        baseline = `<line class="baseline" x1="0" y1="${yZero.toFixed(1)}" x2="100" y2="${yZero.toFixed(1)}" />`;
-      }
-      svg.innerHTML = `${baseline}<polyline class="trace" points="${points}" />`;
+    let min = Infinity;
+    let max = -Infinity;
+    let count = 0;
+    for (let i = 0; i < SPARK_LEN; i++) {
+      const v = b.values[(b.cursor + i) % SPARK_LEN];
+      if (Number.isNaN(v)) continue;
+      count++;
+      if (v < min) min = v;
+      if (v > max) max = v;
     }
+    if (count < 2) {
+      // Not enough points to draw a line — show nothing rather
+      // than a misleading single dot.
+      for (const svg of svgs) svg.innerHTML = "";
+      return;
+    }
+    const range = max - min || 1;
+    // viewBox = 0..100 wide, 0..30 tall. 1 px padding top + bottom
+    // so the line never clips at the edges.
+    let points = "";
+    for (let i = 0; i < SPARK_LEN; i++) {
+      const v = b.values[(b.cursor + i) % SPARK_LEN];
+      if (Number.isNaN(v)) continue;
+      const x = (i / (SPARK_LEN - 1)) * 100;
+      const y = 30 - (((v - min) / range) * 28 + 1);
+      points += `${points ? " " : ""}${x.toFixed(1)},${y.toFixed(1)}`;
+    }
+    // Draw a y=0 baseline only when the window crosses zero —
+    // for power tiles this is the import/export divider, and
+    // it's noise on a constant-positive (e.g. consumer) tile.
+    let baseline = "";
+    if (min < 0 && max > 0) {
+      const yZero = 30 - (((0 - min) / range) * 28 + 1);
+      baseline = `<line class="baseline" x1="0" y1="${yZero.toFixed(1)}" x2="100" y2="${yZero.toFixed(1)}" />`;
+    }
+    const html = `${baseline}<polyline class="trace" points="${points}" />`;
+    for (const svg of svgs) svg.innerHTML = html;
   }
   function paint(stream, snap) {
     for (const el of findEls(stream)) {
