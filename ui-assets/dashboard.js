@@ -8,6 +8,34 @@
 import { escapeHtml, jumpToTopology, mgPath } from "./app.js";
 import { loadFormulas } from "./formulas.js";
 
+// Power auto-scale: W → kW → MW based on magnitude. Mirrors the
+// existing chooseScale() logic for per-component charts so the
+// Dashboard reads in the same units a developer sees in the
+// inspector panel. Shared by the tiles and (via fmtRowPower) every
+// per-component row.
+function fmt(quantity, unit, value) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (quantity === "Power" || quantity === "ReactivePower" || unit === "W" || unit === "var") {
+    const a = Math.abs(value);
+    if (a >= 1e6) return `${(value / 1e6).toFixed(2)} M${unit}`;
+    if (a >= 1e3) return `${(value / 1e3).toFixed(2)} k${unit}`;
+    return `${value.toFixed(1)} ${unit}`;
+  }
+  // Voltage, frequency, percentage etc. — fixed unit, modest precision.
+  return `${value.toFixed(2)} ${unit}`;
+}
+
+// Latest value of one metric for one component, read off a short
+// history window. The single fetch shape behind every row module's
+// seed path — `null` when the stream has no recent sample.
+async function latestMetric(id, metric) {
+  const j = await fetch(`${mgPath("history")}?id=${id}&metric=${metric}&window_s=10`).then((r) =>
+    r.json(),
+  );
+  return j.samples?.at(-1)?.[1] ?? null;
+}
+const latestMetrics = (id, metrics) => Promise.all(metrics.map((m) => latestMetric(id, m)));
+
 // Aggregated metrics from the loopback Microgrid client flow into the
 // Dashboard pane via two paths: (a) /api/microgrid/latest at mode-
 // enter time so the tiles paint immediately with a real number, and
@@ -65,21 +93,6 @@ export const dashboardTiles = (() => {
   }
   function findSparks(stream) {
     return document.querySelectorAll(`.dash-spark[data-stream="${stream}"]`);
-  }
-  // Power auto-scale: W → kW → MW based on magnitude. Mirrors the
-  // existing chooseScale() logic for per-component charts so the
-  // Dashboard reads in the same units a developer sees in the
-  // inspector panel.
-  function fmt(quantity, unit, value) {
-    if (value == null || !Number.isFinite(value)) return "—";
-    if (quantity === "Power" || quantity === "ReactivePower" || unit === "W" || unit === "var") {
-      const a = Math.abs(value);
-      if (a >= 1e6) return `${(value / 1e6).toFixed(2)} M${unit}`;
-      if (a >= 1e3) return `${(value / 1e3).toFixed(2)} k${unit}`;
-      return `${value.toFixed(1)} ${unit}`;
-    }
-    // Voltage, frequency, percentage etc. — fixed unit, modest precision.
-    return `${value.toFixed(2)} ${unit}`;
   }
   function renderSpark(stream) {
     const b = buf(stream);
@@ -254,13 +267,7 @@ function makeRenderScheduler(render) {
 }
 
 // Shared formatters reused by all per-component dashboard rows.
-function fmtRowPower(v) {
-  if (v == null || !Number.isFinite(v)) return "—";
-  const a = Math.abs(v);
-  if (a >= 1e6) return `${(v / 1e6).toFixed(2)} MW`;
-  if (a >= 1e3) return `${(v / 1e3).toFixed(2)} kW`;
-  return `${v.toFixed(1)} W`;
-}
+const fmtRowPower = (v) => fmt("Power", "W", v);
 function fmtRowSoc(v) {
   return v == null || !Number.isFinite(v) ? "—" : `${v.toFixed(1)}%`;
 }
@@ -368,28 +375,25 @@ export const batteryPairs = (() => {
   const scheduleRender = makeRenderScheduler(render);
   async function seedBattery(id) {
     try {
-      const [soc, dc] = await Promise.all([
-        fetch(`${mgPath("history")}?id=${id}&metric=soc_pct&window_s=10`).then((r) => r.json()),
-        fetch(`${mgPath("history")}?id=${id}&metric=dc_power_w&window_s=10`).then((r) => r.json()),
-      ]);
+      const [soc, dc] = await latestMetrics(id, ["soc_pct", "dc_power_w"]);
       const p = pairs.get(id);
       if (!p) return;
-      p.battery.soc = soc.samples?.at(-1)?.[1] ?? null;
-      p.battery.power_w = dc.samples?.at(-1)?.[1] ?? null;
+      p.battery.soc = soc;
+      p.battery.power_w = dc;
     } catch (_) {}
   }
   async function seedInverter(id) {
     try {
-      const [m, lo, hi] = await Promise.all([
-        fetch(`${mgPath("history")}?id=${id}&metric=active_power_w&window_s=10`).then((r) => r.json()),
-        fetch(`${mgPath("history")}?id=${id}&metric=active_power_lower_bound_w&window_s=10`).then((r) => r.json()),
-        fetch(`${mgPath("history")}?id=${id}&metric=active_power_upper_bound_w&window_s=10`).then((r) => r.json()),
+      const [m, lo, hi] = await latestMetrics(id, [
+        "active_power_w",
+        "active_power_lower_bound_w",
+        "active_power_upper_bound_w",
       ]);
       const inv = inverters.get(id);
       if (!inv) return;
-      inv.measured = m.samples?.at(-1)?.[1] ?? null;
-      inv.lower = lo.samples?.at(-1)?.[1] ?? null;
-      inv.upper = hi.samples?.at(-1)?.[1] ?? null;
+      inv.measured = m;
+      inv.lower = lo;
+      inv.upper = hi;
     } catch (_) {}
   }
   return {
@@ -516,258 +520,149 @@ function envelopeBar(lower, current, upper, fmtValue) {
   `;
 }
 
-// ─── PV inverter rows ─────────────────────────────────────────────────────
+// ─── Per-category row modules ─────────────────────────────────────────────
 //
-// One row per visible solar inverter. Measured AC active power
-// highlights when it clips against either envelope bound — same
-// operator-visible signal that the upstream control app's setpoint
-// is being held back by the inverter's own clamp. Battery inverters
-// are intentionally absent from this section; they pair with their
-// batteries in the Batteries section above.
-export const pvRows = (() => {
-  const data = new Map(); // id -> { name, subtype, health, measured, lower, upper }
+// PV / EV / CHP rows are one pattern instantiated three times: a
+// data map keyed by component id, a topology-driven refresh that
+// preserves live values across shape changes, a seed pass pulling
+// each tracked metric's latest sample, a rAF-coalesced render, and
+// a WS applySample dispatch. The factory owns that plumbing; each
+// instance declares only its filter, its metric→field table, and
+// its row markup.
+//
+// `fields` maps data-object field → history/WS metric name — one
+// table drives both the seed fetches and the applySample dispatch.
+function makeRowModule({ gridId, sectionSel, filter, fields, rowClass, rowHtml, sort, resortOnSample = false }) {
+  const data = new Map(); // id -> { name, subtype, health, ...fields }
   let order = [];
-  const TRACKED = new Set([
-    "active_power_w",
-    "active_power_lower_bound_w",
-    "active_power_upper_bound_w",
-  ]);
+  const fieldNames = Object.keys(fields);
+  const metricToField = new Map(fieldNames.map((f) => [fields[f], f]));
 
   function resort() {
-    order = [...data.keys()].sort((a, b) => {
-      const A = data.get(a);
-      const B = data.get(b);
-      const pa = invPinned(A) ? 0 : 1;
-      const pb = invPinned(B) ? 0 : 1;
-      if (pa !== pb) return pa - pb;
-      return a - b;
-    });
+    order = [...data.keys()].sort(
+      (a, b) => (sort ? sort(data.get(a), data.get(b)) : 0) || a - b,
+    );
   }
   function render() {
-    const grid = document.getElementById("pv-rows");
-    const section = grid?.closest(".dash-pv");
+    const grid = document.getElementById(gridId);
+    const section = grid?.closest(sectionSel);
     if (!grid || !section) return;
     section.hidden = data.size === 0;
     grid.innerHTML = "";
     for (const id of order) {
       const d = data.get(id);
       const row = document.createElement("div");
-      row.className = "tier3-row";
+      row.className = rowClass(d);
       row.dataset.id = id;
-      if (invPinned(d)) row.classList.add("pinned");
-      const healthCls = d.health === "ok" ? "health-ok" : "health-bad";
-      row.innerHTML = `
-        <span class="tier3-name">${escapeHtml(d.name)}</span>
-        <span class="tier3-subtype muted">${d.subtype || "—"}</span>
-        <span class="tier3-health ${healthCls}">${d.health}</span>
-        ${envelopeBar(d.lower, d.measured, d.upper, fmtRowPower)}
-      `;
+      row.innerHTML = rowHtml(d);
       row.addEventListener("click", () => jumpToTopology(id));
       grid.appendChild(row);
     }
   }
   const scheduleRender = makeRenderScheduler(render);
-  async function seedFromHistory(id) {
+  async function seed(id) {
     try {
-      const [m, lo, hi] = await Promise.all([
-        fetch(`${mgPath("history")}?id=${id}&metric=active_power_w&window_s=10`).then((r) => r.json()),
-        fetch(`${mgPath("history")}?id=${id}&metric=active_power_lower_bound_w&window_s=10`).then((r) => r.json()),
-        fetch(`${mgPath("history")}?id=${id}&metric=active_power_upper_bound_w&window_s=10`).then((r) => r.json()),
-      ]);
+      const vals = await latestMetrics(id, fieldNames.map((f) => fields[f]));
       const d = data.get(id);
       if (!d) return;
-      d.measured = m.samples?.at(-1)?.[1] ?? null;
-      d.lower = lo.samples?.at(-1)?.[1] ?? null;
-      d.upper = hi.samples?.at(-1)?.[1] ?? null;
+      fieldNames.forEach((f, i) => {
+        d[f] = vals[i];
+      });
     } catch (_) {}
   }
   return {
     async refresh(snapshot) {
       const components = snapshot?.components || [];
-      const inverters = components.filter(
-        (c) => c.category === "inverter" && c.subtype === "solar" && !c.hidden,
-      );
+      const rows = components.filter((c) => !c.hidden && filter(c));
       const next = new Map();
-      for (const c of inverters) {
+      for (const c of rows) {
         const prev = data.get(c.id);
-        next.set(c.id, {
-          name: c.name,
-          subtype: c.subtype,
-          health: c.health,
-          measured: prev?.measured ?? null,
-          lower: prev?.lower ?? null,
-          upper: prev?.upper ?? null,
-        });
+        const d = { name: c.name, subtype: c.subtype, health: c.health };
+        for (const f of fieldNames) d[f] = prev?.[f] ?? null;
+        next.set(c.id, d);
       }
       data.clear();
       for (const [k, v] of next) data.set(k, v);
       resort();
       render();
-      await Promise.all(inverters.map((c) => seedFromHistory(c.id)));
+      await Promise.all(rows.map((c) => seed(c.id)));
       resort();
       render();
     },
     applySample(ev) {
-      if (!TRACKED.has(ev.metric)) return;
+      const f = metricToField.get(ev.metric);
+      if (!f) return;
       const d = data.get(ev.id);
       if (!d) return;
-      if (ev.metric === "active_power_w") d.measured = ev.value;
-      else if (ev.metric === "active_power_lower_bound_w") d.lower = ev.value;
-      else if (ev.metric === "active_power_upper_bound_w") d.upper = ev.value;
-      resort();
+      d[f] = ev.value;
+      if (resortOnSample) resort();
       scheduleRender();
     },
   };
-})();
+}
 
-// ─── EV charger rows ──────────────────────────────────────────────────────
-//
+// One row per visible solar inverter. Measured AC active power
+// highlights when it clips against either envelope bound — same
+// operator-visible signal that the upstream control app's setpoint
+// is being held back by the inverter's own clamp. Battery inverters
+// are intentionally absent from this section; they pair with their
+// batteries in the Batteries section above. Pinned rows sort first.
+export const pvRows = makeRowModule({
+  gridId: "pv-rows",
+  sectionSel: ".dash-pv",
+  filter: (c) => c.category === "inverter" && c.subtype === "solar",
+  fields: {
+    measured: "active_power_w",
+    lower: "active_power_lower_bound_w",
+    upper: "active_power_upper_bound_w",
+  },
+  sort: (A, B) => (invPinned(A) ? 0 : 1) - (invPinned(B) ? 0 : 1),
+  resortOnSample: true,
+  rowClass: (d) => (invPinned(d) ? "tier3-row pinned" : "tier3-row"),
+  rowHtml: (d) => `
+        <span class="tier3-name">${escapeHtml(d.name)}</span>
+        <span class="tier3-subtype muted">${d.subtype || "—"}</span>
+        <span class="tier3-health ${d.health === "ok" ? "health-ok" : "health-bad"}">${d.health}</span>
+        ${envelopeBar(d.lower, d.measured, d.upper, fmtRowPower)}
+      `,
+});
+
 // EV rows mirror the battery row shape: name + health pill + SoC bar
 // + DC power. Click → jump to Topology with the EV selected.
-export const evRows = (() => {
-  const data = new Map(); // id -> { name, health, soc, power_w }
-  const TRACKED = new Set(["soc_pct", "dc_power_w"]);
-
-  function render() {
-    const grid = document.getElementById("ev-rows");
-    const section = grid?.closest(".dash-ev");
-    if (!grid || !section) return;
-    section.hidden = data.size === 0;
-    grid.innerHTML = "";
-    const ids = [...data.keys()].sort((a, b) => a - b);
-    for (const id of ids) {
-      const d = data.get(id);
-      const row = document.createElement("div");
-      row.className = "tier5-row cat-ev-charger";
-      row.dataset.id = id;
-      const healthCls = d.health === "ok" ? "health-ok" : "health-bad";
-      const socPct = d.soc == null ? 0 : Math.max(0, Math.min(100, d.soc));
-      row.innerHTML = `
+export const evRows = makeRowModule({
+  gridId: "ev-rows",
+  sectionSel: ".dash-ev",
+  filter: (c) => c.category === "ev-charger",
+  fields: { soc: "soc_pct", power_w: "dc_power_w" },
+  rowClass: () => "tier5-row cat-ev-charger",
+  rowHtml: (d) => {
+    const socPct = d.soc == null ? 0 : Math.max(0, Math.min(100, d.soc));
+    return `
         <span class="tier5-name">${escapeHtml(d.name)}</span>
         <span class="tier5-cat muted">ev-charger</span>
-        <span class="tier5-health ${healthCls}">${d.health}</span>
+        <span class="tier5-health ${d.health === "ok" ? "health-ok" : "health-bad"}">${d.health}</span>
         <span class="tier5-soc-wrap">
           <span class="tier5-soc-bar" style="width:${socPct.toFixed(1)}%"></span>
           <span class="tier5-soc-text">${fmtRowSoc(d.soc)}</span>
         </span>
         <span class="tier5-power">${fmtRowPower(d.power_w)}</span>
       `;
-      row.addEventListener("click", () => jumpToTopology(id));
-      grid.appendChild(row);
-    }
-  }
-  const scheduleRender = makeRenderScheduler(render);
-  async function seedFromHistory(id) {
-    try {
-      const [p, soc] = await Promise.all([
-        fetch(`${mgPath("history")}?id=${id}&metric=dc_power_w&window_s=10`).then((r) => r.json()),
-        fetch(`${mgPath("history")}?id=${id}&metric=soc_pct&window_s=10`).then((r) => r.json()),
-      ]);
-      const d = data.get(id);
-      if (!d) return;
-      d.power_w = p.samples?.at(-1)?.[1] ?? null;
-      d.soc = soc.samples?.at(-1)?.[1] ?? null;
-    } catch (_) {}
-  }
-  return {
-    async refresh(snapshot) {
-      const components = snapshot?.components || [];
-      const rows = components.filter((c) => c.category === "ev-charger" && !c.hidden);
-      const next = new Map();
-      for (const c of rows) {
-        const prev = data.get(c.id);
-        next.set(c.id, {
-          name: c.name,
-          health: c.health,
-          soc: prev?.soc ?? null,
-          power_w: prev?.power_w ?? null,
-        });
-      }
-      data.clear();
-      for (const [k, v] of next) data.set(k, v);
-      render();
-      await Promise.all(rows.map((c) => seedFromHistory(c.id)));
-      render();
-    },
-    applySample(ev) {
-      if (!TRACKED.has(ev.metric)) return;
-      const d = data.get(ev.id);
-      if (!d) return;
-      if (ev.metric === "soc_pct") d.soc = ev.value;
-      else if (ev.metric === "dc_power_w") d.power_w = ev.value;
-      scheduleRender();
-    },
-  };
-})();
+  },
+});
 
-// ─── CHP rows ─────────────────────────────────────────────────────────────
-//
 // CHP rows show name + health + AC active power; no SoC field. The
 // AC reading is signed (-ve when generating into the grid).
-export const chpRows = (() => {
-  const data = new Map(); // id -> { name, health, power_w }
-  const TRACKED = new Set(["active_power_w"]);
-
-  function render() {
-    const grid = document.getElementById("chp-rows");
-    const section = grid?.closest(".dash-chp");
-    if (!grid || !section) return;
-    section.hidden = data.size === 0;
-    grid.innerHTML = "";
-    const ids = [...data.keys()].sort((a, b) => a - b);
-    for (const id of ids) {
-      const d = data.get(id);
-      const row = document.createElement("div");
-      row.className = "tier5-row cat-chp";
-      row.dataset.id = id;
-      const healthCls = d.health === "ok" ? "health-ok" : "health-bad";
-      row.innerHTML = `
+export const chpRows = makeRowModule({
+  gridId: "chp-rows",
+  sectionSel: ".dash-chp",
+  filter: (c) => c.category === "chp",
+  fields: { power_w: "active_power_w" },
+  rowClass: () => "tier5-row cat-chp",
+  rowHtml: (d) => `
         <span class="tier5-name">${escapeHtml(d.name)}</span>
         <span class="tier5-cat muted">chp</span>
-        <span class="tier5-health ${healthCls}">${d.health}</span>
+        <span class="tier5-health ${d.health === "ok" ? "health-ok" : "health-bad"}">${d.health}</span>
         <span class="tier5-soc-wrap muted">—</span>
         <span class="tier5-power">${fmtRowPower(d.power_w)}</span>
-      `;
-      row.addEventListener("click", () => jumpToTopology(id));
-      grid.appendChild(row);
-    }
-  }
-  const scheduleRender = makeRenderScheduler(render);
-  async function seedFromHistory(id) {
-    try {
-      const p = await fetch(
-        `${mgPath("history")}?id=${id}&metric=active_power_w&window_s=10`,
-      ).then((r) => r.json());
-      const d = data.get(id);
-      if (!d) return;
-      d.power_w = p.samples?.at(-1)?.[1] ?? null;
-    } catch (_) {}
-  }
-  return {
-    async refresh(snapshot) {
-      const components = snapshot?.components || [];
-      const rows = components.filter((c) => c.category === "chp" && !c.hidden);
-      const next = new Map();
-      for (const c of rows) {
-        const prev = data.get(c.id);
-        next.set(c.id, {
-          name: c.name,
-          health: c.health,
-          power_w: prev?.power_w ?? null,
-        });
-      }
-      data.clear();
-      for (const [k, v] of next) data.set(k, v);
-      render();
-      await Promise.all(rows.map((c) => seedFromHistory(c.id)));
-      render();
-    },
-    applySample(ev) {
-      if (!TRACKED.has(ev.metric)) return;
-      const d = data.get(ev.id);
-      if (!d) return;
-      d.power_w = ev.value;
-      scheduleRender();
-    },
-  };
-})();
+      `,
+});
