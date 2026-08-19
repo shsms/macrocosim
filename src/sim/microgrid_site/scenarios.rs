@@ -150,7 +150,7 @@ impl MicrogridSite {
         let mut telemetry = CsvSinks::new();
         let mut setpoints = CsvSinks::new();
         let mut bounds = CsvSinks::new();
-        for c in &components {
+        for c in components.iter() {
             telemetry.insert(c.id(), CsvSink::open(dir, c.id(), c.category())?);
             if c.effective_active_bounds().is_some() {
                 setpoints.insert(c.id(), CsvSink::open_setpoints(dir, c.id())?);

@@ -74,7 +74,11 @@ pub struct MicrogridSite {
 }
 
 struct MicrogridSiteInner {
-    components: RwLock<Vec<Arc<dyn SimulatedComponent>>>,
+    /// Registration-order component list, snapshotted by every tick /
+    /// sampler pass. The inner Arc makes a snapshot one refcount bump
+    /// instead of a Vec clone; structural mutations (rare) copy-on-
+    /// write via `Arc::make_mut`.
+    components: RwLock<Arc<Vec<Arc<dyn SimulatedComponent>>>>,
     by_id: RwLock<HashMap<u64, Arc<dyn SimulatedComponent>>>,
     connections: RwLock<Vec<(u64, u64)>>,
     grid_state: RwLock<GridState>,
@@ -208,7 +212,7 @@ impl MicrogridSite {
     pub fn with_id_allocator(next_id: Arc<AtomicU64>) -> Self {
         Self {
             inner: Arc::new(MicrogridSiteInner {
-                components: RwLock::new(Vec::new()),
+                components: RwLock::new(Arc::new(Vec::new())),
                 by_id: RwLock::new(HashMap::new()),
                 connections: RwLock::new(Vec::new()),
                 grid_state: RwLock::new(GridState::default()),
@@ -494,7 +498,7 @@ impl MicrogridSite {
     /// for one pass).
     pub fn register_arc(&self, c: Arc<dyn SimulatedComponent>) -> ComponentHandle {
         let id = c.id();
-        self.inner.components.write().push(c.clone());
+        Arc::make_mut(&mut *self.inner.components.write()).push(c.clone());
         self.inner.by_id.write().insert(id, c.clone());
         self.bump_structural();
         // Default runtime mode: every flag at "Normal" — i.e. emit
@@ -601,8 +605,15 @@ impl MicrogridSite {
             .collect()
     }
 
-    pub fn components(&self) -> Vec<Arc<dyn SimulatedComponent>> {
+    /// Snapshot of the registration-order component list — one Arc
+    /// refcount bump, no Vec copy.
+    pub fn components(&self) -> Arc<Vec<Arc<dyn SimulatedComponent>>> {
         self.inner.components.read().clone()
+    }
+
+    /// Number of registered components, without snapshotting the list.
+    pub fn component_count(&self) -> usize {
+        self.inner.components.read().len()
     }
 
     pub fn get(&self, id: u64) -> Option<Arc<dyn SimulatedComponent>> {
@@ -709,7 +720,7 @@ impl MicrogridSite {
         // forever, indistinguishable from live data. Clients see
         // EOF/CANCELLED and reconnect onto the rebuilt registry.
         self.cancel_all_streams();
-        self.inner.components.write().clear();
+        *self.inner.components.write() = Arc::new(Vec::new());
         self.inner.by_id.write().clear();
         self.inner.connections.write().clear();
         self.inner.runtime.write().clear();
@@ -741,7 +752,7 @@ impl MicrogridSite {
         if was_present {
             self.bump_structural();
         }
-        self.inner.components.write().retain(|c| c.id() != id);
+        Arc::make_mut(&mut *self.inner.components.write()).retain(|c| c.id() != id);
         self.inner
             .connections
             .write()
@@ -969,7 +980,7 @@ impl MicrogridSite {
     /// before driving `tick_once` should call `Config::refresh_once`.
     pub fn tick_once(&self, now: DateTime<Utc>, dt: Duration) {
         let components = self.inner.components.read().clone();
-        for c in &components {
+        for c in components.iter() {
             c.tick(self, now, dt);
         }
         self.integrate_energy(&components, now);

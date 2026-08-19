@@ -79,7 +79,7 @@ impl From<&MicrogridEntry> for MicrogridView {
             name: e.def.name.clone(),
             grpc_port: e.def.grpc_port,
             tso: e.def.tso.clone(),
-            component_count: e.site.components().len(),
+            component_count: e.site.component_count(),
         }
     }
 }

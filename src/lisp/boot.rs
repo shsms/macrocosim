@@ -353,7 +353,7 @@ impl Config {
             .map(|e| e.site.clone())
             .collect();
         for site in sites {
-            for c in site.components() {
+            for c in site.components().iter() {
                 c.refresh_inputs(&mut guard);
             }
         }
@@ -466,7 +466,7 @@ impl Config {
                     registry.lock().values().map(|e| e.site.clone()).collect();
                 let mut guard = ctx.borrow_mut();
                 for site in &sites {
-                    for c in site.components() {
+                    for c in site.components().iter() {
                         c.refresh_inputs(&mut guard);
                     }
                 }
