@@ -51,24 +51,30 @@ impl Meter {
         }
     }
 
+    /// The shared children walk: sum `value` over the direct
+    /// children, applying the parallel-paths share — a child with N
+    /// parents in the connection graph contributes 1/N to each
+    /// parent. So 1 inverter shared by 2 parallel meters appears as
+    /// half of its flow under each — the top meter sums them and
+    /// lands on the inverter's actual power. Single-parent children
+    /// clamp via `.max(1)`.
+    fn sum_children(
+        &self,
+        site: &MicrogridSite,
+        value: impl Fn(&dyn SimulatedComponent) -> f32,
+    ) -> f32 {
+        site.children_with_parent_counts(self.id)
+            .into_iter()
+            .filter_map(|(id, parents)| site.get(id).map(|c| (c, parents)))
+            .map(|(child, parents)| value(child.as_ref()) / parents.max(1) as f32)
+            .sum()
+    }
+
     fn aggregate_active(&self, site: &MicrogridSite) -> f32 {
         if let Some(scalar) = self.power_source.read().as_ref() {
             return scalar.get();
         }
-        site.children_of(self.id)
-            .into_iter()
-            .filter_map(|id| site.get(id).map(|c| (id, c)))
-            .map(|(child_id, child)| {
-                // Parallel-paths share: a child with N parents in the
-                // connection graph contributes 1/N to each parent. So
-                // 1 inverter shared by 2 parallel meters appears as
-                // half of its flow under each — the top meter sums
-                // them and lands on the inverter's actual power.
-                // Single-parent children clamp via `.max(1)`.
-                let share = site.parent_count(child_id).max(1) as f32;
-                child.aggregate_power_w(site) / share
-            })
-            .sum()
+        self.sum_children(site, |c| c.aggregate_power_w(site))
     }
 
     fn aggregate_reactive(&self, site: &MicrogridSite) -> f32 {
@@ -78,14 +84,7 @@ impl Meter {
         if self.power_source.read().is_some() {
             return 0.0;
         }
-        site.children_of(self.id)
-            .into_iter()
-            .filter_map(|id| site.get(id).map(|c| (id, c)))
-            .map(|(child_id, child)| {
-                let share = site.parent_count(child_id).max(1) as f32;
-                child.aggregate_reactive_var(site) / share
-            })
-            .sum()
+        self.sum_children(site, |c| c.aggregate_reactive_var(site))
     }
 
     /// Replace the power source with a fresh constant. Used by
@@ -248,6 +247,27 @@ mod tests {
         fn aggregate_reactive_var(&self, _: &MicrogridSite) -> f32 {
             self.q
         }
+    }
+
+    /// A duplicated (parent, child) edge — `connect` rejects only
+    /// cycles, so evaluating `(connect 2 100)` twice stores two
+    /// identical edges — must not change the meter's sum: each copy
+    /// contributes value/2, landing on the child's actual power.
+    #[test]
+    fn duplicate_edge_does_not_double_count() {
+        let w = MicrogridSite::new();
+        let inverter = std::sync::Arc::new(FixedFlow {
+            id: 100,
+            p: 10_000.0,
+            q: 0.0,
+        });
+        w.register_arc(inverter);
+        let meter = Meter::new(2, Duration::from_secs(1), None, 0.0, false);
+        w.register(meter);
+        assert!(w.connect(2, 100));
+        assert!(w.connect(2, 100));
+        let m = w.get(2).unwrap();
+        assert!((m.aggregate_power_w(&w) - 10_000.0).abs() < 1e-3);
     }
 
     /// 1 inverter, 2 parallel meters, 1 top meter:

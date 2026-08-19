@@ -583,6 +583,24 @@ impl MicrogridSite {
             .collect()
     }
 
+    /// Children of `parent` paired with each child's total parent
+    /// count, gathered under a single connections-lock read. The
+    /// meter aggregation walk runs per telemetry read (physics tick,
+    /// history sampler, gRPC streams), so the edge list is scanned
+    /// once per call here, not once per child.
+    pub fn children_with_parent_counts(&self, parent: u64) -> Vec<(u64, usize)> {
+        let conns = self.inner.connections.read();
+        let mut parents: HashMap<u64, usize> = HashMap::new();
+        for (_, c) in conns.iter() {
+            *parents.entry(*c).or_insert(0) += 1;
+        }
+        conns
+            .iter()
+            .filter(|(p, _)| *p == parent)
+            .map(|(_, c)| (*c, parents[c]))
+            .collect()
+    }
+
     pub fn components(&self) -> Vec<Arc<dyn SimulatedComponent>> {
         self.inner.components.read().clone()
     }
