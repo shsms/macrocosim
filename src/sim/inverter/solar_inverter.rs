@@ -216,7 +216,7 @@ impl SimulatedComponent for SolarInverter {
             // Same sign-of-P state the battery inverter reports, so a
             // controller can read idle-vs-delivering off the stream
             // (an empty snapshot was indistinguishable from idle).
-            component_state: Some(crate::sim::inverter::battery_inverter::power_state(p)),
+            component_state: Some(crate::sim::component::power_state(p)),
             ..Default::default()
         }
     }

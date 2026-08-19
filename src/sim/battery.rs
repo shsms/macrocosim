@@ -238,7 +238,7 @@ impl SimulatedComponent for Battery {
                 0.0
             }),
             active_power_bounds: Some(VecBounds::single(s.effective_lower_w, s.effective_upper_w)),
-            component_state: Some(power_to_state(s.power_w)),
+            component_state: Some(crate::sim::component::power_state(s.power_w)),
             relay_state: Some("relay-closed"),
             ..Default::default()
         }
@@ -285,15 +285,5 @@ impl SimulatedComponent for Battery {
     fn effective_active_bounds(&self) -> Option<VecBounds> {
         let s = self.state.lock();
         Some(VecBounds::single(s.effective_lower_w, s.effective_upper_w))
-    }
-}
-
-fn power_to_state(p: f32) -> &'static str {
-    if p > 0.0 {
-        "charging"
-    } else if p < 0.0 {
-        "discharging"
-    } else {
-        "ready"
     }
 }

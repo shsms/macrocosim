@@ -40,6 +40,20 @@ impl Category {
     }
 }
 
+/// Proto state label from the sign of P: positive = charging,
+/// negative = discharging (a PV inverter delivering power reads as
+/// discharging too — the proto has no "generating" code), zero =
+/// ready. Shared by the battery and both inverters.
+pub(crate) fn power_state(p: f32) -> &'static str {
+    if p > 0.0 {
+        "charging"
+    } else if p < 0.0 {
+        "discharging"
+    } else {
+        "ready"
+    }
+}
+
 /// A component's declared capability — a microgrid CONFIG parameter,
 /// not a runtime state. The runtime fault knobs (telemetry mode,
 /// command mode, health) depend on it: an `Inactive` component can

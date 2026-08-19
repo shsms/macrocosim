@@ -220,7 +220,7 @@ impl SimulatedComponent for BatteryInverter {
             // Reactive envelope is dynamic: tightens with |P| under
             // PF, expands toward the kVA edge when P is small.
             reactive_power_bounds: Some(self.reactive.bounds_at(p)),
-            component_state: Some(power_state(p)),
+            component_state: Some(crate::sim::component::power_state(p)),
             ..Default::default()
         }
     }
@@ -313,20 +313,6 @@ impl SimulatedComponent for BatteryInverter {
 
     fn set_reactive_apparent_va(&self, va: Option<f32>) {
         self.reactive.set_apparent_va(va);
-    }
-}
-
-/// Proto state label from the sign of P: positive = charging,
-/// negative = discharging (a PV inverter delivering power reads as
-/// discharging too — the proto has no "generating" code), zero =
-/// ready. Shared with the solar inverter's telemetry.
-pub(crate) fn power_state(p: f32) -> &'static str {
-    if p > 0.0 {
-        "charging"
-    } else if p < 0.0 {
-        "discharging"
-    } else {
-        "ready"
     }
 }
 
