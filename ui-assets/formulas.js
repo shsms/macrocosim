@@ -7,7 +7,7 @@
 // the dashboard tile titles + the click → openFormulaPanel
 // handoff.
 
-import { inspectEl, jumpToTopology, mgPath, openInspector } from "./app.js";
+import { escapeHtml, inspectEl, jumpToTopology, mgPath, openInspector } from "./app.js";
 
 // Parses a graph-crate-rendered formula like
 //   MAX(#2 - COALESCE(#1002, #1001, 0.0), 0.0)
@@ -100,21 +100,6 @@ function parseFormula(src) {
 // long arg lists; everything else stays inline so a short formula
 // like `#2` doesn't expand to four lines for one ref.
 function formulaToHtml(node) {
-  // Local rather than the file-level `escapeHtml` so the formula
-  // panel stays self-contained; named `escapeText` rather than
-  // `escape` to avoid shadowing the global escape() function.
-  const escapeText = (s) =>
-    String(s).replace(
-      /[&<>"']/g,
-      (c) =>
-        ({
-          "&": "&amp;",
-          "<": "&lt;",
-          ">": "&gt;",
-          '"': "&quot;",
-          "'": "&#39;",
-        })[c],
-    );
   function rec(n) {
     switch (n.kind) {
       case "ref":
@@ -122,14 +107,14 @@ function formulaToHtml(node) {
       case "num":
         return `<span class="formula-num">${n.value}</span>`;
       case "ident":
-        return `<span class="formula-ident">${escapeText(n.name)}</span>`;
+        return `<span class="formula-ident">${escapeHtml(n.name)}</span>`;
       case "paren":
         return `(${rec(n.inner)})`;
       case "op":
         return `${rec(n.left)} <span class="formula-op">${n.op}</span> ${rec(n.right)}`;
       case "call": {
         const args = n.args.map(rec);
-        const head = `<span class="formula-call">${escapeText(n.name)}</span>`;
+        const head = `<span class="formula-call">${escapeHtml(n.name)}</span>`;
         if (args.length <= 2 && n.args.every((a) => a.kind === "ref" || a.kind === "num")) {
           return `${head}(${args.join(", ")})`;
         }
@@ -139,7 +124,7 @@ function formulaToHtml(node) {
         return `${head}(\n${indented})`;
       }
       default:
-        return `<span class="formula-raw">${escapeText(n.text || "")}</span>`;
+        return `<span class="formula-raw">${escapeHtml(n.text || "")}</span>`;
     }
   }
   return rec(node);

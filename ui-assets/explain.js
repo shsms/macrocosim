@@ -112,6 +112,18 @@ const GROUP_ID_METRICS = new Set([
 ]);
 const SINGLE_ID_METRICS = new Set(["component", "component_ac_coalesce"]);
 
+// Engine-option checkboxes → query params on the formula request.
+// Adding an option is one row here plus its checkbox in index.html —
+// the #config-panel change listener already iterates generically.
+const ENGINE_OPTIONS = [
+  ["cfg-prefer-meters", "prefer_meters"],
+  ["cfg-phantom", "phantom_loads"],
+  ["cfg-no-fallback", "no_fallback"],
+  ["cfg-allow-unconnected", "allow_unconnected"],
+  ["cfg-allow-validation-failures", "allow_validation_failures"],
+  ["cfg-unspecified-inverters", "allow_unspecified_inverters"],
+];
+
 let metric = "grid";
 // The current formula, plain and with `//` comments, for the copy buttons.
 let formulaText = "";
@@ -456,23 +468,8 @@ export async function refreshFormula() {
     params.set("ids", selection.join(","));
   }
   // Engine options live client-side; every request carries them.
-  if (document.getElementById("cfg-prefer-meters").checked) {
-    params.set("prefer_meters", "true");
-  }
-  if (document.getElementById("cfg-phantom").checked) {
-    params.set("phantom_loads", "true");
-  }
-  if (document.getElementById("cfg-no-fallback").checked) {
-    params.set("no_fallback", "true");
-  }
-  if (document.getElementById("cfg-allow-unconnected").checked) {
-    params.set("allow_unconnected", "true");
-  }
-  if (document.getElementById("cfg-allow-validation-failures").checked) {
-    params.set("allow_validation_failures", "true");
-  }
-  if (document.getElementById("cfg-unspecified-inverters").checked) {
-    params.set("allow_unspecified_inverters", "true");
+  for (const [id, param] of ENGINE_OPTIONS) {
+    if (document.getElementById(id).checked) params.set(param, "true");
   }
 
   const seq = ++requestSeq;
