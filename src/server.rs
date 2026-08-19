@@ -305,16 +305,12 @@ impl MicrogridServer {
         // Per the proto, a successful response carries the expiry the
         // TTL was armed with so a client can time its refresh.
         let valid_until = Some(Timestamp::from(SystemTime::now() + duration));
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
-        tokio::spawn(async move {
-            let _ = tx
-                .send(Ok(SetElectricalComponentPowerResponse {
-                    valid_until_time: valid_until,
-                    status: SetElectricalComponentPowerRequestStatus::Success as i32,
-                }))
-                .await;
-        });
-        Ok(tonic::Response::new(Box::pin(ReceiverStream::new(rx))))
+        Ok(tonic::Response::new(Box::pin(tokio_stream::once(Ok(
+            SetElectricalComponentPowerResponse {
+                valid_until_time: valid_until,
+                status: SetElectricalComponentPowerRequestStatus::Success as i32,
+            },
+        )))))
     }
 }
 
@@ -581,10 +577,11 @@ impl microgrid_server::Microgrid for MicrogridServer {
                         .await;
                     break;
                 }
-                // Re-read the telemetry mode each iteration so a
-                // mid-stream `(set-component-telemetry-mode)` flip
-                // takes effect on the next sample boundary.
-                match site.runtime_of(id).telemetry {
+                // Re-read the runtime each iteration so a mid-stream
+                // `(set-component-telemetry-mode)` flip takes effect
+                // on the next sample boundary.
+                let runtime = site.runtime_of(id);
+                match runtime.telemetry {
                     TelemetryMode::Closed => {
                         log::debug!("stream({id}): closed by runtime mode");
                         break;
@@ -621,7 +618,7 @@ impl microgrid_server::Microgrid for MicrogridServer {
                         // ERROR/STANDBY in its state code, regardless
                         // of what the physics layer thinks the
                         // component is doing this tick.
-                        if let Some(label) = site.runtime_of(id).health.state_label() {
+                        if let Some(label) = runtime.health.state_label() {
                             snapshot.component_state = Some(label);
                         }
                         let msg = telemetry_to_proto(
