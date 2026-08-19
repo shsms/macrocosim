@@ -14,7 +14,6 @@ use crate::sim::{
     Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     bounds::ComponentBounds,
     dynamic_scalar::DynamicScalar,
-    meter::{per_phase_apparent_current, split_per_phase},
     ramp::{CommandDelay, Ramp},
     reactive::{ReactiveCapability, ReactivePath},
     runtime::Health,
@@ -196,29 +195,15 @@ impl SimulatedComponent for SolarInverter {
     }
 
     fn telemetry(&self, site: &MicrogridSite) -> Telemetry {
-        let grid = site.grid_state();
         let p = self.ramp.actual();
-        let pp = split_per_phase(p, grid.voltage_per_phase);
-        let rp = self.reactive.published();
-        let rpp = split_per_phase(rp, grid.voltage_per_phase);
-        Telemetry {
-            id: self.id,
-            category: Some(Category::Inverter),
-            active_power_w: Some(p),
-            reactive_power_var: Some(rp),
-            per_phase_active_w: Some(pp),
-            per_phase_reactive_var: Some(rpp),
-            per_phase_voltage_v: Some(grid.voltage_per_phase),
-            per_phase_current_a: Some(per_phase_apparent_current(pp, rpp, grid.voltage_per_phase)),
-            frequency_hz: Some(grid.frequency_hz),
-            active_power_bounds: Some(self.bounds.lock().effective()),
-            reactive_power_bounds: Some(self.reactive.bounds_at(p)),
-            // Same sign-of-P state the battery inverter reports, so a
-            // controller can read idle-vs-delivering off the stream
-            // (an empty snapshot was indistinguishable from idle).
-            component_state: Some(crate::sim::component::power_state(p)),
-            ..Default::default()
-        }
+        super::inverter_telemetry(
+            self.id,
+            site,
+            p,
+            self.reactive.published(),
+            self.bounds.lock().effective(),
+            self.reactive.bounds_at(p),
+        )
     }
 
     fn set_active_setpoint(&self, power_w: f32) -> Result<(), SetpointError> {

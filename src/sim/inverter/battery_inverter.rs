@@ -6,7 +6,6 @@ use parking_lot::Mutex;
 use crate::sim::{
     Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     bounds::ComponentBounds,
-    meter::{per_phase_apparent_current, split_per_phase},
     ramp::{CommandDelay, Ramp},
     reactive::{ReactiveCapability, ReactivePath},
     runtime::Health,
@@ -196,33 +195,22 @@ impl SimulatedComponent for BatteryInverter {
     }
 
     fn telemetry(&self, site: &MicrogridSite) -> Telemetry {
-        let grid = site.grid_state();
         // Report the measured AC output, not the internal ramp state —
         // those diverge when a battery clips downstream.
         let p = *self.measured_w.lock();
-        let pp = split_per_phase(p, grid.voltage_per_phase);
-        let rp = self.reactive.published();
-        let rpp = split_per_phase(rp, grid.voltage_per_phase);
-        Telemetry {
-            id: self.id,
-            category: Some(Category::Inverter),
-            active_power_w: Some(p),
-            reactive_power_var: Some(rp),
-            per_phase_active_w: Some(pp),
-            per_phase_reactive_var: Some(rpp),
-            per_phase_voltage_v: Some(grid.voltage_per_phase),
-            per_phase_current_a: Some(per_phase_apparent_current(pp, rpp, grid.voltage_per_phase)),
-            frequency_hz: Some(grid.frequency_hz),
-            // Reported envelope is OUR own bounds only — clients that
-            // want the combined inverter+battery envelope read both
-            // streams and intersect.
-            active_power_bounds: Some(self.bounds.lock().effective()),
-            // Reactive envelope is dynamic: tightens with |P| under
-            // PF, expands toward the kVA edge when P is small.
-            reactive_power_bounds: Some(self.reactive.bounds_at(p)),
-            component_state: Some(crate::sim::component::power_state(p)),
-            ..Default::default()
-        }
+        // Reported active envelope is OUR own bounds only — clients
+        // that want the combined inverter+battery envelope read both
+        // streams and intersect. Reactive envelope is dynamic:
+        // tightens with |P| under PF, expands toward the kVA edge
+        // when P is small.
+        super::inverter_telemetry(
+            self.id,
+            site,
+            p,
+            self.reactive.published(),
+            self.bounds.lock().effective(),
+            self.reactive.bounds_at(p),
+        )
     }
 
     fn set_active_setpoint(&self, power_w: f32) -> Result<(), SetpointError> {
