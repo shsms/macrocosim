@@ -345,19 +345,7 @@ impl Config {
     /// `(run-with-timer 0 …)` values are visible before the synthetic
     /// physics tick.
     pub fn refresh_once(&self) {
-        let mut guard = self.ctx.borrow_mut();
-        let sites: Vec<MicrogridSite> = self
-            .microgrids
-            .lock()
-            .values()
-            .map(|e| e.site.clone())
-            .collect();
-        for site in sites {
-            for c in site.components().iter() {
-                c.refresh_inputs(&mut guard);
-            }
-        }
-        self.timer_handle.tick(&mut guard);
+        refresh_pass(&self.microgrids, &self.ctx, &self.timer_handle);
     }
 
     /// Advance a headless simulation by `dt`: move the sim clock
@@ -456,21 +444,11 @@ impl Config {
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
-                // Snapshot the per-mg sites outside the ctx lock, then
-                // take the lock once and run the full refresh pass.
                 // A long /api/eval grabbing the same lock will delay
                 // this iteration but won't block physics: each site's
                 // `spawn_physics` task ticks lock-free against the
                 // atomics last published by `refresh_inputs`.
-                let sites: Vec<MicrogridSite> =
-                    registry.lock().values().map(|e| e.site.clone()).collect();
-                let mut guard = ctx.borrow_mut();
-                for site in &sites {
-                    for c in site.components().iter() {
-                        c.refresh_inputs(&mut guard);
-                    }
-                }
-                timer_handle.tick(&mut guard);
+                refresh_pass(&registry, &ctx, &timer_handle);
             }
         });
     }
@@ -773,6 +751,26 @@ fn warn_orphaned_chp_defaults(ctx: &mut TulispContext) {
              moved into marker-defaults. Put the customization there."
         );
     }
+}
+
+/// One refresh + timer-drain pass: snapshot the per-mg sites outside
+/// the ctx lock, take the interpreter lock once, refresh every
+/// component's lisp-bound inputs, then drain the timer mailbox. The
+/// single implementation behind both `Config::refresh_once` and the
+/// background refresh loop, so the two can't drift.
+fn refresh_pass(
+    registry: &crate::sim::microgrids::SharedMicrogrids,
+    ctx: &SharedMut<TulispContext>,
+    timer_handle: &tulisp_async::Handle,
+) {
+    let sites: Vec<MicrogridSite> = registry.lock().values().map(|e| e.site.clone()).collect();
+    let mut guard = ctx.borrow_mut();
+    for site in &sites {
+        for c in site.components().iter() {
+            c.refresh_inputs(&mut guard);
+        }
+    }
+    timer_handle.tick(&mut guard);
 }
 
 /// The script's directory, for the single-script constructors that
