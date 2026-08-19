@@ -374,32 +374,17 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             if let Some(v) = a.stream_jitter_pct {
                 cfg.stream_jitter_pct = v as f32;
             }
-            // Reactive capability semantics:
-            //   value ≤ 0.0  → that constraint is disabled
-            //   absent       → inherit the existing field on cfg.reactive
-            //                  (i.e. the BatteryInverterConfig::default
-            //                  microsim_default, which sets PF=0.35)
-            // `:reactive-apparent-va 50000` adds a kVA cap *without*
-            // silently dropping the inherited PF limit; previously
-            // that subtle interaction was the easy way to ship a
-            // misconfigured inverter.
-            let merge_reactive = |input: Option<f64>, fallback: Option<f32>| -> Option<f32> {
-                match input {
-                    Some(v) if v > 0.0 => Some(v as f32),
-                    Some(_) => None,
-                    None => fallback,
-                }
-            };
-            cfg.reactive = crate::sim::reactive::ReactiveCapability {
-                pf_limit: merge_reactive(a.reactive_pf_limit, cfg.reactive.pf_limit),
-                apparent_va: merge_reactive(a.reactive_apparent_va, cfg.reactive.apparent_va),
-            };
-            if let Some(v) = a.reactive_command_delay_ms {
-                cfg.reactive_command_delay = Duration::from_millis(v.max(0) as u64);
+            ReactiveKwargs {
+                pf_limit: a.reactive_pf_limit,
+                apparent_va: a.reactive_apparent_va,
+                command_delay_ms: a.reactive_command_delay_ms,
+                ramp_rate: a.reactive_ramp_rate,
             }
-            if let Some(v) = a.reactive_ramp_rate {
-                cfg.reactive_ramp_rate_var_per_s = checked_ramp_rate(":reactive-ramp-rate", v)?;
-            }
+            .apply(
+                &mut cfg.reactive,
+                &mut cfg.reactive_command_delay,
+                &mut cfg.reactive_ramp_rate_var_per_s,
+            )?;
             let h = register_with_modes(
                 &w,
                 BatteryInverter::new(id, interval, cfg),
@@ -455,23 +440,17 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             if let Some(v) = a.stream_jitter_pct {
                 cfg.stream_jitter_pct = v as f32;
             }
-            let merge_reactive = |input: Option<f64>, fallback: Option<f32>| -> Option<f32> {
-                match input {
-                    Some(v) if v > 0.0 => Some(v as f32),
-                    Some(_) => None,
-                    None => fallback,
-                }
-            };
-            cfg.reactive = crate::sim::reactive::ReactiveCapability {
-                pf_limit: merge_reactive(a.reactive_pf_limit, cfg.reactive.pf_limit),
-                apparent_va: merge_reactive(a.reactive_apparent_va, cfg.reactive.apparent_va),
-            };
-            if let Some(v) = a.reactive_command_delay_ms {
-                cfg.reactive_command_delay = Duration::from_millis(v.max(0) as u64);
+            ReactiveKwargs {
+                pf_limit: a.reactive_pf_limit,
+                apparent_va: a.reactive_apparent_va,
+                command_delay_ms: a.reactive_command_delay_ms,
+                ramp_rate: a.reactive_ramp_rate,
             }
-            if let Some(v) = a.reactive_ramp_rate {
-                cfg.reactive_ramp_rate_var_per_s = checked_ramp_rate(":reactive-ramp-rate", v)?;
-            }
+            .apply(
+                &mut cfg.reactive,
+                &mut cfg.reactive_command_delay,
+                &mut cfg.reactive_ramp_rate_var_per_s,
+            )?;
             let inverter = SolarInverter::new(id, interval, cfg);
             if let Some(scalar) = dynamic_sunlight {
                 inverter.set_sunlight_source(scalar);
@@ -593,6 +572,53 @@ fn connect_successors(
 
 fn ms_to_duration(ms: Option<i64>, default_ms: u64) -> Duration {
     Duration::from_millis(ms.map(|x| x.max(0) as u64).unwrap_or(default_ms))
+}
+
+/// The reactive kwargs shared by both inverter constructors,
+/// gathered by field name so the two same-typed `Option<f64>` caps
+/// can't be transposed at a call site.
+struct ReactiveKwargs {
+    pf_limit: Option<f64>,
+    apparent_va: Option<f64>,
+    command_delay_ms: Option<i64>,
+    ramp_rate: Option<f64>,
+}
+
+impl ReactiveKwargs {
+    /// Apply to a config's (capability, command-delay, ramp-rate)
+    /// triple.
+    ///
+    /// Reactive capability semantics:
+    ///   value ≤ 0.0  → that constraint is disabled
+    ///   absent       → inherit the existing field on the config (the
+    ///                  type's default; for the PF limit, microsim's
+    ///                  0.35)
+    /// `:reactive-apparent-va 50000` adds a kVA cap *without* silently
+    /// dropping the inherited PF limit; previously that subtle
+    /// interaction was the easy way to ship a misconfigured inverter.
+    fn apply(
+        self,
+        reactive: &mut crate::sim::reactive::ReactiveCapability,
+        command_delay: &mut Duration,
+        ramp_rate: &mut f32,
+    ) -> Result<(), Error> {
+        let merge = |input: Option<f64>, fallback: Option<f32>| -> Option<f32> {
+            match input {
+                Some(v) if v > 0.0 => Some(v as f32),
+                Some(_) => None,
+                None => fallback,
+            }
+        };
+        reactive.pf_limit = merge(self.pf_limit, reactive.pf_limit);
+        reactive.apparent_va = merge(self.apparent_va, reactive.apparent_va);
+        if let Some(v) = self.command_delay_ms {
+            *command_delay = Duration::from_millis(v.max(0) as u64);
+        }
+        if let Some(v) = self.ramp_rate {
+            *ramp_rate = checked_ramp_rate(":reactive-ramp-rate", v)?;
+        }
+        Ok(())
+    }
 }
 
 /// A ramp rate must be a non-negative, non-NaN number: `Ramp::advance`
