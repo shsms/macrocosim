@@ -352,6 +352,8 @@ export const dispatchesPanel = (() => {
 
 // Pending debounce handle for the WS-driven formula refresh.
 let formulaRefreshTimer = null;
+let topologyBackfillTimer = null;
+let topologyBackfillPending = false;
 
 async function init() {
   setupAddForm();
@@ -444,17 +446,16 @@ async function init() {
   await overrideState.refresh();
   // WS push: refresh both the topology (so the canvas reflects the
   // mutation) and the pending state (so the pill, dialog, and
-  // inspector all update) on every TopologyChanged. Sample events
-  // go straight into the live-charts router.
-  openWebSocket((_v) => {
+  // inspector all update) on TopologyChanged. Sample events go
+  // straight into the live-charts router.
+  const onTopologyChanged = () => {
     refreshTopology();
     overrideState.refresh();
     // The formula depends on the topology; re-derive it while the
     // Formulas subview is showing (hidden, the subview-enter hook
-    // refreshes on the next visit anyway). Debounced: a burst of
-    // edits (multi-step undo, scripted evals) fires many
-    // topology_changed events, and each formula refresh is a
-    // server-side graph build plus a full panel re-render.
+    // refreshes on the next visit anyway). Debounced: each formula
+    // refresh is a server-side graph build plus a full panel
+    // re-render.
     if (visibleSubview() === "formulas") {
       clearTimeout(formulaRefreshTimer);
       formulaRefreshTimer = setTimeout(refreshFormula, 300);
@@ -462,10 +463,54 @@ async function init() {
     // The loopback supervisor debounces ~300ms and rebuilds the
     // Microgrid handle; /api/microgrid/latest + /formulas return
     // 503 mid-rebuild. Delay the dashboard re-fetch so it lands
-    // after the supervisor settles. backfill() is 503-tolerant —
-    // an undershoot leaves the existing tooltip + values, and
-    // the next sample-flow tick overwrites the displayed numbers.
-    setTimeout(() => dashboardTiles.backfill(), 800);
+    // after the supervisor settles. At most one backfill timer is
+    // armed at a time (each backfill refetches the full 15-min
+    // history for every stream); events landing while it's armed
+    // set the pending flag, and the callback re-arms once more when
+    // the flag is set. So a sustained event storm gets one backfill
+    // per 800 ms window (never starved), and the last event of a
+    // burst always has a backfill land ≥ 800 ms after it — past the
+    // supervisor's rebuild, so the final history refetch isn't the
+    // one that ate a 503. backfill() is 503-tolerant — an undershoot
+    // leaves the existing tooltip + values, and the next sample-flow
+    // tick overwrites the displayed numbers.
+    if (topologyBackfillTimer == null) {
+      armTopologyBackfill();
+    } else {
+      topologyBackfillPending = true;
+    }
+  };
+  const armTopologyBackfill = () => {
+    topologyBackfillTimer = setTimeout(() => {
+      topologyBackfillTimer = null;
+      dashboardTiles.backfill();
+      if (topologyBackfillPending) {
+        topologyBackfillPending = false;
+        armTopologyBackfill();
+      }
+    }, 800);
+  };
+  // A burst of edits (multi-step undo, scripted import, hot reload)
+  // fires one topology_changed per accepted eval, and every refresh
+  // is a topology fetch (a server-side graph build) plus a reseed of
+  // all dashboard row modules. Leading-edge throttle with trailing
+  // catch-up: the first event refreshes immediately, the rest of the
+  // burst collapses into one refresh 300 ms later.
+  let topologyBurstTimer = null;
+  let topologyBurstPending = false;
+  openWebSocket((_v) => {
+    if (topologyBurstTimer !== null) {
+      topologyBurstPending = true;
+      return;
+    }
+    onTopologyChanged();
+    topologyBurstTimer = setTimeout(() => {
+      topologyBurstTimer = null;
+      if (topologyBurstPending) {
+        topologyBurstPending = false;
+        onTopologyChanged();
+      }
+    }, 300);
   });
   // Periodically re-seed the dashboard tile values from the cached
   // latest sample, so a dropped/throttled WS frame can't leave a tile
