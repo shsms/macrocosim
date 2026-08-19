@@ -59,11 +59,7 @@ impl CsvSink {
     /// header, return the sink. Errors if the directory doesn't
     /// exist or isn't writable.
     pub(crate) fn open(dir: &Path, id: u64, category: Category) -> std::io::Result<Self> {
-        Self::create(
-            dir,
-            format!("{id}-{}.csv", category_slug(category)),
-            CSV_HEADER,
-        )
+        Self::create(dir, format!("{id}-{}.csv", category.as_str()), CSV_HEADER)
     }
 
     /// Open the received-setpoints sink `dir/<id>-setpoints.csv`.
@@ -153,21 +149,6 @@ fn csv_quote(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
-    }
-}
-
-fn category_slug(c: Category) -> &'static str {
-    match c {
-        Category::Grid => "grid",
-        Category::Meter => "meter",
-        Category::Inverter => "inverter",
-        Category::Battery => "battery",
-        Category::EvCharger => "ev-charger",
-        Category::Chp => "chp",
-        Category::WindTurbine => "wind-turbine",
-        Category::SteamBoiler => "steam-boiler",
-        Category::PowerTransformer => "power-transformer",
-        Category::Breaker => "breaker",
     }
 }
 

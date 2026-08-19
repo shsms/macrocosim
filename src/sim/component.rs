@@ -21,6 +21,25 @@ pub enum Category {
     Breaker,
 }
 
+impl Category {
+    /// Canonical lowercase slug — the one vocabulary shared by the
+    /// topology API and the scenario CSV filenames.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Category::Grid => "grid",
+            Category::Meter => "meter",
+            Category::Inverter => "inverter",
+            Category::Battery => "battery",
+            Category::EvCharger => "ev-charger",
+            Category::Chp => "chp",
+            Category::WindTurbine => "wind-turbine",
+            Category::SteamBoiler => "steam-boiler",
+            Category::PowerTransformer => "power-transformer",
+            Category::Breaker => "breaker",
+        }
+    }
+}
+
 /// A component's declared capability — a microgrid CONFIG parameter,
 /// not a runtime state. The runtime fault knobs (telemetry mode,
 /// command mode, health) depend on it: an `Inactive` component can

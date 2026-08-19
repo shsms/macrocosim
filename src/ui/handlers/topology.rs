@@ -10,7 +10,6 @@ use axum::{
 use serde::Serialize;
 
 use crate::lisp::Config;
-use crate::sim::Category;
 
 use super::resolve_site;
 
@@ -91,7 +90,7 @@ fn topology_snapshot(site: &crate::sim::MicrogridSite) -> TopologySnapshot {
                 name: site
                     .display_name(c.id())
                     .unwrap_or_else(|| c.name().to_string()),
-                category: category_label(c.category()),
+                category: c.category().as_str(),
                 subtype: c.subtype(),
                 hidden: c.is_hidden(),
                 health: runtime.health.to_string(),
@@ -112,20 +111,5 @@ fn topology_snapshot(site: &crate::sim::MicrogridSite) -> TopologySnapshot {
         // viewed. Sites are small; the graph build is cheap.
         graph_status: crate::sim::graph_adapter::validation_error(site),
         main_meter_id: site.main_meter_id(),
-    }
-}
-
-fn category_label(c: Category) -> &'static str {
-    match c {
-        Category::Grid => "grid",
-        Category::Meter => "meter",
-        Category::Inverter => "inverter",
-        Category::Battery => "battery",
-        Category::EvCharger => "ev-charger",
-        Category::Chp => "chp",
-        Category::WindTurbine => "wind-turbine",
-        Category::SteamBoiler => "steam-boiler",
-        Category::PowerTransformer => "power-transformer",
-        Category::Breaker => "breaker",
     }
 }
