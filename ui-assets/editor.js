@@ -100,67 +100,46 @@ export const undoMgr = (() => {
     }
   }
 
-  async function undo() {
+  // Undo and redo are the same restore with the stack roles swapped:
+  // pop `from` until an entry differs from the current bytes, post
+  // it, push the displaced current text onto `to`.
+  async function restore(from, to, label) {
     const mgId = readSelectedMg();
     if (mgId == null) return;
-    const u = stackFor(undoStacks, mgId);
-    if (!u.length) {
-      notify("Nothing to undo on this microgrid.");
+    const src = stackFor(from, mgId);
+    if (!src.length) {
+      notify(`Nothing to ${label} on this microgrid.`);
       return;
     }
     let current;
-    try { current = await fetchText(mgId); } catch (e) {
-      notify(`Undo failed: ${e.message}`);
+    try {
+      current = await fetchText(mgId);
+    } catch (e) {
+      notify(`${cap(label)} failed: ${e.message}`);
       return;
     }
     // Snapshots identical to the current bytes (pre-dedup stacks)
     // restore nothing — posting one would only force a pointless
     // reload (resetting live ramp/SoC state). Fall through to the
     // first entry that differs so no keypress is a dead no-op.
-    let target = u.pop();
-    while (target === current && u.length) target = u.pop();
+    let target = src.pop();
+    while (target === current && src.length) target = src.pop();
     if (target === current) {
-      notify("Nothing to undo on this microgrid.");
+      notify(`Nothing to ${label} on this microgrid.`);
       return;
     }
     try {
       await postText(mgId, target);
     } catch (e) {
-      u.push(target);
-      notify(`Undo failed: ${e.message}`);
+      src.push(target);
+      notify(`${cap(label)} failed: ${e.message}`);
       return;
     }
-    stackFor(redoStacks, mgId).push(current);
+    stackFor(to, mgId).push(current);
   }
-
-  async function redo() {
-    const mgId = readSelectedMg();
-    if (mgId == null) return;
-    const r = stackFor(redoStacks, mgId);
-    if (!r.length) {
-      notify("Nothing to redo on this microgrid.");
-      return;
-    }
-    let current;
-    try { current = await fetchText(mgId); } catch (e) {
-      notify(`Redo failed: ${e.message}`);
-      return;
-    }
-    let target = r.pop();
-    while (target === current && r.length) target = r.pop();
-    if (target === current) {
-      notify("Nothing to redo on this microgrid.");
-      return;
-    }
-    try {
-      await postText(mgId, target);
-    } catch (e) {
-      r.push(target);
-      notify(`Redo failed: ${e.message}`);
-      return;
-    }
-    stackFor(undoStacks, mgId).push(current);
-  }
+  const cap = (s) => s[0].toUpperCase() + s.slice(1);
+  const undo = () => restore(undoStacks, redoStacks, "undo");
+  const redo = () => restore(redoStacks, undoStacks, "redo");
 
   return { record, undo, redo };
 })();
