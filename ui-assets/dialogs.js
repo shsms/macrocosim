@@ -8,6 +8,7 @@ import {
   escapeHtml,
   inspectEl,
   inspectorEl,
+  mutate,
   notify,
   openInspector,
 } from "./app.js";
@@ -128,15 +129,11 @@ function renderOverridesDialog(content, data) {
           .filter((c) => c.checked)
           .map((c) => Number(c.dataset.idx));
         if (!indices.length) return;
-        const res = await fetch(mgPath("persisted/delete"), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ indices }),
-        });
-        if (res.ok) {
+        try {
+          await mutate("POST", mgPath("persisted/delete"), { indices });
           overrideState.refresh();
-        } else {
-          notify(`Delete failed: ${res.status} ${await res.text()}`);
+        } catch (err) {
+          notify(`Delete failed: ${err.message}`);
         }
       }
       refreshDeleteState();
@@ -188,15 +185,7 @@ export function setupSnapshotsDialog() {
         li.querySelector(".snapshot-load").addEventListener("click", async () => {
           if (!confirm(`Load snapshot "${name}"? Current overrides will be replaced.`)) return;
           try {
-            const r = await fetch("/api/snapshots/load", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name }),
-            });
-            if (!r.ok) {
-              notify(`Load failed: ${await r.text()}`);
-              return;
-            }
+            await mutate("POST", "/api/snapshots/load", { name });
           } catch (err) {
             notify(`Load failed: ${err.message}`);
             return;
@@ -223,15 +212,7 @@ export function setupSnapshotsDialog() {
     const name = input.value.trim();
     if (!name) return;
     try {
-      const r = await fetch("/api/snapshots/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-      if (!r.ok) {
-        notify(`Save failed: ${await r.text()}`);
-        return;
-      }
+      await mutate("POST", "/api/snapshots/save", { name });
     } catch (err) {
       notify(`Save failed: ${err.message}`);
       return;
