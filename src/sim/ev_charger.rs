@@ -250,6 +250,10 @@ impl SimulatedComponent for EvCharger {
         self.ramp.snap_to(0.0);
     }
 
+    fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
+        Some(self.ramp.actual())
+    }
+
     fn aggregate_power_w(&self, _world: &MicrogridSite) -> f32 {
         self.ramp.actual()
     }

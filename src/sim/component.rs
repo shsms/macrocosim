@@ -323,6 +323,15 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// environment (per-phase voltage, frequency) at sample time.
     fn telemetry(&self, site: &MicrogridSite) -> Telemetry;
 
+    /// The AC active power `telemetry()` would report, without
+    /// building the full snapshot — the per-tick energy integrator
+    /// needs only this field, at 10 Hz, for every component. The
+    /// default derives it from `telemetry()`; overrides must read
+    /// the same source their `telemetry()` reads.
+    fn active_power_w(&self, site: &MicrogridSite) -> Option<f32> {
+        self.telemetry(site).active_power_w
+    }
+
     // ── setpoints (control surface) ──────────────────────────────────
 
     /// Apply an active-power setpoint. Default returns `Unsupported`

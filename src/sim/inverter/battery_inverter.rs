@@ -258,6 +258,10 @@ impl SimulatedComponent for BatteryInverter {
         self.bounds.lock().add_augmentation(ts, bounds, lifetime);
     }
 
+    fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
+        Some(*self.measured_w.lock())
+    }
+
     fn aggregate_power_w(&self, _world: &MicrogridSite) -> f32 {
         *self.measured_w.lock()
     }

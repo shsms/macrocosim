@@ -985,18 +985,22 @@ impl MicrogridSite {
     /// Components carrying no AC active power (batteries) never get an
     /// entry, matching the sparse `EnergyWh` history metric.
     fn integrate_energy(&self, components: &[Arc<dyn SimulatedComponent>], now: DateTime<Utc>) {
-        // Gather power + health with no energy lock held: `telemetry()`
-        // re-enters `runtime` / `connections` reads, so snapshotting first
-        // keeps the `component_energy` critical section lock-clean.
+        // Health first, under one runtime-lock read for the whole
+        // pass (not held across the power reads — `active_power_w`
+        // re-enters `connections` / `by_id` locks for meters).
+        let healths: Vec<Health> = {
+            let runtime = self.inner.runtime.read();
+            components
+                .iter()
+                .map(|c| runtime.get(&c.id()).copied().unwrap_or_default().health)
+                .collect()
+        };
+        // Gather power with no energy lock held, keeping the
+        // `component_energy` critical section lock-clean.
         let samples: Vec<(u64, Option<f32>, Health)> = components
             .iter()
-            .map(|c| {
-                (
-                    c.id(),
-                    c.telemetry(self).active_power_w,
-                    self.runtime_of(c.id()).health,
-                )
-            })
+            .zip(healths)
+            .map(|(c, health)| (c.id(), c.active_power_w(self), health))
             .collect();
         let ts_ms = now.timestamp_millis();
         let mut acc = self.inner.component_energy.write();
@@ -1173,6 +1177,64 @@ fn reachable(edges: &[(u64, u64)], from: u64, to: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The energy integrator reads `active_power_w()` where every
+    /// other consumer reads `telemetry().active_power_w`; the trait
+    /// doc requires overrides to read the same source their
+    /// `telemetry()` reads. Pin that for every real component so a
+    /// later telemetry-source change can't silently drift the energy
+    /// accounting from the reported power stream.
+    #[test]
+    fn active_power_w_matches_telemetry() {
+        use crate::sim::inverter::battery_inverter::BatteryInverterConfig;
+        use crate::sim::inverter::solar_inverter::SolarInverterConfig;
+        use crate::sim::{
+            Battery, EvCharger, Meter,
+            battery::BatteryConfig,
+            ev_charger::EvChargerConfig,
+            inverter::{BatteryInverter, SolarInverter},
+        };
+
+        let w = MicrogridSite::new();
+        let sec = Duration::from_secs(1);
+        w.register(Battery::new(1, sec, BatteryConfig::default()));
+        w.register(EvCharger::new(2, sec, EvChargerConfig::default()));
+        w.register(BatteryInverter::new(
+            3,
+            sec,
+            BatteryInverterConfig::default(),
+        ));
+        w.register(SolarInverter::new(4, sec, SolarInverterConfig::default()));
+        // A meter aggregating the solar inverter, so its override
+        // exercises the children walk.
+        w.register(Meter::new(5, sec, None, 0.0, false));
+        w.connect(3, 1);
+        w.connect(5, 4);
+
+        // Drive nonzero flows: command the battery inverter and EV,
+        // let the PV free-run from default sunlight, then tick.
+        w.get(3).unwrap().set_active_setpoint(5_000.0).unwrap();
+        w.get(2).unwrap().set_active_setpoint(3_000.0).unwrap();
+        let mut now = Utc::now();
+        for _ in 0..30 {
+            now += chrono::Duration::milliseconds(100);
+            w.tick_once(now, Duration::from_millis(100));
+        }
+
+        for id in 1..=5 {
+            let c = w.get(id).unwrap();
+            assert_eq!(
+                c.active_power_w(&w),
+                c.telemetry(&w).active_power_w,
+                "component {id}: active_power_w() drifted from telemetry()"
+            );
+        }
+        // And the flows really are nonzero, so the equality above
+        // compared real values, not None == None everywhere. (PV
+        // generation is negative by convention: rated is [-30 kW, 0].)
+        assert!(w.get(4).unwrap().active_power_w(&w).unwrap_or(0.0) < 0.0);
+        assert!(w.get(2).unwrap().active_power_w(&w).unwrap_or(0.0) > 0.0);
+    }
 
     #[test]
     fn set_health_couples_command_mode() {

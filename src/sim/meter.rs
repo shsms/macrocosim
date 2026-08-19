@@ -149,6 +149,10 @@ impl SimulatedComponent for Meter {
         }
     }
 
+    fn active_power_w(&self, site: &MicrogridSite) -> Option<f32> {
+        Some(self.aggregate_active(site))
+    }
+
     fn aggregate_power_w(&self, site: &MicrogridSite) -> f32 {
         self.aggregate_active(site)
     }

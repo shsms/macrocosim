@@ -251,6 +251,10 @@ impl SimulatedComponent for SolarInverter {
         self.bounds.lock().add_augmentation(ts, bounds, lifetime);
     }
 
+    fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
+        Some(self.ramp.actual())
+    }
+
     fn aggregate_power_w(&self, _world: &MicrogridSite) -> f32 {
         self.ramp.actual()
     }
