@@ -100,22 +100,10 @@ export const liveCharts = (() => {
       // Drop the "none" placeholder if it's still showing.
       const empty = list.querySelector(".sp-empty");
       if (empty) empty.remove();
-      const li = document.createElement("li");
-      li.className = `sp-event ${ev.accepted ? "accepted" : "rejected"}`;
-      const ts = new Date(ev.ts_ms).toLocaleTimeString();
       // The WS event carries the setpoint kind on `setpoint_kind`
       // to dodge collision with the SiteEvent discriminator (also
-      // called `kind`). Escape every interpolation — the server
-      // currently only emits fixed-shape strings and a numeric
-      // `value`, but defense-in-depth (anything that lands in
-      // `innerHTML` goes through `escapeHtml` first).
-      const tag = escapeHtml(String(ev.setpoint_kind ?? "").replace("_", " "));
-      const head = `<span class="sp-ts">${escapeHtml(ts)}</span> <span class="sp-tag">${tag}</span> <span class="sp-val">${escapeHtml(String(ev.value))}</span>`;
-      const body = ev.accepted
-        ? '<span class="sp-ok">✓ accepted</span>'
-        : `<span class="sp-bad">✕ ${escapeHtml(ev.reason || "")}</span>`;
-      li.innerHTML = `${head}<br/>${body}`;
-      list.prepend(li);
+      // called `kind`).
+      list.prepend(setpointEventLi(ev.ts_ms, ev.setpoint_kind, ev.value, ev.accepted, ev.reason));
       // Trim if the list is getting long — match the 600s window
       // used by the initial fetch.
       while (list.children.length > 100) list.removeChild(list.lastChild);
@@ -368,37 +356,39 @@ export async function showComponent(d) {
   const container = document.getElementById("charts");
   const charts = new Map(); // metric → { plot, xs, ys }
 
-  // A stale call must not leave its uPlots alive — they were never
-  // handed to liveCharts, so nothing else would ever destroy them.
-  const destroyBuilt = () => {
-    for (const { plot } of charts.values()) plot.destroy();
-  };
-
-  for (const metric of metrics) {
+  // All metric histories fetched concurrently — inspector-open
+  // latency is the slowest round-trip, not the sum. Errors settle
+  // into the result slot so a stale-generation return can't leak an
+  // unhandled rejection.
+  const slots = metrics.map((metric) => {
     const slot = document.createElement("div");
     slot.className = "chart";
     container.appendChild(slot);
-    const url = `${mgPath("history")}?id=${d.id}&metric=${metric}&window_s=300`;
-    let resp;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      resp = await res.json();
-    } catch (err) {
-      if (gen !== showGen) {
-        destroyBuilt();
-        return;
-      }
+    return { metric, slot };
+  });
+  const results = await Promise.all(
+    slots.map(({ metric }) =>
+      fetch(`${mgPath("history")}?id=${d.id}&metric=${metric}&window_s=300`)
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then(
+          (resp) => ({ resp }),
+          (err) => ({ err }),
+        ),
+    ),
+  );
+  if (gen !== showGen) return;
+  for (const [i, { metric, slot }] of slots.entries()) {
+    const { resp, err } = results[i];
+    if (err) {
       // Same discipline as renderSetpoints below: one failed metric
       // renders an "unavailable" slot instead of breaking the panel.
       slot.innerHTML = `<p class="hint">${escapeHtml(
         METRIC_TITLES[metric] || metric,
       )} unavailable: ${escapeHtml(err.message)}</p>`;
       continue;
-    }
-    if (gen !== showGen) {
-      destroyBuilt();
-      return;
     }
     const samples = resp.samples || [];
     const xs = samples.map(([t]) => t / 1000);
@@ -414,6 +404,24 @@ export async function showComponent(d) {
   // below the charts. Live-overlay markers on the chart are a
   // follow-up; this is the inspector's MVP.
   await renderSetpoints(d.id, container);
+}
+
+// One setpoint-event row, shared by the live-WS push and the REST
+// backfill so the markup and escape discipline can't drift. Every
+// interpolation goes through `escapeHtml` — the server currently
+// only emits fixed-shape strings and a numeric `value`, but
+// defense-in-depth: anything that lands in `innerHTML` is escaped.
+function setpointEventLi(ts, kind, value, accepted, reason) {
+  const li = document.createElement("li");
+  li.className = `sp-event ${accepted ? "accepted" : "rejected"}`;
+  const time = new Date(ts).toLocaleTimeString();
+  const tag = escapeHtml(String(kind ?? "").replace("_", " "));
+  const head = `<span class="sp-ts">${escapeHtml(time)}</span> <span class="sp-tag">${tag}</span> <span class="sp-val">${escapeHtml(String(value))}</span>`;
+  const body = accepted
+    ? '<span class="sp-ok">✓ accepted</span>'
+    : `<span class="sp-bad">✕ ${escapeHtml(reason || "")}</span>`;
+  li.innerHTML = `${head}<br/>${body}`;
+  return li;
 }
 
 async function renderSetpoints(id, container) {
@@ -438,18 +446,8 @@ async function renderSetpoints(id, container) {
     }
     // Newest first reads better in a chronological log.
     for (const e of data.events.slice().reverse()) {
-      const li = document.createElement("li");
       const accepted = e.outcome.kind === "accepted";
-      li.className = `sp-event ${accepted ? "accepted" : "rejected"}`;
-      const ts = new Date(e.ts).toLocaleTimeString();
-      // Same escape discipline as the live-WS counterpart above.
-      const tag = escapeHtml(String(e.kind ?? "").replace("_", " "));
-      const head = `<span class="sp-ts">${escapeHtml(ts)}</span> <span class="sp-tag">${tag}</span> <span class="sp-val">${escapeHtml(String(e.value))}</span>`;
-      const body = accepted
-        ? '<span class="sp-ok">✓ accepted</span>'
-        : `<span class="sp-bad">✕ ${escapeHtml(e.outcome.reason)}</span>`;
-      li.innerHTML = `${head}<br/>${body}`;
-      list.appendChild(li);
+      list.appendChild(setpointEventLi(e.ts, e.kind, e.value, accepted, e.outcome.reason));
     }
     wrap.appendChild(list);
   } catch (err) {
