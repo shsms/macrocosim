@@ -13,6 +13,64 @@ pub struct SocProtect {
     pub margin_pct: f32,
 }
 
+impl SocProtect {
+    /// Build from the (lower, upper, margin) config triple every
+    /// SoC-carrying component stores.
+    pub fn new(soc_lower_pct: f32, soc_upper_pct: f32, margin_pct: f32) -> Self {
+        Self {
+            soc_lower_pct,
+            soc_upper_pct,
+            margin_pct,
+        }
+    }
+
+    /// An over-wide protect margin makes BOTH taper bands active
+    /// across the whole mid-SoC range, silently derating in both
+    /// directions. Warn rather than clamp — the config author may
+    /// genuinely want an always-tapering cell, but should know.
+    pub fn warn_if_overwide(&self, label: &str) {
+        if self.margin_pct * 2.0 > self.soc_upper_pct - self.soc_lower_pct {
+            log::warn!(
+                "{label}: soc-protect-margin {} covers more than half the \
+                 [{}, {}] SoC band; both tapers are active at every SoC",
+                self.margin_pct,
+                self.soc_lower_pct,
+                self.soc_upper_pct,
+            );
+        }
+    }
+}
+
+/// Gate a scripted SoC write: reject non-finite values at the door
+/// (NaN survives clamp — clamp on NaN self returns NaN — and would
+/// poison every later SoC integration), else clamp into [0, 100].
+pub fn sanitize_soc_pct(label: &str, pct: f32) -> Option<f32> {
+    if !pct.is_finite() {
+        log::warn!("{label} ignored non-finite value");
+        return None;
+    }
+    Some(pct.clamp(0.0, 100.0))
+}
+
+/// One rectangular P·dt SoC step:
+///     ΔE[Wh]  = P[W] · dt[s] / 3600
+///     ΔSoC[%] = ΔE[Wh] / capacity[Wh] · 100
+/// clamped at the boundaries so unphysical "extra" charge can't
+/// accumulate when the protective taper is disabled. Identity when
+/// capacity is unset (≤ 0).
+pub fn integrate_soc_pct(
+    soc_pct: f32,
+    power_w: f32,
+    dt: std::time::Duration,
+    capacity_wh: f32,
+) -> f32 {
+    if capacity_wh <= 0.0 {
+        return soc_pct;
+    }
+    let delta_soc = power_w * dt.as_secs_f32() / 3600.0 / capacity_wh * 100.0;
+    (soc_pct + delta_soc).clamp(0.0, 100.0)
+}
+
 /// Apply the smooth taper near both SoC limits to a `(rated_lower,
 /// rated_upper)` pair, returning the SoC-protected bounds at the
 /// current `soc`. Charge (positive) tapers near `soc_upper`; discharge

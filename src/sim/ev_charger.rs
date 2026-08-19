@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use crate::sim::{
     Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     bounds::{ComponentBounds, VecBounds},
-    decay::{SocProtect, soc_protected_bounds},
+    decay::{SocProtect, integrate_soc_pct, sanitize_soc_pct, soc_protected_bounds},
     ramp::{CommandDelay, Ramp},
 };
 
@@ -70,27 +70,13 @@ struct EvState {
 
 impl EvCharger {
     pub fn new(id: u64, interval: Duration, cfg: EvChargerConfig) -> Self {
-        // Same over-wide-margin warning as Battery::new — both taper
-        // bands active at every SoC silently derates both directions.
-        if cfg.soc_protect_margin_pct * 2.0 > cfg.soc_upper_pct - cfg.soc_lower_pct {
-            log::warn!(
-                "ev-charger {id}: soc-protect-margin {} covers more than half the \
-                 [{}, {}] SoC band; both tapers are active at every SoC",
-                cfg.soc_protect_margin_pct,
-                cfg.soc_lower_pct,
-                cfg.soc_upper_pct,
-            );
-        }
+        Self::protect(&cfg).warn_if_overwide(&format!("ev-charger {id}"));
         let init_soc = cfg.initial_soc_pct;
         let (l, u) = soc_protected_bounds(
             cfg.rated_lower_w,
             cfg.rated_upper_w,
             init_soc,
-            SocProtect {
-                soc_lower_pct: cfg.soc_lower_pct,
-                soc_upper_pct: cfg.soc_upper_pct,
-                margin_pct: cfg.soc_protect_margin_pct,
-            },
+            Self::protect(&cfg),
         );
         let delay = CommandDelay::new(cfg.command_delay);
         let ramp = Ramp::new(cfg.ramp_rate_w_per_s, 0.0);
@@ -111,16 +97,20 @@ impl EvCharger {
         }
     }
 
+    fn protect(cfg: &EvChargerConfig) -> SocProtect {
+        SocProtect::new(
+            cfg.soc_lower_pct,
+            cfg.soc_upper_pct,
+            cfg.soc_protect_margin_pct,
+        )
+    }
+
     fn refresh_bounds(&self, soc: f32) -> (f32, f32) {
         soc_protected_bounds(
             self.cfg.rated_lower_w,
             self.cfg.rated_upper_w,
             soc,
-            SocProtect {
-                soc_lower_pct: self.cfg.soc_lower_pct,
-                soc_upper_pct: self.cfg.soc_upper_pct,
-                margin_pct: self.cfg.soc_protect_margin_pct,
-            },
+            Self::protect(&self.cfg),
         )
     }
 }
@@ -150,14 +140,10 @@ impl SimulatedComponent for EvCharger {
 
     fn set_soc_pct(&self, pct: f32) -> bool {
         // Same contract as Battery: lets a scenario script "car
-        // arrives at 20 %" via (set-component-soc ...). Non-finite
-        // values are rejected at the door — NaN survives clamp and
-        // would poison every later SoC integration.
-        if !pct.is_finite() {
-            log::warn!("EvCharger::set_soc_pct ignored non-finite value");
-            return true;
+        // arrives at 20 %" via (set-component-soc ...).
+        if let Some(pct) = sanitize_soc_pct("EvCharger::set_soc_pct", pct) {
+            self.state.lock().soc_pct = pct;
         }
-        self.state.lock().soc_pct = pct.clamp(0.0, 100.0);
         true
     }
 
@@ -217,16 +203,11 @@ impl SimulatedComponent for EvCharger {
         // re-returns the armed value every tick, so the clamp above
         // already tracks a narrowing envelope.
 
-        // 5. Slew + integrate SoC. ΔSoC = P · dt / capacity, in %.
-        // Clamping at the SoC boundary prevents unphysical "extra"
-        // charge from accumulating when the protective taper is
-        // disabled — same fix as Battery.
+        // 5. Slew + integrate SoC (shared rectangular step, same as
+        //    Battery).
         let p = self.ramp.advance(dt);
         let mut s = self.state.lock();
-        if self.cfg.capacity_wh > 0.0 {
-            let delta_soc = p * dt.as_secs_f32() / 3600.0 / self.cfg.capacity_wh * 100.0;
-            s.soc_pct = (s.soc_pct + delta_soc).clamp(0.0, 100.0);
-        }
+        s.soc_pct = integrate_soc_pct(s.soc_pct, p, dt, self.cfg.capacity_wh);
     }
 
     fn telemetry(&self, site: &MicrogridSite) -> Telemetry {

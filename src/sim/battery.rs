@@ -6,7 +6,9 @@ use parking_lot::Mutex;
 use crate::sim::{
     Category, MicrogridSite, SimulatedComponent, Telemetry,
     bounds::VecBounds,
-    decay::{SocProtect, soc_protected_bounds as decay_soc_bounds},
+    decay::{
+        SocProtect, integrate_soc_pct, sanitize_soc_pct, soc_protected_bounds as decay_soc_bounds,
+    },
 };
 
 /// Tunables exposed via `(make-battery :soc-protect-margin 10.0 …)`.
@@ -83,19 +85,7 @@ struct BatteryState {
 
 impl Battery {
     pub fn new(id: u64, interval: Duration, cfg: BatteryConfig) -> Self {
-        // An over-wide protect margin makes BOTH taper bands active
-        // across the whole mid-SoC range, silently derating in both
-        // directions. Warn rather than clamp — the config author may
-        // genuinely want an always-tapering cell, but should know.
-        if cfg.soc_protect_margin_pct * 2.0 > cfg.soc_upper_pct - cfg.soc_lower_pct {
-            log::warn!(
-                "battery {id}: soc-protect-margin {} covers more than half the \
-                 [{}, {}] SoC band; both tapers are active at every SoC",
-                cfg.soc_protect_margin_pct,
-                cfg.soc_lower_pct,
-                cfg.soc_upper_pct,
-            );
-        }
+        protect(&cfg).warn_if_overwide(&format!("battery {id}"));
         let init_soc = cfg.initial_soc_pct;
         let (l, u) = soc_protected_bounds(&cfg, init_soc);
         Self {
@@ -116,17 +106,16 @@ impl Battery {
     }
 }
 
-fn soc_protected_bounds(cfg: &BatteryConfig, soc: f32) -> (f32, f32) {
-    decay_soc_bounds(
-        cfg.rated_lower_w,
-        cfg.rated_upper_w,
-        soc,
-        SocProtect {
-            soc_lower_pct: cfg.soc_lower_pct,
-            soc_upper_pct: cfg.soc_upper_pct,
-            margin_pct: cfg.soc_protect_margin_pct,
-        },
+fn protect(cfg: &BatteryConfig) -> SocProtect {
+    SocProtect::new(
+        cfg.soc_lower_pct,
+        cfg.soc_upper_pct,
+        cfg.soc_protect_margin_pct,
     )
+}
+
+fn soc_protected_bounds(cfg: &BatteryConfig, soc: f32) -> (f32, f32) {
+    decay_soc_bounds(cfg.rated_lower_w, cfg.rated_upper_w, soc, protect(cfg))
 }
 
 impl fmt::Display for Battery {
@@ -153,16 +142,11 @@ impl SimulatedComponent for Battery {
     }
 
     fn set_soc_pct(&self, pct: f32) -> bool {
-        // NaN survives clamp (clamp on NaN self returns NaN) and
-        // would poison every later SoC integration, so reject it at
-        // the door like Ramp does.
-        if !pct.is_finite() {
-            log::warn!("Battery::set_soc_pct ignored non-finite value");
-            return true;
-        }
         // The next tick re-derives the SoC-protected bounds from the
         // new value, so no other state needs touching here.
-        self.state.lock().soc_pct = pct.clamp(0.0, 100.0);
+        if let Some(pct) = sanitize_soc_pct("Battery::set_soc_pct", pct) {
+            self.state.lock().soc_pct = pct;
+        }
         true
     }
 
@@ -195,23 +179,14 @@ impl SimulatedComponent for Battery {
         s.power_w = total_p.min(s.effective_upper_w).max(s.effective_lower_w);
         s.reactive_var = total_q;
 
-        // 3. SoC update from settled P. First the energy moved this tick:
-        //    the P·dt integral in Wh — related to the per-component
+        // 3. SoC update from settled P — the rectangular P·dt step in
+        //    decay::integrate_soc_pct. Related to the per-component
         //    `EnergyWh` history metric (see history.rs `push_snapshot`), but
         //    a different quadrature: rectangular over this one fixed physics
         //    tick's `dt` here, versus trapezoidal over the variable sample
         //    gap there. Deliberately not the shared `EnergyAccum` — the
-        //    per-tick rectangle is what clamps SoC each step. SoC is that
-        //    energy as a fraction of capacity:
-        //        ΔE[Wh]   = P[W] · dt[s] / 3600
-        //        ΔSoC[%]  = ΔE[Wh] / capacity[Wh] · 100
-        //    Clamp at boundaries so unphysical "extra" charge can't
-        //    accumulate when the protective taper is disabled.
-        if self.cfg.capacity_wh > 0.0 {
-            let delta_wh = s.power_w * dt.as_secs_f32() / 3600.0;
-            let delta_soc = delta_wh / self.cfg.capacity_wh * 100.0;
-            s.soc_pct = (s.soc_pct + delta_soc).clamp(0.0, 100.0);
-        }
+        //    per-tick rectangle is what clamps SoC each step.
+        s.soc_pct = integrate_soc_pct(s.soc_pct, s.power_w, dt, self.cfg.capacity_wh);
     }
 
     fn telemetry(&self, _world: &MicrogridSite) -> Telemetry {
