@@ -3,6 +3,7 @@
 // respond to clicks / WS pushes by re-fetching + re-rendering.
 
 import { escapeHtml, mutate, notify, selectMicrogrid } from "./app.js";
+import { jsToLispString } from "./inspect.js";
 import { readSelectedMg, renderReplMgChip } from "./routing.js";
 
 export const microgridsPanel = (() => {
@@ -42,15 +43,8 @@ export const microgridsPanel = (() => {
     newCard.addEventListener("click", () => {
       const name = prompt("Name for the new microgrid:");
       if (!name) return;
-      fetch("/api/microgrids/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      })
-        .then(async (r) => {
-          if (!r.ok) throw new Error(await r.text());
-          return r.json();
-        })
+      mutate("POST", "/api/microgrids/create", { name })
+        .then((r) => r.json())
         .then((m) => selectMicrogrid(m.id))
         .catch((e) => notify(`Create failed: ${e.message}`));
     });
@@ -88,7 +82,7 @@ export const microgridsPanel = (() => {
   // Eval a (load "path") on the server; path is state-dir-relative
   // (or absolute). Returns true when the load succeeded.
   async function loadScript(path) {
-    const lispPath = path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const lispPath = jsToLispString(path);
     try {
       const res = await fetch("/api/eval", {
         method: "POST",
@@ -251,17 +245,27 @@ export const microgridsPanel = (() => {
     }
   }
 
-  async function refresh() {
-    try {
-      const res = await fetch("/api/microgrids");
-      if (res.ok) cached = await res.json();
-    } catch (_) {
-      cached = [];
-    }
+  // Shared by refresh() and the 5 s poll. A non-ok response keeps
+  // the previous list; the two callers differ only in what a thrown
+  // (network-level) failure does to `cached`.
+  async function fetchList() {
+    const res = await fetch("/api/microgrids");
+    if (res.ok) cached = await res.json();
+  }
+  function renderAll() {
     window.__mgPanelCache = cached;
     renderList();
     renderBreadcrumb();
     renderReplMgChip();
+  }
+
+  async function refresh() {
+    try {
+      await fetchList();
+    } catch (_) {
+      cached = [];
+    }
+    renderAll();
     schedulePoll();
   }
 
@@ -274,12 +278,13 @@ export const microgridsPanel = (() => {
         pollTimer = null;
         return;
       }
+      // Unlike refresh(), a transient poll failure keeps the old
+      // list — blanking the cards every 5 s while the server
+      // restarts would just flicker.
       try {
-        const res = await fetch("/api/microgrids");
-        if (res.ok) cached = await res.json();
+        await fetchList();
       } catch (_) {}
-      renderList();
-      renderBreadcrumb();
+      renderAll();
     }, 5000);
   }
 
@@ -537,8 +542,7 @@ export const scenariosPanel = (() => {
   // ── actions ─────────────────────────────────────────────────────────
   async function startRun(name) {
     try {
-      const r = await fetch(`/api/scenarios/${encodeURIComponent(name)}/start`, { method: "POST" });
-      if (!r.ok) notify(`run failed: ${await r.text()}`);
+      await mutate("POST", `/api/scenarios/${encodeURIComponent(name)}/start`);
     } catch (err) {
       notify(`run failed: ${err.message}`);
     }
@@ -546,8 +550,7 @@ export const scenariosPanel = (() => {
   }
   async function stopRun() {
     try {
-      const r = await fetch("/api/scenarios/stop", { method: "POST" });
-      if (!r.ok) notify(`stop failed: ${await r.text()}`);
+      await mutate("POST", "/api/scenarios/stop");
     } catch (err) {
       notify(`stop failed: ${err.message}`);
     }
@@ -560,16 +563,25 @@ export const scenariosPanel = (() => {
     updateActiveChip();
   }
 
+  const getJson = (path) => fetch(path).then((r) => r.json());
+  const settled = (r, fallback) => (r.status === "fulfilled" ? r.value : fallback);
+
   async function refresh() {
-    try { scenarios = await (await fetch("/api/scenarios")).json(); } catch (_) { scenarios = []; }
-    try { summary = await (await fetch("/api/scenario")).json(); } catch (_) { summary = null; }
+    // Two stages of concurrent fetches: the journal reads depend on
+    // the summary's name, nothing else depends on anything — so
+    // latency is two round-trips, not five.
+    const [sc, sum] = await Promise.allSettled([getJson("/api/scenarios"), getJson("/api/scenario")]);
+    scenarios = settled(sc, []);
+    summary = settled(sum, null);
     if (journalName()) {
-      try { report = await (await fetch("/api/scenario/report")).json(); } catch (_) { report = null; }
-      try {
-        const e = await (await fetch("/api/scenario/events?limit=50")).json();
-        events = e.events || [];
-      } catch (_) { events = []; }
-      try { csv = await (await fetch("/api/scenario/csv")).json(); } catch (_) { csv = { dir: null, files: [] }; }
+      const [rep, ev, cs] = await Promise.allSettled([
+        getJson("/api/scenario/report"),
+        getJson("/api/scenario/events?limit=50"),
+        getJson("/api/scenario/csv"),
+      ]);
+      report = settled(rep, null);
+      events = settled(ev, {}).events || [];
+      csv = settled(cs, { dir: null, files: [] });
     } else {
       report = null;
       events = [];
@@ -579,11 +591,26 @@ export const scenariosPanel = (() => {
     schedulePoll();
   }
 
+  // Keep the header chip live from the one summary fetch when the
+  // Scenarios mode is hidden — the full 5-fetch refresh only runs
+  // while its panels are actually showing.
+  async function refreshChip() {
+    try {
+      summary = await getJson("/api/scenario");
+    } catch (_) {
+      summary = null;
+    }
+    updateActiveChip();
+  }
+
   function schedulePoll() {
     if (pollTimer) return;
     // Cheap 3 s poll — server-side scenario time + checks have no WS
     // push, so the run view + header chip stay live by polling.
-    pollTimer = setInterval(refresh, 3000);
+    pollTimer = setInterval(() => {
+      if (document.body.dataset.mode === "scenarios") refresh();
+      else refreshChip();
+    }, 3000);
   }
 
   function setup() {

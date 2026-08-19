@@ -291,7 +291,7 @@ function selectField(knob, current, options, disabledReason = null) {
   return `<select data-knob="${knob}"${attrs}>${opts}</select>`;
 }
 
-function jsToLispString(s) {
+export function jsToLispString(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
