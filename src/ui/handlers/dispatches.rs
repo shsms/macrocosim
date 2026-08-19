@@ -130,12 +130,7 @@ pub(in crate::ui) async fn dispatch_create_for_mg(
     // A typo'd mg id would otherwise create a phantom entry that
     // accumulates forever (dispatches have no TTL) — guard with the
     // registry like the sibling per-mg routes (eval, overrides).
-    if !config.microgrids().lock().contains_key(&mg_id) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("microgrid {mg_id} not registered"),
-        ));
-    }
+    super::require_mg(&config, mg_id)?;
     let target = crate::sim::dispatch::parse_target(&req.target)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let payload = match req.payload {

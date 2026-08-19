@@ -29,11 +29,10 @@ pub(in crate::ui) async fn scenarios_start(
     State(config): State<Config>,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let res = tokio::task::spawn_blocking(move || {
+    let res = super::blocking(move || {
         crate::sim::scenarios::start(&config.interpreter(), &config.scenarios(), &name)
     })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("join: {e}")))?;
+    .await?;
     res.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -44,9 +43,7 @@ pub(in crate::ui) async fn scenarios_start(
 pub(in crate::ui) async fn scenarios_stop(
     State(config): State<Config>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let res = tokio::task::spawn_blocking(move || config.eval("(scenario-stop)").map(|_| ()))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("join: {e}")))?;
+    let res = super::blocking(move || config.eval("(scenario-stop)").map(|_| ())).await?;
     res.map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }

@@ -42,6 +42,34 @@ pub(in crate::ui) fn resolve_site(
         ))
 }
 
+/// Guard for per-mg handlers that don't need the site itself: 404
+/// (same shape as [`resolve_site`]) when `mg_id` isn't registered.
+pub(in crate::ui) fn require_mg(config: &Config, mg_id: u64) -> Result<(), (StatusCode, String)> {
+    if config.microgrids().lock().contains_key(&mg_id) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            format!("microgrid {mg_id} not registered"),
+        ))
+    }
+}
+
+/// Run `f` on the blocking pool, mapping a task panic to a 500 —
+/// the spawn_blocking boilerplate every interpreter-touching
+/// handler otherwise repeats. Callers keep only their domain error
+/// mapping.
+pub(in crate::ui) async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, (StatusCode, String)> {
+    tokio::task::spawn_blocking(f).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task panicked: {e}"),
+        )
+    })
+}
+
 /// Mirror of [`resolve_site`] for the loopback Microgrid client
 /// slot a microgrid owns. Used by the per-mg
 /// `/microgrid/{status,latest,formulas}` endpoints.

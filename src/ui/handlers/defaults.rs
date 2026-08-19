@@ -48,7 +48,7 @@ pub(in crate::ui) async fn defaults(
     // Read each *-defaults variable via eval_silent so reading the
     // current state doesn't itself look like an edit. spawn_blocking
     // because eval acquires the std-RwLock-backed ctx.
-    let entries = tokio::task::spawn_blocking(move || {
+    let entries = super::blocking(move || {
         let mut out = Vec::new();
         for cat in DEFAULT_CATEGORIES {
             let var = format!("{cat}-defaults");
@@ -72,9 +72,9 @@ pub(in crate::ui) async fn defaults(
         }
         out
     })
-    .await
-    // A panicked interpreter walk is a 500, not an empty-but-200
-    // list the UI cannot tell apart from "no defaults defined".
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // A panicked interpreter walk is a 500 (via `blocking`), not an
+    // empty-but-200 list the UI cannot tell apart from "no defaults
+    // defined".
+    .await?;
     Ok(Json(DefaultsResponse { entries }))
 }

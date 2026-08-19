@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::{blocking, require_mg};
 use crate::lisp::Config;
 
 #[derive(Serialize)]
@@ -41,17 +42,6 @@ pub(in crate::ui) async fn overrides_list_for_mg(
     )))
 }
 
-fn require_mg(config: &Config, mg_id: u64) -> Result<(), (StatusCode, String)> {
-    if config.microgrids().lock().contains_key(&mg_id) {
-        Ok(())
-    } else {
-        Err((
-            StatusCode::NOT_FOUND,
-            format!("microgrid {mg_id} not registered"),
-        ))
-    }
-}
-
 fn overrides_response(persisted: Vec<crate::lisp::PersistedOverride>) -> OverridesResponse {
     // Format each form via tulisp-fmt so the dialog shows tidy
     // Lisp (multi-line for nested forms) instead of one-liner
@@ -80,14 +70,7 @@ pub(in crate::ui) async fn persisted_remove(
     State(config): State<Config>,
     Path(idx): Path<usize>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let result = tokio::task::spawn_blocking(move || config.remove_persisted_overrides(&[idx]))
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("task panicked: {e}"),
-            )
-        })?;
+    let result = blocking(move || config.remove_persisted_overrides(&[idx])).await?;
     match result {
         Ok(0) => Err((
             StatusCode::NOT_FOUND,
@@ -109,15 +92,7 @@ pub(in crate::ui) async fn persisted_remove_for_mg(
     Path((mg_id, idx)): Path<(u64, usize)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     require_mg(&config, mg_id)?;
-    let result =
-        tokio::task::spawn_blocking(move || config.remove_persisted_overrides_for(mg_id, &[idx]))
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("task panicked: {e}"),
-                )
-            })?;
+    let result = blocking(move || config.remove_persisted_overrides_for(mg_id, &[idx])).await?;
     match result {
         Ok(0) => Err((
             StatusCode::NOT_FOUND,
@@ -149,15 +124,7 @@ pub(in crate::ui) async fn persisted_bulk_remove(
     State(config): State<Config>,
     Json(body): Json<BulkRemoveBody>,
 ) -> Result<Json<BulkRemoveResponse>, (StatusCode, String)> {
-    let result =
-        tokio::task::spawn_blocking(move || config.remove_persisted_overrides(&body.indices))
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("task panicked: {e}"),
-                )
-            })?;
+    let result = blocking(move || config.remove_persisted_overrides(&body.indices)).await?;
     match result {
         Ok(removed) => Ok(Json(BulkRemoveResponse { removed })),
         Err(e) => Err((
@@ -175,16 +142,8 @@ pub(in crate::ui) async fn persisted_bulk_remove_for_mg(
     Json(body): Json<BulkRemoveBody>,
 ) -> Result<Json<BulkRemoveResponse>, (StatusCode, String)> {
     require_mg(&config, mg_id)?;
-    let result = tokio::task::spawn_blocking(move || {
-        config.remove_persisted_overrides_for(mg_id, &body.indices)
-    })
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("task panicked: {e}"),
-        )
-    })?;
+    let result =
+        blocking(move || config.remove_persisted_overrides_for(mg_id, &body.indices)).await?;
     match result {
         Ok(removed) => Ok(Json(BulkRemoveResponse { removed })),
         Err(e) => Err((
@@ -202,20 +161,9 @@ pub(in crate::ui) async fn overrides_text_for_mg(
     State(config): State<Config>,
     Path(mg_id): Path<u64>,
 ) -> Result<String, (StatusCode, String)> {
-    if !config.microgrids().lock().contains_key(&mg_id) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("microgrid {mg_id} not registered"),
-        ));
-    }
-    tokio::task::spawn_blocking(move || config.scoped(mg_id, |cfg, _ctx| cfg.overrides_text()))
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("task panicked: {e}"),
-            )
-        })?
+    require_mg(&config, mg_id)?;
+    blocking(move || config.scoped(mg_id, |cfg, _ctx| cfg.overrides_text()))
+        .await?
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -232,24 +180,13 @@ pub(in crate::ui) async fn overrides_text_replace_for_mg(
     Path(mg_id): Path<u64>,
     body: String,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    if !config.microgrids().lock().contains_key(&mg_id) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("microgrid {mg_id} not registered"),
-        ));
-    }
-    tokio::task::spawn_blocking(move || {
+    require_mg(&config, mg_id)?;
+    blocking(move || {
         config.scoped(mg_id, |cfg, ctx| {
             cfg.replace_overrides_text_locked(ctx, &body)
         })
     })
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("task panicked: {e}"),
-        )
-    })?
+    .await?
     .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,

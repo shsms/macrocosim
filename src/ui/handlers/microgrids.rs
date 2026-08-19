@@ -222,14 +222,7 @@ pub(in crate::ui) async fn microgrids_import(
     let forms = import.forms();
     let cfg = config.clone();
     let id = created.id;
-    let evaled = tokio::task::spawn_blocking(move || cfg.eval_in_mg(id, &forms))
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("import eval panicked: {e}"),
-            )
-        })?;
+    let evaled = super::blocking(move || cfg.eval_in_mg(id, &forms)).await?;
     if let Err(e) = evaled {
         // The runtime is already booted, so this cannot roll back
         // cleanly; the parse + collision checks above make this a

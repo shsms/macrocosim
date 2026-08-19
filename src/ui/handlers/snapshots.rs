@@ -26,9 +26,8 @@ pub(in crate::ui) async fn snapshots_save(
     State(config): State<Config>,
     Json(body): Json<SnapshotsBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let path = tokio::task::spawn_blocking(move || config.save_snapshot(&body.name))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("join: {e}")))?
+    let path = super::blocking(move || config.save_snapshot(&body.name))
+        .await?
         // Only the sanitiser's rejection is the caller's fault
         // (InvalidInput); disk-full / permissions are server-side
         // 500s a client shouldn't retry as a "bad request".
@@ -50,9 +49,8 @@ pub(in crate::ui) async fn snapshots_load(
     State(config): State<Config>,
     Json(body): Json<SnapshotsBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    tokio::task::spawn_blocking(move || config.load_snapshot(&body.name))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("join: {e}")))?
+    super::blocking(move || config.load_snapshot(&body.name))
+        .await?
         // load_snapshot returns String errors; classify by the known
         // client-fault prefixes, everything else (copy/rename IO,
         // reload failure) is a 500.

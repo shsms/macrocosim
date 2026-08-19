@@ -54,9 +54,7 @@ pub(in crate::ui) async fn formula_for_mg(
     // imported site the graph validation + explanation tree is real
     // CPU work, and running it inline would stall a tokio worker
     // that also serves the WS pump and telemetry forwarders.
-    tokio::task::spawn_blocking(move || formula_body(site, query))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    super::blocking(move || formula_body(site, query)).await?
 }
 
 fn formula_body(
