@@ -11,20 +11,28 @@ export function formatScaled(value, unit) {
   return `${value.toFixed(1)} ${unit}`;
 }
 
-// The node's live second line, or null when no power sample has
-// arrived yet (the node then keeps its structural one-line label).
-// Batteries and EV chargers show SoC instead of reactive power;
-// everything else appends reactive only when the component reports
-// it.
-export function liveLabelLine({ category, p, q, soc }) {
-  if (p == null || !Number.isFinite(p)) return null;
-  const power = formatScaled(p, "W");
-  if (category === "battery" || category === "ev-charger") {
-    if (soc == null || !Number.isFinite(soc)) return power;
-    return `${power} · SoC ${soc.toFixed(0)}%`;
+// The node's live label lines, in display order, or [] when nothing
+// has arrived yet (the node then keeps its structural one-line
+// label). One metric per line:
+//   battery     → SoC, then DC power (batteries report no AC power)
+//   ev-charger  → AC power, then SoC
+//   everything else → AC power, then reactive power when reported
+export function liveLabelLines({ category, p, q, soc, dc }) {
+  const finite = (v) => v != null && Number.isFinite(v);
+  const lines = [];
+  if (category === "battery") {
+    if (finite(soc)) lines.push(`SoC ${soc.toFixed(0)}%`);
+    if (finite(dc)) lines.push(formatScaled(dc, "W"));
+    return lines;
   }
-  if (q == null || !Number.isFinite(q)) return power;
-  return `${power} · ${formatScaled(q, "VAr")}`;
+  if (!finite(p)) return lines;
+  lines.push(formatScaled(p, "W"));
+  if (category === "ev-charger") {
+    if (finite(soc)) lines.push(`SoC ${soc.toFixed(0)}%`);
+  } else if (finite(q)) {
+    lines.push(formatScaled(q, "VAr"));
+  }
+  return lines;
 }
 
 // Flow attributes for a parent→child edge. `childPowerW` is the

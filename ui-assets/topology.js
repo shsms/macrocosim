@@ -19,7 +19,7 @@
 import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./inspect.js";
-import { edgeFlow, liveLabelLine } from "./live.js";
+import { edgeFlow, liveLabelLines } from "./live.js";
 import { readSelectedMg, visibleSubview } from "./routing.js";
 
 function getCss(name) {
@@ -73,6 +73,21 @@ function shortLabel(name) {
 
 const LIVE_KEY = "switchyard-topology-live";
 const EDGE_LIVE_COLOR = "#79b8ff";
+// Fixed label box while live is on, so a value changing from
+// "0.0 W" to "-19.93 kW" (or a line appearing) never resizes the
+// node: 132 px fits the widest demo name without wrapping, 54 px holds
+// three lines at the 14 px label font, and the resulting ellipse
+// stays inside the 260 px column separation.
+const LIVE_NODE_WIDTH = 132;
+const LIVE_NODE_HEIGHT = 54;
+function liveNodeConstraints(on) {
+  return on
+    ? {
+        widthConstraint: { minimum: LIVE_NODE_WIDTH, maximum: LIVE_NODE_WIDTH },
+        heightConstraint: { minimum: LIVE_NODE_HEIGHT },
+      }
+    : { widthConstraint: { minimum: 78, maximum: 200 }, heightConstraint: { minimum: 24 } };
+}
 
 // The edge's look with no live flow on it — what buildVisData's
 // `arrows: "to"` plus the visOptions defaults render. A function so
@@ -321,10 +336,18 @@ export function createGraphCanvas(containerId, adapter = {}) {
     liveMg = mg;
   }
 
+  // Name plus the live metric lines (when live is on and values
+  // exist) — the one label builder for flushes and refreshes.
+  function liveLabel(c) {
+    const entry = liveEnabled ? liveValues.get(c.id) : null;
+    const lines = entry ? liveLabelLines({ category: c.category, ...entry }) : [];
+    return [shortLabel(c.name), ...lines].join("\n");
+  }
+
   function liveEntry(id) {
     let e = liveValues.get(id);
     if (!e) {
-      e = { p: null, q: null, soc: null };
+      e = { p: null, q: null, soc: null, dc: null };
       liveValues.set(id, e);
     }
     return e;
@@ -349,11 +372,10 @@ export function createGraphCanvas(containerId, adapter = {}) {
     for (const id of liveDirty) {
       const c = componentById.get(id);
       if (!c) continue;
-      const line = liveLabelLine({ category: c.category, ...liveEntry(id) });
-      const label = line == null ? shortLabel(c.name) : `${shortLabel(c.name)}\n${line}`;
+      const label = liveLabel(c);
       const prev = nodesDS.get(id);
       if (prev && prev.label !== label) {
-        if ((prev.label.includes("\n")) !== (label.includes("\n"))) linesChanged = true;
+        if (prev.label.split("\n").length !== label.split("\n").length) linesChanged = true;
         nodeUpdates.push({ id, label });
       }
     }
@@ -539,13 +561,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
     const nodes = data.components.map((c) => {
       componentById.set(c.id, c);
       const node = nodeStyleFor(c);
-      // Carry the live line so a topology refresh doesn't snap the
-      // label back to one line until the next flush.
-      const entry = liveEnabled ? liveValues.get(c.id) : null;
-      if (entry) {
-        const line = liveLabelLine({ category: c.category, ...entry });
-        if (line) node.label = `${node.label}\n${line}`;
-      }
+      // Carry the live lines so a topology refresh doesn't snap the
+      // label back to one line until the next flush, and the fixed
+      // live-mode box so the refresh doesn't resize nodes either.
+      node.label = liveLabel(c);
+      Object.assign(node, liveNodeConstraints(liveEnabled));
       return node;
     });
     const visibleEdges = data.connections.map(([p, c]) => ({
@@ -1236,6 +1256,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
       if (ev.metric === "active_power_w") e.p = ev.value;
       else if (ev.metric === "reactive_power_var") e.q = ev.value;
       else if (ev.metric === "soc_pct") e.soc = ev.value;
+      else if (ev.metric === "dc_power_w") e.dc = ev.value;
       else if (
         ev.metric === "active_power_lower_bound_w" ||
         ev.metric === "active_power_upper_bound_w"
@@ -1255,6 +1276,15 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// wait for a topology refresh to actually land.
     debugApplyCount() {
       return applyCount;
+    },
+    /// Smoke-test hook: each node's drawn width — live mode must
+    /// keep them uniform regardless of value lengths.
+    debugNodeWidths() {
+      if (!network || !nodesDS) return [];
+      return nodesDS.getIds().map((id) => {
+        const b = network.getBoundingBox(id);
+        return b ? Math.round(b.right - b.left) : null;
+      });
     },
     /// Smoke-test hook: every node label currently on the canvas.
     debugLiveLabels() {
@@ -1277,6 +1307,17 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// update, then re-measures the (now shorter) nodes.
     setLive(on) {
       liveEnabled = Boolean(on);
+      // Both directions re-stamp every node's label box: fixed
+      // while live (no resizing with values), natural when off.
+      if (nodesDS) {
+        nodesDS.update(
+          nodesDS.get().map((n) => {
+            const c = componentById.get(n.id);
+            const label = c ? liveLabel(c) : n.label.split("\n")[0];
+            return { id: n.id, label, ...liveNodeConstraints(liveEnabled) };
+          }),
+        );
+      }
       if (liveEnabled) {
         localStorage.removeItem(LIVE_KEY);
         for (const id of liveValues.keys()) liveDirty.add(id);
@@ -1284,14 +1325,6 @@ export function createGraphCanvas(containerId, adapter = {}) {
       } else {
         localStorage.setItem(LIVE_KEY, "0");
         liveDirty.clear();
-        if (nodesDS) {
-          nodesDS.update(
-            nodesDS.get().map((n) => {
-              const c = componentById.get(n.id);
-              return { id: n.id, label: c ? shortLabel(c.name) : n.label.split("\n")[0] };
-            }),
-          );
-        }
         if (edgesDS) {
           edgesDS.update(
             edgesDS.get().map((e) => ({ id: e.id, ...edgeRestStyle() })),

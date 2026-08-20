@@ -14,11 +14,16 @@ itself.
 
 ## Decisions (settled during brainstorming)
 
-- **Node content**: a second label line with bare numbers — active
-  power and reactive power (`-24.0 kW · 1.2 kVAr`); reactive only for
-  components that report it. Batteries/EVs show SoC with a label
-  instead of reactive (`0.0 kW · SoC 85%`). No mini-cards; space is
-  tight.
+- **Node content**: live metrics as extra label lines, one metric
+  per line, bare numbers. Batteries report no AC power, so they show
+  `SoC 85%` then their DC power (`-3.00 kW`); EV chargers show AC
+  power then `SoC 40%`; everything else shows AC power then reactive
+  power (`1.20 kVAr`) when the component reports it. No mini-cards.
+- **Nodes don't resize with values**: while live is on every node
+  gets a fixed label box (132 × 54 px — the widest name, three
+  lines), so a value growing from `0.0 W` to `-19.93 kW` or a line
+  appearing never changes a node's size or shifts the layout. Off
+  restores the natural sizing.
 - **Edges carry both structure and flow, on separate channels**:
   the existing muted end arrowhead keeps encoding parent→child
   wiring, unchanged. A new mid-edge chevron in the accent color
@@ -73,16 +78,17 @@ liveDirty:  Set<id>
 
 ### Node labels
 
-`nodeLabel(component, live)` — pure function:
+`liveLabelLines({ category, p, q, soc, dc })` — pure function
+returning the metric lines in display order ([] until a sample
+arrives; the node then keeps its structural one-line label):
 
-- Line 1: display name (as today).
-- Line 2 (only when live mode is on and a value exists):
-  - power: formatted with the same W → kW → MW ladder the dashboard
-    uses — the formatter moves to a shared helper both import (not a
-    third copy).
-  - reactive appended as `· <n> kVAr` when the component reported
-    `reactive_power_var`.
-  - batteries / EV chargers: `· SoC <n>%` instead of reactive.
+- battery: `SoC <n>%`, then DC power (batteries emit `dc_power_w`
+  and `soc_pct`, never `active_power_w`).
+- ev-charger: AC power, then `SoC <n>%`.
+- everything else: AC power, then reactive (`<n> kVAr`) when
+  reported.
+- power values use the same W → kW → MW ladder as the dashboard
+  (shared `formatScaled`, not a copy).
 
 vis-network multi-line labels are plain `\n` text; the second line
 uses the existing label font (scales with zoom like the name).
@@ -134,10 +140,9 @@ receive them). No change to the WS protocol or subscription.
   branch.)
 - Component removed mid-session: pruned from `liveValues` on the
   next topology refresh; vis removes its edges with it.
-- Multi-line labels change node heights → node sizes change → the
-  measured-relayout pass (`pendingMeasuredRelayout`) already handles
-  re-measuring; toggling live triggers one relayout so spacing stays
-  correct in both modes.
+- Toggling live swaps every node between the fixed live box and
+  natural sizing, so it triggers one measured relayout
+  (`pendingMeasuredRelayout`); within a mode node sizes are constant.
 - Hidden components render dashed on this canvas and get live
   labels/chevrons like any other node.
 
@@ -150,7 +155,9 @@ receive them). No change to the WS protocol or subscription.
   parent-count sharing.
 - End-to-end (Playwright tour against the berlin-demo config):
   live on → some node's label carries a `W`/`kW` line, the battery
-  shows SoC, some edge has a middle chevron, and the hidden
+  shows `SoC` then DC power on separate lines, an inverter shows
+  power then reactive on separate lines, node widths are identical
+  across flushes, some edge has a middle chevron, and the hidden
   consumer meter's edge (always consuming, independent of PV
   sunlight) points at the child; a no-op eval's topology refresh
   leaves labels and chevrons in place; toggle off → labels are

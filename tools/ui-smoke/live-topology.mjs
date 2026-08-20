@@ -44,13 +44,14 @@ const unit = await page.evaluate(async () => {
   eq("fmt null", m.formatScaled(null, "W"), "—");
   eq("fmt NaN", m.formatScaled(Number.NaN, "W"), "—");
 
-  // liveLabelLine
-  eq("line inverter p+q", m.liveLabelLine({ category: "inverter", p: -24000, q: 1200, soc: null }), "-24.00 kW · 1.20 kVAr");
-  eq("line meter p only", m.liveLabelLine({ category: "meter", p: 500, q: null, soc: null }), "500.0 W");
-  eq("line battery soc", m.liveLabelLine({ category: "battery", p: 0, q: null, soc: 85.2 }), "0.0 W · SoC 85%");
-  eq("line ev soc", m.liveLabelLine({ category: "ev-charger", p: 3000, q: null, soc: 40 }), "3.00 kW · SoC 40%");
-  eq("line battery no soc yet", m.liveLabelLine({ category: "battery", p: 0, q: null, soc: null }), "0.0 W");
-  eq("line no sample", m.liveLabelLine({ category: "meter", p: null, q: null, soc: null }), null);
+  // liveLabelLines: one metric per line, category-specific order
+  eq("lines inverter p then q", m.liveLabelLines({ category: "inverter", p: -24000, q: 1200, soc: null, dc: null }), ["-24.00 kW", "1.20 kVAr"]);
+  eq("lines meter p only", m.liveLabelLines({ category: "meter", p: 500, q: null, soc: null, dc: null }), ["500.0 W"]);
+  eq("lines battery soc then dc", m.liveLabelLines({ category: "battery", p: null, q: null, soc: 85.2, dc: -3000 }), ["SoC 85%", "-3.00 kW"]);
+  eq("lines battery dc only", m.liveLabelLines({ category: "battery", p: null, q: null, soc: null, dc: 0 }), ["0.0 W"]);
+  eq("lines battery ignores ac", m.liveLabelLines({ category: "battery", p: 1, q: 1, soc: null, dc: null }), []);
+  eq("lines ev p then soc", m.liveLabelLines({ category: "ev-charger", p: 3000, q: 7, soc: 40 }), ["3.00 kW", "SoC 40%"]);
+  eq("lines no sample", m.liveLabelLines({ category: "meter", p: null, q: null, soc: null, dc: null }), []);
 
   // edgeFlow: dead band, direction, sharing, clamps
   eq("flow dead", m.edgeFlow(10, 1, 30000).chevron, false);
@@ -90,7 +91,17 @@ const labels = await waitFor(async () => {
   return hasLiveLine(ls) ? ls : null;
 });
 check("e2e: some node has a kW/W line", labels.some((l) => /\n-?\d+(\.\d+)? (W|kW|MW)/.test(l)), JSON.stringify(labels));
-check("e2e: battery node shows SoC", labels.some((l) => /SoC \d+%/.test(l)), JSON.stringify(labels));
+check("e2e: battery shows SoC line then DC power line", labels.some((l) => /^bat-\d+\nSoC \d+%\n-?\d+(\.\d+)? (W|kW|MW)$/.test(l)), JSON.stringify(labels));
+check("e2e: inverter shows power then reactive on separate lines", labels.some((l) => /^inv-\S+\n-?\d+(\.\d+)? (W|kW|MW)\n-?\d+(\.\d+)? (VAr|kVAr|MVAr)$/.test(l)), JSON.stringify(labels));
+const nodeWidths = () =>
+  page.evaluate(async () => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugNodeWidths();
+  });
+const widthsA = await nodeWidths();
+await new Promise((r) => setTimeout(r, 2500)); // two more 1 Hz flushes
+const widthsB = await nodeWidths();
+check("e2e: live nodes keep their width across flushes", widthsA.length > 0 && JSON.stringify(widthsA) === JSON.stringify(widthsB), `${JSON.stringify(widthsA)} vs ${JSON.stringify(widthsB)}`);
 
 // ── e2e: flow chevrons ────────────────────────────────────────────
 const edges = await waitFor(async () => {
