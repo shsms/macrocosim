@@ -14,9 +14,12 @@ is wiring the topology + animating the environment.
   - `microgrids.rs` — enterprise registry + per-mg routing
   - `dispatch.rs` — enterprise dispatch store (per-`microgrid_id`, id
     allocator, lifecycle broadcast); backs the dispatch gRPC + UI
-  - `bounds.rs` — `VecBounds`, `ComponentBounds` (rated + TTL augmentations)
+  - `bounds.rs` — `VecBounds`, `ComponentBounds` (rated + TTL
+    augmentations, `validate_active_setpoint` 0-W-park gate)
   - `ramp.rs` — `CommandDelay` + `Ramp`
-  - `decay.rs` — `bounded_exp_decay` + `soc_protected_bounds`
+  - `decay.rs` — `bounded_exp_decay` + `soc_protected_bounds`, plus
+    the SoC lifecycle helpers shared by battery/EV (`SocProtect`,
+    `sanitize_soc_pct`, `integrate_soc_pct`)
   - `battery.rs`, `meter.rs`, `grid.rs`, `ev_charger.rs`,
     `inverter/{battery,solar}_inverter.rs`
   - `marker.rs` — no-physics categories (chp, wind turbine, steam
