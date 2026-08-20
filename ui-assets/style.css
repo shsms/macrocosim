@@ -877,9 +877,12 @@ body.compact .tier2-soc-text { font-size: 10px; }
   grid-column: 4 / -1;
 }
 .tier3-row:hover { border-color: var(--accent); }
+/* An inverter at its envelope edge is usually normal operation
+   (full sun, commanded full charge) — mark it with the neutral
+   accent, not warning colors that read as a fault. Health has its
+   own red pill. */
 .tier3-row.pinned {
-  border-color: var(--warn, #d9c46b);
-  background: rgba(217, 196, 107, 0.06);
+  border-color: var(--accent);
 }
 .tier3-name { font-weight: 500; }
 .tier3-subtype { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -925,8 +928,14 @@ body.compact .tier2-soc-text { font-size: 10px; }
   border-radius: 50%;
   box-shadow: 0 0 0 1px var(--accent);
 }
-.envelope-marker.pinned-hi { background: var(--good, #6bd97b); box-shadow: 0 0 0 1px var(--good, #6bd97b); }
-.envelope-marker.pinned-lo { background: var(--bad,  #d96b6b); box-shadow: 0 0 0 1px var(--bad, #d96b6b); }
+/* Same neutrality at the marker: hitting either bound is "at the
+   limit", not good/bad — a PV inverter in full sun pins the lower
+   (generation) bound all afternoon. */
+.envelope-marker.pinned-hi,
+.envelope-marker.pinned-lo {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
 .envelope-current { text-align: right; font-weight: 500; }
 body.compact .tier3-row { padding: 5px 10px; }
 body.compact .tier3-health { font-size: 10px; padding: 1px 6px; }
