@@ -119,6 +119,37 @@ const unit = await page.evaluate(async () => {
   eq("renderer reports dimensions", res.nodeDimensions, { width: dOff.width, height: dOff.height });
   eq("renderer onSize", sizes, [[12, dOff.width, dOff.height]]);
   out.push({ name: "renderer drawNode is callable", ok: typeof res.drawNode === "function" && (res.drawNode(), true) });
+
+  // hovercard.js: the pure card model
+  const hc = await import("/assets/hovercard.js");
+  const now = 1787252990000;
+  const liveInv = { p: -19930, q: 1200, soc: null, dc: null, energy: 12400, pLo: -30000, pHi: 30000, qLo: -5000, qHi: 5000, ts: now - 2000, hist: [[now - 3000, -19000], [now - 2000, -19930]] };
+  const card = hc.hoverCardModel({ component: inv, live: liveInv, parents: ["meter-2"], children: ["bat-1000"], lastCommand: { kind: "power", value: "-2000", ts: now - 15000, accepted: true, reason: "" }, nowMs: now, deadBand: 300 });
+  eq("card title", card.title, "Battery Inverter 1");
+  eq("card id line", card.idLine, "#12 · inverter / battery");
+  eq("card power text", card.power.text, "-19.93 kW");
+  eq("card power envelope", [card.power.lo, card.power.hi, card.power.value], [-30000, 30000, -19930]);
+  eq("card pf leading (opposite signs)", card.pf.text, "PF 1.00 leading");
+  eq("card energy", card.energy.text, "12.40 kWh since start");
+  eq("card last command", card.lastCommand.text, "power -2000 · 15 s ago · accepted");
+  eq("card wiring", card.wiring, { parents: "meter-2", children: "bat-1000" });
+  eq("card freshness", card.freshness, { text: "updated 2 s ago", stale: false });
+  eq("card spark", card.spark, liveInv.hist);
+  const lag = hc.hoverCardModel({ component: inv, live: { ...liveInv, p: 8000, q: 6000 }, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
+  eq("card pf lagging (same signs)", lag.pf.text, "PF 0.80 lagging");
+  eq("card wiring empty", lag.wiring, { parents: "—", children: "—" });
+  eq("card no command", lag.lastCommand, null);
+  const stale = hc.hoverCardModel({ component: inv, live: { ...liveInv, ts: now - 9000 }, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
+  eq("card stale", stale.freshness, { text: "updated 9 s ago", stale: true });
+  const none = hc.hoverCardModel({ component: inv, live: null, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
+  eq("card no data", none.freshness, { text: "no data yet", stale: true });
+  eq("card no data → no pf", none.pf, null);
+  const batCard = hc.hoverCardModel({ component: bat, live: { ...liveInv, p: null, q: null, dc: -3000, soc: 85.4 }, parents: ["inv-bat-1001"], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
+  eq("battery card soc", batCard.soc, { pct: 85, text: "85%" });
+  eq("battery card dc", batCard.dc.text, "-3.00 kW");
+  eq("battery card no ac power section", batCard.power, null);
+  eq("battery card no pf", batCard.pf, null);
+  eq("rejected command", hc.hoverCardModel({ component: inv, live: liveInv, parents: [], children: [], lastCommand: { kind: "power", value: "5", ts: now - 1000, accepted: false, reason: "out of bounds" }, nowMs: now, deadBand: 300 }).lastCommand.text, "power 5 · 1 s ago · rejected: out of bounds");
   return out;
 });
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
