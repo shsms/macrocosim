@@ -1,6 +1,17 @@
 /* Dark monospace shell. Every following commit layers panels into
    #app; the chrome here stays put. */
 
+/* IBM Plex, vendored (SIL OFL 1.1, see vendor/fonts/LICENSE-OFL.txt).
+   The graph canvas draws node text with these; the DOM never needs
+   them at page load, so `font-display: swap` keeps first paint fast
+   and pill.js explicitly loads the faces before measuring. */
+@font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url("vendor/fonts/IBMPlexSans-Regular.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 500; font-style: normal; font-display: swap; src: url("vendor/fonts/IBMPlexSans-Medium.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-style: normal; font-display: swap; src: url("vendor/fonts/IBMPlexSans-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 400; font-style: normal; font-display: swap; src: url("vendor/fonts/IBMPlexMono-Regular.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; font-style: normal; font-display: swap; src: url("vendor/fonts/IBMPlexMono-Medium.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 600; font-style: normal; font-display: swap; src: url("vendor/fonts/IBMPlexMono-SemiBold.woff2") format("woff2"); }
+
 :root {
   /* Softer than the GitHub-dark default — a bit more midtone so the
      contrast doesn't fight the eye on long sessions. Backgrounds
