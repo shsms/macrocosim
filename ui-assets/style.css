@@ -2064,6 +2064,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="formulas"] #
   transition: background 120ms;
 }
 .fsplitter:hover, .fsplitter.dragging { background: var(--accent); }
+/* Collapsed drawer: only the REPL input row stays; the log tail and
+   eval output give their space back to the content panes. */
+body.drawer-collapsed #logs,
+body.drawer-collapsed #repl-output {
+  display: none;
+}
 .canvas-controls.in-pane {
   position: absolute;
   top: 10px;

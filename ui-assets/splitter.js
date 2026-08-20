@@ -21,11 +21,13 @@ function makeSplitter({ axis, splitter, getStart, apply, clamp }) {
   const cursor = isHoriz ? "row-resize" : "col-resize";
 
   let dragging = false;
+  let moved = false;
   let start = 0;
   let startSize = 0;
 
   splitter.addEventListener("mousedown", (e) => {
     dragging = true;
+    moved = false;
     start = isHoriz ? e.clientY : e.clientX;
     startSize = getStart();
     splitter.classList.add("dragging");
@@ -37,6 +39,12 @@ function makeSplitter({ axis, splitter, getStart, apply, clamp }) {
     if (!dragging) return;
     const here = isHoriz ? e.clientY : e.clientX;
     const delta = start - here; // positive = drag toward the start
+    // Ignore the few px of jitter a click (or the first half of a
+    // double-click) produces — applying it would resize, and for
+    // the drawer splitter also expand-and-clobber the saved height
+    // right before the dblclick toggle reads the collapsed state.
+    if (!moved && Math.abs(delta) < 4) return;
+    moved = true;
     const viewport = isHoriz ? window.innerHeight : window.innerWidth;
     apply(clamp(startSize + delta, viewport));
     refitCharts();
@@ -84,24 +92,66 @@ export function setupFormulaDrawerSplitter() {
 }
 
 /// Horizontal splitter between topology row and bottom drawer.
-/// Updates main's grid-template-rows to resize the drawer.
+/// Updates main's grid-template-rows to resize the drawer. The
+/// height persists; double-clicking the splitter collapses the
+/// drawer to just the REPL input row (logs + output hidden, also
+/// persisted) so the content panes get the vertical space back.
 export function setupDrawerSplitter() {
   const main = document.getElementById("app");
   const drawer = document.getElementById("repl");
+  const splitter = document.getElementById("drawer-splitter");
+  const HEIGHT_KEY = "switchyard-drawer-h";
+  const COLLAPSED_KEY = "switchyard-drawer-collapsed";
   const MIN_DRAWER = 120;
   const MIN_TOP_FRAC = 0.2; // keep at least 20% of main for the canvas
+
+  const applyH = (h) => {
+    // Main's grid template has FOUR rows: the auto mgheader, the
+    // 1fr topology row, the 5px drawer-splitter, the drawer.
+    // An earlier shape rewrote only three values here, dropping
+    // the mgheader's `auto` track — the grid then collapsed
+    // and the canvas disappeared as soon as the user dragged the
+    // splitter at all. Keep all four tracks. CSS min() keeps a
+    // persisted height from swallowing the pane on a smaller
+    // window than it was saved on.
+    main.style.gridTemplateRows = `auto 1fr 5px min(${h}px, 75%)`;
+  };
+  const setCollapsed = (on) => {
+    document.body.classList.toggle("drawer-collapsed", on);
+    if (on) {
+      // `auto` sizes the row to the repl form alone (logs + output
+      // are display:none under the body class).
+      main.style.gridTemplateRows = "auto 1fr 5px auto";
+      localStorage.setItem(COLLAPSED_KEY, "1");
+    } else {
+      const saved = Number(localStorage.getItem(HEIGHT_KEY));
+      applyH(Number.isFinite(saved) && saved >= MIN_DRAWER ? saved : 260);
+      localStorage.removeItem(COLLAPSED_KEY);
+    }
+    refitCharts();
+  };
+
+  const savedH = Number(localStorage.getItem(HEIGHT_KEY));
+  if (Number.isFinite(savedH) && savedH >= MIN_DRAWER) applyH(savedH);
+  if (localStorage.getItem(COLLAPSED_KEY)) setCollapsed(true);
+
+  splitter.title = "Drag to resize · double-click to collapse";
+  splitter.addEventListener("dblclick", () => {
+    setCollapsed(!document.body.classList.contains("drawer-collapsed"));
+  });
+
   makeSplitter({
     axis: "y",
-    splitter: document.getElementById("drawer-splitter"),
+    splitter,
     getStart: () => drawer.getBoundingClientRect().height,
     apply: (h) => {
-      // Main's grid template has FOUR rows: the auto mgheader, the
-      // 1fr topology row, the 5px drawer-splitter, the drawer.
-      // An earlier shape rewrote only three values here, dropping
-      // the mgheader's `auto` track — the grid then collapsed
-      // and the canvas disappeared as soon as the user dragged the
-      // splitter at all. Keep all four tracks.
-      main.style.gridTemplateRows = `auto 1fr 5px ${h}px`;
+      // Dragging a collapsed drawer expands it at the dragged size.
+      if (document.body.classList.contains("drawer-collapsed")) {
+        document.body.classList.remove("drawer-collapsed");
+        localStorage.removeItem(COLLAPSED_KEY);
+      }
+      applyH(h);
+      localStorage.setItem(HEIGHT_KEY, String(Math.round(h)));
     },
     clamp: (h, vh) => {
       const mainH = main.getBoundingClientRect().height;
