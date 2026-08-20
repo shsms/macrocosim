@@ -37,8 +37,10 @@ component ids.
     divider, either reactive power (Plex Mono 500, 11 px) or, for
     batteries and EV chargers, a 40×5 px SoC bar with the percentage.
   Batteries use DC power as their power value (they report no AC
-  power). Width comes from the measured content (min 96 px); height
-  from the rows present. No fixed box.
+  power). Width comes from the measured content (min 96 px, max
+  200 px — the layout's column separation, as the old
+  `widthConstraint.maximum` was; the name truncates further if row 1
+  would exceed it); height from the rows present. No fixed box.
 - **Values off (variant F).** Row 2 omitted; the pill collapses to
   one row and the name steps up to 13 px with the id at 11 px — the
   name becomes the hero when nothing else is there. This is both the
@@ -47,13 +49,18 @@ component ids.
   the Frequenz common proto: +P consumption, +Q inductive). Active
   power: export (negative) `#6bd9a5`, import (positive) `#79b8ff`,
   zero/below dead band dim `#5a626d`. Reactive power: the same hues
-  desaturated (`#4f9a78` / `#5a87bd`) by *its own* sign, zero dim —
+  desaturated (`#4f9a78` / `#5a87bd`) by *its own* sign, zero dim
+  (same absolute dead band as P: max(1 % of `siteMaxRatedW`, 50)) —
   so Q matching P's hue reads as lagging and a contrasting hue as
   leading, with no legend. Idle nodes (no flow) keep their surface;
   only the numbers dim.
 - **Toggle.** The `live` pill becomes `values` (same
   localStorage key `switchyard-topology-live`, default on). Off =
-  values-off pills, not ellipses.
+  values-off pills, not ellipses. Sampling never stops: the toggle
+  only decides whether row 2 is drawn, so the hover card and the
+  sparkline buffer are complete the moment values are switched back
+  on (`applySample` is no longer gated by the toggle; the 1 Hz flush
+  is).
 - **Formulas canvas** uses the same renderer in values-off mode. The
   formula-hover highlight maps to rings: accent ring for a
   referenced term, red ring for a subtracted one (today's blue/red
@@ -61,7 +68,9 @@ component ids.
 - **Hover card (variant E)**, read-only, 300 px, anchored below the
   pill, never covering its wired neighbours: header (dot, name,
   `#id · category/subtype`, health chip); 60 s active-power
-  sparkline; active power on its envelope bar (lower…upper with the
+  sparkline from a per-component 60-entry ring buffer kept in
+  `liveValues` (seeded on first hover from the existing
+  `history?window_s=300` endpoint when the buffer is still short); active power on its envelope bar (lower…upper with the
   current marker); reactive power with its allowed band; `PF 0.99
   leading|lagging` computed from P and Q; energy since start;
   category extras (battery: SoC bar against its protect band, DC
@@ -70,12 +79,28 @@ component ids.
   cached fetch of `/api/setpoints`; wiring (parents / children by
   name); footer: freshness ("updated N s ago" — the stale indicator
   when the WS drops) and "click for inspector". Per-phase P/Q/V/I is
-  deferred until the WS sampler carries per-phase metrics.
+  deferred until the WS sampler carries per-phase metrics. The card
+  is topology-only; the Formulas canvas keeps vis's `title` tooltip
+  (`#id — name`) and the topology canvas drops `title`, so there is
+  never a vis tooltip and a card on screen together.
+- **Hover card lifecycle.** `pointer-events: none` (the card must
+  never take the pointer from the node, or hovering flickers); shows
+  after a 250 ms dwell and aborts its fetches on blur, so sweeping
+  across the canvas fires nothing; hidden on blur, drag start,
+  pan/zoom, click (the inspector takes over), right-click / context
+  menu, subview change and any refresh that removes its node.
+- **Dot colour** comes from the existing `--cat-*` tokens in
+  style.css (read via `getComputedStyle` once), so the dot, the
+  sidebar and the legend agree; the mockup's hexes are not a second
+  palette.
 - **Fonts.** IBM Plex Sans (400/500/600) and IBM Plex Mono
   (400/500/600) vendored as woff2 under `ui-assets/vendor/fonts/`
   with `@font-face` in style.css; the canvas renderer waits for
   `document.fonts.ready` before its first measure so nothing is laid
-  out in a fallback face and then jumps.
+  out in a fallback face and then jumps. If the network already
+  exists when the fonts land (fast first paint), the measure cache is
+  invalidated, every node is re-stamped so vis re-measures, and one
+  measured relayout runs — the same path `setValues` uses.
 
 ## Architecture (client-side only; no server changes)
 
@@ -102,8 +127,8 @@ component ids.
 - `nodeStyleFor` → builds the pill model via `pillModel` and the
   custom renderer; colorFor/health logic reused for the dot/ring.
 - `flushLive` updates dirty nodes by replacing their `ctxRenderer`
-  model (one `nodesDS.update` batch per second as today); label text
-  is no longer used for rendering (kept as the accessible `title`).
+  model (one `nodesDS.update` batch per second as today); vis
+  `label` and, on the topology canvas, `title` are dropped.
 - `setLive` → `setValues`: re-stamps every node's model with
   `valuesOn`, triggers one measured relayout (row count changes).
 - Hover: vis `hoverNode`/`blurNode` events drive an HTML hover card
@@ -148,8 +173,10 @@ the sign of the child's power).
   DC power + SoC; EV: P + SoC; grid/CHP: P only when reported), hue
   selection for P and Q by sign incl. dead band → dim, values-off
   model has no row 2, health → ring mapping.
-- E2e (extend `tools/ui-smoke/live-topology.mjs`): nodes report
-  content-derived widths that differ between short and long names
+- E2e (extend `tools/ui-smoke/live-topology.mjs`): the label-based
+  assertions (`debugLabels`, "label carries a kW / SoC line") are
+  rewritten against a new `debugNodeModels()` hook that returns each
+  node's `pillModel`; nodes report content-derived widths that differ between short and long names
   and stay stable across flushes; values toggle collapses pills to
   one row and back; hovering a pill shows the card with name, `#id`,
   PF line and freshness; the Formulas canvas shows `#id` on every
