@@ -665,20 +665,28 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   color: var(--accent);
 }
 
-/* Dashboard layout. Auto-fit grid sized to fan out on the 32" 4K
-   target — at ~1800 px available width that's 5-6 tiles per row,
-   on a 1200 px laptop it folds to 3-4, on iPad-narrow it folds to
-   2, and on phone-width it's 1. Per-tile minimum (280 px) is just
-   wide enough to keep "−999.99 MW" + the meta line from wrapping.
-   Padding + scroll on the pane so per-component drill-down rows
-   (future tier-2 / tier-3 breakouts) don't push the page. */
+/* Dashboard layout. The pool tiles live in a wrapping flex row so a
+   partial last row stretches to fill the width instead of leaving an
+   orphan tile next to empty grid cells — at ~1800 px that's 5-6
+   tiles per row, on a 1200 px laptop 3-4, phone-width 1. Per-tile
+   minimum (280 px) is just wide enough to keep "−999.99 MW" + the
+   meta line from wrapping. Padding + scroll on the pane so
+   per-component drill-down rows don't push the page. */
 #dashboard {
   padding: 16px;
   overflow-y: auto;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  /* The explicit display (ID specificity) is what beats the global
+     `[hidden] { display: none }` — visibility is controlled by the
+     body-state rules above, not the markup's `hidden` attribute. */
+  display: block;
+}
+.dash-tiles {
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
-  align-content: start;
+}
+.dash-tiles .dash-tile {
+  flex: 1 1 280px;
 }
 .dash-tile {
   background: var(--bg-elev);
@@ -740,10 +748,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
 
 .dash-section {
-  /* Span every column of the auto-fit dashboard grid so a tier-N
-     block stacks below the pool tiles instead of wedging into the
-     next column. */
-  grid-column: 1 / -1;
+  margin-top: 12px;
 }
 .tier-heading {
   font-size: 13px;
@@ -1723,7 +1728,8 @@ body.compact .dash-tile h2 { font-size: 10px; margin-bottom: 2px; }
 body.compact .dash-value { font-size: 22px; min-height: 26px; }
 body.compact .dash-spark { height: 28px; margin-top: 3px; }
 body.compact .dash-meta { font-size: 10px; margin-top: 3px; }
-body.compact #dashboard { padding: 8px; gap: 6px; }
+body.compact #dashboard { padding: 8px; }
+body.compact .dash-tiles { gap: 6px; }
 /* Re-tighten the main grid since the pulse bar shrank 6 px. */
 body.compact main { height: calc(100vh - 41px - 22px); }
 
