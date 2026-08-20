@@ -3,6 +3,8 @@
 // /ws/events frames to liveCharts / dashboard rows / pulseBar /
 // the log panel.
 
+import { dispatchesPanel, escapeHtml, notify, setStatus } from "./app.js";
+import { gridFrequency, pulseBar } from "./chrome.js";
 import {
   batteryPairs,
   chpRows,
@@ -10,7 +12,7 @@ import {
   evRows,
   pvRows,
 } from "./dashboard.js";
-import { gridFrequency, pulseBar } from "./chrome.js";
+import { liveCharts } from "./inspect.js";
 import {
   COMPLETIONS,
   indentForNewline,
@@ -18,8 +20,6 @@ import {
   wordAtCursor,
 } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
-import { liveCharts } from "./inspect.js";
-import { dispatchesPanel, escapeHtml, notify, setStatus } from "./app.js";
 
 
 // Log panel above the REPL. /api/logs gives the load-time backfill
