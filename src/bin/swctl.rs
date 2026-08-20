@@ -417,54 +417,49 @@ async fn main() {
 }
 
 async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    // Dispatch scenario commands first — they only need the HTTP
-    // client, not a live gRPC channel. Avoids paying for a
-    // failing gRPC connect when the user only wants /api/scenario.
-    if let Cmd::Dispatch(d) = cli.cmd {
-        return run_dispatch(d, &cli.dispatch_addr, cli.json).await;
-    }
-    if let Cmd::Scenario(s) = cli.cmd {
-        return run_scenario(s, &cli.ui_addr, cli.json).await;
-    }
-    if let Cmd::Snapshot(s) = cli.cmd {
-        return run_snapshot(s, &cli.ui_addr, cli.microgrid_id, cli.json).await;
-    }
-    if let Cmd::Dashboard { tail, interval } = cli.cmd {
-        return run_dashboard(&cli.ui_addr, cli.microgrid_id, tail, interval).await;
-    }
-    if let Cmd::Pool { cmd } = cli.cmd {
-        return run_pool(cmd, &cli.ui_addr, cli.microgrid_id, cli.json).await;
-    }
-    let mut client = MicrogridClient::connect(cli.addr.clone()).await?;
     match cli.cmd {
-        Cmd::Info => cmd_info(&mut client, cli.json).await,
-        Cmd::List { category, ids } => cmd_list(&mut client, category, ids, cli.json).await,
-        Cmd::Connections { from, to } => cmd_connections(&mut client, from, to, cli.json).await,
-        Cmd::Tree => cmd_tree(&mut client).await,
-        Cmd::Stream {
-            id,
-            samples,
-            metrics,
-        } => cmd_stream(&mut client, id, samples, metrics, cli.json).await,
-        Cmd::SetPower {
-            id,
-            power,
-            reactive,
-            lifetime,
-        } => cmd_set_power(&mut client, id, power, reactive, lifetime).await,
-        Cmd::AugmentBounds {
-            id,
-            lower,
-            upper,
-            lifetime,
-        } => cmd_augment(&mut client, id, lower, upper, lifetime).await,
-        // Dispatch, Scenario, Snapshot, Dashboard, Pool handled before
-        // the gRPC connect above.
-        Cmd::Dispatch(_)
-        | Cmd::Scenario(_)
-        | Cmd::Snapshot(_)
-        | Cmd::Dashboard { .. }
-        | Cmd::Pool { .. } => unreachable!(),
+        // HTTP-backed commands dispatch directly — they only need
+        // the HTTP client, not a live gRPC channel. Avoids paying
+        // for a failing gRPC connect when the user only wants
+        // /api/scenario.
+        Cmd::Dispatch(d) => run_dispatch(d, &cli.dispatch_addr, cli.json).await,
+        Cmd::Scenario(s) => run_scenario(s, &cli.ui_addr, cli.json).await,
+        Cmd::Snapshot(s) => run_snapshot(s, &cli.ui_addr, cli.microgrid_id, cli.json).await,
+        Cmd::Dashboard { tail, interval } => {
+            run_dashboard(&cli.ui_addr, cli.microgrid_id, tail, interval).await
+        }
+        Cmd::Pool { cmd } => run_pool(cmd, &cli.ui_addr, cli.microgrid_id, cli.json).await,
+        // Everything else talks the Microgrid gRPC API: connect
+        // once, then dispatch.
+        cmd => {
+            let mut client = MicrogridClient::connect(cli.addr.clone()).await?;
+            match cmd {
+                Cmd::Info => cmd_info(&mut client, cli.json).await,
+                Cmd::List { category, ids } => cmd_list(&mut client, category, ids, cli.json).await,
+                Cmd::Connections { from, to } => {
+                    cmd_connections(&mut client, from, to, cli.json).await
+                }
+                Cmd::Tree => cmd_tree(&mut client).await,
+                Cmd::Stream {
+                    id,
+                    samples,
+                    metrics,
+                } => cmd_stream(&mut client, id, samples, metrics, cli.json).await,
+                Cmd::SetPower {
+                    id,
+                    power,
+                    reactive,
+                    lifetime,
+                } => cmd_set_power(&mut client, id, power, reactive, lifetime).await,
+                Cmd::AugmentBounds {
+                    id,
+                    lower,
+                    upper,
+                    lifetime,
+                } => cmd_augment(&mut client, id, lower, upper, lifetime).await,
+                _ => unreachable!("HTTP-backed commands are dispatched above"),
+            }
+        }
     }
 }
 
@@ -816,12 +811,7 @@ async fn build_pool_line(
         return Ok(serde_json::to_string(&serde_json::Value::Object(out))?);
     }
     let now = chrono::Local::now().format("%H:%M:%S");
-    let read = |s: &str| -> Option<f64> {
-        latest
-            .get(s)
-            .and_then(|v| v.get("value"))
-            .and_then(|v| v.as_f64())
-    };
+    let read = |s: &str| latest_value(&latest, s);
     let fmt = |w: Option<f64>| match w {
         None => "—".to_owned(),
         Some(v) if v.abs() >= 1e6 => format!("{:+.2} MW", v / 1e6),
@@ -913,12 +903,7 @@ async fn build_dashboard_line(
         }
     }
     let total = components.len();
-    let pick = |stream| {
-        latest
-            .get(stream)
-            .and_then(|v| v.get("value"))
-            .and_then(|v| v.as_f64())
-    };
+    let pick = |stream| latest_value(&latest, stream);
     let grid = pick("grid_power");
     let pv = pick("pv_power");
     let bat = pick("battery_pool_power");
@@ -1319,10 +1304,22 @@ async fn eval(
 
 /// Backslash-escape a string for embedding inside Lisp source.
 /// Handles the two characters that break a `"…"` literal: `"`
-/// and `\`.
+/// and `\`. Deliberately NOT the library's `escape_lisp_string`:
+/// that one also strips control characters (it writes files that
+/// get re-evaled), which would silently delete the newlines in a
+/// multi-line scenario-event payload sent from the CLI.
 fn lisp_string(s: &str) -> String {
     let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
     format!("\"{escaped}\"")
+}
+
+/// `latest[stream].value` as f64 from an `/api/.../microgrid/latest`
+/// map — shared by the pool and dashboard line builders.
+fn latest_value(latest: &serde_json::Value, stream: &str) -> Option<f64> {
+    latest
+        .get(stream)
+        .and_then(|v| v.get("value"))
+        .and_then(|v| v.as_f64())
 }
 
 fn print_summary(s: &serde_json::Value, json: bool) {
