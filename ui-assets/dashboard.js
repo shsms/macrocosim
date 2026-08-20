@@ -7,19 +7,16 @@
 
 import { escapeHtml, jumpToTopology, mgPath } from "./app.js";
 import { loadFormulas } from "./formulas.js";
+import { formatScaled } from "./live.js";
 
-// Power auto-scale: W → kW → MW based on magnitude. Mirrors the
-// existing chooseScale() logic for per-component charts so the
-// Dashboard reads in the same units a developer sees in the
-// inspector panel. Shared by the tiles and (via fmtRowPower) every
-// per-component row.
+// Power auto-scale: W → kW → MW based on magnitude. Delegates to
+// formatScaled from live.js so the Dashboard reads in the same units
+// as every other readout in the app — one implementation of the
+// scaling ladder.
 function fmt(quantity, unit, value) {
   if (value == null || !Number.isFinite(value)) return "—";
   if (quantity === "Power" || quantity === "ReactivePower" || unit === "W" || unit === "var") {
-    const a = Math.abs(value);
-    if (a >= 1e6) return `${(value / 1e6).toFixed(2)} M${unit}`;
-    if (a >= 1e3) return `${(value / 1e3).toFixed(2)} k${unit}`;
-    return `${value.toFixed(1)} ${unit}`;
+    return formatScaled(value, unit);
   }
   // Voltage, frequency, percentage etc. — fixed unit, modest precision.
   return `${value.toFixed(2)} ${unit}`;
