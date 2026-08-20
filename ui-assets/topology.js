@@ -20,6 +20,7 @@ import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./inspect.js";
 import { edgeFlow, liveLabelLine } from "./live.js";
+import { readSelectedMg, visibleSubview } from "./routing.js";
 
 function getCss(name) {
   return getComputedStyle(document.documentElement)
@@ -68,6 +69,20 @@ function lighten(hex, n) {
 // whole layout zooms out to unreadable.
 function shortLabel(name) {
   return name.length > 22 ? `${name.slice(0, 20)}…` : name;
+}
+
+const LIVE_KEY = "switchyard-topology-live";
+const EDGE_LIVE_COLOR = "#79b8ff";
+
+// The edge's look with no live flow on it — what buildVisData's
+// `arrows: "to"` plus the visOptions defaults render. A function so
+// every DataSet entry gets its own object.
+function edgeRestStyle() {
+  return {
+    width: 1.5,
+    arrows: { to: { enabled: true, scaleFactor: 0.6 }, middle: { enabled: false } },
+    color: { color: "#6b7280", inherit: false },
+  };
 }
 
 function nodeStyleFor(c) {
@@ -285,11 +300,26 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // canvas in ONE nodesDS/edgesDS update per second.
   const liveValues = new Map(); // id -> { p, q, soc }
   const liveDirty = new Set();
-  let liveEnabled = localStorage.getItem("switchyard-topology-live") !== "0";
+  let liveEnabled = localStorage.getItem(LIVE_KEY) !== "0";
   let liveFlushTimer = null;
   // Largest |active power bound| seen — the magnitude reference for
   // edge flow scaling. Reset on topology refresh.
   let maxAbsBoundW = 0;
+  // The microgrid the live values belong to. Component ids collide
+  // across microgrids (and the list view forwards every microgrid's
+  // samples), so a switch drops everything accumulated so far.
+  let liveMg = null;
+  // Smoke-test hook: how many times apply() ran.
+  let applyCount = 0;
+
+  function syncLiveMg() {
+    const mg = readSelectedMg();
+    if (mg === liveMg) return;
+    liveValues.clear();
+    liveDirty.clear();
+    maxAbsBoundW = 0;
+    liveMg = mg;
+  }
 
   function liveEntry(id) {
     let e = liveValues.get(id);
@@ -298,14 +328,6 @@ export function createGraphCanvas(containerId, adapter = {}) {
       liveValues.set(id, e);
     }
     return e;
-  }
-
-  function topologyVisible() {
-    return (
-      document.body.dataset.mode === "microgrids" &&
-      document.body.dataset.mgView === "selected" &&
-      document.body.dataset.subview === "topology"
-    );
   }
 
   function armLiveFlush() {
@@ -321,7 +343,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // directly to catch up).
   function flushLive() {
     if (!liveEnabled || !nodesDS || liveDirty.size === 0) return;
-    if (!topologyVisible()) return;
+    if (visibleSubview() !== "topology") return;
     const nodeUpdates = [];
     let linesChanged = false;
     for (const id of liveDirty) {
@@ -348,22 +370,24 @@ export function createGraphCanvas(containerId, adapter = {}) {
         if (!liveDirty.has(e.to)) continue;
         const child = liveValues.get(e.to);
         const flow = edgeFlow(child ? child.p : null, parentCount.get(e.to) || 1, maxAbsBoundW);
+        if (!flow.chevron) {
+          edgeUpdates.push({ id: e.id, ...edgeRestStyle() });
+          continue;
+        }
         edgeUpdates.push({
           id: e.id,
-          width: flow.chevron ? flow.width : 1.5,
+          width: flow.width,
           arrows: {
             to: { enabled: true, scaleFactor: 0.6 },
-            middle: flow.chevron
-              ? {
-                  enabled: true,
-                  type: "arrow",
-                  // Negative flips the chevron toward the parent —
-                  // physical flow for export/generation.
-                  scaleFactor: (flow.towardParent ? -1 : 1) * flow.scale,
-                }
-              : { enabled: false },
+            middle: {
+              enabled: true,
+              type: "arrow",
+              // Negative flips the chevron toward the parent —
+              // physical flow for export/generation.
+              scaleFactor: (flow.towardParent ? -1 : 1) * flow.scale,
+            },
           },
-          color: flow.chevron ? { color: "#79b8ff", inherit: false } : { color: "#6b7280", inherit: false },
+          color: { color: EDGE_LIVE_COLOR, inherit: false },
         });
       }
     }
@@ -514,7 +538,15 @@ export function createGraphCanvas(containerId, adapter = {}) {
     componentById.clear();
     const nodes = data.components.map((c) => {
       componentById.set(c.id, c);
-      return nodeStyleFor(c);
+      const node = nodeStyleFor(c);
+      // Carry the live line so a topology refresh doesn't snap the
+      // label back to one line until the next flush.
+      const entry = liveEnabled ? liveValues.get(c.id) : null;
+      if (entry) {
+        const line = liveLabelLine({ category: c.category, ...entry });
+        if (line) node.label = `${node.label}\n${line}`;
+      }
+      return node;
     });
     const visibleEdges = data.connections.map(([p, c]) => ({
       id: `${p}-${c}`,
@@ -574,9 +606,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
   };
 
   function apply(data) {
+    applyCount++;
     mainMeterId = typeof data.main_meter_id === "number" ? data.main_meter_id : null;
     if (adapter.onApply) adapter.onApply(data);
     const prevIds = new Set(componentById.keys());
+    syncLiveMg();
     const { nodes, edges } = buildVisData(data);
     // Live overlay: forget components that left the topology, mark
     // every survivor dirty so the next flush rebuilds its label
@@ -786,7 +820,18 @@ export function createGraphCanvas(containerId, adapter = {}) {
       const newEdgeIds = new Set(edges.map((e) => e.id));
       const staleEdges = edgesDS.getIds().filter((id) => !newEdgeIds.has(id));
       if (staleEdges.length) edgesDS.remove(staleEdges);
-      edgesDS.update(edges);
+      // Existing edges whose child has live values keep their
+      // arrows/width/color (DataSet .update merges per field); ones
+      // whose child has none — a microgrid switch just cleared the
+      // map, or the child lost telemetry — drop back to the rest
+      // style so a colliding edge id can't carry a stale chevron
+      // over. New edges get the structural `arrows: "to"`.
+      const edgeUpdates = edges.map((e) => {
+        if (!edgesDS.get(e.id)) return e;
+        const base = { id: e.id, from: e.from, to: e.to, ...(e.dashes ? { dashes: true } : {}) };
+        return liveValues.has(e.to) ? base : { ...base, ...edgeRestStyle() };
+      });
+      edgesDS.update(edgeUpdates);
 
       if (prevSelected.length) {
         // Re-select what survived. The notify must fire even when
@@ -1184,6 +1229,9 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// marks the id dirty, and arms the 1 Hz flush.
     applySample(ev) {
       if (!liveEnabled) return;
+      const mg = readSelectedMg();
+      if (mg == null || (ev.mg_id != null && ev.mg_id !== mg)) return;
+      syncLiveMg();
       const e = liveEntry(ev.id);
       if (ev.metric === "active_power_w") e.p = ev.value;
       else if (ev.metric === "reactive_power_var") e.q = ev.value;
@@ -1203,6 +1251,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// Apply pending live updates now — subview enter calls this so
     /// a hidden tab's accumulated samples land immediately.
     flushLive,
+    /// Smoke-test hook: apply() invocations so far — lets a test
+    /// wait for a topology refresh to actually land.
+    debugApplyCount() {
+      return applyCount;
+    },
     /// Smoke-test hook: every node label currently on the canvas.
     debugLiveLabels() {
       return nodesDS ? nodesDS.get().map((n) => n.label) : [];
@@ -1225,11 +1278,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
     setLive(on) {
       liveEnabled = Boolean(on);
       if (liveEnabled) {
-        localStorage.removeItem("switchyard-topology-live");
+        localStorage.removeItem(LIVE_KEY);
         for (const id of liveValues.keys()) liveDirty.add(id);
         flushLive();
       } else {
-        localStorage.setItem("switchyard-topology-live", "0");
+        localStorage.setItem(LIVE_KEY, "0");
         liveDirty.clear();
         if (nodesDS) {
           nodesDS.update(
@@ -1241,12 +1294,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         }
         if (edgesDS) {
           edgesDS.update(
-            edgesDS.get().map((e) => ({
-              id: e.id,
-              width: 1.5,
-              arrows: { to: { enabled: true, scaleFactor: 0.6 }, middle: { enabled: false } },
-              color: { color: "#6b7280", inherit: false },
-            })),
+            edgesDS.get().map((e) => ({ id: e.id, ...edgeRestStyle() })),
           );
         }
       }

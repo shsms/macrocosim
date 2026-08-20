@@ -12,6 +12,17 @@ const check = (name, ok, detail = "") => {
   if (!ok) failures++;
 };
 
+// Bounded poll: await `fn()` until truthy, or throw after `ms`.
+async function waitFor(fn, ms = 10000, every = 200) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > deadline) throw new Error(`waitFor: timed out after ${ms} ms`);
+    await new Promise((r) => setTimeout(r, every));
+  }
+}
+
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
 const page = await (await browser.newContext({ viewport: { width: 1600, height: 950 } })).newPage();
 const errors = [];
@@ -56,36 +67,75 @@ const unit = await page.evaluate(async () => {
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
 
 // ── e2e: live labels on the canvas ────────────────────────────────
-await page.click(".mglist-card:not(.mglist-new)");
-await new Promise((r) => setTimeout(r, 1000));
+const DEMO_CARD = '.mglist-card:has-text("Berlin demo")';
+const getLabels = () =>
+  page.evaluate(async () => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugLiveLabels();
+  });
+const getEdges = () =>
+  page.evaluate(async () => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugLiveEdges();
+  });
+const hasLiveLine = (ls) => ls.some((l) => l.includes("\n"));
+const hasChevron = (es) => es.some((e) => e.middleEnabled);
+
+await page.click(DEMO_CARD);
 await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
-await new Promise((r) => setTimeout(r, 3500)); // > one 1 Hz flush
-const labels = await page.evaluate(async () => {
-  const { topology } = await import("/assets/topology.js");
-  return topology.debugLiveLabels();
+// Labels land on the next 1 Hz flush; chevrons ride the same flush
+// but need a power sample for the child first.
+const labels = await waitFor(async () => {
+  const ls = await getLabels();
+  return hasLiveLine(ls) ? ls : null;
 });
 check("e2e: some node has a kW/W line", labels.some((l) => /\n-?\d+(\.\d+)? (W|kW|MW)/.test(l)), JSON.stringify(labels));
 check("e2e: battery node shows SoC", labels.some((l) => /SoC \d+%/.test(l)), JSON.stringify(labels));
 
 // ── e2e: flow chevrons ────────────────────────────────────────────
-const edges = await page.evaluate(async () => {
-  const { topology } = await import("/assets/topology.js");
-  return topology.debugLiveEdges();
+const edges = await waitFor(async () => {
+  const es = await getEdges();
+  return hasChevron(es) ? es : null;
 });
 const withChevron = edges.filter((e) => e.middleEnabled);
 check("e2e: some edge has a flow chevron", withChevron.length > 0, JSON.stringify(edges));
-// berlin demo: PV generates (negative) → its edge chevron points
-// toward the parent (negative scaleFactor).
-check("e2e: an exporting edge points at the parent", withChevron.some((e) => e.scaleFactor < 0), JSON.stringify(withChevron));
-check("e2e: chevron widths clamped", withChevron.every((e) => e.width >= 1 && e.width <= 6), JSON.stringify(withChevron));
+// berlin demo: the hidden consumer meter (id 100, under meter-2)
+// always consumes, so its chevron points away from the parent
+// (positive scaleFactor) regardless of PV sunlight.
+const consumer = await waitFor(async () => (await getEdges()).find((e) => e.id === "2-100" && e.middleEnabled));
+check("e2e: the consumer edge's chevron points at the child", consumer.scaleFactor > 0, JSON.stringify(consumer));
+check("e2e: chevron widths clamped", withChevron.every((e) => e.width >= 1.5 && e.width <= 6), JSON.stringify(withChevron));
 check("e2e: live edges keep the 0.6 end arrowhead", edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(edges));
+
+// ── e2e: a topology refresh keeps the overlay ─────────────────────
+// An accepted eval broadcasts topology_changed → apply() diffs the
+// DataSets. The live labels and chevrons must survive the diff.
+const getApplyCount = () =>
+  page.evaluate(async () => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugApplyCount();
+  });
+const appliesBefore = await getApplyCount();
+const evalRes = await page.evaluate(async () => {
+  const r = await fetch("/api/mg/2200/eval", { method: "POST", body: "(+ 1 1)" });
+  return r.status;
+});
+check("e2e: no-op eval accepted", evalRes === 200, `status ${evalRes}`);
+// Wait for the refresh to land before asserting, so the check can't
+// pass against the pre-refresh DataSets.
+await waitFor(async () => (await getApplyCount()) > appliesBefore);
+const afterRefresh = { labels: await getLabels(), edges: await getEdges() };
+check("e2e: labels survive a topology refresh", hasLiveLine(afterRefresh.labels), JSON.stringify(afterRefresh.labels));
+check("e2e: chevrons survive a topology refresh", hasChevron(afterRefresh.edges), JSON.stringify(afterRefresh.edges));
 
 // ── e2e: live toggle ──────────────────────────────────────────────
 await page.click("#topology-controls .live-btn");
-await new Promise((r) => setTimeout(r, 500));
-const off = await page.evaluate(async () => {
-  const { topology } = await import("/assets/topology.js");
-  return { labels: topology.debugLiveLabels(), edges: topology.debugLiveEdges(), on: topology.liveOn() };
+const off = await waitFor(async () => {
+  const st = await page.evaluate(async () => {
+    const { topology } = await import("/assets/topology.js");
+    return { labels: topology.debugLiveLabels(), edges: topology.debugLiveEdges(), on: topology.liveOn() };
+  });
+  return st.on === false && !hasLiveLine(st.labels) ? st : null;
 });
 check("e2e: toggle off clears label lines", off.labels.every((l) => !l.includes("\n")), JSON.stringify(off.labels));
 check("e2e: toggle off clears chevrons", off.edges.every((e) => !e.middleEnabled));
@@ -93,8 +143,9 @@ check("e2e: toggle off reverts edge color", off.edges.every((e) => e.color !== "
 check("e2e: end arrowhead stays default size", off.edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(off.edges));
 check("e2e: liveOn() reports off", off.on === false);
 await page.reload({ waitUntil: "networkidle" });
-await page.click(".mglist-card:not(.mglist-new)").catch(() => {});
-await new Promise((r) => setTimeout(r, 1500));
+await page.click(DEMO_CARD).catch(() => {});
+// liveOn() reads the persisted flag at module load, so no flush to
+// wait for here.
 const persisted = await page.evaluate(async () => {
   const { topology } = await import("/assets/topology.js");
   return topology.liveOn();
