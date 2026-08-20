@@ -47,8 +47,13 @@ is wiring the topology + animating the environment.
   - `state.rs` / `loopback.rs` / `events_ws.rs` — loopback client cache,
     gRPC loopback supervisor, WS event push
 - `ui-assets/` — the SPA as hand-rolled ES modules (`app.js` is the
-  entry; `topology.js`, `dashboard.js`, `inspect.js`, `repl.js`,
-  `routing.js`, `dialogs.js`, `editor.js`, … own one concern each)
+  entry; `topology.js`, `live.js`, `dashboard.js`, `inspect.js`,
+  `repl.js`, `routing.js`, `dialogs.js`, `editor.js`, … own one
+  concern each; `live.js` owns the live-overlay pure helpers: label
+  text, edge flow attributes, the shared power-format ladder)
+- `tools/ui-smoke/` — Playwright smoke scripts run by hand against a
+  live server (`SW_UI=http://127.0.0.1:PORT node
+  tools/ui-smoke/live-topology.mjs`)
 - `src/server.rs` — `Microgrid` gRPC service
 - `src/assets_server.rs` — `PlatformAssets` gRPC service (shared port)
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
