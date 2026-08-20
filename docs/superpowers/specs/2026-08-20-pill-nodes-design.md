@@ -70,17 +70,20 @@ component ids.
   `#id · category/subtype`, health chip); 60 s active-power
   sparkline from a per-component 60-entry ring buffer kept in
   `liveValues` (seeded on first hover from the existing
-  `history?window_s=300` endpoint when the buffer is still short); active power on its envelope bar (lower…upper with the
-  current marker); reactive power with its allowed band; `PF 0.99
+  `history?window_s=300` endpoint when the buffer is still short);
+  active power on its envelope bar (lower…upper with the current
+  marker); reactive power with its allowed band; `PF 0.99
   leading|lagging` computed from P and Q; energy since start;
-  category extras (battery: SoC bar against its protect band, DC
-  power on its envelope, capacity and stored kWh; PV: sunlight %);
-  last command (value, age, accepted/rejected, TTL remaining) from a
-  cached fetch of `/api/setpoints`; wiring (parents / children by
-  name); footer: freshness ("updated N s ago" — the stale indicator
-  when the WS drops) and "click for inspector". Per-phase P/Q/V/I is
-  deferred until the WS sampler carries per-phase metrics. The card
-  is topology-only; the Formulas canvas keeps vis's `title` tooltip
+  category extras (battery: SoC bar and DC power; PV: none yet —
+  protect band, capacity, DC envelope and sunlight need a
+  component-detail endpoint and are deferred with the per-phase
+  metrics); last command (kind, value, age, accepted/rejected with
+  reason) from a cached fetch of `/api/setpoints`; wiring (parents /
+  children by name); footer: freshness ("updated N s ago" — the
+  stale indicator when the WS drops) and "click for inspector".
+  Per-phase P/Q/V/I is deferred until the WS sampler carries
+  per-phase metrics. The card is topology-only; the Formulas canvas
+  keeps vis's `title` tooltip
   (`#id — name`) and the topology canvas drops `title`, so there is
   never a vis tooltip and a card on screen together.
 - **Hover card lifecycle.** `pointer-events: none` (the card must
