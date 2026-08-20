@@ -847,8 +847,11 @@ body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  mix-blend-mode: difference;
+  /* White with a dark halo stays readable over both the filled
+     (light accent) and empty (dark track) parts of the bar —
+     blend-mode difference washed out against the accent fill. */
   color: #fff;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 0.9);
 }
 .tier2-power { text-align: right; }
 body.compact .tier2-row { padding: 5px 10px; }
@@ -1217,8 +1220,8 @@ body.compact .envelope-marker { width: 10px; height: 10px; margin-left: -5px; ma
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  mix-blend-mode: difference;
   color: #fff;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 0.9);
 }
 .tier5-power { text-align: right; }
 body.compact .tier5-row { padding: 5px 10px; }
