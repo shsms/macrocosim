@@ -131,12 +131,17 @@ const unit = await page.evaluate(async () => {
   eq("card power envelope", [card.power.lo, card.power.hi, card.power.value], [-30000, 30000, -19930]);
   eq("card pf leading (opposite signs)", card.pf.text, "PF 1.00 leading");
   eq("card energy", card.energy.text, "12.40 kWh since start");
-  eq("card last command", card.lastCommand.text, "power -2000 · 15 s ago · accepted");
+  eq("card last command", card.lastCommand.text, "power -2.00 kW · 15 s ago · accepted");
   eq("card wiring", card.wiring, { parents: "meter-2", children: "bat-1000" });
   eq("card freshness", card.freshness, { text: "updated 2 s ago", stale: false });
   eq("card spark", card.spark, liveInv.hist);
   const lag = hc.hoverCardModel({ component: inv, live: { ...liveInv, p: 8000, q: 6000 }, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
   eq("card pf lagging (same signs)", lag.pf.text, "PF 0.80 lagging");
+  // |Q| inside the dead band: the sign of that Q is noise, so no qualifier.
+  const noQ = hc.hoverCardModel({ component: inv, live: { ...liveInv, q: 0 }, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
+  eq("card pf unqualified in the reactive dead band", noQ.pf.text, "PF 1.00");
+  const smallQ = hc.hoverCardModel({ component: inv, live: { ...liveInv, q: -100 }, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
+  eq("card pf unqualified for a tiny leading Q", smallQ.pf.text, "PF 1.00");
   eq("card wiring empty", lag.wiring, { parents: "—", children: "—" });
   eq("card no command", lag.lastCommand, null);
   const stale = hc.hoverCardModel({ component: inv, live: { ...liveInv, ts: now - 9000 }, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
@@ -149,7 +154,12 @@ const unit = await page.evaluate(async () => {
   eq("battery card dc", batCard.dc.text, "-3.00 kW");
   eq("battery card no ac power section", batCard.power, null);
   eq("battery card no pf", batCard.pf, null);
-  eq("rejected command", hc.hoverCardModel({ component: inv, live: liveInv, parents: [], children: [], lastCommand: { kind: "power", value: "5", ts: now - 1000, accepted: false, reason: "out of bounds" }, nowMs: now, deadBand: 300 }).lastCommand.text, "power 5 · 1 s ago · rejected: out of bounds");
+  eq("rejected command", hc.hoverCardModel({ component: inv, live: liveInv, parents: [], children: [], lastCommand: { kind: "power", value: "5", ts: now - 1000, accepted: false, reason: "out of bounds" }, nowMs: now, deadBand: 300 }).lastCommand.text, "power 5.0 W · 1 s ago · rejected: out of bounds");
+  const cmdText = (lastCommand) => hc.hoverCardModel({ component: inv, live: liveInv, parents: [], children: [], lastCommand, nowMs: now, deadBand: 300 }).lastCommand.text;
+  eq("reactive command scales in VAr", cmdText({ kind: "reactive_power", value: "1200", ts: now - 1000, accepted: true, reason: "" }), "reactive power 1.20 kVAr · 1 s ago · accepted");
+  eq("every underscore in the kind is a space", cmdText({ kind: "active_power_w", value: 0, ts: now - 1000, accepted: true, reason: "" }), "active power w 0.0 W · 1 s ago · accepted");
+  eq("non-numeric command value stays raw", cmdText({ kind: "mode", value: "idle", ts: now - 1000, accepted: true, reason: "" }), "mode idle · 1 s ago · accepted");
+  eq("augment_bounds shows no value", cmdText({ kind: "augment_bounds", value: 0, ts: now - 3000, accepted: true, reason: "" }), "augment bounds · 3 s ago · accepted");
   return out;
 });
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
@@ -239,7 +249,104 @@ const formulaModels = await waitFor(async () => {
   return ms.length ? ms : null;
 });
 check("e2e: formulas canvas shows #id on every node, values off", formulaModels.every((m) => m.idText === `#${m.id}` && m.valuesOn === false), JSON.stringify(formulaModels));
+check(
+  "e2e: formulas canvas has no hover card",
+  await page.evaluate(async () => {
+    const { formulaCanvas } = await import("/assets/explain.js");
+    return formulaCanvas().debugHoverCard() === null;
+  }),
+);
 await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+
+// ── e2e: hover card ──────────────────────────────────────────────
+// The Berlin demo's battery inverter idles at 0 W, and a card with
+// no power through it has no power factor to show. Command it (the
+// setpoint expires on its own, so re-runs start from the same
+// state) and wait for the ramp to reach the live overlay.
+const setpointOk = await page.evaluate(async () => {
+  const r = await fetch("/api/mg/2200/eval", { method: "POST", body: "(set-active-power 1001 -8000 60000)" });
+  return (await r.json()).ok;
+});
+check("e2e: hover setup — inverter setpoint accepted", setpointOk === true, String(setpointOk));
+await waitFor(async () => {
+  const e = await page.evaluate(async () => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugLiveEntry(1001);
+  });
+  return e && Number.isFinite(e.p) && Math.abs(e.p) > 1000;
+}, 15000);
+const readCard = () =>
+  page.evaluate(async () => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugHoverCard();
+  });
+// Parking the pointer once is not enough on a live canvas: a pill
+// whose value text changes width re-measures and relayouts, and the
+// node slides out from under coordinates read a moment earlier. Also
+// vis recomputes hover only when a mousemove *changes* what is under
+// the pointer, so the nudge has to be two moves. Re-read and retry
+// until the card opens.
+async function hoverNodeCard(id, ms = 10000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const r = await page.evaluate(async (nid) => {
+      const { topology } = await import("/assets/topology.js");
+      return topology.debugNodeScreenRect(nid);
+    }, id);
+    if (r) {
+      await page.mouse.move(r.x + r.width / 2, r.y + r.height / 2 - 2);
+      await page.mouse.move(r.x + r.width / 2, r.y + r.height / 2);
+    }
+    const s = await readCard();
+    if (s?.visible) return s;
+    if (Date.now() > deadline) throw new Error(`hoverNodeCard(${id}): the card never opened`);
+    await new Promise((again) => setTimeout(again, 400));
+  }
+}
+const cardState = await hoverNodeCard(1001); // inv-bat-1001
+check("e2e: hover card names the component", /inv-bat-1001/.test(cardState.text) && /#1001/.test(cardState.text), cardState.text);
+// The qualifier is only printed when |Q| clears the dead band, and
+// the demo inverter often runs at Q = 0 — so it is optional here.
+check("e2e: hover card has a PF line", /PF \d\.\d\d( (lagging|leading))?\b/.test(cardState.text), cardState.text);
+check("e2e: hover card has freshness", /updated \d+ s ago|no data yet/.test(cardState.text), cardState.text);
+check("e2e: hover card is inert to the pointer", await page.evaluate(() => getComputedStyle(document.querySelector(".hover-card")).pointerEvents === "none"));
+// A WS setpoint event writes through to the card's "Last command"
+// (the card is still open on 1001), so it never shows a stale fetch.
+await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  topology.noteSetpoint({ id: 1001, ts_ms: Date.now(), setpoint_kind: "active_power", value: -8000, accepted: true, reason: null });
+});
+const notedCard = await waitFor(async () => {
+  const s = await readCard();
+  return s?.visible && /Last command/.test(s.text) && /-8\.00 kW/.test(s.text) ? s : null;
+}, 2000);
+check("e2e: WS setpoint refreshes the card's last command", /active power -8\.00 kW/.test(notedCard.text), notedCard.text);
+await page.mouse.move(5, 5);
+const hiddenCard = await waitFor(async () => {
+  const s = await readCard();
+  return s && !s.visible ? s : null;
+}, 3000);
+check("e2e: hover card hides on blur", hiddenCard.visible === false);
+
+// A sick /api/setpoints must not be re-polled by every 1 s card
+// re-render. Failures are cached for 10 s, so once a card is open on
+// a component nobody has hovered yet, a 4 s window adds no requests.
+let setpointHits = 0;
+await page.route("**/api/setpoints**", (route) => {
+  setpointHits++;
+  route.abort();
+});
+const failCard = await hoverNodeCard(1000); // bat-1000, not hovered before
+const hitsAtOpen = setpointHits;
+await new Promise((r) => setTimeout(r, 4000));
+check("e2e: a failing setpoints endpoint is not re-polled every second", setpointHits - hitsAtOpen === 0, `${hitsAtOpen} → ${setpointHits} requests`);
+check("e2e: the card still renders when setpoints fails", /bat-1000/.test(failCard.text) && !/Last command/.test(failCard.text), failCard.text);
+await page.unroute("**/api/setpoints**");
+await page.mouse.move(5, 5);
+await waitFor(async () => {
+  const s = await readCard();
+  return s && !s.visible;
+}, 3000);
 
 // ── e2e: live toggle ──────────────────────────────────────────────
 // Geometry as vis applied it, not just the models: a custom shape
@@ -318,6 +425,27 @@ const boundsEntryOff = await page.evaluate(async () => {
   return topology.debugLiveEntry(1001);
 });
 check("e2e: live entry carries bounds and timestamp", boundsEntryOff && Number.isFinite(boundsEntryOff.ts) && Number.isFinite(boundsEntryOff.pLo) && Number.isFinite(boundsEntryOff.pHi), JSON.stringify(boundsEntryOff));
+// The hover card reads the live map, not the pill overlay, so it
+// must open and keep ticking with values off. Component 100 is the
+// always-consuming demo load: its power moves every second, so a
+// card that stopped re-rendering would repeat itself.
+const cardOff = await hoverNodeCard(100);
+check("e2e: hover card opens with values off", /consumer/.test(cardOff.text) && /updated \d+ s ago/.test(cardOff.text), cardOff.text);
+// With values off flushLive returns before it touches anything, so
+// the only thing that can re-render the card is its own 1 s timer.
+// That timer is what keeps "updated N s ago" honest when the sample
+// stream dies — and a live server can't be made to drop the stream
+// here, so the assertion is on the timer itself: the card re-renders
+// on wall time. (Comparing the rendered *text* would be flaky — a
+// slow-moving load can print the same kW twice in a row.)
+await new Promise((r) => setTimeout(r, 1200));
+const cardOffLater = await readCard();
+check(
+  "e2e: hover card freshness keeps counting",
+  Boolean(cardOffLater?.visible) && cardOffLater.renders > cardOff.renders,
+  `${cardOff.renders} → ${cardOffLater?.renders} renders`,
+);
+await page.mouse.move(5, 5);
 await page.click("#topology-controls .values-btn");
 const backOn = await waitFor(async () => {
   const ms = await getModels();

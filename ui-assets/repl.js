@@ -406,6 +406,7 @@ export function openWebSocket(onTopologyChanged) {
         onTopologyChanged(ev.version);
       } else if (ev.kind === "setpoint") {
         liveCharts.pushSetpoint(ev);
+        topology.noteSetpoint(ev);
         pulseBar.recordSetpoint();
       } else if (ev.kind === "log") {
         appendLog(ev);

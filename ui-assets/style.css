@@ -2362,3 +2362,44 @@ body.drawer-collapsed #repl-output {
   background: var(--dot, var(--muted));
 }
 .pal-btn:hover { border-color: var(--dot, var(--accent)); }
+
+/* Node hover card (topology canvas). Read-only and inert to the
+   pointer: moving the mouse onto it must not blur the node. */
+.hover-card {
+  position: fixed;
+  z-index: 60;
+  width: 300px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #242a33;
+  border: 1px solid #323a45;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: #d5dbe3;
+  font-family: "IBM Plex Sans", var(--font-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+.hover-card .hc-head { display: flex; align-items: center; gap: 8px; }
+.hover-card .hc-title { font-weight: 600; font-size: 13px; }
+.hover-card .hc-id { color: var(--muted); font-family: "IBM Plex Mono", var(--font-mono); font-size: 11px; margin-bottom: 6px; }
+.hover-card .hc-chip { font-size: 10px; padding: 1px 6px; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+.hover-card .hc-chip-error { background: #e58275; color: #1c2128; }
+.hover-card .hc-chip-standby { background: #c4ad55; color: #1c2128; }
+.hover-card .hc-spark { display: block; width: 100%; height: 36px; margin: 2px 0 6px; }
+.hover-card .hc-spark-empty { color: var(--muted); font-size: 11px; line-height: 36px; text-align: center; }
+.hover-card .hc-spark-line { fill: none; stroke: #79b8ff; stroke-width: 1.5; }
+.hover-card .hc-spark-zero { stroke: #323a45; stroke-width: 1; }
+.hover-card .hc-spark-end { fill: #79b8ff; }
+.hover-card .hc-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+.hover-card .hc-label { color: var(--muted); }
+.hover-card .hc-value { font-family: "IBM Plex Mono", var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.hover-card .hc-cmd { font-size: 11px; }
+.hover-card .hc-pf { justify-content: flex-end; font-family: "IBM Plex Mono", var(--font-mono); color: var(--muted); font-size: 11px; }
+.hover-card .hc-bar { position: relative; height: 4px; border-radius: 2px; background: #323a45; margin: 2px 0; }
+.hover-card .hc-bar-marker { position: absolute; top: -2px; width: 2px; height: 8px; border-radius: 1px; transform: translateX(-1px); }
+.hover-card .hc-bar-ends { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; font-family: "IBM Plex Mono", var(--font-mono); margin-bottom: 4px; }
+.hover-card .hc-soc-fill { height: 100%; border-radius: 2px; background: #6bd9a5; }
+.hover-card .hc-foot { display: flex; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px solid #323a45; color: var(--muted); font-size: 10.5px; }
+.hover-card .hc-stale { color: #c4ad55; }

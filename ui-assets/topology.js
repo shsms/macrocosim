@@ -19,10 +19,11 @@
 
 import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
+import { createHoverCard, hoverCardModel } from "./hovercard.js";
 import { evalQuoted } from "./inspect.js";
 import { deadBandW, edgeFlow } from "./live.js";
 import { invalidateMeasureCache, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
-import { readSelectedMg, visibleSubview } from "./routing.js";
+import { mgPath, readSelectedMg, visibleSubview } from "./routing.js";
 
 function getCss(name) {
   return getComputedStyle(document.documentElement)
@@ -262,6 +263,153 @@ export function createGraphCanvas(containerId, adapter = {}) {
   }
   const valuesDefault = adapter.valuesOn !== false;
 
+  // Hover card: one per canvas (only the topology canvas asks for
+  // one), shown after a short dwell so a sweep across the graph
+  // fires nothing, hidden by any gesture.
+  const hoverCard = adapter.hoverCard ? createHoverCard() : null;
+  let hoverTimer = null;
+  // The open card's own 1 Hz clock (see showHover). The card must
+  // keep re-rendering on wall time, not on sample arrival: a dropped
+  // WS is exactly when "updated N s ago" has to keep counting.
+  let hoverTick = null;
+  let hoverId = null;
+  let hoverAbort = null;
+  // Smoke-test hook: how many times the card has been rendered.
+  let hoverRenders = 0;
+  // Ids whose sparkline was already seeded from the server during
+  // this hover session. Cleared by hideHover, so the seed is a
+  // one-shot per hover rather than a retry on every 1 Hz re-render.
+  const seededHist = new Set();
+  // /api/setpoints per component: a hit is good for 60 s, a failure
+  // for 10 s. Without the second half, a card left open on a
+  // component whose endpoint is erroring re-fetches on every 1 s
+  // re-render for as long as the pointer rests there.
+  const setpointCache = new Map(); // id -> { at, last, failed }
+  const SETPOINT_TTL_MS = 60_000;
+  const SETPOINT_FAIL_TTL_MS = 10_000;
+
+  async function lastCommandFor(id, signal) {
+    const hit = setpointCache.get(id);
+    if (hit && Date.now() - hit.at < (hit.failed ? SETPOINT_FAIL_TTL_MS : SETPOINT_TTL_MS)) return hit.last;
+    try {
+      const res = await fetch(`/api/setpoints?id=${id}&window_s=600`, { signal });
+      if (!res.ok) throw new Error(`setpoints: HTTP ${res.status}`);
+      const data = await res.json();
+      const e = data.events?.[data.events.length - 1];
+      const last = e
+        ? { kind: e.kind, value: e.value, ts: Date.parse(e.ts), accepted: e.outcome?.kind === "accepted", reason: e.outcome?.reason || "" }
+        : null;
+      // A WS setpoint event may have written through while the fetch
+      // was in flight; the newer of the two wins.
+      const now = setpointCache.get(id);
+      if (now?.last && (!last || now.last.ts > last.ts)) return now.last;
+      setpointCache.set(id, { at: Date.now(), last });
+      return last;
+    } catch {
+      // Keep showing whatever the last good answer was, and back off.
+      // An abort is this hover's own doing — the next re-render took
+      // over — so it must not start a back-off of its own.
+      const last = hit ? hit.last : null;
+      if (!signal?.aborted) setpointCache.set(id, { at: Date.now(), last, failed: true });
+      return last;
+    }
+  }
+
+  // The hovered pill's rect in page pixels. Built from the node's
+  // layout position and the size the renderer measured, NOT from
+  // network.getBoundingBox(): that box is whatever the last draw
+  // left behind (so it lags a relayout by a frame or more) and it
+  // measures a custom shape by the generic `size` option — the
+  // square afterDrawing stamps, not the pill.
+  function nodeScreenRect(id) {
+    const pos = network.getPositions([id])[id];
+    if (!pos) return null;
+    const px = knownSize.get(id);
+    const box = px ? null : network.getBoundingBox(id);
+    if (!px && !box) return null;
+    const halfW = px ? px.w / 2 : (box.right - box.left) / 2;
+    const halfH = px ? px.h / 2 : (box.bottom - box.top) / 2;
+    // Both corners through canvasToDOM, so the zoom factor comes
+    // from vis instead of being reconstructed here.
+    const tl = network.canvasToDOM({ x: pos.x - halfW, y: pos.y - halfH });
+    const br = network.canvasToDOM({ x: pos.x + halfW, y: pos.y + halfH });
+    const host = container().getBoundingClientRect();
+    return { x: host.left + tl.x, y: host.top + tl.y, width: br.x - tl.x, height: br.y - tl.y };
+  }
+
+  function hideHover() {
+    if (hoverTimer) clearTimeout(hoverTimer);
+    hoverTimer = null;
+    if (hoverTick) clearTimeout(hoverTick);
+    hoverTick = null;
+    hoverId = null;
+    if (hoverAbort) hoverAbort.abort();
+    hoverAbort = null;
+    seededHist.clear();
+    if (hoverCard) hoverCard.hide();
+  }
+
+  // Seeds a short sparkline from the server's history the first
+  // time a node is hovered (the live buffer takes 60 s to fill).
+  async function seedHistory(id, c, entry, signal) {
+    if (!entry || seededHist.has(id) || entry.hist.length >= 10) return;
+    // Marked before the await: the 1 Hz re-render must not start a
+    // second fetch while this one is still in flight.
+    seededHist.add(id);
+    const metric = c.category === "battery" ? "dc_power_w" : "active_power_w";
+    try {
+      const res = await fetch(`${mgPath("history")}?id=${id}&metric=${metric}&window_s=60`, { signal });
+      const data = await res.json();
+      const firstLive = entry.hist[0]?.[0] ?? Number.POSITIVE_INFINITY;
+      const seeded = (data.samples || []).filter((s) => Number.isFinite(s[1]) && s[0] < firstLive);
+      entry.hist = [...seeded, ...entry.hist].slice(-60);
+    } catch {
+      // no seed — the live buffer fills on its own
+    }
+  }
+
+  async function showHover(id) {
+    const c = componentById.get(id);
+    if (!c || !hoverCard || !network) return;
+    // Every entry point cancels the pending tick and the tail of this
+    // call arms a fresh one, so exactly one is ever outstanding.
+    if (hoverTick) clearTimeout(hoverTick);
+    hoverTick = null;
+    // The 1 Hz re-render calls straight back in; drop whatever the
+    // previous call still had in flight instead of orphaning it.
+    if (hoverAbort) hoverAbort.abort();
+    hoverAbort = new AbortController();
+    const { signal } = hoverAbort;
+    const entry = liveValues.get(id) ?? null;
+    await seedHistory(id, c, entry, signal);
+    const lastCommand = await lastCommandFor(id, signal);
+    if (signal.aborted || hoverId !== id) return;
+    const rect = nodeScreenRect(id);
+    if (!rect) return;
+    const nameOf = (nid) => componentById.get(nid)?.name ?? `#${nid}`;
+    hoverRenders += 1;
+    hoverCard.show(
+      hoverCardModel({
+        component: c,
+        live: entry,
+        parents: network.getConnectedNodes(id, "from").map(nameOf),
+        children: network.getConnectedNodes(id, "to").map(nameOf),
+        lastCommand,
+        nowMs: Date.now(),
+        deadBand: deadBandW(maxAbsBoundW),
+      }),
+      rect,
+    );
+    // The card's clock. Driving the re-render from here rather than
+    // from the sample flush is what makes the freshness line honest:
+    // with the stream dead there are no samples to ride on, and that
+    // is precisely when the age has to keep climbing.
+    hoverTick = setTimeout(() => {
+      hoverTick = null;
+      if (hoverId === id) showHover(id);
+    }, 1000);
+  }
+
   function syncLiveMg() {
     const mg = readSelectedMg();
     if (mg === liveMg) return;
@@ -322,10 +470,15 @@ export function createGraphCanvas(containerId, adapter = {}) {
 
   // One batched canvas update for every dirty component. Parked
   // while the subview is hidden (subview enter calls flushLive()
-  // directly to catch up).
+  // directly to catch up) — and that guard doubles as the catch-all
+  // for a hover card left open across a subview switch, since the
+  // card now ticks on its own timer rather than on this flush.
   function flushLive() {
+    if (visibleSubview() !== "topology") {
+      hideHover();
+      return;
+    }
     if (!liveEnabled || !nodesDS || liveDirty.size === 0) return;
-    if (visibleSubview() !== "topology") return;
     const nodeUpdates = [];
     for (const id of liveDirty) {
       const c = componentById.get(id);
@@ -578,6 +731,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
     const prevIds = new Set(componentById.keys());
     syncLiveMg();
     const { nodes, edges } = buildVisData(data);
+    if (hoverId != null && !componentById.has(hoverId)) hideHover();
     // Live overlay: forget components that left the topology, mark
     // every survivor dirty so the next flush rebuilds its label
     // (names/categories may have changed), and reset the flow
@@ -658,6 +812,25 @@ export function createGraphCanvas(containerId, adapter = {}) {
         knownSize.clear();
         nodesDS.update(nodesDS.getIds().map((id) => ({ id })));
       });
+      if (hoverCard) {
+        network.on("hoverNode", ({ node }) => {
+          hideHover();
+          hoverId = node;
+          hoverTimer = setTimeout(() => {
+            hoverTimer = null;
+            if (hoverId === node) showHover(node);
+          }, 250);
+        });
+        network.on("blurNode", hideHover);
+        // vis only blurs on a mousemove that lands inside the canvas
+        // and off the node, so a pointer that leaves the canvas
+        // altogether would strand the card on screen.
+        container().addEventListener("mouseleave", hideHover);
+        for (const ev of ["dragStart", "zoom", "dragging", "click", "oncontext", "doubleClick"]) {
+          network.on(ev, hideHover);
+        }
+        document.addEventListener("visibilitychange", hideHover);
+      }
       network.on("click", (params) => {
         const shiftKey = params.event?.srcEvent?.shiftKey;
         if (params.nodes.length) {
@@ -1261,6 +1434,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
       liveDirty.add(ev.id);
       armLiveFlush();
     },
+    /// WS setpoint event: keeps the hover card's "Last command"
+    /// current without another fetch.
+    noteSetpoint(ev) {
+      setpointCache.set(ev.id, { at: Date.now(), last: { kind: ev.setpoint_kind, value: ev.value, ts: ev.ts_ms, accepted: ev.accepted, reason: ev.reason || "" } });
+    },
     /// Apply pending live updates now — subview enter calls this so
     /// a hidden tab's accumulated samples land immediately.
     flushLive,
@@ -1283,6 +1461,13 @@ export function createGraphCanvas(containerId, adapter = {}) {
     debugNodeHeights() {
       if (!network || !nodesDS) return [];
       return nodesDS.getIds().map((id) => network.body.nodes[id]?.shape?.height ?? null);
+    },
+    /// Smoke-test hooks for the hover card.
+    debugNodeScreenRect(id) {
+      return network ? nodeScreenRect(id) : null;
+    },
+    debugHoverCard() {
+      return hoverCard ? { visible: hoverCard.visible(), text: hoverCard.text(), renders: hoverRenders } : null;
     },
     /// Smoke-test hook: every node's pill model as drawn.
     debugNodeModels() {
@@ -1608,6 +1793,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
 // through the eval/overrides path, and the edit context menu.
 export const topology = createGraphCanvas("topology", {
   tooltip: false,
+  hoverCard: true,
   onConnect(from, to) {
     evalQuoted(`(connect ${from} ${to})`, "Connect failed");
   },
