@@ -244,6 +244,11 @@ export function jumpToTopology(id) {
   topology.select([id]);
   const c = topology.get(id);
   if (c) showComponent(c);
+  // Center the node in the part of the canvas the inspector isn't
+  // covering — a fit alone can leave the jumped-to node hidden
+  // behind the panel.
+  const inspector = document.getElementById("inspector");
+  topology.reveal(id, inspector ? inspector.getBoundingClientRect().width : 0);
 }
 
 export function selectMicrogrid(id) {

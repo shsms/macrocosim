@@ -271,6 +271,32 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // siblings on top of each other.
   let pendingMeasuredRelayout = false;
   let initialFitDone = false;
+  // A jump-to-node target waiting to be centered. The fit paths
+  // (ResizeObserver, fit(), the initial afterDrawing fit) consume it
+  // instead of fitting, so the reveal wins over the subview-switch
+  // refits by construction rather than by frame ordering. Expires
+  // after a moment so a much-later resize doesn't re-center a stale
+  // target.
+  let pendingReveal = null; // { id, rightInset, until }
+  function applyPendingReveal() {
+    if (!pendingReveal || !network) return false;
+    if (Date.now() > pendingReveal.until) {
+      pendingReveal = null;
+      return false;
+    }
+    const pos = network.getPositions([pendingReveal.id])[pendingReveal.id];
+    if (!pos) {
+      pendingReveal = null;
+      return false;
+    }
+    network.moveTo({
+      position: pos,
+      scale: network.getScale(),
+      offset: { x: -pendingReveal.rightInset / 2, y: 0 },
+      animation: false,
+    });
+    return true;
+  }
   // Magnetic drag grid: dragged nodes move in PITCH steps from where
   // the drag started (the grid is relative, so nodes keep their
   // alignment with rows the auto-layouts made). Toggled from the
@@ -469,7 +495,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
       // construction shows only half of itself afterwards.
       if (typeof ResizeObserver !== "undefined") {
         const ro = new ResizeObserver(() => {
-          if (network && el.offsetWidth > 0 && el.offsetHeight > 0) {
+          if (network && el.offsetWidth > 0 && el.offsetHeight > 0 && !applyPendingReveal()) {
             network.fit({ animation: false });
           }
         });
@@ -490,7 +516,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         }
         if (!initialFitDone) {
           initialFitDone = true;
-          network.fit({ animation: false });
+          if (!applyPendingReveal()) network.fit({ animation: false });
         }
       });
       network.on("click", (params) => {
@@ -982,28 +1008,18 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// after container resizes.
     fit() {
       if (!network) return;
+      if (applyPendingReveal()) return;
       network.fit({ animation: false });
     },
     /// Center `id` in the visible part of the canvas. `rightInset`
     /// is the width of a panel overlaying the canvas's right edge
     /// (the inspector), so the node lands in the middle of what the
     /// user can actually see instead of possibly behind the panel.
-    /// Runs two frames late so it lands after the subview-switch
-    /// resize fit that would otherwise override it.
+    /// Applies immediately and stays armed for a moment so the
+    /// subview-switch refits re-apply it instead of overriding it.
     reveal(id, rightInset = 0) {
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          if (!network) return;
-          const pos = network.getPositions([id])[id];
-          if (!pos) return;
-          network.moveTo({
-            position: pos,
-            scale: network.getScale(),
-            offset: { x: -rightInset / 2, y: 0 },
-            animation: false,
-          });
-        }),
-      );
+      pendingReveal = { id, rightInset, until: Date.now() + 1000 };
+      requestAnimationFrame(() => applyPendingReveal());
     },
     /// Temporary highlight for explanation hover: borrows the vis
     /// selection, saving the user's own selection for unhighlight().
