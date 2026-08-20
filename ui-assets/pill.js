@@ -151,8 +151,14 @@ function auxWidth(ctx, aux) {
 
 // Measures the pill for `model`. Cached by the strings that affect
 // size; hover/selection never change a pill's size.
+//
+// `model.minWidth` is an optional lower bound the canvas owner may
+// raise per node (topology.js ratchets it to the widest the node has
+// ever been, so a value that shrinks by a character doesn't shuffle
+// the layout). The content is laid out from the dot either way, so a
+// floored pill simply carries more padding on its right.
 export function measurePill(ctx, model) {
-  const key = [model.valuesOn ? 1 : 0, model.name, model.idText, model.hero?.text ?? "", model.aux?.kind ?? "", model.aux?.text ?? ""].join("\u0000");
+  const key = [model.valuesOn ? 1 : 0, model.minWidth || 0, model.name, model.idText, model.hero?.text ?? "", model.aux?.kind ?? "", model.aux?.text ?? ""].join("\u0000");
   const hit = measureCache.get(key);
   if (hit) return hit;
   const f = fonts(model);
@@ -178,7 +184,8 @@ export function measurePill(ctx, model) {
     row1W = nameW + GEOM.idGap + idW;
   }
   const content = Math.max(row1W, row2W);
-  const width = Math.round(Math.min(GEOM.maxWidth, Math.max(GEOM.minWidth, textLeft + content + GEOM.padX)));
+  const floor = Math.max(GEOM.minWidth, model.minWidth || 0);
+  const width = Math.round(Math.min(GEOM.maxWidth, Math.max(floor, textLeft + content + GEOM.padX)));
   const height = GEOM.padY * 2 + f.row1H + (row2 ? GEOM.rowGap + ROW2_H : 0);
   const dims = { width, height, name, nameW, heroW, textLeft, row1H: f.row1H, row2H: row2 ? ROW2_H : 0 };
   // Live value strings make most keys single-use; the cap keeps a

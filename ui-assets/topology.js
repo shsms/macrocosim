@@ -246,7 +246,16 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // flags the refresh), and schedules a measured relayout when the
   // axis that moved is one the current layout spends.
   const knownSize = new Map(); // id -> { w, h } last reported
-  const sizeDirty = new Set();
+  const sizeDirty = new Map(); // id -> { widthChanged, heightChanged }
+  // Per-node upward width ratchet: the widest this node has ever
+  // been measured at, fed back into its pill model as a floor. A
+  // pill's width is content-derived, so an active-power reading that
+  // loses a digit ("-19.93 kW" → "-5.00 kW") would otherwise shrink
+  // the node once a second. Growing is fine — that is real news —
+  // but shrinking on a value that will grow back is pure jitter.
+  // Reset wherever a size change is expected anyway (apply,
+  // setValues, fonts landing), each of which relayouts.
+  const widthFloor = new Map(); // id -> widest width reported
   // The pill model each node's renderer draws, by component id.
   const pillModels = new Map();
   // Scratch 2-D context for measuring pills outside a draw. vis's own
@@ -256,10 +265,17 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // with.
   let measureCtx = null;
   function noteSize(id, w, h) {
+    widthFloor.set(id, Math.max(widthFloor.get(id) ?? 0, w));
     const prev = knownSize.get(id);
     if (prev && prev.w === w && prev.h === h) return;
     knownSize.set(id, { w, h });
-    sizeDirty.add(id);
+    // A first measurement counts as both axes moving: the layout
+    // that placed this node ran on a guess.
+    const was = sizeDirty.get(id);
+    sizeDirty.set(id, {
+      widthChanged: !prev || prev.w !== w || Boolean(was?.widthChanged),
+      heightChanged: !prev || prev.h !== h || Boolean(was?.heightChanged),
+    });
   }
   const valuesDefault = adapter.valuesOn !== false;
 
@@ -431,6 +447,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
       dotColor: colorFor(c),
       deadBand: deadBandW(maxAbsBoundW),
     });
+    model.minWidth = widthFloor.get(c.id) ?? 0;
     if (redHighlighted.includes(c.id)) model.highlight = "subtracted";
     // vis-network binds a custom shape's ctxRenderer when the node is
     // FIRST created and ignores every later one (Node.updateShape
@@ -730,6 +747,10 @@ export function createGraphCanvas(containerId, adapter = {}) {
     if (adapter.onApply) adapter.onApply(data);
     const prevIds = new Set(componentById.keys());
     syncLiveMg();
+    // A refresh relayouts anyway, so let every pill find its natural
+    // width again instead of inheriting a floor from the topology it
+    // had before.
+    widthFloor.clear();
     const { nodes, edges } = buildVisData(data);
     if (hoverId != null && !componentById.has(hoverId)) hideHover();
     // Live overlay: forget components that left the topology, mark
@@ -773,7 +794,18 @@ export function createGraphCanvas(containerId, adapter = {}) {
         if (sizeDirty.size) {
           // A refresh may have removed a node since it last drew; an
           // update() for an unknown id would add a blank one back.
-          const ids = [...sizeDirty].filter((id) => nodesDS.get(id) && knownSize.has(id));
+          const ids = [...sizeDirty.keys()].filter((id) => nodesDS.get(id) && knownSize.has(id));
+          // Not every size change moves the layout. Every horizontal
+          // layout stacks siblings by node *height* and separates
+          // depths by the constant SEP, so widths are spent by
+          // "topdown" alone — relayouting on a width change under any
+          // other layout would place every node exactly where it
+          // already is.
+          const widthsMatter = currentLayout === "topdown";
+          const layoutMoved = ids.some((id) => {
+            const f = sizeDirty.get(id);
+            return f.heightChanged || (f.widthChanged && widthsMatter);
+          });
           sizeDirty.clear();
           if (ids.length) {
             // The stamped value does little: ShapeBase.resize takes
@@ -785,14 +817,16 @@ export function createGraphCanvas(containerId, adapter = {}) {
             // customSizeWidth/Height only when the node is flagged
             // for refresh, so without an update() vis would keep
             // measuring, fitting and hit-testing this node against
-            // the box it had one size ago.
+            // the box it had one size ago. Unconditional for that
+            // reason: it is needed whichever axis moved, and whether
+            // or not the layout cares.
             nodesDS.update(
               ids.map((id) => {
                 const { w, h } = knownSize.get(id);
                 return { id, size: Math.max(w, h) / 2 };
               }),
             );
-            if (!manualArrangement) pendingMeasuredRelayout = true;
+            if (!manualArrangement && layoutMoved) pendingMeasuredRelayout = true;
             return;
           }
         }
@@ -810,6 +844,8 @@ export function createGraphCanvas(containerId, adapter = {}) {
       pillFontsReady.then(() => {
         invalidateMeasureCache();
         knownSize.clear();
+        widthFloor.clear();
+        for (const m of pillModels.values()) m.minWidth = 0;
         nodesDS.update(nodesDS.getIds().map((id) => ({ id })));
       });
       if (hoverCard) {
@@ -1491,7 +1527,9 @@ export function createGraphCanvas(containerId, adapter = {}) {
     setValues(on) {
       liveEnabled = Boolean(on);
       // Both directions rebuild every pill: with its value row while
-      // live, name-only when off.
+      // live, name-only when off. The value row is most of a pill's
+      // width, so drop the ratchet with it — this toggle relayouts.
+      widthFloor.clear();
       if (nodesDS) {
         nodesDS.update(
           nodesDS.getIds().filter((id) => componentById.has(id)).map((id) => nodeFor(componentById.get(id))),

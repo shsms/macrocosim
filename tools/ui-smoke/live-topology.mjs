@@ -112,6 +112,13 @@ const unit = await page.evaluate(async () => {
   out.push({ name: "two rows taller than one", ok: dLong.height > dShort.height, got: `${dLong.height} vs ${dShort.height}` });
   const dOff = pill.measurePill(ctx, pill.pillModel(inv, null, { ...opts, valuesOn: false }));
   eq("values-off height single row", dOff.height, dShort.height);
+  // minWidth: the per-node width ratchet's floor (topology.js keeps
+  // the map). Below the content it changes nothing; above it pads.
+  const shortModel = () => pill.pillModel({ ...meter, name: "m" }, null, { ...opts, valuesOn: false });
+  eq("width floor pads a narrow pill", pill.measurePill(ctx, { ...shortModel(), minWidth: 150 }).width, 150);
+  eq("width floor still clamped at max", pill.measurePill(ctx, { ...shortModel(), minWidth: 400 }).width, 200);
+  eq("width floor under the content is ignored", pill.measurePill(ctx, { ...pill.pillModel(inv, { p: -19930, q: 1200, soc: null, dc: null }, opts), minWidth: 40 }).width, dLong.width);
+  eq("width floor leaves the height alone", pill.measurePill(ctx, { ...shortModel(), minWidth: 150 }).height, dShort.height);
   // pillRenderer contract
   const sizes = [];
   const r = pill.pillRenderer(pill.pillModel(inv, null, { ...opts, valuesOn: false }), (id, w, h) => sizes.push([id, w, h]));
@@ -199,7 +206,15 @@ const nodeWidths = () =>
 const widthsA = await nodeWidths();
 await new Promise((r) => setTimeout(r, 2500)); // two more 1 Hz flushes
 const widthsB = await nodeWidths();
-check("e2e: live nodes keep their width across flushes", widthsA.length > 0 && JSON.stringify(widthsA) === JSON.stringify(widthsB), `${JSON.stringify(widthsA)} vs ${JSON.stringify(widthsB)}`);
+// Each node's width is ratcheted upward: a value that loses a digit
+// never narrows the pill, it only pads it. Between two refreshes
+// (which reset the ratchet) widths may therefore grow but never
+// shrink — that, not equality, is the invariant.
+check(
+  "e2e: live node widths never shrink across flushes",
+  widthsA.length > 0 && widthsB.length === widthsA.length && widthsA.every((w, i) => widthsB[i] >= w),
+  `${JSON.stringify(widthsA)} vs ${JSON.stringify(widthsB)}`,
+);
 check("e2e: widths are content-derived (not all equal)", new Set(widthsA).size > 1, JSON.stringify(widthsA));
 check("e2e: widths inside [96, 200]", widthsA.every((w) => w >= 96 && w <= 200), JSON.stringify(widthsA));
 
