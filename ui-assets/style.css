@@ -760,6 +760,13 @@ body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
 .tier-rows {
   display: grid;
   gap: 4px;
+  /* Rows flow into columns on wide screens instead of stretching a
+     single row across the whole pane — a battery pair at 3800 px is
+     unreadable on a 4K monitor. ~880 px keeps the envelope bar
+     usable; a laptop still gets one column. */
+  grid-template-columns: repeat(auto-fill, minmax(min(880px, 100%), 1fr));
+  column-gap: 24px;
+  align-items: start;
 }
 /* Battery + paired inverter render as two stacked sub-rows inside a
  * single .bat-pair wrapper. The inverter cell sits flush under the
