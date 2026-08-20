@@ -385,9 +385,12 @@ async function renderDefaults() {
   for (const e of data.entries) {
     const block = document.createElement("div");
     block.className = "defaults-entry";
+    // Size the textarea to the pair-per-line value and let long
+    // lines scroll horizontally instead of soft-wrapping mid-token.
+    const rows = Math.min(10, Math.max(3, e.value.split("\n").length + 1));
     block.innerHTML = `
       <label>${e.var_name}</label>
-      <textarea rows="4" spellcheck="false">${escapeHtml(e.value)}</textarea>
+      <textarea rows="${rows}" wrap="off" spellcheck="false">${escapeHtml(e.value)}</textarea>
       <button class="hdr-btn primary">Save</button>
     `;
     const ta = block.querySelector("textarea");
