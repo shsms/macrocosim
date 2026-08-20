@@ -372,7 +372,9 @@ mod tests {
             .set_active_setpoint(8_000.0)
             .expect_err("8 kW exceeds augmented envelope");
         match err {
-            SetpointError::OutOfBounds { value, envelope } => {
+            SetpointError::OutOfBounds {
+                value, envelope, ..
+            } => {
                 assert_eq!(value, 8_000.0);
                 let b = envelope.0.first().expect("single-bucket envelope");
                 assert_eq!(b.lower, Some(-5_000.0));

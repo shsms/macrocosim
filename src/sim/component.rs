@@ -134,7 +134,14 @@ pub enum SetpointError {
     /// envelope in the error, otherwise the message reads "out of
     /// [-30000, 30000]" while the actual rejection was on the
     /// [-10000, 10000] window they themselves set up.
-    OutOfBounds { value: f32, envelope: VecBounds },
+    ///
+    /// `unit` names the axis (`"W"` or `"VAr"`) so the message reads
+    /// right for both power types.
+    OutOfBounds {
+        value: f32,
+        unit: &'static str,
+        envelope: VecBounds,
+    },
     /// The component type doesn't accept this operation (e.g. a
     /// meter being asked for an active-power setpoint). Maps to
     /// `tonic::Status::unimplemented` server-side.
@@ -150,8 +157,12 @@ pub enum SetpointError {
 impl fmt::Display for SetpointError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::OutOfBounds { value, envelope } => {
-                write!(f, "set-point {value} W out of bounds {envelope}")
+            Self::OutOfBounds {
+                value,
+                unit,
+                envelope,
+            } => {
+                write!(f, "set-point {value} {unit} out of bounds {envelope}")
             }
             Self::Unsupported => write!(f, "operation not supported by this component type"),
         }

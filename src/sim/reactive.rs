@@ -141,6 +141,7 @@ impl ReactivePath {
         if vars < lo || vars > hi {
             return Err(SetpointError::OutOfBounds {
                 value: vars,
+                unit: "VAr",
                 envelope: crate::sim::bounds::VecBounds::single(lo, hi),
             });
         }
@@ -261,7 +262,9 @@ mod tests {
         );
         // PF=0.5 at P=10k → ±5000 envelope. 6000 is out.
         match p.accept_setpoint(10_000.0, 6000.0) {
-            Err(SetpointError::OutOfBounds { value, envelope }) => {
+            Err(SetpointError::OutOfBounds {
+                value, envelope, ..
+            }) => {
                 assert_eq!(value, 6000.0);
                 let b = envelope.0.first().expect("single-bucket envelope");
                 let (lower, upper) = (b.lower.unwrap(), b.upper.unwrap());

@@ -307,6 +307,7 @@ impl ComponentBounds {
         if power_w != 0.0 && !envelope.contains(power_w) {
             return Err(crate::sim::component::SetpointError::OutOfBounds {
                 value: power_w,
+                unit: "W",
                 envelope,
             });
         }
