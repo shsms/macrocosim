@@ -264,6 +264,13 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // True once the user drags a node: refreshes then keep the manual
   // arrangement instead of re-running the layout.
   let manualArrangement = false;
+  // Set when a layout ran against node sizes vis-network hadn't
+  // measured yet (before the first draw, or right after new nodes
+  // landed). The afterDrawing handler then re-runs the layout once
+  // with real bounding boxes — without this, the first paint stacks
+  // siblings on top of each other.
+  let pendingMeasuredRelayout = false;
+  let initialFitDone = false;
   // Magnetic drag grid: dragged nodes move in PITCH steps from where
   // the drag started (the grid is relative, so nodes keep their
   // alignment with rows the auto-layouts made). Toggled from the
@@ -470,11 +477,22 @@ export function createGraphCanvas(containerId, adapter = {}) {
       }
       // vis-network's first auto-fit happens on stabilization, but
       // we ship with `physics.enabled = false` so stabilization
-      // doesn't actually fire — call fit explicitly once
-      // construction is done so the camera lands on the layout
-      // extent rather than whatever default zoom vis-network
-      // initialised with.
-      network.once("afterDrawing", () => network.fit({ animation: false }));
+      // doesn't actually fire. After each draw: re-run a layout that
+      // was computed against unmeasured node boxes (the relayout
+      // clears the flag first, so the draw it triggers doesn't
+      // loop), and fit the camera once on the initial reveal —
+      // later relayouts keep the user's pan/zoom, matching how
+      // topology refreshes behave.
+      network.on("afterDrawing", () => {
+        if (pendingMeasuredRelayout) {
+          pendingMeasuredRelayout = false;
+          if (!manualArrangement) layoutHierarchy();
+        }
+        if (!initialFitDone) {
+          initialFitDone = true;
+          network.fit({ animation: false });
+        }
+      });
       network.on("click", (params) => {
         const shiftKey = params.event?.srcEvent?.shiftKey;
         if (params.nodes.length) {
@@ -655,6 +673,10 @@ export function createGraphCanvas(containerId, adapter = {}) {
       placeNewNodes([...componentById.keys()].filter((id) => !prevIds.has(id)));
     } else {
       layoutHierarchy();
+      // Only nodes this apply introduced lack measured boxes — a
+      // refresh that added none (the common WS topology_changed)
+      // needs no second layout pass.
+      pendingMeasuredRelayout = [...componentById.keys()].some((id) => !prevIds.has(id));
     }
   }
 
@@ -961,6 +983,27 @@ export function createGraphCanvas(containerId, adapter = {}) {
     fit() {
       if (!network) return;
       network.fit({ animation: false });
+    },
+    /// Center `id` in the visible part of the canvas. `rightInset`
+    /// is the width of a panel overlaying the canvas's right edge
+    /// (the inspector), so the node lands in the middle of what the
+    /// user can actually see instead of possibly behind the panel.
+    /// Runs two frames late so it lands after the subview-switch
+    /// resize fit that would otherwise override it.
+    reveal(id, rightInset = 0) {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (!network) return;
+          const pos = network.getPositions([id])[id];
+          if (!pos) return;
+          network.moveTo({
+            position: pos,
+            scale: network.getScale(),
+            offset: { x: -rightInset / 2, y: 0 },
+            animation: false,
+          });
+        }),
+      );
     },
     /// Temporary highlight for explanation hover: borrows the vis
     /// selection, saving the user's own selection for unhighlight().
