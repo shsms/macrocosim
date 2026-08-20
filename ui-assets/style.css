@@ -880,13 +880,6 @@ body.compact .tier2-soc-text { font-size: 10px; }
   grid-column: 4 / -1;
 }
 .tier3-row:hover { border-color: var(--accent); }
-/* An inverter at its envelope edge is usually normal operation
-   (full sun, commanded full charge) — mark it with the neutral
-   accent, not warning colors that read as a fault. Health has its
-   own red pill. */
-.tier3-row.pinned {
-  border-color: var(--accent);
-}
 .tier3-name { font-weight: 500; }
 .tier3-subtype { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 .tier3-health {

@@ -293,15 +293,6 @@ function socClass(v) {
   if (v < 10 || v > 95) return "soc-warn";
   return "soc-ok";
 }
-function invPinned(d) {
-  if (d.measured == null) return false;
-  const span = Math.max(Math.abs(d.upper ?? 0), Math.abs(d.lower ?? 0), 1);
-  const tol = 0.005 * span;
-  return (
-    (d.upper != null && d.measured >= d.upper - tol) ||
-    (d.lower != null && d.measured <= d.lower + tol)
-  );
-}
 
 // ─── Battery pairs: battery + paired battery-inverter, one row each ───────
 //
@@ -372,7 +363,6 @@ export const batteryPairs = (() => {
       invCell.className = "tier3-row bat-pair-inv";
       if (inv) {
         invCell.dataset.id = inverterId;
-        if (invPinned(inv)) invCell.classList.add("pinned");
         const ihCls = inv.health === "ok" ? "health-ok" : "health-bad";
         invCell.innerHTML = `
           <span class="tier3-name">${escapeHtml(inv.name)}</span>
@@ -555,16 +545,15 @@ function envelopeBar(lower, current, upper, fmtValue) {
 //
 // `fields` maps data-object field → history/WS metric name — one
 // table drives both the seed fetches and the applySample dispatch.
-function makeRowModule({ gridId, sectionSel, filter, fields, rowClass, rowHtml, sort, resortOnSample = false }) {
+function makeRowModule({ gridId, sectionSel, filter, fields, rowClass, rowHtml }) {
   const data = new Map(); // id -> { name, subtype, health, ...fields }
   let order = [];
   const fieldNames = Object.keys(fields);
   const metricToField = new Map(fieldNames.map((f) => [fields[f], f]));
 
+  // Stable id order: live values must not move rows.
   function resort() {
-    order = [...data.keys()].sort(
-      (a, b) => (sort ? sort(data.get(a), data.get(b)) : 0) || a - b,
-    );
+    order = [...data.keys()].sort((a, b) => a - b);
   }
   function render() {
     const grid = document.getElementById(gridId);
@@ -625,18 +614,17 @@ function makeRowModule({ gridId, sectionSel, filter, fields, rowClass, rowHtml, 
       const d = data.get(ev.id);
       if (!d) return;
       d[f] = ev.value;
-      if (resortOnSample) resort();
       scheduleRender();
     },
   };
 }
 
-// One row per visible solar inverter. Measured AC active power
-// highlights when it clips against either envelope bound — same
-// operator-visible signal that the upstream control app's setpoint
-// is being held back by the inverter's own clamp. Battery inverters
-// are intentionally absent from this section; they pair with their
-// batteries in the Batteries section above. Pinned rows sort first.
+// One row per visible solar inverter, in stable id order — at-limit
+// state must not move rows (a setpoint arriving or expiring flips it,
+// and rows that jump around read as mysterious). The envelope
+// marker's at-bound dot carries that signal instead. Battery
+// inverters are intentionally absent from this section; they pair
+// with their batteries in the Batteries section above.
 export const pvRows = makeRowModule({
   gridId: "pv-rows",
   sectionSel: ".dash-pv",
@@ -646,9 +634,7 @@ export const pvRows = makeRowModule({
     lower: "active_power_lower_bound_w",
     upper: "active_power_upper_bound_w",
   },
-  sort: (A, B) => (invPinned(A) ? 0 : 1) - (invPinned(B) ? 0 : 1),
-  resortOnSample: true,
-  rowClass: (d) => (invPinned(d) ? "tier3-row pinned" : "tier3-row"),
+  rowClass: () => "tier3-row",
   rowHtml: (d) => `
         <span class="tier3-name">${escapeHtml(d.name)}</span>
         <span class="tier3-subtype muted">${d.subtype || "—"}</span>
