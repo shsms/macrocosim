@@ -73,14 +73,29 @@ export const dashboardTiles = (() => {
     b.values[b.cursor] = value == null ? NaN : value;
     b.cursor = (b.cursor + 1) % SPARK_LEN;
   }
+  // The tile elements are static markup in index.html, so the
+  // per-stream lookups are resolved once and cached — paint() runs
+  // per stream per 1 Hz WS sample, and two whole-document
+  // querySelectorAlls per sample add up. Only non-empty results are
+  // cached so a stream that gains markup later still resolves.
+  const elCache = new Map();
+  const sparkCache = new Map();
+  function cached(cache, stream, query) {
+    let els = cache.get(stream);
+    if (!els) {
+      els = [...document.querySelectorAll(query)];
+      if (els.length) cache.set(stream, els);
+    }
+    return els;
+  }
   function findEls(stream) {
     // Any non-svg element tagged with this stream — covers the main
     // .dash-value number plus envelope `.env-lo` / `.env-hi`
     // siblings that share the same stream's value formatting.
-    return document.querySelectorAll(`[data-stream="${stream}"]:not(svg)`);
+    return cached(elCache, stream, `[data-stream="${stream}"]:not(svg)`);
   }
   function findSparks(stream) {
-    return document.querySelectorAll(`.dash-spark[data-stream="${stream}"]`);
+    return cached(sparkCache, stream, `.dash-spark[data-stream="${stream}"]`);
   }
   function renderSpark(stream) {
     const svgs = findSparks(stream);
@@ -398,8 +413,18 @@ export const batteryPairs = (() => {
       inv.upper = hi;
     } catch (_) {}
   }
+  async function seedAll() {
+    await Promise.all([
+      ...[...pairs.keys()].map(seedBattery),
+      ...[...inverters.keys()].map(seedInverter),
+    ]);
+    resort();
+    render();
+  }
   return {
-    async refresh(snapshot) {
+    // Same seed contract as makeRowModule: `seed: false` while the
+    // Dashboard is hidden, reseed() on subview enter.
+    async refresh(snapshot, { seed: doSeed = true } = {}) {
       const components = snapshot?.components || [];
       const allConns = [
         ...(snapshot?.connections || []),
@@ -460,13 +485,9 @@ export const batteryPairs = (() => {
       for (const [k, v] of nextInvByBattery) invByBattery.set(k, v);
       resort();
       render();
-      await Promise.all([
-        ...batteries.map((b) => seedBattery(b.id)),
-        ...[...inverters.keys()].map((id) => seedInverter(id)),
-      ]);
-      resort();
-      render();
+      if (doSeed) await seedAll();
     },
+    reseed: seedAll,
     applySample(ev) {
       if (TRACKED_BATTERY.has(ev.metric)) {
         const p = pairs.get(ev.id);
@@ -572,8 +593,16 @@ function makeRowModule({ gridId, sectionSel, filter, fields, rowClass, rowHtml, 
       });
     } catch (_) {}
   }
+  async function seedAll() {
+    await Promise.all([...data.keys()].map(seed));
+    resort();
+    render();
+  }
   return {
-    async refresh(snapshot) {
+    // `seed: false` skips the per-component latest-sample fetches —
+    // callers pass it while the Dashboard subview is hidden, and
+    // reseed() catches up when it becomes visible.
+    async refresh(snapshot, { seed: doSeed = true } = {}) {
       const components = snapshot?.components || [];
       const rows = components.filter((c) => !c.hidden && filter(c));
       const next = new Map();
@@ -587,10 +616,9 @@ function makeRowModule({ gridId, sectionSel, filter, fields, rowClass, rowHtml, 
       for (const [k, v] of next) data.set(k, v);
       resort();
       render();
-      await Promise.all(rows.map((c) => seed(c.id)));
-      resort();
-      render();
+      if (doSeed) await seedAll();
     },
+    reseed: seedAll,
     applySample(ev) {
       const f = metricToField.get(ev.metric);
       if (!f) return;

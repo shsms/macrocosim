@@ -164,6 +164,13 @@ function setupRouterPopstate() {
     if (!parsed) return;
     writeRouteToStorage(parsed);
     applyMode(parsed.mode);
+    // Back/forward can land on a different microgrid; refetch so
+    // the canvas and row modules rebuild for it (the click path
+    // does this via selectMicrogrid).
+    if (parsed.selectedMg != null) {
+      refreshTopology();
+      overrideState.refresh();
+    }
   });
 }
 
@@ -227,6 +234,19 @@ function applyMode(mode) {
   if (mode === "microgrids" && selected != null && subview === "dashboard") {
     dashboardTiles.backfill();
     gridFrequency.backfill();
+    // Catch the row modules up on the seeds skipped while hidden —
+    // but only when their maps hold THIS microgrid's components.
+    // After a back/forward mg switch they still hold the previous
+    // mg's ids, and ids collide across mgs, so seeding them against
+    // the new mg's endpoints would mix two sites' values. The
+    // refreshTopology() for the new mg rebuilds the maps and seeds
+    // them itself.
+    if (lastTopologySnapshot?.mg === selected) {
+      batteryPairs.reseed();
+      pvRows.reseed();
+      evRows.reseed();
+      chpRows.reseed();
+    }
   }
   if (mode === "microgrids" && selected != null && subview === "dispatches") {
     dispatchesPanel.render(selected);
@@ -370,10 +390,15 @@ export async function refreshTopology() {
     // signals + a hot-reload's WS topology_changed nudge
     // already drives a refresh.
     pulseBar.applyTopology(data.components || [], data.graph_status);
-    batteryPairs.refresh(data);
-    pvRows.refresh(data);
-    evRows.refresh(data);
-    chpRows.refresh(data);
+    // Keep the row modules' shape current on every refresh, but
+    // only pay the per-component latest-sample fetches while the
+    // Dashboard subview is actually showing — applyMode reseeds on
+    // subview enter.
+    const seed = visibleSubview() === "dashboard";
+    batteryPairs.refresh(data, { seed });
+    pvRows.refresh(data, { seed });
+    evRows.refresh(data, { seed });
+    chpRows.refresh(data, { seed });
     gridFrequency.applyTopology(data);
   } catch (err) {
     setStatus(`error: ${err.message}`, "error");
