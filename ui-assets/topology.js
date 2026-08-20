@@ -19,6 +19,7 @@
 import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./inspect.js";
+import { liveLabelLine } from "./live.js";
 
 function getCss(name) {
   return getComputedStyle(document.documentElement)
@@ -278,6 +279,68 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // after a moment so a much-later resize doesn't re-center a stale
   // target.
   let pendingReveal = null; // { id, rightInset, until }
+  // ── live overlay state ─────────────────────────────────────────
+  // Per-component last-known live values, fed by applySample from
+  // the WS sample stream; ids marked dirty are flushed to the
+  // canvas in ONE nodesDS/edgesDS update per second.
+  const liveValues = new Map(); // id -> { p, q, soc }
+  const liveDirty = new Set();
+  let liveEnabled = true; // Task 5 wires the persisted toggle
+  let liveFlushTimer = null;
+  // Largest |active power bound| seen — the magnitude reference for
+  // edge flow scaling. Reset on topology refresh.
+  let maxAbsBoundW = 0;
+
+  function liveEntry(id) {
+    let e = liveValues.get(id);
+    if (!e) {
+      e = { p: null, q: null, soc: null };
+      liveValues.set(id, e);
+    }
+    return e;
+  }
+
+  function topologyVisible() {
+    return (
+      document.body.dataset.mode === "microgrids" &&
+      document.body.dataset.mgView === "selected" &&
+      document.body.dataset.subview === "topology"
+    );
+  }
+
+  function armLiveFlush() {
+    if (liveFlushTimer !== null) return;
+    liveFlushTimer = setTimeout(() => {
+      liveFlushTimer = null;
+      flushLive();
+    }, 1000);
+  }
+
+  // One batched canvas update for every dirty component. Parked
+  // while the subview is hidden (subview enter calls flushLive()
+  // directly to catch up).
+  function flushLive() {
+    if (!liveEnabled || !nodesDS || liveDirty.size === 0) return;
+    if (!topologyVisible()) return;
+    const nodeUpdates = [];
+    let linesChanged = false;
+    for (const id of liveDirty) {
+      const c = componentById.get(id);
+      if (!c) continue;
+      const line = liveLabelLine({ category: c.category, ...liveEntry(id) });
+      const label = line == null ? shortLabel(c.name) : `${shortLabel(c.name)}\n${line}`;
+      const prev = nodesDS.get(id);
+      if (prev && prev.label !== label) {
+        if ((prev.label.includes("\n")) !== (label.includes("\n"))) linesChanged = true;
+        nodeUpdates.push({ id, label });
+      }
+    }
+    liveDirty.clear();
+    if (nodeUpdates.length) nodesDS.update(nodeUpdates);
+    // A node gaining/losing its second line changes its height —
+    // re-measure so the tidy layout keeps its spacing.
+    if (linesChanged && !manualArrangement) pendingMeasuredRelayout = true;
+  }
   function applyPendingReveal() {
     if (!pendingReveal || !network) return false;
     if (Date.now() > pendingReveal.until) {
@@ -482,6 +545,16 @@ export function createGraphCanvas(containerId, adapter = {}) {
     if (adapter.onApply) adapter.onApply(data);
     const prevIds = new Set(componentById.keys());
     const { nodes, edges } = buildVisData(data);
+    // Live overlay: forget components that left the topology, mark
+    // every survivor dirty so the next flush rebuilds its label
+    // (names/categories may have changed), and reset the flow
+    // scale reference (rated bounds may have changed too).
+    for (const id of [...liveValues.keys()]) {
+      if (!componentById.has(id)) liveValues.delete(id);
+      else liveDirty.add(id);
+    }
+    maxAbsBoundW = 0;
+    if (liveDirty.size) armLiveFlush();
     if (!network) {
       nodesDS = new vis.DataSet(nodes);
       edgesDS = new vis.DataSet(edges);
@@ -1073,6 +1146,33 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// re-clicking the still-selected node reopens it.
     resetNotify() {
       lastNotified = "";
+    },
+    /// Live-overlay feed: one WS sample. Cheap — records the value,
+    /// marks the id dirty, and arms the 1 Hz flush.
+    applySample(ev) {
+      if (!liveEnabled) return;
+      const e = liveEntry(ev.id);
+      if (ev.metric === "active_power_w") e.p = ev.value;
+      else if (ev.metric === "reactive_power_var") e.q = ev.value;
+      else if (ev.metric === "soc_pct") e.soc = ev.value;
+      else if (
+        ev.metric === "active_power_lower_bound_w" ||
+        ev.metric === "active_power_upper_bound_w"
+      ) {
+        maxAbsBoundW = Math.max(maxAbsBoundW, Math.abs(ev.value));
+        return; // bounds feed the scale reference only
+      } else {
+        return;
+      }
+      liveDirty.add(ev.id);
+      armLiveFlush();
+    },
+    /// Apply pending live updates now — subview enter calls this so
+    /// a hidden tab's accumulated samples land immediately.
+    flushLive,
+    /// Smoke-test hook: every node label currently on the canvas.
+    debugLiveLabels() {
+      return nodesDS ? nodesDS.get().map((n) => n.label) : [];
     },
     /// Turns the magnetic drag grid on or off (the canvas header's
     /// "snap" toggle). Off, nodes drag freely; Alt axis locking works

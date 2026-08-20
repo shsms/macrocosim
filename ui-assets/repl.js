@@ -20,6 +20,7 @@ import {
   wordAtCursor,
 } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
+import { topology } from "./topology.js";
 
 
 // Log panel above the REPL. /api/logs gives the load-time backfill
@@ -398,6 +399,7 @@ export function openWebSocket(onTopologyChanged) {
         evRows.applySample(ev);
         chpRows.applySample(ev);
         gridFrequency.applySample(ev);
+        topology.applySample(ev);
       } else if (ev.kind === "microgrid_sample") {
         dashboardTiles.applySample(ev);
       } else if (ev.kind === "topology_changed") {

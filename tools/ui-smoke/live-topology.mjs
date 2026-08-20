@@ -55,6 +55,18 @@ const unit = await page.evaluate(async () => {
 });
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
 
+// ── e2e: live labels on the canvas ────────────────────────────────
+await page.click(".mglist-card:not(.mglist-new)");
+await new Promise((r) => setTimeout(r, 1000));
+await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+await new Promise((r) => setTimeout(r, 3500)); // > one 1 Hz flush
+const labels = await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  return topology.debugLiveLabels();
+});
+check("e2e: some node has a kW/W line", labels.some((l) => /\n-?\d+(\.\d+)? (W|kW|MW)/.test(l)), JSON.stringify(labels));
+check("e2e: battery node shows SoC", labels.some((l) => /SoC \d+%/.test(l)), JSON.stringify(labels));
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }

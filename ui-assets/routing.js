@@ -217,6 +217,7 @@ function applyMode(mode) {
   if (mode === "microgrids" && selected != null && subview === "topology") {
     refitCharts();
     requestAnimationFrame(() => topology.fit());
+    topology.flushLive();
   }
   if (mode === "microgrids" && selected != null && subview === "formulas") {
     // The Formulas canvas is fed lazily: while its subview is hidden
