@@ -1,7 +1,7 @@
-//! `(set-active-power)` — apply an active-power setpoint and arm
-//! a request-lifetime timeout. Mirrors gRPC's
-//! `SetElectricalComponentPower`; the reset fires from the loop in
-//! `Config::start_timeout_loop`.
+//! `(set-active-power)` and `(set-reactive-power)` — apply a
+//! setpoint on one power axis and arm a request-lifetime timeout.
+//! Mirror gRPC's `SetElectricalComponentPower`; the reset fires from
+//! the loop in `Config::start_timeout_loop`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,14 +13,31 @@ use crate::sim::microgrids::SharedSiteRouter;
 
 use super::super::Metadata;
 
-/// Lower bound on a non-zero request-lifetime that
-/// `(set-active-power)` can install. The timeout loop polls at
+/// Lower bound on a non-zero request-lifetime that the setpoint
+/// defuns can install. The timeout loop polls at
 /// 100 ms and the default physics tick is 100 ms, so a sub-150 ms
 /// lifetime can expire before the next physics tick observes the
 /// setpoint at all — the ramp would clear without ever leaving
 /// idle. `lifetime-ms = 0` is preserved as an explicit "expire
 /// immediately" escape (used by tests) and bypasses the clamp.
-const MIN_SET_ACTIVE_POWER_LIFETIME_MS: u64 = 150;
+const MIN_SETPOINT_LIFETIME_MS: u64 = 150;
+
+/// The request lifetime for a `LIFETIME-MS` argument: omitted falls
+/// back to `default-request-lifetime-ms`, `0` expires at once, any
+/// other value is floored at [`MIN_SETPOINT_LIFETIME_MS`].
+fn lifetime_from_arg(lifetime_ms: Option<i64>, metadata: &RwLock<Metadata>) -> Duration {
+    lifetime_ms
+        .map(|ms| {
+            let raw = ms.max(0) as u64;
+            let clamped = if raw == 0 {
+                0
+            } else {
+                raw.max(MIN_SETPOINT_LIFETIME_MS)
+            };
+            Duration::from_millis(clamped)
+        })
+        .unwrap_or_else(|| metadata.read().default_request_lifetime)
+}
 
 /// `(set-active-power ID WATTS &OPTIONAL LIFETIME-MS CLAMP)` — apply an
 /// active-power setpoint and arm a request-lifetime timeout, mirroring
@@ -41,12 +58,31 @@ const MIN_SET_ACTIVE_POWER_LIFETIME_MS: u64 = 150;
 /// allows" each tick without tracking the augmentations itself. With
 /// `CLAMP` nil the out-of-envelope command is rejected, like the gRPC
 /// gateway. 0 W (the fail-safe park) is applied as-is either way.
+///
+/// `(set-reactive-power ID VARS &OPTIONAL LIFETIME-MS CLAMP)` — the
+/// reactive-axis twin of `set-active-power`: apply a reactive-power
+/// setpoint and arm a request-lifetime timeout on the reactive axis
+/// only, mirroring gRPC's `SetElectricalComponentPower` with
+/// `PowerType::Reactive`. Returns `t` on success; signals an error
+/// if the component doesn't exist, has no reactive axis (meters,
+/// batteries), or rejects the value.
+///
+/// `LIFETIME-MS` follows the same rule as `set-active-power`
+/// (omitted → `default-request-lifetime-ms`, `0` → expire at once,
+/// otherwise floored at 150 ms).
+///
+/// There is no gateway envelope on this axis (gRPC has none
+/// either): the inverter accepts or rejects against its live band,
+/// the PF / apparent-power caps at its current active power. With
+/// `CLAMP` non-nil an out-of-band request is pulled to the band
+/// edge and applied instead. 0 VAr always passes, like the 0 W park.
 pub(super) fn register(
     ctx: &mut TulispContext,
     router: SharedSiteRouter,
     metadata: Arc<RwLock<Metadata>>,
 ) {
-    let r = router;
+    let metadata_q = metadata.clone();
+    let r = router.clone();
     ctx.defun(
         "set-active-power",
         move |id: i64,
@@ -90,20 +126,43 @@ pub(super) fn register(
             component
                 .set_active_setpoint(watts)
                 .map_err(|e| Error::invalid_argument(format!("set-active-power: {e}")))?;
-            let lifetime = lifetime_ms
-                .map(|ms| {
-                    let raw = ms.max(0) as u64;
-                    let clamped = if raw == 0 {
-                        0
-                    } else {
-                        raw.max(MIN_SET_ACTIVE_POWER_LIFETIME_MS)
-                    };
-                    Duration::from_millis(clamped)
-                })
-                .unwrap_or_else(|| metadata.read().default_request_lifetime);
+            let lifetime = lifetime_from_arg(lifetime_ms, &metadata);
             w.add_timeout(
                 id as u64,
                 crate::timeout_tracker::SetpointAxis::Active,
+                lifetime,
+            );
+            Ok(true)
+        },
+    );
+
+    // `(set-reactive-power …)` — documented with `register` above.
+    let r = router;
+    ctx.defun(
+        "set-reactive-power",
+        move |id: i64,
+              vars: f64,
+              lifetime_ms: Option<i64>,
+              clamp: Option<bool>|
+              -> Result<bool, Error> {
+            let w = r.site();
+            let component = w.get(id as u64).ok_or_else(|| {
+                Error::invalid_argument(format!("set-reactive-power: component {id} not found"))
+            })?;
+            let mut vars = vars as f32;
+            if vars != 0.0
+                && clamp.unwrap_or(false)
+                && let Some((lo, hi)) = component.reactive_bounds()
+            {
+                vars = vars.clamp(lo, hi);
+            }
+            component
+                .set_reactive_setpoint(vars)
+                .map_err(|e| Error::invalid_argument(format!("set-reactive-power: {e}")))?;
+            let lifetime = lifetime_from_arg(lifetime_ms, &metadata_q);
+            w.add_timeout(
+                id as u64,
+                crate::timeout_tracker::SetpointAxis::Reactive,
                 lifetime,
             );
             Ok(true)
@@ -216,5 +275,97 @@ mod tests {
         // returns Unsupported, which we surface as a Lisp error.
         let res = cfg.eval("(set-active-power 1 1500.0)");
         assert!(res.is_err(), "expected error, got {res:?}");
+    }
+
+    /// A battery-inverter with a 5 kVA apparent-power cap and no PF
+    /// limit (the inherited default would pin Q to 0 at idle) has a
+    /// ±5 kVAr reactive band at idle. Used by the reactive tests below.
+    const REACTIVE_SITE: &str = "(set-microgrid-id 9)
+         (setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
+         (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
+                                   :reactive-pf-limit 0
+                                   :reactive-apparent-va 5000.0
+                                   :reactive-command-delay-ms 0
+                                   :reactive-ramp-rate 1e9
+                                   :successors (list b1))";
+
+    /// set-reactive-power applies a setpoint and arms the *reactive*
+    /// axis of the timeout tracker, leaving the active axis alone.
+    #[test]
+    fn set_reactive_power_applies_setpoint_and_arms_reactive_timeout() {
+        let (cfg, _dir) = config_with(REACTIVE_SITE);
+        cfg.eval("(set-reactive-power 2 1500.0 30000)").unwrap();
+        assert_eq!(cfg.site().drain_expired_timeouts(), Vec::new());
+        cfg.eval("(set-reactive-power 2 1500.0 0)").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        assert_eq!(
+            cfg.site().drain_expired_timeouts(),
+            vec![(2, crate::timeout_tracker::SetpointAxis::Reactive)]
+        );
+    }
+
+    /// Outside the inverter's live reactive band the request is
+    /// rejected, like gRPC's SetElectricalComponentPower(Reactive);
+    /// inside it, and 0 VAr, are accepted.
+    #[test]
+    fn set_reactive_power_rejects_outside_band() {
+        let (cfg, _dir) = config_with(REACTIVE_SITE);
+        let res = cfg.eval("(set-reactive-power 2 6000.0 30000)");
+        assert!(res.is_err(), "expected rejection, got {res:?}");
+        assert!(cfg.eval("(set-reactive-power 2 -6000.0 30000)").is_err());
+        cfg.eval("(set-reactive-power 2 3000.0 30000)").unwrap();
+        cfg.eval("(set-reactive-power 2 0.0 30000)").unwrap();
+    }
+
+    /// With CLAMP, an out-of-band request is pulled to the band edge
+    /// and applied: the published Q settles at ±5 kVAr.
+    #[test]
+    fn set_reactive_power_clamp_arg_clamps_into_band() {
+        use std::time::Duration;
+        let (cfg, _dir) = config_with(REACTIVE_SITE);
+        assert!(cfg.eval("(set-reactive-power 2 6000.0 30000)").is_err());
+        cfg.eval("(set-reactive-power 2 6000.0 30000 t)").unwrap();
+        let site = cfg.site();
+        let inv = site.get(2).unwrap();
+        inv.tick(&site, chrono::Utc::now(), Duration::from_millis(100));
+        let q = inv.telemetry(&site).reactive_power_var.unwrap();
+        assert!(
+            (q - 5000.0).abs() < 1.0,
+            "expected clamp to +5 kVAr, got {q}"
+        );
+        cfg.eval("(set-reactive-power 2 -6000.0 30000 t)").unwrap();
+        inv.tick(&site, chrono::Utc::now(), Duration::from_millis(100));
+        let q = inv.telemetry(&site).reactive_power_var.unwrap();
+        assert!(
+            (q + 5000.0).abs() < 1.0,
+            "expected clamp to -5 kVAr, got {q}"
+        );
+    }
+
+    /// A non-finite value (a lambda that divided by zero) is rejected
+    /// instead of riding the ramp into telemetry as NaN.
+    #[test]
+    fn set_reactive_power_rejects_nan() {
+        let (cfg, _dir) = config_with(REACTIVE_SITE);
+        let res = cfg.eval("(set-reactive-power 2 (/ 0.0 0.0) 30000)");
+        assert!(res.is_err(), "expected rejection, got {res:?}");
+        assert!(
+            cfg.eval("(set-reactive-power 2 (/ 0.0 0.0) 30000 t)")
+                .is_err()
+        );
+    }
+
+    /// Unknown ids and components without a reactive axis (a meter)
+    /// error out instead of silently no-op'ing.
+    #[test]
+    fn set_reactive_power_rejects_unknown_or_unsupported() {
+        let (cfg, _dir) = config_with(
+            "(set-microgrid-id 9)
+             (%make-meter :id 1)",
+        );
+        let res = cfg.eval("(set-reactive-power 999 100.0)");
+        assert!(res.is_err(), "expected error, got {res:?}");
+        assert!(res.unwrap_err().contains("999"));
+        assert!(cfg.eval("(set-reactive-power 1 100.0)").is_err());
     }
 }

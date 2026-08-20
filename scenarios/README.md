@@ -61,6 +61,7 @@ exercises the simulator:
 | `(set-component-telemetry-mode ID K)`  | `'normal` / `'silent` / `'closed`                        |
 | `(set-component-command-mode ID K)`    | `'normal` / `'timeout` / `'error`                        |
 | `(set-active-power ID W &OPTIONAL MS CLAMP)` | gRPC-style setpoint; MS = lifetime in ms, non-nil CLAMP clamps into the live envelope instead of rejecting |
+| `(set-reactive-power ID VAR &OPTIONAL MS CLAMP)` | same for the reactive axis; CLAMP pulls into the inverter's live PF / kVA band |
 
 `(set-meter-power 100 (lambda () (csv-lookup …)))` and
 `(set-meter-power 100 'consumer-power)` install the lambda or

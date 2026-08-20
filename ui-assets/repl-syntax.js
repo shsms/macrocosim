@@ -45,6 +45,7 @@ export const COMPLETIONS = [
   "set-component-operational-mode",
   "set-battery-soc",
   "set-active-power",
+  "set-reactive-power",
   "set-meter-power",
   "set-solar-sunlight",
   "set-reactive-pf-limit",

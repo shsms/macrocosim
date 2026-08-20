@@ -262,9 +262,9 @@ impl Config {
             // MicrogridSite's TimeoutTracker and calls reset_setpoint
             // on each elapsed entry. Both gRPC's
             // SetElectricalComponentPower and the Lisp
-            // `(set-active-power …)` defun add to the tracker; this
-            // loop is what makes their request-lifetime semantics
-            // visible.
+            // `(set-active-power …)` / `(set-reactive-power …)` defuns
+            // add to the tracker; this loop is what makes their
+            // request-lifetime semantics visible.
             Self::start_timeout_loop(microgrids.clone());
         }
 
