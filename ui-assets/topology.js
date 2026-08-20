@@ -15,6 +15,7 @@
 // - topology.setSelectionHandler — wire showComponent / clearSide to the canvas
 // - topology.highlight(ids, subtractedIds) — temporary highlight (explanation hover)
 // - topology.resetLayout(name) / setSnap / alignSelection / scaleSelection
+// - topology.setValues(on) / valuesOn() — toggle live metric values on nodes/edges
 
 import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
@@ -305,7 +306,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
   function liveEntry(id) {
     let e = liveValues.get(id);
     if (!e) {
-      e = { p: null, q: null, soc: null, dc: null };
+      e = { p: null, q: null, soc: null, dc: null, energy: null, pLo: null, pHi: null, qLo: null, qHi: null, ts: null, hist: [] };
       liveValues.set(id, e);
     }
     return e;
@@ -1224,27 +1225,39 @@ export function createGraphCanvas(containerId, adapter = {}) {
     resetNotify() {
       lastNotified = "";
     },
-    /// Live-overlay feed: one WS sample. Cheap — records the value,
-    /// marks the id dirty, and arms the 1 Hz flush.
+    /// Live-overlay feed: one WS sample. Cheap — records the value
+    /// even while values are off, marks the id dirty, and arms the
+    /// 1 Hz flush.
     applySample(ev) {
-      if (!liveEnabled) return;
       const mg = readSelectedMg();
       if (mg == null || (ev.mg_id != null && ev.mg_id !== mg)) return;
       syncLiveMg();
       const e = liveEntry(ev.id);
-      if (ev.metric === "active_power_w") e.p = ev.value;
-      else if (ev.metric === "reactive_power_var") e.q = ev.value;
-      else if (ev.metric === "soc_pct") e.soc = ev.value;
-      else if (ev.metric === "dc_power_w") e.dc = ev.value;
-      else if (
-        ev.metric === "active_power_lower_bound_w" ||
-        ev.metric === "active_power_upper_bound_w"
-      ) {
-        maxAbsBoundW = Math.max(maxAbsBoundW, Math.abs(ev.value));
-        return; // bounds feed the scale reference only
-      } else {
-        return;
+      e.ts = ev.ts_ms ?? Date.now();
+      let drawn = true;
+      switch (ev.metric) {
+        case "active_power_w": e.p = ev.value; break;
+        case "reactive_power_var": e.q = ev.value; break;
+        case "soc_pct": e.soc = ev.value; break;
+        case "dc_power_w": e.dc = ev.value; break;
+        case "energy_wh": e.energy = ev.value; drawn = false; break;
+        case "active_power_lower_bound_w": e.pLo = ev.value; drawn = false; break;
+        case "active_power_upper_bound_w": e.pHi = ev.value; drawn = false; break;
+        case "reactive_power_lower_bound_var": e.qLo = ev.value; drawn = false; break;
+        case "reactive_power_upper_bound_var": e.qHi = ev.value; drawn = false; break;
+        default: return;
       }
+      if (ev.metric === "active_power_lower_bound_w" || ev.metric === "active_power_upper_bound_w") {
+        maxAbsBoundW = Math.max(maxAbsBoundW, Math.abs(ev.value));
+      }
+      // 60 s power history for the hover sparkline; batteries are
+      // judged by their DC side.
+      const histMetric = componentById.get(ev.id)?.category === "battery" ? "dc_power_w" : "active_power_w";
+      if (ev.metric === histMetric && Number.isFinite(ev.value)) {
+        e.hist.push([e.ts, ev.value]);
+        if (e.hist.length > 60) e.hist.splice(0, e.hist.length - 60);
+      }
+      if (!drawn) return;
       liveDirty.add(ev.id);
       armLiveFlush();
     },
@@ -1290,7 +1303,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// The live-overlay toggle. Off drops every pill's value row
     /// and strips the chevrons in one bulk update, then re-measures
     /// the (now shorter) nodes.
-    setLive(on) {
+    setValues(on) {
       liveEnabled = Boolean(on);
       // Both directions rebuild every pill: with its value row while
       // live, name-only when off.
@@ -1317,8 +1330,12 @@ export function createGraphCanvas(containerId, adapter = {}) {
         if (network) network.redraw();
       }
     },
-    liveOn() {
+    valuesOn() {
       return liveEnabled;
+    },
+    /// Smoke-test hook: one component's live entry.
+    debugLiveEntry(id) {
+      return liveValues.get(id) ?? null;
     },
     /// Turns the magnetic drag grid on or off (the canvas header's
     /// "snap" toggle). Off, nodes drag freely; Alt axis locking works

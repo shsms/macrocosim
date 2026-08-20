@@ -222,11 +222,11 @@ const getHeights = () =>
   });
 const onHeights = await getHeights();
 const valueRows = (await getModels()).map((m) => Boolean(m.hero || m.aux));
-await page.click("#topology-controls .live-btn");
+await page.click("#topology-controls .values-btn");
 const off = await waitFor(async () => {
   const st = await page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
-    return { models: topology.debugNodeModels(), edges: topology.debugLiveEdges(), on: topology.liveOn() };
+    return { models: topology.debugNodeModels(), edges: topology.debugLiveEdges(), on: topology.valuesOn() };
   });
   return st.on === false && !hasValues(st.models) ? st : null;
 });
@@ -246,14 +246,61 @@ check(
 check("e2e: toggle off clears chevrons", off.edges.every((e) => !e.middleEnabled));
 check("e2e: toggle off reverts edge color", off.edges.every((e) => e.color !== "#79b8ff"), JSON.stringify(off.edges));
 check("e2e: end arrowhead stays default size", off.edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(off.edges));
-check("e2e: liveOn() reports off", off.on === false);
+check("e2e: valuesOn() reports off", off.on === false);
+// Sampling continues with values off: the map keeps filling so the
+// hover card and the sparkline are complete when values come back.
+// The entries are already full before the toggle (hist is capped at
+// 60), so snapshot the timestamp at toggle time and wait for both the
+// entry and its latest history point to move past it.
+const liveEntry = (id) =>
+  page.evaluate(async (id) => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugLiveEntry(id);
+  }, id);
+const lastHistTs = (e) => (e && e.hist.length ? e.hist[e.hist.length - 1][0] : -Infinity);
+const tsAtOff = (await liveEntry(100))?.ts ?? -Infinity;
+const entryOff = await waitFor(async () => {
+  const e = await liveEntry(100);
+  return e && e.ts > tsAtOff && lastHistTs(e) > tsAtOff ? e : null;
+}, 5000);
+check("e2e: sampling continues while values are off", entryOff && Number.isFinite(entryOff.p) && entryOff.ts > tsAtOff && lastHistTs(entryOff) > tsAtOff, JSON.stringify(entryOff));
+// Batteries never emit active_power_w, so a populated hist here can
+// only come from the dc_power_w branch of histMetric — id 1000 is
+// bat-1000 in the Berlin demo.
+const batteryTsAtOff = (await liveEntry(1000))?.ts ?? -Infinity;
+const batteryEntryOff = await waitFor(async () => {
+  const e = await liveEntry(1000);
+  return e && e.ts > batteryTsAtOff && lastHistTs(e) > batteryTsAtOff ? e : null;
+}, 5000);
+check(
+  "e2e: battery history tracks dc_power_w, not active_power_w",
+  batteryEntryOff && batteryEntryOff.p === null && Number.isFinite(batteryEntryOff.dc) && batteryEntryOff.hist[batteryEntryOff.hist.length - 1][1] === batteryEntryOff.dc,
+  JSON.stringify(batteryEntryOff),
+);
+// Component 100 is a plain load meter: it has no operating envelope,
+// so it never emits bound samples (only Inverter/Battery/EvCharger
+// do — see src/sim/meter.rs vs. src/sim/inverter/mod.rs). Check the
+// bounds/timestamp fields on 1001 (inv-bat-1001), which reports both
+// active and reactive bounds.
+const boundsEntryOff = await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  return topology.debugLiveEntry(1001);
+});
+check("e2e: live entry carries bounds and timestamp", boundsEntryOff && Number.isFinite(boundsEntryOff.ts) && Number.isFinite(boundsEntryOff.pLo) && Number.isFinite(boundsEntryOff.pHi), JSON.stringify(boundsEntryOff));
+await page.click("#topology-controls .values-btn");
+const backOn = await waitFor(async () => {
+  const ms = await getModels();
+  return hasValues(ms) ? ms : null;
+});
+check("e2e: toggle on restores row 2", hasValues(backOn));
+await page.click("#topology-controls .values-btn"); // back off for the reload test below
 await page.reload({ waitUntil: "networkidle" });
 await page.click(DEMO_CARD).catch(() => {});
-// liveOn() reads the persisted flag at module load, so no flush to
+// valuesOn() reads the persisted flag at module load, so no flush to
 // wait for here.
 const persisted = await page.evaluate(async () => {
   const { topology } = await import("/assets/topology.js");
-  return topology.liveOn();
+  return topology.valuesOn();
 });
 check("e2e: off state survives reload", persisted === false);
 await page.evaluate(() => localStorage.removeItem("switchyard-topology-live"));
