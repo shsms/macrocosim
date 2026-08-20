@@ -747,15 +747,19 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 .dash-envelope .env-hi.muted { color: var(--muted); }
 body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
 
+/* A hairline + generous top margin makes each category read as its
+   own band when scanning down the page. */
 .dash-section {
-  margin-top: 12px;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
 }
 .tier-heading {
-  font-size: 13px;
+  font-size: 15px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  margin: 12px 0 6px;
+  letter-spacing: 0.08em;
+  color: var(--fg, #d5dbe3);
+  margin: 0 0 10px;
 }
 .tier-rows {
   display: grid;
