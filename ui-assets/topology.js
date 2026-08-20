@@ -19,7 +19,7 @@
 import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./inspect.js";
-import { liveLabelLine } from "./live.js";
+import { edgeFlow, liveLabelLine } from "./live.js";
 
 function getCss(name) {
   return getComputedStyle(document.documentElement)
@@ -335,8 +335,41 @@ export function createGraphCanvas(containerId, adapter = {}) {
         nodeUpdates.push({ id, label });
       }
     }
+    // Edge flow: recompute every edge that touches a dirty child.
+    // Parent counts come from the live edge set (parallel paths
+    // split the child's flow, matching the meter aggregation rule).
+    const edgeUpdates = [];
+    if (edgesDS) {
+      const parentCount = new Map();
+      for (const e of edgesDS.get()) {
+        parentCount.set(e.to, (parentCount.get(e.to) || 0) + 1);
+      }
+      for (const e of edgesDS.get()) {
+        if (!liveDirty.has(e.to)) continue;
+        const child = liveValues.get(e.to);
+        const flow = edgeFlow(child ? child.p : null, parentCount.get(e.to) || 1, maxAbsBoundW);
+        edgeUpdates.push({
+          id: e.id,
+          width: flow.chevron ? flow.width : 1.5,
+          arrows: {
+            to: { enabled: true, scaleFactor: 0.6 },
+            middle: flow.chevron
+              ? {
+                  enabled: true,
+                  type: "arrow",
+                  // Negative flips the chevron toward the parent —
+                  // physical flow for export/generation.
+                  scaleFactor: (flow.towardParent ? -1 : 1) * flow.scale,
+                }
+              : { enabled: false },
+          },
+          color: flow.chevron ? { color: "#79b8ff", inherit: false } : { color: "#6b7280", inherit: false },
+        });
+      }
+    }
     liveDirty.clear();
     if (nodeUpdates.length) nodesDS.update(nodeUpdates);
+    if (edgeUpdates.length) edgesDS.update(edgeUpdates);
     // A node gaining/losing its second line changes its height —
     // re-measure so the tidy layout keeps its spacing.
     if (linesChanged && !manualArrangement) pendingMeasuredRelayout = true;
@@ -1173,6 +1206,18 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// Smoke-test hook: every node label currently on the canvas.
     debugLiveLabels() {
       return nodesDS ? nodesDS.get().map((n) => n.label) : [];
+    },
+    /// Smoke-test hook: every edge's live flow chevron state.
+    debugLiveEdges() {
+      if (!edgesDS) return [];
+      return edgesDS.get().map((e) => ({
+        id: e.id,
+        width: e.width ?? 1.5,
+        middleEnabled: Boolean(e.arrows?.middle?.enabled),
+        scaleFactor: e.arrows?.middle?.enabled ? e.arrows.middle.scaleFactor : 0,
+        color: e.color?.color ?? null,
+        toScale: e.arrows?.to?.scaleFactor ?? null,
+      }));
     },
     /// Turns the magnetic drag grid on or off (the canvas header's
     /// "snap" toggle). Off, nodes drag freely; Alt axis locking works

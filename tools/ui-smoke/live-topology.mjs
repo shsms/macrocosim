@@ -67,6 +67,19 @@ const labels = await page.evaluate(async () => {
 check("e2e: some node has a kW/W line", labels.some((l) => /\n-?\d+(\.\d+)? (W|kW|MW)/.test(l)), JSON.stringify(labels));
 check("e2e: battery node shows SoC", labels.some((l) => /SoC \d+%/.test(l)), JSON.stringify(labels));
 
+// ── e2e: flow chevrons ────────────────────────────────────────────
+const edges = await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  return topology.debugLiveEdges();
+});
+const withChevron = edges.filter((e) => e.middleEnabled);
+check("e2e: some edge has a flow chevron", withChevron.length > 0, JSON.stringify(edges));
+// berlin demo: PV generates (negative) → its edge chevron points
+// toward the parent (negative scaleFactor).
+check("e2e: an exporting edge points at the parent", withChevron.some((e) => e.scaleFactor < 0), JSON.stringify(withChevron));
+check("e2e: chevron widths clamped", withChevron.every((e) => e.width >= 1 && e.width <= 6), JSON.stringify(withChevron));
+check("e2e: live edges keep the 0.6 end arrowhead", edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(edges));
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }
