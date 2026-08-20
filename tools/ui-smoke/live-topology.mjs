@@ -107,6 +107,27 @@ const unit = await page.evaluate(async () => {
   const longName = { ...meter, name: "A very long component name indeed" };
   eq("name truncated", pill.pillModel(longName, null, opts).name, "A very long componen…");
   eq("full name kept", pill.pillModel(longName, null, opts).fullName, "A very long component name indeed");
+
+  // renderer: measured sizes, content-derived and clamped
+  await pill.pillFontsReady;
+  const ctx = document.createElement("canvas").getContext("2d");
+  const dShort = pill.measurePill(ctx, pill.pillModel({ ...meter, name: "m" }, null, { ...opts, valuesOn: false }));
+  const dLong = pill.measurePill(ctx, pill.pillModel(inv, { p: -19930, q: 1200, soc: null, dc: null }, opts));
+  const dHuge = pill.measurePill(ctx, pill.pillModel({ ...longName, id: 1234567 }, { p: -19930, q: -12500, soc: null, dc: null }, opts));
+  eq("min width", dShort.width, 96);
+  out.push({ name: "long wider than short", ok: dLong.width > dShort.width, got: `${dLong.width} vs ${dShort.width}` });
+  out.push({ name: "max width clamp", ok: dHuge.width <= 200 && dHuge.width >= 150, got: String(dHuge.width) });
+  out.push({ name: "clamped name re-truncated", ok: dHuge.name.endsWith("…") && dHuge.name.length < 21, got: dHuge.name });
+  out.push({ name: "two rows taller than one", ok: dLong.height > dShort.height, got: `${dLong.height} vs ${dShort.height}` });
+  const dOff = pill.measurePill(ctx, pill.pillModel(inv, null, { ...opts, valuesOn: false }));
+  eq("values-off height single row", dOff.height, dShort.height);
+  // pillRenderer contract
+  const sizes = [];
+  const r = pill.pillRenderer(pill.pillModel(inv, null, { ...opts, valuesOn: false }), (id, w, h) => sizes.push([id, w, h]));
+  const res = r({ ctx, id: 12, x: 0, y: 0, state: { selected: false, hover: false }, style: {}, label: "" });
+  eq("renderer reports dimensions", res.nodeDimensions, { width: dOff.width, height: dOff.height });
+  eq("renderer onSize", sizes, [[12, dOff.width, dOff.height]]);
+  out.push({ name: "renderer drawNode is callable", ok: typeof res.drawNode === "function" && (res.drawNode(), true) });
   return out;
 });
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
