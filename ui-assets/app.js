@@ -139,7 +139,7 @@ export function escapeHtml(s) {
 }
 
 // Wire the floating panels' chrome: the inspector's × (close +
-// deselect the node so a re-click reopens it), and the ＋ Add button /
+// deselect the node so a re-click reopens it), and the + Add button /
 // its panel's × (toggle the topology-only Add-component card).
 function setupFloatingPanels() {
   document.getElementById("inspector-close").addEventListener("click", () => {
@@ -250,7 +250,7 @@ export const dispatchesPanel = (() => {
   }
 
   function emptyHtml() {
-    return `<p class="hint">No dispatches for this microgrid yet — create one with the ＋ New dispatch button, <code>swctl dispatch create</code>, or the dispatch CLI.</p>`;
+    return `<p class="hint">No dispatches for this microgrid yet — create one with the + New dispatch button, <code>swctl dispatch create</code>, or the dispatch CLI.</p>`;
   }
 
   async function setActive(id, active) {

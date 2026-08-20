@@ -39,7 +39,7 @@ export const microgridsPanel = (() => {
     newCard.type = "button";
     newCard.className = "mglist-card mglist-new";
     newCard.id = "mglist-new-btn";
-    newCard.innerHTML = `<span class="mglist-plus">＋</span><span>New microgrid</span>`;
+    newCard.innerHTML = `<span class="mglist-plus">+</span><span>New microgrid</span>`;
     newCard.addEventListener("click", () => {
       const name = prompt("Name for the new microgrid:");
       if (!name) return;

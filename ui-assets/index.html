@@ -76,7 +76,7 @@
         <h3>Empty microgrid</h3>
         <p>This microgrid has no components yet. Add a grid connection point first:</p>
         <ol>
-          <li>Click <strong>grid</strong> in the <em>＋ Add</em> palette (top-left of the canvas), or</li>
+          <li>Click <strong>grid</strong> in the <em>+ Add</em> palette (top-left of the canvas), or</li>
           <li>Eval <code>(make-grid-connection-point :id 1)</code> in the REPL, or</li>
           <li>Paste a structure copied from another microgrid (Ctrl/Cmd+V).</li>
         </ol>
@@ -266,7 +266,7 @@
               them to downstream control apps.
             </p>
           </div>
-          <button id="dispatch-new-btn" class="hdr-btn primary" type="button">＋ New dispatch</button>
+          <button id="dispatch-new-btn" class="hdr-btn primary" type="button">+ New dispatch</button>
         </header>
         <div id="dispatches-body"></div>
       </div>
@@ -287,7 +287,7 @@
       </div>
       <!-- Floating left: summon the Add-component panel (topology only). -->
       <button id="add-toggle" class="canvas-btn" type="button"
-              title="Add a component">＋ Add</button>
+              title="Add a component">+ Add</button>
       <aside id="add-panel" aria-label="add component">
         <header class="float-head">
           <h2>Add component</h2>
@@ -582,7 +582,7 @@
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
           <li><strong>Inspector</strong> — a floating panel on the right. It appears when you click a node (charts + overrides + knobs) or a Dashboard tile (formula tree), and closes when you click empty canvas, press <kbd>Esc</kbd>, hit its <em>×</em>, or switch tab.</li>
-          <li><strong>Add component</strong> — the <em>＋ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node color. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
+          <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node color. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in the inspector; edits write to the override file.</li>
           <li><strong>Overrides pill</strong> — count of forms in <code>microgrids/config.&lt;microgrid-id&gt;.overrides.lisp</code>. Every successful canvas / REPL edit appends to that file immediately. Click the pill to open the dialog: tick the rows you want gone, hit <em>Delete selected</em>; the file rewrites and the microgrid reloads in one round trip.</li>
         </ul>
