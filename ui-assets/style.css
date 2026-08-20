@@ -860,7 +860,7 @@ body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
   color: #fff;
   text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 0.9);
 }
-.tier2-power { text-align: right; }
+.tier2-power { text-align: right; white-space: nowrap; }
 body.compact .tier2-row { padding: 5px 10px; }
 body.compact .tier2-health { font-size: 10px; padding: 1px 6px; }
 body.compact .tier2-soc-wrap { height: 12px; }
@@ -902,7 +902,10 @@ body.compact .tier2-soc-text { font-size: 10px; }
 
 .envelope {
   display: grid;
-  grid-template-columns: 1fr 80px;
+  /* Wide enough for "-999.99 kW" on one line — with 80px, a value
+     crossing 100 kW wrapped to two lines and the row height jumped
+     with the live power. */
+  grid-template-columns: 1fr 100px;
   align-items: center;
   gap: 10px;
 }
@@ -939,7 +942,7 @@ body.compact .tier2-soc-text { font-size: 10px; }
   background: var(--accent);
   box-shadow: 0 0 0 2px var(--accent);
 }
-.envelope-current { text-align: right; font-weight: 500; }
+.envelope-current { text-align: right; font-weight: 500; white-space: nowrap; }
 body.compact .tier3-row { padding: 5px 10px; }
 body.compact .tier3-health { font-size: 10px; padding: 1px 6px; }
 body.compact .envelope-track { height: 6px; }
@@ -1223,7 +1226,7 @@ body.compact .envelope-marker { width: 10px; height: 10px; margin-left: -5px; ma
   color: #fff;
   text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 0.9);
 }
-.tier5-power { text-align: right; }
+.tier5-power { text-align: right; white-space: nowrap; }
 body.compact .tier5-row { padding: 5px 10px; }
 body.compact .tier5-health { font-size: 10px; padding: 1px 6px; }
 body.compact .tier5-soc-wrap { height: 12px; }
