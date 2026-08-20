@@ -11,6 +11,14 @@ export function formatScaled(value, unit) {
   return `${value.toFixed(1)} ${unit}`;
 }
 
+// The "nothing is flowing" threshold shared by the chevrons and the
+// pill colours: 1 % of the site's largest rated bound, never under
+// 50 W. Falls back to a 10 kW site when nothing is rated.
+export function deadBandW(siteMaxRatedW) {
+  const max = siteMaxRatedW > 0 ? siteMaxRatedW : 10_000;
+  return Math.max(0.01 * max, 50);
+}
+
 // The node's live label lines, in display order, or [] when nothing
 // has arrived yet (the node then keeps its structural one-line
 // label). One metric per line:
@@ -44,7 +52,7 @@ export function liveLabelLines({ category, p, q, soc, dc }) {
 export function edgeFlow(childPowerW, parentCount, siteMaxRatedW) {
   const max = siteMaxRatedW > 0 ? siteMaxRatedW : 10_000;
   const flow = (childPowerW ?? 0) / Math.max(parentCount, 1);
-  const dead = Math.max(0.01 * max, 50);
+  const dead = deadBandW(siteMaxRatedW);
   if (!Number.isFinite(flow) || Math.abs(flow) < dead) {
     return { chevron: false, towardParent: false, width: 1.5, scale: 0 };
   }
