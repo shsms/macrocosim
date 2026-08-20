@@ -285,7 +285,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // canvas in ONE nodesDS/edgesDS update per second.
   const liveValues = new Map(); // id -> { p, q, soc }
   const liveDirty = new Set();
-  let liveEnabled = true; // Task 5 wires the persisted toggle
+  let liveEnabled = localStorage.getItem("switchyard-topology-live") !== "0";
   let liveFlushTimer = null;
   // Largest |active power bound| seen — the magnitude reference for
   // edge flow scaling. Reset on topology refresh.
@@ -1218,6 +1218,45 @@ export function createGraphCanvas(containerId, adapter = {}) {
         color: e.color?.color ?? null,
         toScale: e.arrows?.to?.scaleFactor ?? null,
       }));
+    },
+    /// The live-overlay toggle. Off reverts every label to its
+    /// structural one-liner and strips the chevrons in one bulk
+    /// update, then re-measures the (now shorter) nodes.
+    setLive(on) {
+      liveEnabled = Boolean(on);
+      if (liveEnabled) {
+        localStorage.removeItem("switchyard-topology-live");
+        for (const id of liveValues.keys()) liveDirty.add(id);
+        flushLive();
+      } else {
+        localStorage.setItem("switchyard-topology-live", "0");
+        liveDirty.clear();
+        if (nodesDS) {
+          nodesDS.update(
+            nodesDS.get().map((n) => {
+              const c = componentById.get(n.id);
+              return { id: n.id, label: c ? shortLabel(c.name) : n.label.split("\n")[0] };
+            }),
+          );
+        }
+        if (edgesDS) {
+          edgesDS.update(
+            edgesDS.get().map((e) => ({
+              id: e.id,
+              width: 1.5,
+              arrows: { to: { enabled: true, scaleFactor: 0.6 }, middle: { enabled: false } },
+              color: { color: "#6b7280", inherit: false },
+            })),
+          );
+        }
+      }
+      if (!manualArrangement) {
+        pendingMeasuredRelayout = true;
+        if (network) network.redraw();
+      }
+    },
+    liveOn() {
+      return liveEnabled;
     },
     /// Turns the magnetic drag grid on or off (the canvas header's
     /// "snap" toggle). Off, nodes drag freely; Alt axis locking works

@@ -128,6 +128,11 @@ export function setupCanvasControls(stripId, canvas) {
       snapBtn.classList.toggle("active");
       canvas.setSnap(snapBtn.classList.contains("active"));
     }
+    const liveBtn = ev.target.closest(".live-btn");
+    if (liveBtn && canvas.setLive) {
+      liveBtn.classList.toggle("active");
+      canvas.setLive(liveBtn.classList.contains("active"));
+    }
   });
 }
 
@@ -371,6 +376,8 @@ async function init() {
   // before the first apply so the listeners are in place.
   topology.setSelectionHandler(showComponent, clearSide);
   setupCanvasControls("topology-controls", topology);
+  const liveBtn = document.querySelector("#topology-controls .live-btn");
+  if (liveBtn) liveBtn.classList.toggle("active", topology.liveOn());
   setupExplainPanel();
   setupCanvasControls("formulas-controls", formulaCanvas());
   // Editor-style keyboard shortcuts. All check that focus isn't in

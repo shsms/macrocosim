@@ -80,6 +80,28 @@ check("e2e: an exporting edge points at the parent", withChevron.some((e) => e.s
 check("e2e: chevron widths clamped", withChevron.every((e) => e.width >= 1 && e.width <= 6), JSON.stringify(withChevron));
 check("e2e: live edges keep the 0.6 end arrowhead", edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(edges));
 
+// ── e2e: live toggle ──────────────────────────────────────────────
+await page.click("#topology-controls .live-btn");
+await new Promise((r) => setTimeout(r, 500));
+const off = await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  return { labels: topology.debugLiveLabels(), edges: topology.debugLiveEdges(), on: topology.liveOn() };
+});
+check("e2e: toggle off clears label lines", off.labels.every((l) => !l.includes("\n")), JSON.stringify(off.labels));
+check("e2e: toggle off clears chevrons", off.edges.every((e) => !e.middleEnabled));
+check("e2e: toggle off reverts edge color", off.edges.every((e) => e.color !== "#79b8ff"), JSON.stringify(off.edges));
+check("e2e: end arrowhead stays default size", off.edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(off.edges));
+check("e2e: liveOn() reports off", off.on === false);
+await page.reload({ waitUntil: "networkidle" });
+await page.click(".mglist-card:not(.mglist-new)").catch(() => {});
+await new Promise((r) => setTimeout(r, 1500));
+const persisted = await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  return topology.liveOn();
+});
+check("e2e: off state survives reload", persisted === false);
+await page.evaluate(() => localStorage.removeItem("switchyard-topology-live"));
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }
