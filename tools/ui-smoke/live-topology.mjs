@@ -44,15 +44,6 @@ const unit = await page.evaluate(async () => {
   eq("fmt null", m.formatScaled(null, "W"), "—");
   eq("fmt NaN", m.formatScaled(Number.NaN, "W"), "—");
 
-  // liveLabelLines: one metric per line, category-specific order
-  eq("lines inverter p then q", m.liveLabelLines({ category: "inverter", p: -24000, q: 1200, soc: null, dc: null }), ["-24.00 kW", "1.20 kVAr"]);
-  eq("lines meter p only", m.liveLabelLines({ category: "meter", p: 500, q: null, soc: null, dc: null }), ["500.0 W"]);
-  eq("lines battery soc then dc", m.liveLabelLines({ category: "battery", p: null, q: null, soc: 85.2, dc: -3000 }), ["SoC 85%", "-3.00 kW"]);
-  eq("lines battery dc only", m.liveLabelLines({ category: "battery", p: null, q: null, soc: null, dc: 0 }), ["0.0 W"]);
-  eq("lines battery ignores ac", m.liveLabelLines({ category: "battery", p: 1, q: 1, soc: null, dc: null }), []);
-  eq("lines ev p then soc", m.liveLabelLines({ category: "ev-charger", p: 3000, q: 7, soc: 40 }), ["3.00 kW", "SoC 40%"]);
-  eq("lines no sample", m.liveLabelLines({ category: "meter", p: null, q: null, soc: null, dc: null }), []);
-
   // edgeFlow: dead band, direction, sharing, clamps
   eq("flow dead", m.edgeFlow(10, 1, 30000).chevron, false);
   eq("flow consume", m.edgeFlow(5000, 1, 30000).towardParent, false);
@@ -132,32 +123,33 @@ const unit = await page.evaluate(async () => {
 });
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
 
-// ── e2e: live labels on the canvas ────────────────────────────────
+// ── e2e: live pill models on the canvas ───────────────────────────
 const DEMO_CARD = '.mglist-card:has-text("Berlin demo")';
-const getLabels = () =>
+const getModels = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
-    return topology.debugLiveLabels();
+    return topology.debugNodeModels();
   });
 const getEdges = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
     return topology.debugLiveEdges();
   });
-const hasLiveLine = (ls) => ls.some((l) => l.includes("\n"));
+const hasValues = (ms) => ms.some((m) => m.hero);
 const hasChevron = (es) => es.some((e) => e.middleEnabled);
 
 await page.click(DEMO_CARD);
 await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
-// Labels land on the next 1 Hz flush; chevrons ride the same flush
+// Values land on the next 1 Hz flush; chevrons ride the same flush
 // but need a power sample for the child first.
-const labels = await waitFor(async () => {
-  const ls = await getLabels();
-  return hasLiveLine(ls) ? ls : null;
+const models = await waitFor(async () => {
+  const ms = await getModels();
+  return hasValues(ms) ? ms : null;
 });
-check("e2e: some node has a kW/W line", labels.some((l) => /\n-?\d+(\.\d+)? (W|kW|MW)/.test(l)), JSON.stringify(labels));
-check("e2e: battery shows SoC line then DC power line", labels.some((l) => /^bat-\d+\nSoC \d+%\n-?\d+(\.\d+)? (W|kW|MW)$/.test(l)), JSON.stringify(labels));
-check("e2e: inverter shows power then reactive on separate lines", labels.some((l) => /^inv-\S+\n-?\d+(\.\d+)? (W|kW|MW)\n-?\d+(\.\d+)? (VAr|kVAr|MVAr)$/.test(l)), JSON.stringify(labels));
+check("e2e: some node shows a power hero", models.some((m) => m.hero && /-?\d+(\.\d+)? (W|kW|MW)/.test(m.hero.text)), JSON.stringify(models));
+check("e2e: battery shows DC power hero and SoC aux", models.some((m) => /^bat-\d+$/.test(m.fullName) && m.hero && m.aux?.kind === "soc"), JSON.stringify(models));
+check("e2e: inverter shows reactive aux", models.some((m) => /^inv-/.test(m.fullName) && m.aux?.kind === "reactive" && /VAr/.test(m.aux.text)), JSON.stringify(models));
+check("e2e: every node carries its #id", models.every((m) => m.idText === `#${m.id}`), JSON.stringify(models));
 const nodeWidths = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
@@ -167,6 +159,8 @@ const widthsA = await nodeWidths();
 await new Promise((r) => setTimeout(r, 2500)); // two more 1 Hz flushes
 const widthsB = await nodeWidths();
 check("e2e: live nodes keep their width across flushes", widthsA.length > 0 && JSON.stringify(widthsA) === JSON.stringify(widthsB), `${JSON.stringify(widthsA)} vs ${JSON.stringify(widthsB)}`);
+check("e2e: widths are content-derived (not all equal)", new Set(widthsA).size > 1, JSON.stringify(widthsA));
+check("e2e: widths inside [96, 200]", widthsA.every((w) => w >= 96 && w <= 200), JSON.stringify(widthsA));
 
 // ── e2e: flow chevrons ────────────────────────────────────────────
 const edges = await waitFor(async () => {
@@ -200,20 +194,55 @@ check("e2e: no-op eval accepted", evalRes === 200, `status ${evalRes}`);
 // Wait for the refresh to land before asserting, so the check can't
 // pass against the pre-refresh DataSets.
 await waitFor(async () => (await getApplyCount()) > appliesBefore);
-const afterRefresh = { labels: await getLabels(), edges: await getEdges() };
-check("e2e: labels survive a topology refresh", hasLiveLine(afterRefresh.labels), JSON.stringify(afterRefresh.labels));
+const afterRefresh = { models: await getModels(), edges: await getEdges() };
+check("e2e: values survive a topology refresh", hasValues(afterRefresh.models), JSON.stringify(afterRefresh.models));
 check("e2e: chevrons survive a topology refresh", hasChevron(afterRefresh.edges), JSON.stringify(afterRefresh.edges));
 
+// ── e2e: formulas canvas uses the same pills, values off ─────────
+await page.click('#mg-subtoggle .mode-btn[data-subview="formulas"]');
+const formulaModels = await waitFor(async () => {
+  const ms = await page.evaluate(async () => {
+    const { formulaCanvas } = await import("/assets/explain.js");
+    return formulaCanvas().debugNodeModels();
+  });
+  return ms.length ? ms : null;
+});
+check("e2e: formulas canvas shows #id on every node, values off", formulaModels.every((m) => m.idText === `#${m.id}` && m.valuesOn === false), JSON.stringify(formulaModels));
+await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+
 // ── e2e: live toggle ──────────────────────────────────────────────
+// Geometry as vis applied it, not just the models: a custom shape
+// binds its ctxRenderer once, so a model update that never reaches
+// the canvas would still show up in debugNodeModels(). Every pill
+// that carries a value row must lose height when values go off.
+const getHeights = () =>
+  page.evaluate(async () => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugNodeHeights();
+  });
+const onHeights = await getHeights();
+const valueRows = (await getModels()).map((m) => Boolean(m.hero || m.aux));
 await page.click("#topology-controls .live-btn");
 const off = await waitFor(async () => {
   const st = await page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
-    return { labels: topology.debugLiveLabels(), edges: topology.debugLiveEdges(), on: topology.liveOn() };
+    return { models: topology.debugNodeModels(), edges: topology.debugLiveEdges(), on: topology.liveOn() };
   });
-  return st.on === false && !hasLiveLine(st.labels) ? st : null;
+  return st.on === false && !hasValues(st.models) ? st : null;
 });
-check("e2e: toggle off clears label lines", off.labels.every((l) => !l.includes("\n")), JSON.stringify(off.labels));
+check("e2e: toggle off clears row 2", off.models.every((m) => !m.hero && !m.aux && m.valuesOn === false), JSON.stringify(off.models));
+const offHeights = await waitFor(
+  async () => {
+    const hs = await getHeights();
+    return hs.length === onHeights.length && hs.every((h, i) => !valueRows[i] || h < onHeights[i]) ? hs : null;
+  },
+  5000,
+).catch(getHeights);
+check(
+  "e2e: toggle off shrinks applied node heights",
+  valueRows.some(Boolean) && offHeights.every((h, i) => !valueRows[i] || h < onHeights[i]),
+  `${JSON.stringify(onHeights)} → ${JSON.stringify(offHeights)}`,
+);
 check("e2e: toggle off clears chevrons", off.edges.every((e) => !e.middleEnabled));
 check("e2e: toggle off reverts edge color", off.edges.every((e) => e.color !== "#79b8ff"), JSON.stringify(off.edges));
 check("e2e: end arrowhead stays default size", off.edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(off.edges));

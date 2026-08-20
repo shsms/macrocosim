@@ -13,13 +13,14 @@
 // - topology.parentsOf / childrenOf / connections / allIds / selectedIds
 // - topology.mainMeterId()       — the meter flagged :main t (if any)
 // - topology.setSelectionHandler — wire showComponent / clearSide to the canvas
-// - topology.highlight(ids)      — temporary highlight (explanation hover)
+// - topology.highlight(ids, subtractedIds) — temporary highlight (explanation hover)
 // - topology.resetLayout(name) / setSnap / alignSelection / scaleSelection
 
 import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./inspect.js";
-import { edgeFlow, liveLabelLines } from "./live.js";
+import { deadBandW, edgeFlow } from "./live.js";
+import { invalidateMeasureCache, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
 import { readSelectedMg, visibleSubview } from "./routing.js";
 
 function getCss(name) {
@@ -56,38 +57,8 @@ function colorFor(c) {
   return CATEGORY_COLOR[c.category] || "#888";
 }
 
-function lighten(hex, n) {
-  const c = parseInt(hex.slice(1), 16);
-  const r = Math.min(255, ((c >> 16) & 255) + n);
-  const g = Math.min(255, ((c >> 8) & 255) + n);
-  const b = Math.min(255, (c & 255) + n);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
-}
-
-// Long names get shortened on the node (the full name stays as a
-// hover tooltip); otherwise a big site's nodes grow so much that the
-// whole layout zooms out to unreadable.
-function shortLabel(name) {
-  return name.length > 22 ? `${name.slice(0, 20)}…` : name;
-}
-
 const LIVE_KEY = "switchyard-topology-live";
 const EDGE_LIVE_COLOR = "#79b8ff";
-// Fixed label box while live is on, so a value changing from
-// "0.0 W" to "-19.93 kW" (or a line appearing) never resizes the
-// node: 132 px fits the widest demo name without wrapping, 54 px holds
-// three lines at the 14 px label font, and the resulting ellipse
-// stays inside the 260 px column separation.
-const LIVE_NODE_WIDTH = 132;
-const LIVE_NODE_HEIGHT = 54;
-function liveNodeConstraints(on) {
-  return on
-    ? {
-        widthConstraint: { minimum: LIVE_NODE_WIDTH, maximum: LIVE_NODE_WIDTH },
-        heightConstraint: { minimum: LIVE_NODE_HEIGHT },
-      }
-    : { widthConstraint: { minimum: 78, maximum: 200 }, heightConstraint: { minimum: 24 } };
-}
 
 // The edge's look with no live flow on it — what buildVisData's
 // `arrows: "to"` plus the visOptions defaults render. A function so
@@ -97,67 +68,6 @@ function edgeRestStyle() {
     width: 1.5,
     arrows: { to: { enabled: true, scaleFactor: 0.6 }, middle: { enabled: false } },
     color: { color: "#6b7280", inherit: false },
-  };
-}
-
-function nodeStyleFor(c) {
-  // An operational mode without telemetry reads as standby: the
-  // component has no reading, so formulas route around it. A real
-  // health problem still wins the border color. The server derives
-  // provides_telemetry from the mode, so the rule lives in one place.
-  const noTelemetry = c.provides_telemetry === false;
-  const effectiveHealth =
-    (c.health || "ok") === "ok" && noTelemetry ? "standby" : c.health || "ok";
-  const healthBorder = {
-    ok: "#1c2128",     // matches --bg — subtle outline at rest
-    standby: "#c4ad55", // toned-down yellow
-    error: "#e58275",   // toned-down red, matches --bad
-  }[effectiveHealth];
-  // Hidden meters draw with a dashed border + a thicker stroke so
-  // the dash pattern reads cleanly. Health-error / standby still
-  // win the colour since "this is faulted" is more urgent than
-  // "this is hidden". borderDashes accepts an [on, off] array.
-  const healthWidth = effectiveHealth === "ok" ? (c.hidden ? 2 : 1) : 3;
-  const bg = colorFor(c);
-  return {
-    id: c.id,
-    label: shortLabel(c.name),
-    shape: "ellipse",
-    color: {
-      background: bg,
-      border: healthBorder,
-      // Selected: lighter background + accent border. Hover: a
-      // smaller lift so it's a softer "you can click this" cue.
-      highlight: { background: lighten(bg, 36), border: "#79b8ff" },
-      hover: { background: lighten(bg, 18), border: "#b0b8c1" },
-    },
-    borderWidth: healthWidth,
-    borderWidthSelected: 4,
-    borderDashes: c.hidden ? [4, 3] : false,
-    // vis-network's default `chosen` behaviour bolds the label on
-    // selection (and on hover). Drop the label part — color
-    // changes (selected border, hover border) carry the signal,
-    // we don't need a font-weight shift on top.
-    chosen: { node: true, label: false },
-    font: {
-      color: "#1c2128",
-      face: "ui-monospace, monospace",
-      size: 14,
-    },
-    // Tight vertical padding because the ellipse already adds its
-    // own √2-ish inflation to fit the inscribed text rectangle —
-    // any extra top/bottom margin compounds and produces fat ovals
-    // that overlap in dense stacks.
-    margin: { top: 4, right: 16, bottom: 4, left: 16 },
-    // Width floor keeps short-label nodes (grid-1, meter-2) from
-    // shrinking below the readable threshold. The maximum is a
-    // backstop under shortLabel: a node must never grow past the
-    // column separation, or columns overlap.
-    widthConstraint: { minimum: 78, maximum: 200 },
-    heightConstraint: { minimum: 24 },
-    // Hover tooltip: the component id (as it appears in formulas)
-    // plus the full, untruncated name.
-    title: `#${c.id} — ${c.name}`,
   };
 }
 
@@ -326,6 +236,30 @@ export function createGraphCanvas(containerId, adapter = {}) {
   let liveMg = null;
   // Smoke-test hook: how many times apply() ran.
   let applyCount = 0;
+  // Pill sizes vis has not applied yet. vis-network takes a custom
+  // shape's `nodeDimensions` into account only on the draw *after*
+  // the one that reported them, and only when the node is flagged
+  // for refresh — so the renderer reports every size, and
+  // afterDrawing re-stamps the nodes whose size moved (any update
+  // flags the refresh), and schedules a measured relayout when the
+  // axis that moved is one the current layout spends.
+  const knownSize = new Map(); // id -> { w, h } last reported
+  const sizeDirty = new Set();
+  // The pill model each node's renderer draws, by component id.
+  const pillModels = new Map();
+  // Scratch 2-D context for measuring pills outside a draw. vis's own
+  // getBoundingBox() is useless for custom shapes (ShapeBase falls
+  // back to the generic `size` option), so the layout measures the
+  // models itself — the same cached measurement the renderer draws
+  // with.
+  let measureCtx = null;
+  function noteSize(id, w, h) {
+    const prev = knownSize.get(id);
+    if (prev && prev.w === w && prev.h === h) return;
+    knownSize.set(id, { w, h });
+    sizeDirty.add(id);
+  }
+  const valuesDefault = adapter.valuesOn !== false;
 
   function syncLiveMg() {
     const mg = readSelectedMg();
@@ -336,12 +270,36 @@ export function createGraphCanvas(containerId, adapter = {}) {
     liveMg = mg;
   }
 
-  // Name plus the live metric lines (when live is on and values
-  // exist) — the one label builder for flushes and refreshes.
-  function liveLabel(c) {
-    const entry = liveEnabled ? liveValues.get(c.id) : null;
-    const lines = entry ? liveLabelLines({ category: c.category, ...entry }) : [];
-    return [shortLabel(c.name), ...lines].join("\n");
+  // The vis node for a component: a custom-drawn pill carrying the
+  // component's last live sample (when values are on and a sample
+  // exists). No `label`: the pill draws its own text, and a label vis
+  // thinks it has to place widens the node's bounding box (see the
+  // `size` re-stamp in afterDrawing). `title` (the vis tooltip) only
+  // on canvases without a hover card.
+  function nodeFor(c) {
+    const model = pillModel(c, liveEnabled ? liveValues.get(c.id) : null, {
+      valuesOn: liveEnabled && valuesDefault,
+      dotColor: colorFor(c),
+      deadBand: deadBandW(maxAbsBoundW),
+    });
+    if (redHighlighted.includes(c.id)) model.highlight = "subtracted";
+    // vis-network binds a custom shape's ctxRenderer when the node is
+    // FIRST created and ignores every later one (Node.updateShape
+    // re-creates the shape only when the shape *name* changes), so a
+    // new sample has to reach the canvas through the very model
+    // object that renderer closed over: assign into it in place.
+    const kept = pillModels.get(c.id);
+    if (kept) Object.assign(kept, model);
+    else pillModels.set(c.id, model);
+    const drawn = kept ?? model;
+    const node = {
+      id: c.id,
+      shape: "custom",
+      ctxRenderer: pillRenderer(drawn, noteSize),
+      pillModel: drawn,
+    };
+    if (adapter.tooltip !== false) node.title = `#${c.id} — ${c.name}`;
+    return node;
   }
 
   function liveEntry(id) {
@@ -368,16 +326,9 @@ export function createGraphCanvas(containerId, adapter = {}) {
     if (!liveEnabled || !nodesDS || liveDirty.size === 0) return;
     if (visibleSubview() !== "topology") return;
     const nodeUpdates = [];
-    let linesChanged = false;
     for (const id of liveDirty) {
       const c = componentById.get(id);
-      if (!c) continue;
-      const label = liveLabel(c);
-      const prev = nodesDS.get(id);
-      if (prev && prev.label !== label) {
-        if (prev.label.split("\n").length !== label.split("\n").length) linesChanged = true;
-        nodeUpdates.push({ id, label });
-      }
+      if (c) nodeUpdates.push(nodeFor(c));
     }
     // Edge flow: recompute every edge that touches a dirty child.
     // Parent counts come from the live edge set (parallel paths
@@ -416,9 +367,6 @@ export function createGraphCanvas(containerId, adapter = {}) {
     liveDirty.clear();
     if (nodeUpdates.length) nodesDS.update(nodeUpdates);
     if (edgeUpdates.length) edgesDS.update(edgeUpdates);
-    // A node gaining/losing its second line changes its height —
-    // re-measure so the tidy layout keeps its spacing.
-    if (linesChanged && !manualArrangement) pendingMeasuredRelayout = true;
   }
   function applyPendingReveal() {
     if (!pendingReveal || !network) return false;
@@ -548,26 +496,23 @@ export function createGraphCanvas(containerId, adapter = {}) {
 
   function restoreRedHighlights() {
     if (!redHighlighted.length) return;
-    nodesDS.update(
-      redHighlighted
-        .filter((id) => componentById.has(id))
-        .map((id) => ({ id, color: nodeStyleFor(componentById.get(id)).color })),
-    );
+    const ids = redHighlighted.filter((id) => componentById.has(id));
     redHighlighted = [];
+    nodesDS.update(ids.map((id) => nodeFor(componentById.get(id))));
   }
 
   function buildVisData(data) {
     componentById.clear();
     const nodes = data.components.map((c) => {
       componentById.set(c.id, c);
-      const node = nodeStyleFor(c);
-      // Carry the live lines so a topology refresh doesn't snap the
-      // label back to one line until the next flush, and the fixed
-      // live-mode box so the refresh doesn't resize nodes either.
-      node.label = liveLabel(c);
-      Object.assign(node, liveNodeConstraints(liveEnabled));
-      return node;
+      return nodeFor(c);
     });
+    // Forget the models and sizes of components that left.
+    for (const id of [...pillModels.keys()]) {
+      if (componentById.has(id)) continue;
+      pillModels.delete(id);
+      knownSize.delete(id);
+    }
     const visibleEdges = data.connections.map(([p, c]) => ({
       id: `${p}-${c}`,
       from: p,
@@ -670,6 +615,32 @@ export function createGraphCanvas(containerId, adapter = {}) {
       // later relayouts keep the user's pan/zoom, matching how
       // topology refreshes behave.
       network.on("afterDrawing", () => {
+        if (sizeDirty.size) {
+          // A refresh may have removed a node since it last drew; an
+          // update() for an unknown id would add a blank one back.
+          const ids = [...sizeDirty].filter((id) => nodesDS.get(id) && knownSize.has(id));
+          sizeDirty.clear();
+          if (ids.length) {
+            // The stamped value does little: ShapeBase.resize takes
+            // `2 * size` only as the fallback for a custom shape that
+            // has not reported nodeDimensions yet, so half the pill's
+            // larger side is what the very first draw and any
+            // bounding box read before it get to work with.
+            // The *update* is the point. resize() re-reads
+            // customSizeWidth/Height only when the node is flagged
+            // for refresh, so without an update() vis would keep
+            // measuring, fitting and hit-testing this node against
+            // the box it had one size ago.
+            nodesDS.update(
+              ids.map((id) => {
+                const { w, h } = knownSize.get(id);
+                return { id, size: Math.max(w, h) / 2 };
+              }),
+            );
+            if (!manualArrangement) pendingMeasuredRelayout = true;
+            return;
+          }
+        }
         if (pendingMeasuredRelayout) {
           pendingMeasuredRelayout = false;
           if (!manualArrangement) layoutHierarchy();
@@ -678,6 +649,13 @@ export function createGraphCanvas(containerId, adapter = {}) {
           initialFitDone = true;
           if (!applyPendingReveal()) network.fit({ animation: false });
         }
+      });
+      // Fonts may land after the first paint: re-measure everything
+      // and let the size-dirty path relayout.
+      pillFontsReady.then(() => {
+        invalidateMeasureCache();
+        knownSize.clear();
+        nodesDS.update(nodesDS.getIds().map((id) => ({ id })));
       });
       network.on("click", (params) => {
         const shiftKey = params.event?.srcEvent?.shiftKey;
@@ -972,12 +950,19 @@ export function createGraphCanvas(containerId, adapter = {}) {
   }
 
   function nodeSizes(ids) {
+    if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
     const width = new Map();
     const height = new Map();
     for (const id of ids) {
-      const box = network.getBoundingBox(id);
-      width.set(id, box ? box.right - box.left : 120);
-      height.set(id, box ? box.bottom - box.top : 34);
+      const model = pillModels.get(id);
+      if (!model) {
+        // Every laid-out node is built by nodeFor, so a missing model
+        // means the two went out of sync — lay out on a guess, but say so.
+        console.error(`topology: no pill model for node ${id}; laying out on a guess`);
+      }
+      const d = model ? measurePill(measureCtx, model) : null;
+      width.set(id, d ? d.width : 120);
+      height.set(id, d ? d.height : 34);
     }
     return { width, height };
   }
@@ -1205,14 +1190,8 @@ export function createGraphCanvas(containerId, adapter = {}) {
       restoreRedHighlights();
       const subs = subtractedIds.filter((id) => componentById.has(id));
       if (subs.length) {
-        nodesDS.update(
-          subs.map((id) => {
-            const style = nodeStyleFor(componentById.get(id));
-            style.color.highlight = { background: "#e58275", border: "#c25f52" };
-            return { id, color: style.color };
-          }),
-        );
         redHighlighted = subs;
+        nodesDS.update(subs.map((id) => nodeFor(componentById.get(id))));
       }
       network.selectNodes(ids.filter((id) => componentById.has(id)));
     },
@@ -1277,18 +1256,24 @@ export function createGraphCanvas(containerId, adapter = {}) {
     debugApplyCount() {
       return applyCount;
     },
-    /// Smoke-test hook: each node's drawn width — live mode must
-    /// keep them uniform regardless of value lengths.
+    /// Smoke-test hook: the width vis-network applied to each pill —
+    /// content-derived, stable across flushes. Read off the shape
+    /// rather than getBoundingBox(), which ignores a custom shape's
+    /// reported dimensions.
     debugNodeWidths() {
       if (!network || !nodesDS) return [];
-      return nodesDS.getIds().map((id) => {
-        const b = network.getBoundingBox(id);
-        return b ? Math.round(b.right - b.left) : null;
-      });
+      return nodesDS.getIds().map((id) => network.body.nodes[id]?.shape?.width ?? null);
     },
-    /// Smoke-test hook: every node label currently on the canvas.
-    debugLiveLabels() {
-      return nodesDS ? nodesDS.get().map((n) => n.label) : [];
+    /// Smoke-test hook: the height vis-network applied to each pill.
+    /// Read off the shape for the same reason as debugNodeWidths:
+    /// getBoundingBox() ignores a custom shape's reported dimensions.
+    debugNodeHeights() {
+      if (!network || !nodesDS) return [];
+      return nodesDS.getIds().map((id) => network.body.nodes[id]?.shape?.height ?? null);
+    },
+    /// Smoke-test hook: every node's pill model as drawn.
+    debugNodeModels() {
+      return nodesDS ? nodesDS.get().map((n) => n.pillModel) : [];
     },
     /// Smoke-test hook: every edge's live flow chevron state.
     debugLiveEdges() {
@@ -1302,20 +1287,16 @@ export function createGraphCanvas(containerId, adapter = {}) {
         toScale: e.arrows?.to?.scaleFactor ?? null,
       }));
     },
-    /// The live-overlay toggle. Off reverts every label to its
-    /// structural one-liner and strips the chevrons in one bulk
-    /// update, then re-measures the (now shorter) nodes.
+    /// The live-overlay toggle. Off drops every pill's value row
+    /// and strips the chevrons in one bulk update, then re-measures
+    /// the (now shorter) nodes.
     setLive(on) {
       liveEnabled = Boolean(on);
-      // Both directions re-stamp every node's label box: fixed
-      // while live (no resizing with values), natural when off.
+      // Both directions rebuild every pill: with its value row while
+      // live, name-only when off.
       if (nodesDS) {
         nodesDS.update(
-          nodesDS.get().map((n) => {
-            const c = componentById.get(n.id);
-            const label = c ? liveLabel(c) : n.label.split("\n")[0];
-            return { id: n.id, label, ...liveNodeConstraints(liveEnabled) };
-          }),
+          nodesDS.getIds().filter((id) => componentById.has(id)).map((id) => nodeFor(componentById.get(id))),
         );
       }
       if (liveEnabled) {
@@ -1609,6 +1590,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
 // The Topology subview's canvas: full editing — Ctrl-drag connect
 // through the eval/overrides path, and the edit context menu.
 export const topology = createGraphCanvas("topology", {
+  tooltip: false,
   onConnect(from, to) {
     evalQuoted(`(connect ${from} ${to})`, "Connect failed");
   },

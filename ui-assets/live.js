@@ -1,5 +1,6 @@
-// Pure helpers for the live topology overlay: label text and edge
-// flow attributes. No DOM, no vis-network — unit-testable alone.
+// Pure helpers for the live topology overlay: number formatting,
+// the dead band and edge flow attributes. No DOM, no vis-network —
+// unit-testable alone.
 
 // W → kW → MW ladder, shared with the dashboard's fmt() so every
 // power readout in the app scales identically.
@@ -17,30 +18,6 @@ export function formatScaled(value, unit) {
 export function deadBandW(siteMaxRatedW) {
   const max = siteMaxRatedW > 0 ? siteMaxRatedW : 10_000;
   return Math.max(0.01 * max, 50);
-}
-
-// The node's live label lines, in display order, or [] when nothing
-// has arrived yet (the node then keeps its structural one-line
-// label). One metric per line:
-//   battery     → SoC, then DC power (batteries report no AC power)
-//   ev-charger  → AC power, then SoC
-//   everything else → AC power, then reactive power when reported
-export function liveLabelLines({ category, p, q, soc, dc }) {
-  const finite = (v) => v != null && Number.isFinite(v);
-  const lines = [];
-  if (category === "battery") {
-    if (finite(soc)) lines.push(`SoC ${soc.toFixed(0)}%`);
-    if (finite(dc)) lines.push(formatScaled(dc, "W"));
-    return lines;
-  }
-  if (!finite(p)) return lines;
-  lines.push(formatScaled(p, "W"));
-  if (category === "ev-charger") {
-    if (finite(soc)) lines.push(`SoC ${soc.toFixed(0)}%`);
-  } else if (finite(q)) {
-    lines.push(formatScaled(q, "VAr"));
-  }
-  return lines;
 }
 
 // Flow attributes for a parent→child edge. `childPowerW` is the

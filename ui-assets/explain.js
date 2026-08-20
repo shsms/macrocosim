@@ -27,6 +27,7 @@ let canvas = null;
 export function formulaCanvas() {
   if (!canvas) {
     canvas = createGraphCanvas("formula-topology", {
+      valuesOn: false,
       onContextMenu(x, y) {
         const sel = canvas.selectedIds();
         const items = [];
