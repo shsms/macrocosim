@@ -1271,3 +1271,171 @@ Deferred refinements, pick up if the need shows:
   and persists despite changing nothing; a structure hash (old option
   A) layered on the counter would suppress it.
 
+* Potential designs to consider — UX ideas (2026-08-20)
+** TODO Live topology: values and flow on the canvas              :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Nodes show current kW / SoC / health as badges; edges get flow
+direction + thickness from live power. Makes Topology the screen
+operators keep open instead of cross-referencing the dashboard.
+(Large. Top-3 pick; design started on its own branch.)
+
+** TODO Explain-this-number: formula tree with live values        :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Click any dashboard value to see its formula tree with live values
+substituted at every node: grid = #2 (-5.81 kW) = #3 (-24.0) + ...
+The explain API already returns the tree; join it with live
+telemetry. Turns "why is grid -5.8 kW" into one click. (Medium.
+Top-3 pick.)
+
+** TODO Command palette (Ctrl+K)                                  :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Jump to any component by name/id (select + reveal), switch
+microgrid/subview, run a scenario, eval a snippet. (Medium. Top-3
+pick.)
+
+** TODO Dashboard power-flow card                                 :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Sankey-ish tile: grid <-> site, PV -> load/battery, battery <-> load
+with live numbers on the arrows — "where is the power going" at a
+glance instead of assembling it from seven tiles. (Medium-large.)
+
+** TODO Dashboard alert strip                                            :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Components in error/standby as chips at the top of the dashboard
+with jump-to-node links; today the signal hides in pulse-bar counts.
+(Small.)
+
+** TODO Scenario run timeline                                     :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Cues, checks, events as markers on a horizontal time axis with a
+progress cursor; pass/fail lands where it fired; optionally overlay
+the key metric (battery power during an outage). (Medium.)
+
+** TODO Dispatch calendar/timeline view                                  :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Draw the next 7 days of dispatch windows on a strip — recurrence as
+text ("daily x2") hides overlaps and gaps. (Medium.)
+
+** TODO Time scrubbing across live views                          :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Shared pause + scrub control freezing every live view and walking
+back through the last 15 min — the history rings already hold the
+data. Replay instead of memory. (Large, most radical.)
+
+** TODO Topology quick actions and edit lock                             :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Right-click: set power / health / mode without opening the
+inspector (small-medium). Plus a view/edit lock toggle so accidental
+drags can't rearrange a layout (small).
+
+** TODO Landing cards with live mini-stats                               :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Grid-power sparkline + health dots per microgrid card instead of
+static component counts. (Small.)
+
+** TODO Inspector setpoint ergonomics                                    :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Slider bounded by the live envelope with a TTL picker instead of
+bare number fields; show the command's remaining TTL ticking down.
+(Small-medium.)
+
+** TODO Inspector: pin and compare two components                        :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Pin a component's charts, open a second one side by side — e.g.
+battery vs its inverter during a clamp. (Medium.)
+
+** TODO Data-freshness indicator                                         :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+A live/stale badge driven by WS heartbeat: when the socket drops or
+the tab was throttled, views say "stale since hh:mm:ss" instead of
+silently showing old numbers; reconnect toast. (Small-medium.)
+
+** TODO Structured log pane                                              :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Filter by level/component, search, click a component id in a log
+line to select its node. (Medium.)
+
+** TODO REPL history browser and snippets                                :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Persisted eval history with search; a saved-snippets panel for
+common commands (set-power loops, scenario starts). (Small-medium.)
+
+** TODO Subtree collapse for large topologies                            :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Collapse a meter's subtree into one summary node (sum of powers,
+worst health) for 100+-component sites; expand on click. (Medium-
+large.)
+
+** TODO Scenario run comparison                                          :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:12]
+:END:
+
+Diff two runs' reports side by side (checks passed/failed, peak
+stats) — regression checking after a physics change. (Medium.)
+
+** TODO Per-row mini sparklines                                          :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:13]
+:END:
+
+A tiny power/SoC history inline in each component row — trend
+without opening the inspector. (Small-medium; watch render cost
+with many rows.)
+
+** TODO Export surfaces                                                  :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 15:13]
+:END:
+
+PNG export of the topology canvas; CSV download buttons where the
+data already exists (history windows, scenario CSVs are served
+already). (Small.)
