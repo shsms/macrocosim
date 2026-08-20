@@ -138,7 +138,9 @@ impl ReactivePath {
     /// the request exceeds the envelope.
     pub fn accept_setpoint(&self, p_live: f32, vars: f32) -> Result<(), SetpointError> {
         let (lo, hi) = self.capability.lock().q_bounds_at(p_live);
-        if vars < lo || vars > hi {
+        // NaN compares false against both edges; a plain range check
+        // would let it through into the ramp.
+        if !vars.is_finite() || vars < lo || vars > hi {
             return Err(SetpointError::OutOfBounds {
                 value: vars,
                 unit: "VAr",
