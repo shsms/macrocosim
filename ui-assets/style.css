@@ -2053,7 +2053,10 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="formulas"] #
   min-width: 0;
   min-height: 0;
 }
-#formula-topology { position: absolute; inset: 0; }
+/* Top inset reserves a band for the floating layout toolbar, so the
+   fitted graph can never render under it (the formulas pane is
+   short enough that a full-height fit otherwise collides). */
+#formula-topology { position: absolute; inset: 46px 0 0 0; }
 .fsplitter {
   grid-area: fsplit;
   background: var(--border);
