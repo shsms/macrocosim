@@ -290,6 +290,10 @@ await waitFor(async () => {
   });
   return e && Number.isFinite(e.p) && Math.abs(e.p) > 1000;
 }, 15000);
+// With the inverter charging, the battery (which reports only DC
+// power) must get a chevron on its edge from inverter 1001.
+const batteryEdge = await waitFor(async () => (await getEdges()).find((e) => e.id === "1001-1000" && e.middleEnabled), 15000).catch(() => null);
+check("e2e: the battery edge gets a chevron from DC power", Boolean(batteryEdge), JSON.stringify((await getEdges()).find((e) => e.id === "1001-1000")));
 const readCard = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");

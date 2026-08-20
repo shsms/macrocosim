@@ -513,7 +513,10 @@ export function createGraphCanvas(containerId, adapter = {}) {
       for (const e of edgesDS.get()) {
         if (!liveDirty.has(e.to)) continue;
         const child = liveValues.get(e.to);
-        const flow = edgeFlow(child ? child.p : null, parentCount.get(e.to) || 1, maxAbsBoundW);
+        // Batteries report no AC power; the inverter→battery edge
+        // carries their DC power instead.
+        const childPower = child ? (child.p ?? child.dc) : null;
+        const flow = edgeFlow(childPower, parentCount.get(e.to) || 1, maxAbsBoundW);
         if (!flow.chevron) {
           edgeUpdates.push({ id: e.id, ...edgeRestStyle() });
           continue;
