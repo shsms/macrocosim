@@ -1439,3 +1439,41 @@ with many rows.)
 PNG export of the topology canvas; CSV download buttons where the
 data already exists (history windows, scenario CSVs are served
 already). (Small.)
+
+** TODO Pill nodes: colour that pops at every zoom level             :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-20 Do 23:40]
+:END:
+
+The pill redesign (branch live-topology) moved category colour from
+the whole ellipse to a 9 px dot, and the pill surface (#242a33) sits
+only a few steps above the background (#1c2128). Zoomed out on a
+large graph the nodes barely register and the dot is sub-pixel; the
+zoomed-in look is right and should stay.
+
+Zoom-independent changes first (small, reversible, spec-able now):
+- Replace the dot with a 4 px category bar on the pill's left edge
+  (clipped to the rounded corner). A bar reads as colour at small
+  sizes where a dot vanishes, and frees ~13 px of width.
+- Border contrast: #323a45 -> ~#3d4654 at 1.25 px. Biggest win for
+  "are there nodes here" at any zoom, no colour change.
+- Live tint: blend 6-8 % of the hero colour into the surface (green
+  exporting, blue importing, neutral when dead). Subliminal at 1x,
+  the only "alive" signal when zoomed out.
+- Move the pill / hover-card palette (pill.js COLORS, .hover-card
+  CSS) onto :root tokens like the rest of the UI so a re-theme
+  reaches the canvas; today's literals deliberately differ from
+  --bg-elev/--border/--fg and should become named tokens.
+
+Semantic zoom second (the renderer redraws every frame and
+topology.js has network.getScale(), so LOD per draw is cheap):
+- >= 0.8: today's look (+ the bar).
+- 0.4-0.8: surface one step lighter (#2a313b), border a ~35 % tint
+  of the category colour, hero number only, name dropped.
+- < 0.4: no text; the surface takes the category colour at ~55 %
+  saturation (the old "pop"); hidden = dashed outline; selection
+  ring unchanged.
+Thresholds are guesses — mock a 60-node graph at three zooms (like
+the node-studies artifact) before fixing them. Hysteresis around
+each threshold so panning at the boundary doesn't flicker.
+(Medium. Requested 2026-08-20 after the pill redesign.)
