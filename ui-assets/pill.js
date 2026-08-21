@@ -33,6 +33,27 @@ export const COLORS = {
 
 const finite = (v) => v != null && Number.isFinite(v);
 
+// Linear blend of two #rrggbb colours; t = 0 gives a, t = 1 gives b.
+export function mixHex(a, b, t) {
+  if (!/^#[0-9a-f]{6}$/i.test(a) || !/^#[0-9a-f]{6}$/i.test(b)) return a;
+  const ch = (h, i) => parseInt(h.slice(i, i + 2), 16);
+  const out = [1, 3, 5].map((i) => Math.round(ch(a, i) + (ch(b, i) - ch(a, i)) * t));
+  return `#${out.map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("")}`;
+}
+
+// The pill border carries a hint of the category so the node still
+// reads as "a battery" when the bar is a few pixels wide.
+export function borderColor(catColor) {
+  return mixHex(COLORS.border, catColor, 0.35);
+}
+
+// A faint flow tint on the surface: export leans green, import blue,
+// a dead or unknown value stays neutral. Never with values off.
+export function surfaceColor(heroValue, deadBand, valuesOn) {
+  if (!valuesOn || !finite(heroValue) || Math.abs(heroValue) < deadBand) return COLORS.surface;
+  return mixHex(COLORS.surface, heroValue < 0 ? COLORS.export : COLORS.import, 0.07);
+}
+
 // Consumption-positive: import blue, export green, dead band dim.
 export function powerColor(value, deadBand) {
   if (!finite(value) || Math.abs(value) < deadBand) return COLORS.dim;
@@ -65,12 +86,13 @@ function socAux(soc) {
 }
 
 // component: an /api/topology component; live: { p, q, soc, dc } or
-// null; options: { valuesOn, dotColor, deadBand }.
-export function pillModel(c, live, { valuesOn, dotColor, deadBand }) {
+// null; options: { valuesOn, catColor, deadBand }.
+export function pillModel(c, live, { valuesOn, catColor, deadBand }) {
   let hero = null;
   let aux = null;
+  let power = null;
   if (valuesOn && live) {
-    const power = c.category === "battery" ? live.dc : live.p;
+    power = c.category === "battery" ? live.dc : live.p;
     if (c.category === "battery" || c.category === "ev-charger") {
       aux = socAux(live.soc);
     } else if (finite(live.q)) {
@@ -79,18 +101,23 @@ export function pillModel(c, live, { valuesOn, dotColor, deadBand }) {
     if (finite(power)) hero = { text: formatScaled(power, "W"), color: powerColor(power, deadBand) };
     else if (aux) hero = { text: "—", color: COLORS.dim };
   }
+  const heroValue = finite(power) ? power : null;
   return {
     id: c.id,
     name: shortName(c.name),
     fullName: c.name,
     idText: `#${c.id}`,
-    dotColor,
+    catColor,
     health: effectiveHealth(c),
     hidden: Boolean(c.hidden),
     valuesOn: Boolean(valuesOn),
     hero,
+    heroValue,
+    deadBand,
     aux,
     highlight: "none",
+    surface: surfaceColor(heroValue, deadBand, valuesOn),
+    border: borderColor(catColor),
   };
 }
 
@@ -106,8 +133,8 @@ const GEOM = {
   maxWidth: 200,
   padX: 10,
   padY: 6,
-  dot: 9,
-  dotGap: 8,
+  bar: 6,
+  barGap: 10,
   idGap: 6,
   rowGap: 3,
   dividerGap: 8,
@@ -164,14 +191,14 @@ function auxWidth(ctx, aux) {
 // `model.minWidth` is an optional lower bound the canvas owner may
 // raise per node (topology.js ratchets it to the widest the node has
 // ever been, so a value that shrinks by a character doesn't shuffle
-// the layout). The content is laid out from the dot either way, so a
+// the layout). The content is laid out from the bar either way, so a
 // floored pill simply carries more padding on its right.
 export function measurePill(ctx, model) {
   const key = [model.valuesOn ? 1 : 0, model.minWidth || 0, model.name, model.idText, model.hero?.text ?? "", model.aux?.kind ?? "", model.aux?.text ?? ""].join("\u0000");
   const hit = measureCache.get(key);
   if (hit) return hit;
   const f = fonts(model);
-  const textLeft = GEOM.padX + GEOM.dot + GEOM.dotGap;
+  const textLeft = GEOM.bar + GEOM.barGap;
   const row2 = hasRow2(model);
   let row2W = 0;
   let heroW = 0;
@@ -218,7 +245,7 @@ function borderStyle(model, state) {
   if (model.highlight === "subtracted") return { color: COLORS.bad, width: 2 };
   if (state.selected) return { color: COLORS.accent, width: 2 };
   if (state.hover) return { color: COLORS.hover, width: 1.5 };
-  return { color: COLORS.border, width: model.hidden ? 1.5 : 1 };
+  return { color: model.border, width: 1.5 };
 }
 
 // Draws the pill centred on (x, y). `state` is vis's
@@ -231,7 +258,7 @@ export function drawPill(ctx, x, y, model, state) {
   const top = y - d.height / 2;
   // surface + border
   roundRect(ctx, left, top, d.width, d.height, GEOM.radius);
-  ctx.fillStyle = COLORS.surface;
+  ctx.fillStyle = model.surface;
   ctx.fill();
   const b = borderStyle(model, state);
   ctx.setLineDash(model.hidden ? [4, 3] : []);
@@ -239,31 +266,32 @@ export function drawPill(ctx, x, y, model, state) {
   ctx.strokeStyle = b.color;
   ctx.stroke();
   ctx.setLineDash([]);
-  // category dot + health ring
-  const dotX = left + GEOM.padX + GEOM.dot / 2;
-  const dotY = top + GEOM.padY + f.row1H / 2;
-  ctx.beginPath();
-  ctx.arc(dotX, dotY, GEOM.dot / 2, 0, Math.PI * 2);
-  ctx.fillStyle = model.dotColor;
-  ctx.fill();
+  // category bar on the left edge, clipped to the rounded corner
+  ctx.save();
+  roundRect(ctx, left, top, d.width, d.height, GEOM.radius);
+  ctx.clip();
+  ctx.fillStyle = model.catColor;
+  ctx.fillRect(left, top, GEOM.bar, d.height);
+  ctx.restore();
+  // health ring around the whole pill
   if (model.health !== "ok") {
-    ctx.beginPath();
-    ctx.arc(dotX, dotY, GEOM.dot / 2 + 2.5, 0, Math.PI * 2);
+    roundRect(ctx, left - 2.5, top - 2.5, d.width + 5, d.height + 5, GEOM.radius + 2.5);
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = model.health === "error" ? COLORS.bad : COLORS.standby;
     ctx.stroke();
   }
   // row 1: name + id
+  const row1Y = top + GEOM.padY + f.row1H / 2;
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   let tx = left + d.textLeft;
   ctx.font = f.name;
   ctx.fillStyle = COLORS.fg;
-  ctx.fillText(d.name, tx, dotY);
+  ctx.fillText(d.name, tx, row1Y);
   tx += d.nameW + GEOM.idGap;
   ctx.font = f.id;
   ctx.fillStyle = COLORS.muted;
-  ctx.fillText(model.idText, tx, dotY + 0.5);
+  ctx.fillText(model.idText, tx, row1Y + 0.5);
   if (!d.row2H) return;
   // row 2: hero | aux
   const row2Y = top + GEOM.padY + f.row1H + GEOM.rowGap + ROW2_H / 2;

@@ -68,11 +68,11 @@ const unit = await page.evaluate(async () => {
   eq("reactiveColor lagging-with-import", pill.reactiveColor(800, 300), IMPQ);
   eq("reactiveColor leading", pill.reactiveColor(-800, 300), EXPQ);
   eq("reactiveColor dead", pill.reactiveColor(10, 300), DIM);
-  const opts = { valuesOn: true, dotColor: "#abcdef", deadBand: 300 };
+  const opts = { valuesOn: true, catColor: "#abcdef", deadBand: 300 };
   const inv = { id: 12, name: "Battery Inverter 1", category: "inverter", subtype: "battery", hidden: false, health: "ok", provides_telemetry: true };
   const mInv = pill.pillModel(inv, { p: -19930, q: 1200, soc: null, dc: null }, opts);
   eq("model id text", mInv.idText, "#12");
-  eq("model dot", mInv.dotColor, "#abcdef");
+  eq("model cat colour", mInv.catColor, "#abcdef");
   eq("model hero", mInv.hero, { text: "-19.93 kW", color: EXP });
   eq("model aux reactive", mInv.aux, { kind: "reactive", text: "1.20 kVAr", color: IMPQ });
   eq("model health ok", mInv.health, "ok");
@@ -118,6 +118,20 @@ const unit = await page.evaluate(async () => {
   eq("width floor pads a narrow pill", pill.measurePill(ctx, { ...shortModel(), minWidth: 150 }).width, 150);
   eq("width floor still clamped at max", pill.measurePill(ctx, { ...shortModel(), minWidth: 400 }).width, 200);
   eq("width floor under the content is ignored", pill.measurePill(ctx, { ...pill.pillModel(inv, { p: -19930, q: 1200, soc: null, dc: null }, opts), minWidth: 40 }).width, dLong.width);
+
+  // bar + tinted border + live tint
+  eq("mix 0", pill.mixHex("#000000", "#ffffff", 0), "#000000");
+  eq("mix 1", pill.mixHex("#000000", "#ffffff", 1), "#ffffff");
+  eq("mix half", pill.mixHex("#000000", "#ffffff", 0.5), "#808080");
+  eq("mix rejects short hex", pill.mixHex("#888", "#ffffff", 0.5), "#888");
+  eq("mix rejects rgb()", pill.mixHex("#242a33", "rgb(1,2,3)", 0.5), "#242a33");
+  eq("border is 35 % category over border grey", pill.borderColor("#6fbf73"), pill.mixHex(pill.COLORS.border, "#6fbf73", 0.35));
+  eq("surface neutral when dead", pill.surfaceColor(100, 300, true), pill.COLORS.surface);
+  eq("surface neutral when null", pill.surfaceColor(null, 300, true), pill.COLORS.surface);
+  eq("surface neutral with values off", pill.surfaceColor(-5000, 300, false), pill.COLORS.surface);
+  eq("surface export tint", pill.surfaceColor(-5000, 300, true), pill.mixHex(pill.COLORS.surface, pill.COLORS.export, 0.07));
+  eq("surface import tint", pill.surfaceColor(5000, 300, true), pill.mixHex(pill.COLORS.surface, pill.COLORS.import, 0.07));
+  eq("text starts after the bar", pill.measurePill(ctx, pill.pillModel(inv, null, opts)).textLeft, 16);
   eq("width floor leaves the height alone", pill.measurePill(ctx, { ...shortModel(), minWidth: 150 }).height, dShort.height);
   // pillRenderer contract
   const sizes = [];

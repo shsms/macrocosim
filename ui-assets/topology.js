@@ -438,7 +438,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
   function nodeFor(c) {
     const model = pillModel(c, liveEnabled ? liveValues.get(c.id) : null, {
       valuesOn: liveEnabled && valuesDefault,
-      dotColor: colorFor(c),
+      catColor: colorFor(c),
       deadBand: deadBandW(maxAbsBoundW),
     });
     model.minWidth = widthFloor.get(c.id) ?? 0;
