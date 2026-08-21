@@ -22,34 +22,28 @@ import { showContextMenu } from "./editor.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
 import { evalQuoted } from "./inspect.js";
 import { deadBandW, edgeFlow } from "./live.js";
-import { invalidateMeasureCache, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
+import { cssToken, invalidateMeasureCache, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
 import { mgPath, readSelectedMg, visibleSubview } from "./routing.js";
 
-function getCss(name) {
-  return getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
-}
-
 const CATEGORY_COLOR = {
-  grid: getCss("--cat-grid"),
-  meter: getCss("--cat-meter"),
-  inverter: getCss("--cat-inverter"),
-  battery: getCss("--cat-battery"),
-  "ev-charger": getCss("--cat-ev-charger"),
-  chp: getCss("--cat-chp"),
-  "wind-turbine": getCss("--cat-wind-turbine"),
-  "steam-boiler": getCss("--cat-steam-boiler"),
-  "power-transformer": getCss("--cat-power-transformer"),
-  breaker: getCss("--cat-breaker"),
+  grid: cssToken("--cat-grid"),
+  meter: cssToken("--cat-meter"),
+  inverter: cssToken("--cat-inverter"),
+  battery: cssToken("--cat-battery"),
+  "ev-charger": cssToken("--cat-ev-charger"),
+  chp: cssToken("--cat-chp"),
+  "wind-turbine": cssToken("--cat-wind-turbine"),
+  "steam-boiler": cssToken("--cat-steam-boiler"),
+  "power-transformer": cssToken("--cat-power-transformer"),
+  breaker: cssToken("--cat-breaker"),
 };
 
 // Inverters get a subtype-aware shade so battery-inverters and
 // solar-inverters read as related-but-distinct on the canvas.
 const INVERTER_SUBTYPE_COLOR = {
-  battery: getCss("--cat-inverter-battery"),
-  solar: getCss("--cat-inverter-solar"),
-  hybrid: getCss("--cat-inverter-hybrid"),
+  battery: cssToken("--cat-inverter-battery"),
+  solar: cssToken("--cat-inverter-solar"),
+  hybrid: cssToken("--cat-inverter-hybrid"),
 };
 
 function colorFor(c) {

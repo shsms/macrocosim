@@ -5,21 +5,30 @@
 
 import { formatScaled } from "./live.js";
 
+// Colours come from the :root tokens in style.css so a re-theme
+// reaches the canvas; the literal is the fallback for a stylesheet
+// without them (never a transparent pill).
+export function cssToken(name, fallback = "") {
+  if (typeof document === "undefined") return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
 export const COLORS = {
-  export: "#6bd9a5",
-  import: "#79b8ff",
-  dim: "#5a626d",
-  exportDull: "#4f9a78",
-  importDull: "#5a87bd",
-  surface: "#242a33",
-  border: "#323a45",
-  fg: "#d5dbe3",
-  muted: "#7d848e",
-  accent: "#79b8ff",
-  hover: "#b0b8c1",
-  bad: "#e58275",
-  standby: "#c4ad55",
-  socFill: "#6bd9a5",
+  export: cssToken("--flow-export", "#6bd9a5"),
+  import: cssToken("--flow-import", "#79b8ff"),
+  dim: cssToken("--flow-dim", "#5a626d"),
+  exportDull: cssToken("--flow-export-dull", "#4f9a78"),
+  importDull: cssToken("--flow-import-dull", "#5a87bd"),
+  surface: cssToken("--pill-surface", "#242a33"),
+  border: cssToken("--pill-border", "#323a45"),
+  fg: cssToken("--pill-fg", "#d5dbe3"),
+  muted: cssToken("--pill-muted", "#7d848e"),
+  accent: cssToken("--accent", "#79b8ff"),
+  hover: cssToken("--pill-hover", "#b0b8c1"),
+  bad: cssToken("--bad", "#e58275"),
+  standby: cssToken("--standby", "#c4ad55"),
+  socFill: cssToken("--flow-export", "#6bd9a5"),
 };
 
 const finite = (v) => v != null && Number.isFinite(v);

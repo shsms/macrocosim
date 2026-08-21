@@ -167,6 +167,14 @@ const unit = await page.evaluate(async () => {
   eq("every underscore in the kind is a space", cmdText({ kind: "active_power_w", value: 0, ts: now - 1000, accepted: true, reason: "" }), "active power w 0.0 W · 1 s ago · accepted");
   eq("non-numeric command value stays raw", cmdText({ kind: "mode", value: "idle", ts: now - 1000, accepted: true, reason: "" }), "mode idle · 1 s ago · accepted");
   eq("augment_bounds shows no value", cmdText({ kind: "augment_bounds", value: 0, ts: now - 3000, accepted: true, reason: "" }), "augment bounds · 3 s ago · accepted");
+  // palette comes from :root tokens; values unchanged
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  eq("token --pill-surface", css("--pill-surface"), "#242a33");
+  eq("token --flow-export", css("--flow-export"), "#6bd9a5");
+  eq("token --standby", css("--standby"), "#c4ad55");
+  eq("COLORS.surface from token", pill.COLORS.surface, css("--pill-surface"));
+  eq("COLORS.importDull from token", pill.COLORS.importDull, css("--flow-import-dull"));
+  eq("COLORS.bad from token", pill.COLORS.bad, css("--bad"));
   return out;
 });
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
