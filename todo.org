@@ -415,6 +415,29 @@ call or a non-local change.
 
 ** Fidelity
 
+*** TODO [#A] Battery inverter keeps reporting commanded power while the battery throttles :fidelity:bug:
+Found 2026-08-21. When a battery nears full and its SoC-protect
+taper clamps the DC push (=battery.rs= =tick()=), the attached
+inverter still publishes the *commanded* AC power
+(=battery_inverter.rs= =measured_w = commanded_p=). Meters aggregate
+=aggregate_power_w()= upward, so the inverter, its meters and the
+grid all show kilowatts the battery refuses: energy is conserved on
+the DC side and invented on the AC side. The =measured_w= comment
+and d5 below record this as a deliberate simplification, but the
+meter chain makes it a visible bug, not a reconciliation chore.
+
+Proposed fix (d5-lite, no per-source bookkeeping): the battery
+already knows its clamp ratio each tick (=power_w / total pushed=);
+expose it through the =Component= trait (default 1.0) and let the
+inverter publish =commanded_p x ratio= summed over its children.
+1:1 gives exactly the battery's accepted power; M inverters on one
+bus each get their fair share of the throttle; the reactive side is
+untouched (the battery never refuses Q). Tick order means one
+100 ms lag, which matches real inverter dynamics. Tests: 1:1 at
+95 % SoC with a 5 kW charge setpoint -> inverter telemetry within
+the tapered bound and the meter above agrees; 2:1 splits the
+throttle evenly; tripped / no-children paths unchanged.
+
 *** TODO [#B] Reactive config bounds sampled at live P, not rated — research first :reactive:fidelity:
 =make_component_proto= (=src/proto_conv.rs:107=) fills the static
 =AcPowerReactive= =MetricConfigBounds= from =c.reactive_bounds()=, whose
