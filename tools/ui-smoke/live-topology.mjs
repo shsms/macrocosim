@@ -141,6 +141,24 @@ const unit = await page.evaluate(async () => {
   eq("renderer onSize", sizes, [[12, dOff.width, dOff.height]]);
   out.push({ name: "renderer drawNode is callable", ok: typeof res.drawNode === "function" && (res.drawNode(), true) });
 
+  // level of detail by canvas scale, with 0.05 hysteresis
+  eq("lod full at 1", pill.lodFor(1.0, "full"), "full");
+  eq("lod hero at 0.6", pill.lodFor(0.6, "full"), "hero");
+  eq("lod marker at 0.3", pill.lodFor(0.3, "hero"), "marker");
+  eq("lod stays full just under 0.8", pill.lodFor(0.78, "full"), "full");
+  eq("lod drops to hero under 0.75", pill.lodFor(0.74, "full"), "hero");
+  eq("lod stays hero just over 0.8", pill.lodFor(0.82, "hero"), "hero");
+  eq("lod back to full over 0.85", pill.lodFor(0.86, "hero"), "full");
+  eq("lod stays marker just over 0.4", pill.lodFor(0.42, "marker"), "marker");
+  eq("lod hero over 0.45", pill.lodFor(0.46, "marker"), "hero");
+  eq("lod keeps prev on NaN", pill.lodFor(Number.NaN, "hero"), "hero");
+  eq("lod no prev picks by threshold", pill.lodFor(0.5, undefined), "hero");
+  // the renderer contract: nodeDimensions never depends on the LOD tier
+  const mLod = pill.pillModel(inv, { p: -19930, q: 1200, soc: null, dc: null }, opts);
+  const rFull = pill.pillRenderer(mLod, null, () => "full")({ ctx, id: 1, x: 0, y: 0, state: { selected: false, hover: false } });
+  const rMarker = pill.pillRenderer(mLod, null, () => "marker")({ ctx, id: 1, x: 0, y: 0, state: { selected: false, hover: false } });
+  eq("renderer dims identical across tiers", rFull.nodeDimensions, rMarker.nodeDimensions);
+
   // hovercard.js: the pure card model
   const hc = await import("/assets/hovercard.js");
   const now = 1787252990000;
@@ -294,6 +312,37 @@ check(
   }),
 );
 await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+
+// ── e2e: zoom tiers ───────────────────────────────────────────────
+const lodAt = (s) =>
+  page.evaluate(async (scale) => {
+    const { topology } = await import("/assets/topology.js");
+    topology.debugSetScale(scale);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    return { lod: topology.debugLod(), widths: topology.debugNodeWidths(), heights: topology.debugNodeHeights() };
+  }, s);
+const atFull = await lodAt(1.0);
+const atHero = await lodAt(0.6);
+const atMarker = await lodAt(0.3);
+check("e2e: lod full at 1.0", atFull.lod === "full", atFull.lod);
+check("e2e: lod hero at 0.6", atHero.lod === "hero", atHero.lod);
+check("e2e: lod marker at 0.3", atMarker.lod === "marker", atMarker.lod);
+// Hysteresis only makes sense as a sequence, so set the starting tier
+// here rather than inheriting it from the checks above: from marker,
+// 0.78 climbs to hero (over 0.45) and must not reach full (needs 0.85).
+await lodAt(0.3);
+const atEdge = await lodAt(0.78);
+check("e2e: marker to hero climbs past 0.78 (below the 0.85 full threshold)", atEdge.lod === "hero", atEdge.lod);
+await lodAt(1.0);
+const fromFull = await lodAt(0.78);
+check("e2e: hysteresis holds full at 0.78 coming from full", fromFull.lod === "full", fromFull.lod);
+await lodAt(0.6);
+const fromHero = await lodAt(0.82);
+check("e2e: hysteresis holds hero at 0.82 coming from hero", fromHero.lod === "hero", fromHero.lod);
+check("e2e: tiers keep node widths", JSON.stringify(atFull.widths) === JSON.stringify(atMarker.widths), `${JSON.stringify(atFull.widths)} vs ${JSON.stringify(atMarker.widths)}`);
+check("e2e: tiers keep node heights", JSON.stringify(atFull.heights) === JSON.stringify(atMarker.heights));
+await lodAt(1.0);
+await page.evaluate(async () => { const { topology } = await import("/assets/topology.js"); topology.fit(); });
 
 // ── e2e: hover card ──────────────────────────────────────────────
 // The Berlin demo's battery inverter idles at 0 W, and a card with

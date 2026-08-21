@@ -52,8 +52,9 @@ is wiring the topology + animating the environment.
   concern each; `live.js` owns the live-overlay pure helpers: label
   text, number formatting, the dead band and edge flow; `pill.js`
   owns the node model and canvas renderer both graph canvases draw
-  with; `hovercard.js` the node hover card (pure model + DOM
-  widget); `vendor/fonts/` the vendored IBM Plex faces (OFL))
+  with, and the zoom tiers (full / hero / marker); `hovercard.js`
+  the node hover card (pure model + DOM widget); `vendor/fonts/` the
+  vendored IBM Plex faces (OFL))
 - `tools/ui-smoke/` — Playwright smoke scripts run by hand against a
   live server (`SW_UI=http://127.0.0.1:PORT node
   tools/ui-smoke/live-topology.mjs`)

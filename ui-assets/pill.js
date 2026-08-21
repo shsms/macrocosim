@@ -150,6 +150,24 @@ function fonts(model) {
     : { name: `500 13px ${FONT_SANS}`, id: `400 11px ${FONT_MONO}`, row1H: 16 };
 }
 const FONT_HERO = `600 14px ${FONT_MONO}`;
+
+// Level of detail by canvas scale. Text is unreadable below ~0.8, so
+// the pill drops to its hero number, and below 0.4 to no text at all.
+// A tier changes only once the scale is 0.05 past its threshold, so
+// panning at a boundary does not flicker.
+const LOD_FULL = 0.8;
+const LOD_HERO = 0.4;
+const LOD_HYST = 0.05;
+export function lodFor(scale, prev) {
+  if (!Number.isFinite(scale)) return prev ?? "full";
+  const up = (t) => t + LOD_HYST;
+  const down = (t) => t - LOD_HYST;
+  if (prev === "full") return scale >= down(LOD_FULL) ? "full" : scale >= down(LOD_HERO) ? "hero" : "marker";
+  if (prev === "hero") return scale >= up(LOD_FULL) ? "full" : scale >= down(LOD_HERO) ? "hero" : "marker";
+  if (prev === "marker") return scale >= up(LOD_FULL) ? "full" : scale >= up(LOD_HERO) ? "hero" : "marker";
+  return scale >= LOD_FULL ? "full" : scale >= LOD_HERO ? "hero" : "marker";
+}
+const FONT_HERO_ONLY = `600 16px ${FONT_MONO}`;
 const FONT_AUX = `500 11px ${FONT_MONO}`;
 const ROW2_H = 17;
 
@@ -251,7 +269,7 @@ function borderStyle(model, state) {
 // Draws the pill centred on (x, y). `state` is vis's
 // { selected, hover }; a formula "subtracted" highlight lives in the
 // model itself (it is not a vis selection).
-export function drawPill(ctx, x, y, model, state) {
+export function drawPill(ctx, x, y, model, state, lod = "full") {
   const d = measurePill(ctx, model);
   const f = fonts(model);
   const left = x - d.width / 2;
@@ -279,6 +297,18 @@ export function drawPill(ctx, x, y, model, state) {
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = model.health === "error" ? COLORS.bad : COLORS.standby;
     ctx.stroke();
+  }
+  if (lod === "marker") return;
+  if (lod === "hero") {
+    // one centred row: the hero power only (Formulas canvas has no
+    // hero, so it shows the bare pill)
+    if (!model.hero) return;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.font = FONT_HERO_ONLY;
+    ctx.fillStyle = model.hero.color;
+    ctx.fillText(model.hero.text, left + d.textLeft, top + d.height / 2 + 1, d.width - d.textLeft - GEOM.padX);
+    return;
   }
   // row 1: name + id
   const row1Y = top + GEOM.padY + f.row1H / 2;
@@ -331,13 +361,13 @@ export function drawPill(ctx, x, y, model, state) {
 // draw with { ctx, id, x, y, state, style, label }; `onSize` lets the
 // canvas owner notice size changes (vis applies `nodeDimensions` one
 // draw late — see topology.js).
-export function pillRenderer(model, onSize) {
+export function pillRenderer(model, onSize, getLod) {
   return ({ ctx, id, x, y, state }) => {
     const d = measurePill(ctx, model);
     if (onSize) onSize(id, d.width, d.height);
     return {
       drawNode() {
-        drawPill(ctx, x, y, model, state || { selected: false, hover: false });
+        drawPill(ctx, x, y, model, state || { selected: false, hover: false }, getLod ? getLod() : "full");
       },
       nodeDimensions: { width: d.width, height: d.height },
     };

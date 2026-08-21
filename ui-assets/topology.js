@@ -22,7 +22,7 @@ import { showContextMenu } from "./editor.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
 import { evalQuoted } from "./inspect.js";
 import { deadBandW, edgeFlow } from "./live.js";
-import { cssToken, invalidateMeasureCache, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
+import { cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
 import { mgPath, readSelectedMg, visibleSubview } from "./routing.js";
 
 const CATEGORY_COLOR = {
@@ -50,7 +50,7 @@ function colorFor(c) {
   if (c.category === "inverter") {
     return INVERTER_SUBTYPE_COLOR[c.subtype] || CATEGORY_COLOR.inverter;
   }
-  return CATEGORY_COLOR[c.category] || "#888";
+  return CATEGORY_COLOR[c.category] || "#888888";
 }
 
 const LIVE_KEY = "switchyard-topology-live";
@@ -250,6 +250,17 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // Reset wherever a size change is expected anyway (apply,
   // setValues, fonts landing), each of which relayouts.
   const widthFloor = new Map(); // id -> widest width reported
+  // Level of detail for every pill on this canvas, from the camera
+  // scale. Only what is painted changes with it: sizes, layout and
+  // the DataSet never do, so a zoom costs one redraw.
+  let lod = "full";
+  function syncLod() {
+    if (!network) return;
+    const next = lodFor(network.getScale(), lod);
+    if (next === lod) return;
+    lod = next;
+    network.redraw();
+  }
   // The pill model each node's renderer draws, by component id.
   const pillModels = new Map();
   // Scratch 2-D context for measuring pills outside a draw. vis's own
@@ -455,7 +466,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
     const node = {
       id: c.id,
       shape: "custom",
-      ctxRenderer: pillRenderer(drawn, noteSize),
+      ctxRenderer: pillRenderer(drawn, noteSize, () => lod),
       pillModel: drawn,
     };
     if (adapter.tooltip !== false) node.title = `#${c.id} — ${c.name}`;
@@ -788,6 +799,10 @@ export function createGraphCanvas(containerId, adapter = {}) {
       // later relayouts keep the user's pan/zoom, matching how
       // topology refreshes behave.
       network.on("afterDrawing", () => {
+        // fit() and moveTo() change the scale without a `zoom` event;
+        // syncLod is a no-op when the tier is unchanged, so this does
+        // not loop.
+        syncLod();
         if (sizeDirty.size) {
           // A refresh may have removed a node since it last drew; an
           // update() for an unknown id would add a blank one back.
@@ -979,6 +994,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
         },
         true,
       );
+      // Wheel / pinch zooms. afterDrawing already re-syncs the LOD on
+      // every frame (including fit()/moveTo(), which vis emits no
+      // `zoom` for), so this handler is belt-and-braces, not the
+      // only path for those cases.
+      network.on("zoom", syncLod);
       // Node drags: applyDrag computes the snapped (and
       // axis-locked) targets on each move, and the beforeDrawing
       // hook places the nodes there so every frame renders the
@@ -1479,6 +1499,16 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// wait for a topology refresh to actually land.
     debugApplyCount() {
       return applyCount;
+    },
+    /// Smoke-test hooks: the current level-of-detail tier, and a way
+    /// to set the camera scale without a wheel gesture.
+    debugLod() {
+      return lod;
+    },
+    debugSetScale(scale) {
+      if (!network) return;
+      network.moveTo({ scale, animation: false });
+      syncLod();
     },
     /// Smoke-test hook: the width vis-network applied to each pill —
     /// content-derived, stable across flushes. Read off the shape
