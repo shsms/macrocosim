@@ -153,8 +153,9 @@ const FONT_HERO = `600 14px ${FONT_MONO}`;
 
 // Level of detail by canvas scale. Text is unreadable below ~0.8, so
 // the pill drops to its hero number, and below 0.4 to no text at all.
-// A tier changes only once the scale is 0.05 past its threshold, so
-// panning at a boundary does not flicker.
+// A tier changes only once the scale is 0.05 past the threshold it is
+// sitting on, so panning at a boundary does not flicker; a jump clear
+// past the far threshold takes that one raw.
 const LOD_FULL = 0.8;
 const LOD_HERO = 0.4;
 const LOD_HYST = 0.05;
@@ -162,7 +163,7 @@ export function lodFor(scale, prev) {
   if (!Number.isFinite(scale)) return prev ?? "full";
   const up = (t) => t + LOD_HYST;
   const down = (t) => t - LOD_HYST;
-  if (prev === "full") return scale >= down(LOD_FULL) ? "full" : scale >= down(LOD_HERO) ? "hero" : "marker";
+  if (prev === "full") return scale >= down(LOD_FULL) ? "full" : scale >= LOD_HERO ? "hero" : "marker";
   if (prev === "hero") return scale >= up(LOD_FULL) ? "full" : scale >= down(LOD_HERO) ? "hero" : "marker";
   if (prev === "marker") return scale >= up(LOD_FULL) ? "full" : scale >= up(LOD_HERO) ? "hero" : "marker";
   return scale >= LOD_FULL ? "full" : scale >= LOD_HERO ? "hero" : "marker";

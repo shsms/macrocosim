@@ -149,6 +149,7 @@ const unit = await page.evaluate(async () => {
   eq("lod drops to hero under 0.75", pill.lodFor(0.74, "full"), "hero");
   eq("lod stays hero just over 0.8", pill.lodFor(0.82, "hero"), "hero");
   eq("lod back to full over 0.85", pill.lodFor(0.86, "hero"), "full");
+  eq("lod full jumps to marker at 0.38", pill.lodFor(0.38, "full"), "marker");
   eq("lod stays marker just over 0.4", pill.lodFor(0.42, "marker"), "marker");
   eq("lod hero over 0.45", pill.lodFor(0.46, "marker"), "hero");
   eq("lod keeps prev on NaN", pill.lodFor(Number.NaN, "hero"), "hero");
@@ -342,6 +343,37 @@ check("e2e: hysteresis holds hero at 0.82 coming from hero", fromHero.lod === "h
 check("e2e: tiers keep node widths", JSON.stringify(atFull.widths) === JSON.stringify(atMarker.widths), `${JSON.stringify(atFull.widths)} vs ${JSON.stringify(atMarker.widths)}`);
 check("e2e: tiers keep node heights", JSON.stringify(atFull.heights) === JSON.stringify(atMarker.heights));
 await lodAt(1.0);
+
+// The tier has to change what is *painted*, not just what debugLod()
+// reports: count fillText calls across one redraw at each tier. The
+// spy is installed around a single synchronous redraw and removed in
+// a finally, so a live flush between frames cannot inflate the count.
+const paintAt = (scale) =>
+  page.evaluate(async (s) => {
+    const { topology } = await import("/assets/topology.js");
+    topology.debugSetScale(s);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const models = topology.debugNodeModels();
+    const proto = CanvasRenderingContext2D.prototype;
+    const orig = proto.fillText;
+    let calls = 0;
+    try {
+      proto.fillText = function (...args) {
+        calls += 1;
+        return orig.apply(this, args);
+      };
+      topology.debugRedraw();
+    } finally {
+      proto.fillText = orig;
+    }
+    return { lod: topology.debugLod(), calls, nodes: models.length, heroes: models.filter((m) => m.hero).length };
+  }, scale);
+const paintMarker = await paintAt(0.3);
+check("e2e: marker tier paints no text at all", paintMarker.lod === "marker" && paintMarker.calls === 0, JSON.stringify(paintMarker));
+const paintHero = await paintAt(0.6);
+check("e2e: hero tier paints one string per pill with a hero", paintHero.lod === "hero" && paintHero.calls === paintHero.heroes && paintHero.heroes > 0, JSON.stringify(paintHero));
+const paintFull = await paintAt(1.0);
+check("e2e: full tier paints name and id on every pill", paintFull.lod === "full" && paintFull.calls >= 2 * paintFull.nodes && paintFull.nodes > 0, JSON.stringify(paintFull));
 await page.evaluate(async () => { const { topology } = await import("/assets/topology.js"); topology.fit(); });
 
 // ── e2e: hover card ──────────────────────────────────────────────

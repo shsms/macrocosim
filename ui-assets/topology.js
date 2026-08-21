@@ -252,14 +252,16 @@ export function createGraphCanvas(containerId, adapter = {}) {
   const widthFloor = new Map(); // id -> widest width reported
   // Level of detail for every pill on this canvas, from the camera
   // scale. Only what is painted changes with it: sizes, layout and
-  // the DataSet never do, so a zoom costs one redraw.
+  // the DataSet never do, so a zoom costs one redraw. The tier is
+  // stored synchronously and the repaint deferred to the next frame,
+  // so calling this from afterDrawing does not re-enter the handler.
   let lod = "full";
   function syncLod() {
     if (!network) return;
     const next = lodFor(network.getScale(), lod);
     if (next === lod) return;
     lod = next;
-    network.redraw();
+    requestAnimationFrame(() => network && network.redraw());
   }
   // The pill model each node's renderer draws, by component id.
   const pillModels = new Map();
@@ -800,8 +802,8 @@ export function createGraphCanvas(containerId, adapter = {}) {
       // topology refreshes behave.
       network.on("afterDrawing", () => {
         // fit() and moveTo() change the scale without a `zoom` event;
-        // syncLod is a no-op when the tier is unchanged, so this does
-        // not loop.
+        // syncLod is a no-op when the tier is unchanged and defers
+        // its repaint to the next frame, so this does not loop.
         syncLod();
         if (sizeDirty.size) {
           // A refresh may have removed a node since it last drew; an
@@ -1509,6 +1511,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
       if (!network) return;
       network.moveTo({ scale, animation: false });
       syncLod();
+    },
+    /// Smoke-test hook: one repaint, so a test can count what the
+    /// pills actually paint at the current tier.
+    debugRedraw() {
+      if (network) network.redraw();
     },
     /// Smoke-test hook: the width vis-network applied to each pill —
     /// content-derived, stable across flushes. Read off the shape
