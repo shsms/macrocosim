@@ -509,6 +509,18 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
         self.set_dc_power(p);
     }
 
+    /// Share of last tick's pushed DC power this child accepted, in
+    /// [0, 1]: `accepted / pushed`. A parent multiplies its own push
+    /// by this to report what actually flowed, so a battery clipping
+    /// at its SoC envelope pulls every inverter on its bus down in
+    /// proportion. One tick stale by construction: on the tick a
+    /// parent changes its push, its report still uses the ratio of
+    /// the previous mix. 1.0 for children that never clip (the
+    /// default).
+    fn dc_accept_ratio(&self) -> f32 {
+        1.0
+    }
+
     // ── runtime reactive-capability knobs ────────────────────────────
 
     /// Replace the PF cap on the reactive envelope at runtime.

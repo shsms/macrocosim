@@ -71,6 +71,11 @@ struct BatteryState {
     /// last writer win.
     pending_p: f32,
     pending_q: f32,
+    /// `power_w / pushed total` from the last tick — how much of what
+    /// the inverters pushed the SoC envelope let through. 1.0 when
+    /// nothing was pushed. Read back by the inverters for their own
+    /// published power (see `SimulatedComponent::dc_accept_ratio`).
+    accept_ratio: f32,
     /// State of charge in % [0, 100]. Updated each tick from
     /// `power_w * dt`. Clamped at the boundaries — without this,
     /// configs that disable the SoC-protect taper (margin = 0)
@@ -97,6 +102,7 @@ impl Battery {
                 power_w: 0.0,
                 reactive_var: 0.0,
                 pending_p: 0.0,
+                accept_ratio: 1.0,
                 pending_q: 0.0,
                 soc_pct: init_soc,
                 effective_lower_w: l,
@@ -178,6 +184,15 @@ impl SimulatedComponent for Battery {
         // telemetry. min/max propagate the finite side instead.
         s.power_w = total_p.min(s.effective_upper_w).max(s.effective_lower_w);
         s.reactive_var = total_q;
+        // Inside a sane envelope (lower ≤ 0 ≤ upper) the clip keeps the
+        // sign and never grows the magnitude, so the ratio is already in
+        // [0, 1]; the clamp only guards a config whose envelope excludes
+        // zero.
+        s.accept_ratio = if total_p != 0.0 && s.power_w.is_finite() {
+            (s.power_w / total_p).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
 
         // 3. SoC update from settled P — the rectangular P·dt step in
         //    decay::integrate_soc_pct. Related to the per-component
@@ -247,6 +262,10 @@ impl SimulatedComponent for Battery {
         let mut s = self.state.lock();
         s.pending_p += p;
         s.pending_q += q;
+    }
+
+    fn dc_accept_ratio(&self) -> f32 {
+        self.state.lock().accept_ratio
     }
 
     fn aggregate_reactive_var(&self, _world: &MicrogridSite) -> f32 {

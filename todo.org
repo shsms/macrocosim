@@ -415,29 +415,6 @@ call or a non-local change.
 
 ** Fidelity
 
-*** TODO [#A] Battery inverter keeps reporting commanded power while the battery throttles :fidelity:bug:
-Found 2026-08-21. When a battery nears full and its SoC-protect
-taper clamps the DC push (=battery.rs= =tick()=), the attached
-inverter still publishes the *commanded* AC power
-(=battery_inverter.rs= =measured_w = commanded_p=). Meters aggregate
-=aggregate_power_w()= upward, so the inverter, its meters and the
-grid all show kilowatts the battery refuses: energy is conserved on
-the DC side and invented on the AC side. The =measured_w= comment
-and d5 below record this as a deliberate simplification, but the
-meter chain makes it a visible bug, not a reconciliation chore.
-
-Proposed fix (d5-lite, no per-source bookkeeping): the battery
-already knows its clamp ratio each tick (=power_w / total pushed=);
-expose it through the =Component= trait (default 1.0) and let the
-inverter publish =commanded_p x ratio= summed over its children.
-1:1 gives exactly the battery's accepted power; M inverters on one
-bus each get their fair share of the throttle; the reactive side is
-untouched (the battery never refuses Q). Tick order means one
-100 ms lag, which matches real inverter dynamics. Tests: 1:1 at
-95 % SoC with a 5 kW charge setpoint -> inverter telemetry within
-the tapered bound and the meter above agrees; 2:1 splits the
-throttle evenly; tripped / no-children paths unchanged.
-
 *** TODO [#B] Reactive config bounds sampled at live P, not rated — research first :reactive:fidelity:
 =make_component_proto= (=src/proto_conv.rs:107=) fills the static
 =AcPowerReactive= =MetricConfigBounds= from =c.reactive_bounds()=, whose
@@ -1262,15 +1239,24 @@ defun. Tracked here so we don't forget the gap.
 
 ** d5. Per-source attribution under MxN                     :design:fidelity:
 
-Today an inverter publishes its *commanded* AC output as =measured=;
-the battery separately publishes the accepted (clamped) value. A
-SCADA client that wants to see "inverter 1 produced 7.5 kW of the
-13 kW total flowing into the shared battery" has to read both
-streams and reconcile. A future upgrade: track per-source pushes on
-the battery's accumulator (=Vec<(parent_id, p, q)>=), distribute
-the clamp ratio across sources, and let each inverter read its own
-=accepted_from(self.id)= to compute fair-share measured. Minor
-trade-off in trait surface.
+Done in essence (2026-08-21): an inverter publishes its own push
+scaled by each battery's =dc_accept_ratio= (accepted / pushed from
+the battery's last tick), so a clip at the SoC envelope shows on the
+inverter and the meters above it, and M inverters on one bus split
+the clip in proportion to what each pushed. What is left is only the
+exotic case of a battery that would clip *asymmetrically* per source,
+which a single ratio cannot express; revisit if it ever matters.
+
+** d5b. Re-clamp an armed active setpoint as the envelope tightens  :design:fidelity:
+
+The battery's bounds narrow with SoC, and the gateway gates *new*
+setpoints against them — but a setpoint accepted earlier keeps its
+ramp target while the envelope closes underneath it; only the
+published power follows the clip (d5). The reactive path already
+re-clamps its target to the live envelope every tick. Open question
+whether the active path should do the same (honour-until-TTL today
+vs silently shrinking an accepted command); decide with a real
+controller in the loop.
 
 ** d6. Persist-gate follow-ups (origin gating, form splitting) :design:lisp:
 

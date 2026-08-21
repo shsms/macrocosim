@@ -179,17 +179,23 @@ impl SimulatedComponent for BatteryInverter {
             let n = healthy.len() as f32;
             let p_share = commanded_p / n;
             let q_share = commanded_q / n;
+            // Publish what the children accepted of our push, by each
+            // child's clip ratio. The battery ticks before us (children
+            // register first), so the ratio it holds came from the
+            // previous push: the published value lags one tick. With
+            // several inverters on one bus every inverter is scaled
+            // alike, so in steady state the shares sum to what the
+            // battery took; on the tick a sibling changes its push the
+            // sum is off by that change until the next ratio. Q passes
+            // through a battery unclipped.
+            let mut accepted_p = 0.0;
             for id in &healthy {
                 if let Some(child) = site.get(*id) {
                     child.set_dc_active_reactive(p_share, q_share);
+                    accepted_p += p_share * child.dc_accept_ratio();
                 }
             }
-            // The published value is what we *commanded* the (healthy)
-            // children to take, not what any individual child clipped
-            // to — battery telemetry separately exposes the accepted
-            // value, so a SCADA client wanting to see saturation reads
-            // both.
-            *self.measured_w.lock() = commanded_p;
+            *self.measured_w.lock() = accepted_p;
             self.reactive.override_published(commanded_q);
         }
     }
@@ -334,6 +340,117 @@ mod tests {
         w.register(inv);
         w.connect(200, 100);
         (w, 100, 200)
+    }
+
+    /// A site where `n` inverters (ids 200, 201, …) share one battery
+    /// rated ±`bat_w`; inverters are ±10 kW with no delay or ramp, so
+    /// one tick settles a command.
+    fn setup_shared_battery(n: usize, bat_w: f32, soc: f32) -> (MicrogridSite, u64, Vec<u64>) {
+        let w = MicrogridSite::new();
+        w.register(Battery::new(
+            100,
+            Duration::from_secs(1),
+            BatteryConfig {
+                rated_lower_w: -bat_w,
+                rated_upper_w: bat_w,
+                capacity_wh: 100_000.0,
+                initial_soc_pct: soc,
+                soc_protect_margin_pct: 0.0,
+                ..Default::default()
+            },
+        ));
+        let mut invs = Vec::new();
+        for i in 0..n {
+            let id = 200 + i as u64;
+            w.register(BatteryInverter::new(
+                id,
+                Duration::from_secs(1),
+                BatteryInverterConfig {
+                    rated_lower_w: -10000.0,
+                    rated_upper_w: 10000.0,
+                    command_delay: Duration::ZERO,
+                    ramp_rate_w_per_s: f32::INFINITY,
+                    ..Default::default()
+                },
+            ));
+            w.connect(id, 100);
+            invs.push(id);
+        }
+        (w, 100, invs)
+    }
+
+    /// Runs `rounds` physics passes in the site's own order
+    /// (registration order: the battery, then the inverters), so the
+    /// inverters read the ratio the battery computed from their
+    /// previous push — two rounds settle a command.
+    fn settle(w: &MicrogridSite, rounds: usize) {
+        let dt = Duration::from_millis(100);
+        for _ in 0..rounds {
+            w.tick_once(Utc::now(), dt);
+        }
+    }
+
+    /// The inverter publishes what the battery accepted, not what it
+    /// commanded: a 5 kW push into a battery that clips at 3 kW reads
+    /// 3 kW on the inverter too.
+    #[test]
+    fn reported_power_follows_the_battery_clip() {
+        let (w, bat, invs) = setup_shared_battery(1, 3_000.0, 50.0);
+        let inv = w.get(invs[0]).unwrap();
+        inv.set_active_setpoint(5_000.0).unwrap();
+        settle(&w, 2);
+        let accepted = w.get(bat).unwrap().aggregate_power_w(&w);
+        assert!(
+            (accepted - 3_000.0).abs() < 1.0,
+            "battery clip, got {accepted}"
+        );
+        let reported = inv.aggregate_power_w(&w);
+        assert!(
+            (reported - 3_000.0).abs() < 1.0,
+            "expected 3 kW reported, got {reported}"
+        );
+        assert_eq!(inv.telemetry(&w).active_power_w, Some(reported));
+    }
+
+    /// Two inverters on one battery: the one that commands nothing
+    /// reports nothing; the other carries the whole clip.
+    #[test]
+    fn idle_sibling_reports_zero_and_the_other_the_clip() {
+        let (w, _bat, invs) = setup_shared_battery(2, 3_000.0, 50.0);
+        w.get(invs[0])
+            .unwrap()
+            .set_active_setpoint(4_000.0)
+            .unwrap();
+        settle(&w, 2);
+        let a = w.get(invs[0]).unwrap().aggregate_power_w(&w);
+        let b = w.get(invs[1]).unwrap().aggregate_power_w(&w);
+        assert!((a - 3_000.0).abs() < 1.0, "commanding inverter, got {a}");
+        assert!(b.abs() < 1.0, "idle inverter, got {b}");
+    }
+
+    /// Two inverters pushing 4 kW and 2 kW into a 3 kW battery share
+    /// the clip in proportion: 2 kW and 1 kW.
+    #[test]
+    fn shared_clip_is_split_in_proportion_to_the_push() {
+        let (w, bat, invs) = setup_shared_battery(2, 3_000.0, 50.0);
+        w.get(invs[0])
+            .unwrap()
+            .set_active_setpoint(4_000.0)
+            .unwrap();
+        w.get(invs[1])
+            .unwrap()
+            .set_active_setpoint(2_000.0)
+            .unwrap();
+        settle(&w, 2);
+        let a = w.get(invs[0]).unwrap().aggregate_power_w(&w);
+        let b = w.get(invs[1]).unwrap().aggregate_power_w(&w);
+        assert!((a - 2_000.0).abs() < 1.0, "4 kW pusher, got {a}");
+        assert!((b - 1_000.0).abs() < 1.0, "2 kW pusher, got {b}");
+        let total = w.get(bat).unwrap().aggregate_power_w(&w);
+        assert!(
+            (a + b - total).abs() < 1.0,
+            "shares must sum to the battery's {total}"
+        );
     }
 
     /// A setpoint rejected because the live augmentation narrowed the
