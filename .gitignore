@@ -8,3 +8,4 @@ config.*.overrides.lisp
 
 # brainstorming / SDD scratch (ledgers, briefs, mockups)
 /.superpowers/
+/node_modules
