@@ -503,6 +503,14 @@ check("e2e: hover card names the component", /inv-bat-1001/.test(cardState.text)
 check("e2e: hover card has a PF line", /PF \d\.\d\d( (lagging|leading))?\b/.test(cardState.text), cardState.text);
 check("e2e: hover card has freshness", /updated \d+ s ago|no data yet/.test(cardState.text), cardState.text);
 check("e2e: hover card is inert to the pointer", await page.evaluate(() => getComputedStyle(document.querySelector(".hover-card")).pointerEvents === "none"));
+// The reactive envelope rides the same bar helper as the active one,
+// so an inverter that reports Q bounds draws a second `.hc-bar` and
+// labels that bar's ends in VAr (the helper used to hardcode W).
+const hcBars = await page.evaluate(() => ({
+  bars: document.querySelectorAll(".hover-card .hc-bar").length,
+  ends: [...document.querySelectorAll(".hover-card .hc-bar-ends")].map((e) => e.textContent),
+}));
+check("e2e: hover card draws the reactive envelope bar", hcBars.bars >= 2 && hcBars.ends.some((t) => /VAr/.test(t)), JSON.stringify(hcBars));
 // A WS setpoint event writes through to the card's "Last command"
 // (the card is still open on 1001), so it never shows a stale fetch.
 await page.evaluate(async () => {
@@ -540,6 +548,83 @@ await waitFor(async () => {
   const s = await readCard();
   return s && !s.visible;
 }, 3000);
+
+// ── e2e: the dashboard's reactive tile ───────────────────────────
+// `grid_reactive_power` is its own aggregate stream off the loopback,
+// and the tile is plain markup on the generic per-stream machinery —
+// so the check is that the value paints in VArs and that the meta
+// line derives site PF from the two grid streams client-side.
+await page.click('#mg-subtoggle .mode-btn[data-subview="dashboard"]');
+const tile = await waitFor(async () => {
+  const t = await page.evaluate(() => document.querySelector('.dash-value[data-stream="grid_reactive_power"]')?.textContent);
+  return t && t !== "—" ? t : null;
+}, 20000);
+check("e2e: grid reactive tile paints a var value", /VAr|var/.test(tile), tile);
+// PF needs a sample from BOTH grid streams in the spark ring, and
+// only the WS frames push there — so it fills a tick or two after
+// the value above, which /microgrid/latest can paint on its own.
+const pfMeta = await waitFor(async () => {
+  const t = await page.evaluate(() => document.getElementById("site-pf")?.textContent);
+  return t && t !== "site PF —" ? t : null;
+}, 20000);
+check("e2e: site PF derives from the two grid streams", /^site PF \d\.\d\d( (lagging|leading))?$/.test(pfMeta), pfMeta);
+await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+
+// ── e2e: the inspector's reactive knobs ──────────────────────────
+// Any visible meter that isn't the main one will do — the demo drives
+// none of their reactive slots, so the knob is the only writer. Read
+// the id off the live topology rather than pinning one here.
+const meterId = await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  const main = topology.mainMeterId();
+  return topology
+    .allIds()
+    .map((id) => topology.get(id))
+    .filter((c) => c && c.category === "meter" && !c.hidden && c.id !== main)
+    .map((c) => c.id)
+    .sort((a, b) => a - b)[0];
+});
+check("e2e: the demo has a meter to inspect", Number.isFinite(meterId), String(meterId));
+await page.evaluate(async (id) => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([id]);
+}, meterId);
+const knobDefuns = await waitFor(async () => {
+  const ds = await page.evaluate(() => [...document.querySelectorAll(".knob-input")].map((i) => i.dataset.defun));
+  return ds.length ? ds : null;
+});
+check("e2e: meter reactive knobs present", knobDefuns.includes("set-meter-reactive-power") && knobDefuns.includes("set-meter-power-factor"), JSON.stringify(knobDefuns));
+check(
+  "e2e: the power-factor knob carries its leading flag",
+  await page.evaluate(() => Boolean(document.querySelector('.knob-input[data-defun="set-meter-power-factor"]')?.closest("dd")?.querySelector(".knob-flag-input"))),
+);
+// Fill the knob the way a user does and let its change handler build
+// the defun call. The answer is read back with a direct eval from
+// Node, so the assertion lands on the sim's own state and not on
+// anything the page happens to be holding.
+const evalNumber = async (expr) => {
+  const r = await fetch(`${BASE}/api/mg/2200/eval`, { method: "POST", body: expr });
+  const j = await r.json();
+  return j.ok ? Number(j.value) : Number.NaN;
+};
+await page.evaluate(() => {
+  const input = document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]');
+  input.value = "500";
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+});
+const knobQ = await waitFor(async () => {
+  const q = await evalNumber(`(component-reactive-power ${meterId})`);
+  return Math.abs(q - 500) < 1 ? q : null;
+}, 10000).catch(() => evalNumber(`(component-reactive-power ${meterId})`));
+check("e2e: the reactive knob writes through to the sim", Math.abs(knobQ - 500) < 1, String(knobQ));
+check(
+  "e2e: the knob clears itself once submitted",
+  await page.evaluate(() => document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]').value === ""),
+);
+await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([]);
+});
 
 // ── e2e: live toggle ──────────────────────────────────────────────
 // Geometry as vis applied it, not just the models: a custom shape

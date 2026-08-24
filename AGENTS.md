@@ -61,9 +61,29 @@ is wiring the topology + animating the environment.
   with, and the zoom tiers (full / hero / marker); `hovercard.js`
   the node hover card (pure model + DOM widget); `vendor/fonts/` the
   vendored IBM Plex faces (OFL))
+  - Reactive power reads at parity with active power across the SPA:
+    the hover card draws a Q envelope bar under the P one (same
+    `hovercard.js` `envelopeBar`, labelled in VAr); the Dashboard has
+    a Grid reactive power tile on the `grid_reactive_power` aggregate
+    stream, whose meta line derives site PF client-side from the
+    latest grid P and Q samples, and battery-inverter rows carry a
+    muted Q column; the inspector's knob table offers
+    `set-reactive-power` on inverters and `set-meter-reactive-power`
+    / `set-meter-power-factor` (with a `leading` checkbox) on meters.
 - `tools/ui-smoke/` — Playwright smoke scripts run by hand against a
   live server (`SW_UI=http://127.0.0.1:PORT node
-  tools/ui-smoke/live-topology.mjs`)
+  tools/ui-smoke/live-topology.mjs`). The e2e half drives the Berlin
+  demo (microgrid 2200) and expects it in the state dir's
+  `microgrids/`, so run it from a scratch state dir:
+
+  ```sh
+  SD=$(mktemp -d); mkdir "$SD/microgrids"
+  cp examples/berlin-demo.lisp "$SD/microgrids/2200.lisp"
+  ./target/debug/switchyard --state-dir "$SD" --ephemeral-ports \
+      --emit-endpoints="$SD/endpoints.json" "$SD/microgrids/2200.lisp" &
+  SW_UI=http://$(jq -r .ui "$SD/endpoints.json") \
+      node tools/ui-smoke/live-topology.mjs
+  ```
 - `src/server.rs` — `Microgrid` gRPC service
 - `src/assets_server.rs` — `PlatformAssets` gRPC service (shared port)
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
