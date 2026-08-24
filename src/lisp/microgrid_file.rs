@@ -5,9 +5,10 @@
 //! rejoin the two; `rewrite_id` patches the microgrid id inside the
 //! generated block without disturbing anything else in the file.
 //!
-//! Nothing outside this module depends on it yet — later tasks add
-//! rendering the generated block from live state and the loader
-//! that reads these files back in.
+//! `render_block` / `render_empty_block` render the generated block
+//! from live state, the inverse of `parse`. Nothing outside this
+//! module depends on it yet — a later task adds the loader that
+//! reads these files back in.
 
 use std::fs;
 use std::io::Write;
@@ -220,6 +221,74 @@ pub fn rewrite_id(text: &str, new_id: u64) -> Result<String, String> {
     Ok(compose(&new_block, &parsed.script))
 }
 
+/// Render the generated block for a live microgrid: a
+/// `(make-microgrid …)` form that reconstructs the definition, every
+/// registered component (in `site.components()` order), and every
+/// connection — such that re-evaluating the result reproduces the
+/// same site (see the round-trip test below).
+pub fn render_block(
+    def: &crate::sim::microgrids::MicrogridDef,
+    site: &crate::sim::MicrogridSite,
+) -> String {
+    use std::fmt::Write as _;
+
+    let head = render_head(def);
+
+    let mut body = String::new();
+    for c in site.components().iter() {
+        let id = c.id();
+        write!(body, "\n    ({} :id {}", c.make_fn(), id).unwrap();
+        if let Some(name) = site.name_override(id) {
+            write!(
+                body,
+                " :name \"{}\"",
+                crate::lisp::escape_lisp_string(&name)
+            )
+            .unwrap();
+        }
+        for (k, v) in c.constructor_kwargs() {
+            write!(body, " {k} {v}").unwrap();
+        }
+        let mode = site.operational_mode(id);
+        if mode != crate::sim::OperationalMode::Unspecified {
+            write!(body, " :operational-mode '{mode}").unwrap();
+        }
+        body.push(')');
+    }
+    for (a, b) in site.all_connections() {
+        write!(body, "\n    (connect {a} {b})").unwrap();
+    }
+
+    if body.is_empty() {
+        format!("{head}\n  :topology\n  (lambda ()\n    nil))")
+    } else {
+        format!("{head}\n  :topology\n  (lambda (){body}))")
+    }
+}
+
+/// Render the generated block for a microgrid with no components
+/// yet — used by the create endpoint before any component exists.
+pub fn render_empty_block(def: &crate::sim::microgrids::MicrogridDef) -> String {
+    format!("{}\n  :topology\n  (lambda ()\n    nil))", render_head(def))
+}
+
+/// The `(make-microgrid :id … :name "…" :grpc-port … [:tso "…"]`
+/// head shared by [`render_block`] and [`render_empty_block`],
+/// without a trailing space or the `:topology` clause.
+fn render_head(def: &crate::sim::microgrids::MicrogridDef) -> String {
+    use std::fmt::Write as _;
+    let mut head = format!(
+        "(make-microgrid :id {} :name \"{}\" :grpc-port {}",
+        def.id,
+        crate::lisp::escape_lisp_string(&def.name),
+        def.grpc_port,
+    );
+    if let Some(tso) = &def.tso {
+        write!(head, " :tso \"{}\"", crate::lisp::escape_lisp_string(tso)).unwrap();
+    }
+    head
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +366,67 @@ mod tests {
         write_atomic(&path, "two").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
         assert!(!path.with_extension("lisp.tmp").exists());
+    }
+
+    #[test]
+    fn render_block_round_trips_through_a_fresh_config() {
+        use super::super::test_support::config_with;
+        let body = r#"
+(make-microgrid :id 2205 :name "rt" :grpc-port 8815 :tso "TN"
+  :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1 :rated-fuse-current 100)
+    (%make-meter :id 2 :name "main" :power 1500.0 :interval 500)
+    (%make-meter :id 3 :hidden t)
+    (%make-battery-inverter :id 4 :rated-lower -8000.0 :rated-upper 8000.0
+                            :reactive-pf-limit 0)
+    (%make-battery :id 5 :capacity 50000.0 :initial-soc 20.0)
+    (%make-solar-inverter :id 6 :sunlight% 40.0)
+    (%make-ev-charger :id 7)
+    (%make-chp :id 8 :name "chp")
+    (%make-meter :id 9 :operational-mode 'inactive)
+    (connect 1 2) (connect 2 4) (connect 4 5)
+    (connect 2 6) (connect 2 7) (connect 2 8) (connect 2 3) (connect 2 9)))
+"#;
+        let (cfg, _dir) = config_with(body);
+        let (def, site) = {
+            let reg = cfg.microgrids();
+            let r = reg.lock();
+            let e = r.get(&2205).unwrap();
+            (e.def.clone(), e.site.clone())
+        };
+        let block = render_block(&def, &site);
+        // Evaluate the rendered block in a second, fresh Config.
+        let (cfg2, _dir2) = config_with(&block);
+        let reg2 = cfg2.microgrids();
+        let r2 = reg2.lock();
+        let e2 = r2
+            .get(&2205)
+            .expect("rendered block re-registers the microgrid");
+        assert_eq!(e2.def.name, "rt");
+        assert_eq!(e2.def.grpc_port, 8815);
+        assert_eq!(e2.def.tso.as_deref(), Some("TN"));
+        // Same components, same constructor forms, same names, same edges.
+        let sig = |site: &crate::sim::MicrogridSite| {
+            let mut v: Vec<String> = site
+                .components()
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{} {} {:?} {:?} {:?}",
+                        c.id(),
+                        c.make_fn(),
+                        c.constructor_kwargs(),
+                        site.name_override(c.id()),
+                        site.operational_mode(c.id())
+                    )
+                })
+                .collect();
+            v.sort();
+            (v, site.all_connections())
+        };
+        assert_eq!(sig(&site), sig(&e2.site));
+        // Rendering the reloaded site is byte-stable.
+        assert_eq!(block, render_block(&e2.def, &e2.site));
     }
 }
