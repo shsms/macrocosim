@@ -41,9 +41,12 @@ axes), but everything around them does not:
   scenario recordings (no reactive-bounds CSV, no Q stats in the
   report), and to most of the UI (no hover envelope bar, dashboard
   ignores `reactive_power_var`, no knobs).
-- Two axes disagree on envelope semantics: Q re-clamps an armed
-  target into the live envelope every tick; P keeps the stale target
-  (open item d5b).
+- Envelope semantics agree more than the todo suggested: BOTH axes
+  already re-clamp an armed target into their own live envelope every
+  tick (the armed command re-polls; pinned non-destructively at
+  `battery_inverter.rs:528-558`). The genuinely open d5b case is a
+  CHILD battery's SoC envelope tightening under an armed inverter
+  target — visible only to the site gateway, not to the component.
 
 ## Decisions
 
@@ -52,11 +55,27 @@ axes), but everything around them does not:
   component: `CommandDelay` + slew `Ramp` + optional capability caps
   (the PF-limit / apparent-VA pair — set for Q axes, `None` for P)
   + a `ComponentBounds`-style TTL augmentation queue over `VecBounds`
-  (both axes). Per tick it promotes delayed commands, **re-clamps the
-  armed target into the live envelope** (both axes — resolving d5b:
-  a device can never track a target outside its envelope), slews and
-  publishes. The live envelope is static/rated bounds ∩
-  caps-at-the-other-axis's-value ∩ live augmentations.
+  (both axes). Per tick it promotes delayed commands, re-clamps the
+  **retained armed request** (never overwriting it — tighten →
+  follow, re-widen → restore, as pinned today) into the live
+  tracking envelope, slews and publishes. This codifies existing
+  behavior on both axes; it changes no test outcome. The child-SoC
+  half of d5b (a battery's envelope closing under an armed inverter
+  target, visible only at the gateway) stays an open todo.
+  The tracking envelope is static/rated bounds ∩
+  caps-at-the-other-axis's-value ∩ live augmentations ∩ an optional
+  **per-tick dynamic envelope hook** the owning component supplies
+  (the EV charger's SoC derate; nothing for the inverters).
+  Accept-time **validation** uses a separate envelope that excludes
+  the dynamic hook (the EV charger deliberately validates against
+  rated ∩ augmentations only, so accepts don't bounce as the cell
+  tops up). Two park rules carry over as axis contracts: an empty
+  intersection parks the output at 0, and an unarmed idle target is
+  never clamped INTO a zero-excluding envelope (a `[5 kW, 22 kW]`
+  augmentation must not make an idle charger charge). The idle
+  target is per-component — 0 for battery inverter and EV charger,
+  the live sunlight availability for solar (unarmed PV tracks the
+  sun; `reset` parks solar at `min_avail`, not 0).
   `ReactivePath` dissolves into a `PowerAxis` with caps; the
   inverters' and EV charger's P plumbing (delay + ramp +
   `ComponentBounds`) becomes a `PowerAxis` without caps. Existing
@@ -66,7 +85,16 @@ axes), but everything around them does not:
 - **Q bounds become `VecBounds` end to end.** `Telemetry.
   reactive_power_bounds` widens from `Option<(f32, f32)>` to
   `Option<VecBounds>`; `reactive_bounds()` follows; `proto_conv`
-  streams the multi-band shape the same way it does for P.
+  streams the multi-band shape the same way it does for P. Every
+  single-value reader collapses Q exactly as it collapses P on the
+  same surface: history/WS scalars take the first band (event names
+  `reactive_power_lower_bound_var` / `reactive_power_upper_bound_var`
+  keep their shape), the bounds CSV takes the outer hull (first-band
+  lower / last-band upper), and `Telemetry::metric_value`
+  (scenario-expect) takes the envelope extremes, matching its own
+  active arms. `set-reactive-power`'s CLAMP
+  clamps into `reactive_setpoint_envelope` via the same
+  `VecBounds::clamp` the active CLAMP uses.
 - **Reactive augmentation over the API.** The trait gains
   `augment_reactive_bounds(create_ts, VecBounds, lifetime)` (default
   no-op; implemented by both inverters via their Q axis).
@@ -83,18 +111,36 @@ axes), but everything around them does not:
   `AcPowerReactive` config bound in `ListElectricalComponents` is the
   widest Q the device could ever deliver — the max over P of the caps
   envelope (kVA cap → ±VA at P = 0; PF cap → ±k·P_rated at rated P;
-  both → the widest point of their intersection). Never zero for a
-  capable device, independent of the operating point (closes todo
-  #445). Components without a Q axis advertise `(0, 0)` — no more
-  fake `±p_max` for grid and EV charger.
-- **EV chargers stay P-only.** No Q axis; their honest `(0, 0)`
-  advertisement is the whole change. (Listed out of scope below.)
+  both → the widest point of their intersection; NEITHER cap set →
+  the `|Q| ≤ |P|` fallback cone, whose hull is ±P_rated). Never zero
+  for a capable device, independent of the operating point (closes
+  todo #445). Components without a Q axis advertise `(0, 0)` — no
+  more fake `±p_max` for grid and EV charger. Naming note:
+  `:reactive-pf-limit` is the ratio k = |Q|/|P| (as today), while
+  the meter driver's `:power-factor` is true cos φ — both meanings
+  stay, and the docs say so in one sentence.
+- **EV chargers stay P-only, but honestly so.** No Q axis; they
+  advertise `(0, 0)` config bounds AND publish
+  `reactive_power_var: Some(0.0)` in telemetry. The telemetry zero
+  is load-bearing: the upstream formula engine blocks per operand
+  until every term emits a sample of the requested metric, so a
+  P-only component that stays silent on Q would starve the grid-Q
+  formula stream forever. Any P-only AC component follows the same
+  rule.
 - **The battery loses its Q axis.** Reactive power terminates on the
   inverter's AC side: inverters no longer push a Q share to children,
   `set_dc_active_reactive` is removed from the trait (its only real
   consumer was the battery), `dc_power_w` becomes pure active DC
-  power (closes todo #474), and battery telemetry carries no Q.
-  `dc_accept_ratio` stays P-only and correct by construction.
+  power (closes todo #474), and battery telemetry carries no Q (it
+  already carries none). `dc_accept_ratio` stays P-only and correct
+  by construction. The inverter's health / no-healthy-children gates
+  keep zeroing the PUBLISHED Q — only the child push disappears, so
+  a dead DC bus still means zero VArs. `dc_current_a` changes
+  meaning with `dc_power_w` (pure P over voltage); the two doc
+  contracts describing the signed-apparent fold (`battery.rs:59-66`,
+  `battery.rs:237-244`) are rewritten with it; and the scenario
+  charge/discharge Wh integrals get *smaller* (correct) when Q ≠ 0 —
+  a number change, not a regression.
 - **Meters carry reactive loads.** `Meter` gains a reactive source
   slot next to `power_source`, an enum:
   - `Var(DynamicScalar)` — constant / lambda / symbol, exactly like
@@ -107,8 +153,16 @@ axes), but everything around them does not:
   Constructor kwargs `:reactive-power` and `:power-factor` (+
   `:leading t`) are mutually exclusive — both at once is a config
   error. Constants persist into generated blocks via
-  `constructor_kwargs` the same way `:power` does; lambda/symbol
-  sources are runtime state, not persisted.
+  `constructor_kwargs` the same way `:power` does (floats via
+  `lisp_float32`; `:leading t` renders like `:hidden t`; both new
+  kwargs join the render round-trip test); lambda/symbol sources are
+  runtime state, not persisted. The constructed-vs-poked freeze
+  applies: runtime `set-meter-reactive-power` /
+  `set-meter-power-factor` never change what `constructor_kwargs`
+  renders, exactly like `set-meter-power` vs `:power`. And
+  `has_unrenderable_source` ORs in the reactive slot, so Adopt and
+  the save-warning path warn about a dynamic Q source they cannot
+  write down.
 - **Trait + DSL surface for meter Q.** `set_reactive_power_override`,
   `set_reactive_power_source`, `takes_reactive_power_override`
   (defaults false/no-op, Meter implements); defuns
@@ -129,14 +183,23 @@ axes), but everything around them does not:
   scenario report gains peak main-meter Q and the site PF at that
   peak. No reactive energy (varh) accumulator — deliberately out.
 - **PV health-trip parity (todo #998).** The solar inverter's
-  health-trip arm calls the full axis `trip()` (snap the ramp, drop
-  the armed command), matching the battery inverter.
+  health-trip arm calls `trip()` on its **reactive axis only** (snap
+  the Q ramp, drop the armed Q command), matching the battery
+  inverter. The P side keeps its armed curtailment across a trip —
+  reviewed and ruled intended earlier, not overturned here; #998's
+  own alternative (keep armed, snap actual) is rejected in favor of
+  the full Q trip.
 - **UI.** Hover card draws the Q envelope bar + marker it already
-  computes (same `envelopeBar` as P/DC). Dashboard adds
+  computes (`envelopeBar` gains a unit parameter — it hardcodes
+  "W" today and would mislabel VArs). Dashboard adds
   `reactive_power_var` to its tier sets and WS dispatch, plus one
   site tile — grid Q with derived site PF — fed by a new loopback
   subscription to the upstream client's typed `ReactivePower` grid
-  formula stream. Inspector: inverters get a `set-reactive-power`
+  formula stream (a `ReactivePower`-typed forwarder beside the
+  monomorphic `Power` one: `.as_volt_amperes_reactive()`, quantity
+  "ReactivePower", unit "var", deliberately absent from
+  `energy_stream_for` so no varh sneaks in). Inspector: inverters
+  get a `set-reactive-power`
   setpoint knob beside the existing cap knobs; meters get
   `reactive power (VAr or expr)` and `power factor (+ leading)`
   knobs. Edge chevrons stay P/DC-based.
@@ -176,6 +239,10 @@ axes), but everything around them does not:
 - Trait methods, defuns, scenario wrappers as decided.
 - Aggregation fix; query defuns; reactive-bounds CSV; scenario report
   Q stats.
+- Python client parity: the meter builder gains
+  `reactive_power` / `power_factor(+leading)` kwargs and the
+  scripting layer a reactive `DrivenSignal` twin of `Meter.power`
+  (`python/src/switchyard/build.py`).
 - `scenarios/README.md`, `AGENTS.md` documentation.
 
 ### Sub-project 3 — UI and loopback
@@ -205,8 +272,15 @@ axes), but everything around them does not:
   change).
 - gRPC: augment-reactive round trip (bounds visible in streamed
   telemetry, expire on TTL); reactive setpoint gateway rejection;
-  config-bounds hull values for PF-only, kVA-only, both, and no-axis
-  components.
+  config-bounds hull values for PF-only, kVA-only, both,
+  **neither-cap (fallback cone)**, and no-axis components.
+- Axis contracts: park-at-0 on empty intersection; unarmed idle
+  target not clamped into a zero-excluding envelope; solar idle
+  target tracks availability and reset parks at `min_avail`;
+  validation-vs-tracking envelope split (EV SoC derate clips output
+  but never rejects accepts).
+- Formula convergence: a grid-Q formula over a site containing an
+  EV charger converges (the telemetry-zero rule).
 - Meter: PF sign tests (lagging/leading), live-P tracking, override
   vs children aggregation, restart round-trip of the new kwargs.
 - Scenario: drive-meter-reactive / drive-meter-pf end to end with
