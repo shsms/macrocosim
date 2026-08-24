@@ -2195,6 +2195,56 @@ mod tests {
         );
     }
 
+    /// `enterprise.lisp` is what makes enterprise-wide state durable:
+    /// an eval that touches the enterprise id or a `*-defaults` plist
+    /// rewrites it, and every boot re-reads it before any microgrid
+    /// file — so a component built in the NEXT process is built with
+    /// the operator's defaults, not the built-in ones.
+    #[test]
+    fn enterprise_state_survives_a_restart() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        cfg.eval("(setq battery-defaults '(:capacity 12345.0))")
+            .unwrap();
+        cfg.eval("(set-enterprise-id 77)").unwrap();
+
+        // A second process on the same state dir — no boot scripts,
+        // exactly what a bare `switchyard --state-dir` does.
+        let boot = |dir: std::path::PathBuf| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let built = rt.block_on(async { Config::new_with(&[], Some(dir)) });
+            std::mem::forget(rt);
+            built
+        };
+        let restarted = boot(dir.clone()).expect("second boot reads enterprise.lisp");
+        assert_eq!(restarted.metadata().enterprise_id, 77);
+        restarted
+            .eval(
+                "(make-microgrid :id 6 :grpc-port 8806 :topology \
+                 (lambda () (make-battery :id 300)))",
+            )
+            .unwrap();
+        let site = restarted.microgrids().lock().get(&6).unwrap().site.clone();
+        let telemetry = site.get(300).unwrap().telemetry(&site);
+        assert_eq!(
+            telemetry.capacity_wh,
+            Some(12_345.0),
+            "the persisted default built the component"
+        );
+
+        // And a broken enterprise.lisp fails the boot rather than
+        // silently falling back to the built-in defaults.
+        std::fs::write(
+            dir.join("enterprise.lisp"),
+            "(setq battery-defaults '(:capacity",
+        )
+        .unwrap();
+        assert!(
+            boot(dir).is_err(),
+            "a broken enterprise file must fail the boot"
+        );
+    }
+
     /// A broken `enterprise.lisp` aborts a whole-world reload BEFORE
     /// anything is reset: an undo click must not turn a typo in the
     /// settings file into an empty world.

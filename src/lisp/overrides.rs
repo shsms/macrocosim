@@ -603,6 +603,57 @@ mod tests {
         assert!(text.contains("(set-enterprise-id 77)"), "{text}");
     }
 
+    /// A file switchyard cannot write is a *live but unsaved* edit,
+    /// never a failed eval: the in-memory change stands, the entry is
+    /// flagged so the UI can mark the card, and the next structural
+    /// edit retries the write. Here the file has lost its markers,
+    /// which `write_two_section` refuses rather than burying the
+    /// hand-written text under a generated block.
+    #[test]
+    fn a_refused_write_leaves_the_microgrid_live_and_flagged_unsaved() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let def = crate::sim::microgrids::MicrogridDef {
+            id: 27,
+            name: "m".into(),
+            grpc_port: 8897,
+            tso: None,
+        };
+        let path = dir.join("microgrids/27.lisp");
+        let managed_text = crate::lisp::microgrid_file::compose(
+            &crate::lisp::microgrid_file::render_empty_block(&def),
+            crate::lisp::microgrid_file::FRESH_SCRIPT_HEADER,
+        );
+        crate::lisp::microgrid_file::write_atomic(&path, &managed_text).unwrap();
+        cfg.load_file(&path).unwrap();
+        let unsaved = || cfg.microgrids().lock().get(&27).unwrap().unsaved;
+        assert!(!unsaved(), "a freshly loaded microgrid is saved");
+
+        // Somebody replaced the file with marker-less text.
+        std::fs::write(&path, ";; mine now\n(setq x 1)\n").unwrap();
+        cfg.eval_in_mg(27, "(%make-meter :id 270)")
+            .expect("the eval itself succeeds");
+        {
+            let reg = cfg.microgrids();
+            let r = reg.lock();
+            assert!(r[&27].site.get(270).is_some(), "the edit is live");
+        }
+        assert!(unsaved(), "and flagged as not on disk");
+        assert!(
+            !std::fs::read_to_string(&path).unwrap().contains("270"),
+            "the hand-written text was not buried"
+        );
+
+        // Put a managed file back: the next structural edit saves
+        // everything, including the edit that could not be written.
+        crate::lisp::microgrid_file::write_atomic(&path, &managed_text).unwrap();
+        cfg.eval_in_mg(27, "(%make-meter :id 271)").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("(%make-meter :id 270"), "{text}");
+        assert!(text.contains("(%make-meter :id 271"), "{text}");
+        assert!(!unsaved(), "and the flag clears");
+    }
+
     /// Concurrent per-mg evals must not cross microgrids: the scope
     /// pointer only flips under the interpreter lock, so each eval's
     /// mutations AND the file it regenerates belong to its own
