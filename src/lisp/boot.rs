@@ -445,19 +445,12 @@ impl Config {
             log::error!("Tulisp error in {}:\n{formatted}", resolved.display());
             return Err(formatted);
         }
-        // Only on success, and only when the file actually owns a
-        // microgrid: a source file is one that some live entry names,
-        // and that is what `reload` replays. A file that failed to
-        // evaluate, or that registered nothing (a plain script), is
-        // not a source.
-        if self
-            .microgrids
-            .lock()
-            .values()
-            .any(|e| e.source.as_deref() == Some(canonical.as_path()))
-        {
-            self.note_source_file(&canonical);
-        }
+        // Only on success: a file that failed to evaluate contributed
+        // nothing and is not part of the world. A file that DID
+        // evaluate is worth watching and worth re-evaluating on its
+        // own even if it registered no microgrid — a driver script
+        // that only arms `every` blocks is exactly that case.
+        self.note_source_file(&canonical);
 
         let new_ids: Vec<u64> = self
             .microgrids
@@ -744,6 +737,15 @@ impl Config {
     /// only that file's world needs rebuilding. Returns the ids the
     /// re-eval registered as NEW (empty for a plain re-load, whose
     /// `(make-microgrid …)` forms reuse their entries in place).
+    ///
+    /// Works on a file that declares no microgrid at all — a driver
+    /// script that only arms `every` blocks re-arms them, since its
+    /// old timers were cancelled first.
+    ///
+    /// On a failed re-eval the error is returned and this file's
+    /// microgrids stay reset-empty (their runtimes keep ticking an
+    /// empty site) until the next successful reload of the file;
+    /// no OTHER file's world is touched either way.
     pub fn reload_file(&self, path: &Path) -> Result<Vec<u64>, String> {
         let mut ctx = self.ctx.borrow_mut();
         self.reload_file_locked(&mut ctx, path)
@@ -806,14 +808,21 @@ impl Config {
         Ok(new_ids)
     }
 
-    /// Rebuild the WHOLE world: cancel every timer, reset every site
-    /// and the id allocator, re-evaluate `enterprise.lisp`, then
+    /// Rebuild the WHOLE world: re-evaluate `enterprise.lisp`, cancel
+    /// every timer, reset every site and the id allocator, then
     /// re-evaluate every file that backs a registered microgrid, in
     /// the order those files first arrived.
     ///
-    /// Returns the formatted lisp error on failure — files before the
-    /// failing one have been rebuilt, the failing and later files'
-    /// microgrids stay reset-empty; the next successful reload
+    /// Only files a live microgrid came from are replayed. A driver
+    /// script that registers nothing is not part of this list — it is
+    /// re-run when its OWN file changes, via
+    /// [`reload_file`](Self::reload_file).
+    ///
+    /// Returns the formatted lisp error on failure. A failing
+    /// `enterprise.lisp` aborts before anything is reset, so the
+    /// running world is left untouched. Past that point, files before
+    /// the failing one have been rebuilt and the failing and later
+    /// files' microgrids stay reset-empty; the next successful reload
     /// converges the whole world again.
     pub fn reload(&self) -> Result<(), String> {
         let mut ctx = self.ctx.borrow_mut();
@@ -827,6 +836,17 @@ impl Config {
     pub(super) fn reload_locked(&self, ctx: &mut TulispContext) -> Result<(), String> {
         use std::sync::atomic::Ordering;
         let start = std::time::Instant::now();
+        // Enterprise-wide state first, exactly as at boot: the
+        // `*-defaults` plists and the socket addresses must be back in
+        // place before any microgrid file rebuilds its components, or
+        // the rebuild would silently use built-in defaults.
+        //
+        // Before any reset, deliberately: the file only sets variables
+        // and metadata, so applying it early is harmless — while a
+        // syntax error in it AFTER the resets would leave the whole
+        // world wiped with nothing replayed. Failing here leaves the
+        // running world exactly as it was.
+        self.load_enterprise_locked(ctx)?;
         self.site.reset();
         // Reset the enterprise-wide id allocator too — every site
         // is about to be rebuilt by the re-eval of config.lisp,
@@ -859,11 +879,6 @@ impl Config {
         if let Err(e) = ctx.eval_string("(cancel-timers)") {
             log::warn!("reload: cancel-timers failed: {}", e.format(ctx));
         }
-        // Enterprise-wide state first, exactly as at boot: the
-        // `*-defaults` plists and the socket addresses must be back in
-        // place before any microgrid file rebuilds its components,
-        // or the rebuild would silently use built-in defaults.
-        self.load_enterprise_locked(ctx)?;
         // Replay every file that backs a registered microgrid, in the
         // order those files first arrived. The registry is the list:
         // each live microgrid names the file it came from, so there is
@@ -929,12 +944,16 @@ impl Config {
                 return;
             }
         };
-        // Arm the initial watch set: enterprise.lisp, every microgrid
-        // source file, and every `(watch-file …)` registration.
+        // Arm the initial watch set: enterprise.lisp, every file the
+        // loader evaluated, and every `(watch-file …)` registration.
         let mut armed: HashSet<PathBuf> = HashSet::new();
-        self.rearm_watches(&mut watcher, &mut armed);
+        let wanted = self.rearm_watches(&mut watcher, &mut armed);
         if armed.is_empty() {
-            log::error!("watch: no watch could be registered; hot-reload disabled");
+            if wanted == 0 {
+                log::info!("watch: nothing to watch; hot-reload idle");
+            } else {
+                log::error!("watch: no watch could be registered; hot-reload disabled");
+            }
             return;
         }
 
@@ -947,10 +966,11 @@ impl Config {
         const DEBOUNCE: Duration = Duration::from_millis(150);
         // How often the watch set is rebuilt when nothing happens.
         // Two things go stale on their own: a file loaded at runtime
-        // has no watch yet, and a file replaced by an atomic save
-        // (write temp + rename) is a new file on disk that the old
-        // watch no longer follows. Both fix themselves within this
-        // interval; re-arming a handful of paths is cheap.
+        // has no watch yet, and an atomic save (write temp + rename)
+        // leaves the inotify watch on the REPLACED inode — the event
+        // does arrive, but every later edit lands on the new file the
+        // dead watch no longer follows. Both fix themselves within
+        // this interval; re-arming a handful of paths is cheap.
         const REARM: Duration = Duration::from_secs(5);
 
         loop {
@@ -1008,46 +1028,58 @@ impl Config {
     }
 
     /// Point `watcher` at exactly the files worth watching now:
-    /// `enterprise.lisp`, every file backing a registered microgrid,
-    /// and every `(watch-file …)` registration. `armed` is the set
-    /// currently watched; it is updated in place.
-    fn rearm_watches(&self, watcher: &mut RecommendedWatcher, armed: &mut HashSet<PathBuf>) {
+    /// `enterprise.lisp`, every file the loader evaluated, and every
+    /// `(watch-file …)` registration. `armed` is the set currently
+    /// watched; it is updated in place. Returns how many paths were
+    /// wanted, so a caller can tell "nothing to watch" from "every
+    /// watch failed to register".
+    ///
+    /// Loader-visited files, not just the registry's sources: a
+    /// driver script that arms timers and registers no microgrid is
+    /// still a file an operator edits and expects to take effect.
+    fn rearm_watches(
+        &self,
+        watcher: &mut RecommendedWatcher,
+        armed: &mut HashSet<PathBuf>,
+    ) -> usize {
         let mut want: Vec<PathBuf> = vec![self.enterprise_path()];
-        want.extend(self.registered_sources());
+        want.extend(self.loader_visited_files());
         want.extend(self.extra_watches.lock().iter().cloned());
         let want: HashSet<PathBuf> = want
             .into_iter()
             .map(|p| p.canonicalize().unwrap_or(p))
+            .filter(|p| p.exists())
             .collect();
         for gone in armed.difference(&want) {
             let _ = watcher.unwatch(gone);
         }
         // Re-arm every wanted path, the already-armed ones included:
-        // an atomic save replaces the file, so the old watch would be
-        // stuck on content nobody reads any more.
+        // an atomic save replaces the file, leaving the old watch on
+        // an inode nothing writes to any more.
         let mut next = HashSet::new();
-        for path in want {
-            match watcher.watch(&path, notify::RecursiveMode::NonRecursive) {
+        for path in &want {
+            match watcher.watch(path, notify::RecursiveMode::NonRecursive) {
                 Ok(()) => {
-                    next.insert(path);
+                    next.insert(path.clone());
                 }
                 Err(e) => log::warn!("watch {}: {}", path.display(), e),
             }
         }
         *armed = next;
+        want.len()
     }
 
     /// React to one debounced batch of file edits: re-evaluate
-    /// enterprise settings, reload each edited microgrid file on its
-    /// own, and fall back to a whole-world reload for anything else
-    /// (a `(watch-file …)` registration such as a shared library of
-    /// helper defuns, whose edit can affect every microgrid).
+    /// enterprise settings, reload each edited file the loader knows
+    /// on its own, and fall back to a whole-world reload for anything
+    /// else (a `(watch-file …)` registration such as a shared library
+    /// of helper defuns, whose edit can affect every microgrid).
     fn reload_touched(&self, touched: &HashSet<PathBuf>) {
         let enterprise = {
             let p = self.enterprise_path();
             p.canonicalize().unwrap_or(p)
         };
-        let sources: HashSet<PathBuf> = self.registered_sources().into_iter().collect();
+        let visited: HashSet<PathBuf> = self.loader_visited_files().into_iter().collect();
         let mut errors: Vec<String> = Vec::new();
         let mut whole_world = false;
         for path in touched {
@@ -1055,9 +1087,9 @@ impl Config {
             // Switchyard's own save must not bounce back as a reload
             // of the file it just wrote: the world already IS what the
             // file says, and reloading would throw away live state for
-            // nothing.
+            // nothing. One-shot — see `take_self_write`.
             if let Ok(text) = std::fs::read_to_string(&path)
-                && self.was_self_write(&path, &text)
+                && self.take_self_write(&path, &text)
             {
                 log::debug!(
                     "watch: {} matches what we last wrote; not reloading",
@@ -1074,7 +1106,10 @@ impl Config {
                 if let Err(e) = self.load_enterprise() {
                     errors.push(e);
                 }
-            } else if sources.contains(&path) {
+            } else if visited.contains(&path) {
+                // A file the loader ran: re-run just that file. Its
+                // microgrids rebuild and its timers re-arm; every
+                // other file's world keeps running.
                 if let Err(e) = self.reload_file(&path) {
                     errors.push(e);
                 }
@@ -1536,5 +1571,96 @@ mod tests {
         assert_eq!(count(), 1, "reload must not double-arm the file's timers");
         cfg.reload_file(&other).unwrap();
         assert_eq!(count(), 1);
+    }
+
+    /// A driver-only script — no `(make-microgrid …)`, just timers
+    /// driving somebody else's world — reloads on its own like any
+    /// other loaded file: its old timers are cancelled and its new
+    /// ones armed, with no double-arming and no whole-world reset.
+    #[test]
+    fn reload_file_re_arms_a_driver_only_script() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let driver = dir.join("driver.lisp");
+        std::fs::write(
+            &driver,
+            "(setq driver-mark 1)\n(every :milliseconds 1 :call (lambda () nil))",
+        )
+        .unwrap();
+        cfg.load_file(&driver).unwrap();
+        let count = || -> i64 {
+            cfg.eval_silent("(length active-timers)")
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(count(), 1, "the driver armed one timer");
+        // It registers no microgrid, so it is not part of the
+        // whole-world replay list …
+        assert!(
+            !cfg.registered_sources().iter().any(|p| p == &driver),
+            "a driver script backs no microgrid"
+        );
+        // … but the loader saw it, so it is watched and reloadable.
+        assert!(
+            cfg.loader_visited_files()
+                .iter()
+                .any(|p| p.ends_with("driver.lisp")),
+            "a driver script is still a file the loader ran"
+        );
+        // Edit and reload just this file: the new mark is live and
+        // the timer count stays at one.
+        std::fs::write(
+            &driver,
+            "(setq driver-mark 2)\n(every :milliseconds 1 :call (lambda () nil))",
+        )
+        .unwrap();
+        cfg.reload_file(&driver).unwrap();
+        assert_eq!(cfg.eval_silent("driver-mark").unwrap(), "2");
+        assert_eq!(count(), 1, "reload must not double-arm the driver's timer");
+    }
+
+    /// A broken `enterprise.lisp` aborts a whole-world reload BEFORE
+    /// anything is reset: an undo click must not turn a typo in the
+    /// settings file into an empty world.
+    #[test]
+    fn reload_leaves_the_world_alone_when_enterprise_is_broken() {
+        let (cfg, _dir) = config_with(
+            "(set-microgrid-id 9)
+             (%make-grid-connection-point :id 1)",
+        );
+        let live_site = cfg.microgrids().lock().get(&9).unwrap().site.clone();
+        std::fs::write(cfg.enterprise_path(), "(this-defun-does-not-exist 1)").unwrap();
+
+        let err = cfg
+            .reload()
+            .expect_err("a broken enterprise file must fail");
+        assert!(err.contains("this-defun-does-not-exist"), "got: {err}");
+        assert!(
+            live_site.get(1).is_some(),
+            "the running world must survive a failed reload untouched",
+        );
+    }
+
+    /// Self-write suppression is one-shot: the first event whose
+    /// content matches what switchyard wrote is skipped, and the
+    /// hash is forgotten — so an operator reverting the file to
+    /// exactly that content by hand is a real edit again.
+    #[test]
+    fn self_write_suppression_is_one_shot() {
+        let (cfg, dir) = config_with("nil");
+        let path = dir.join("managed.lisp");
+        cfg.record_self_write(&path, "body");
+        assert!(
+            cfg.take_self_write(&path, "body"),
+            "our own save is recognised"
+        );
+        assert!(
+            !cfg.take_self_write(&path, "body"),
+            "the same content a second time is a human edit, not our save"
+        );
+        // Different content never matches in the first place.
+        cfg.record_self_write(&path, "body");
+        assert!(!cfg.take_self_write(&path, "edited by hand"));
     }
 }

@@ -146,16 +146,17 @@ impl Default for Metadata {
 
 #[derive(Clone)]
 pub struct Config {
-    /// Order-keeping side note for [`Config::registered_sources`]:
-    /// every microgrid source file the loader has seen, canonicalized
-    /// and dedup'd, in the order it first registered a microgrid.
+    /// Every file the loader has evaluated — boot scripts, runtime
+    /// `(load …)`s, created microgrid files — canonicalized and
+    /// dedup'd, in first-load order.
     ///
-    /// It is NOT the reload list — the registry is (a source whose
-    /// microgrids are gone is skipped, and a file that registered
-    /// nothing never lands here). All this vector carries is
-    /// *ordering*: the registry is a BTreeMap, so iterating it yields
-    /// id order, and reload wants files replayed in the order they
-    /// first arrived.
+    /// Two jobs, neither of them "the reload list": it is the set of
+    /// files worth WATCHING (a driver script that registers no
+    /// microgrid still wants hot-reload), and it carries the ORDER
+    /// [`Config::registered_sources`] replays in, since the registry
+    /// is a BTreeMap and iterating it yields id order. What a
+    /// whole-world reload replays is derived from the registry, not
+    /// from here.
     pub(crate) source_files: Arc<Mutex<Vec<PathBuf>>>,
     /// Anchor for everything persistent — overrides journals,
     /// `snapshots/`, runtime-created microgrid files — and for the
@@ -391,18 +392,34 @@ impl Config {
             .insert(path.to_path_buf(), content_hash(content));
     }
 
-    /// Is `content` exactly what switchyard last wrote to `path`?
+    /// Was `content` exactly what switchyard last wrote to `path`?
+    /// If so, FORGET that write and answer true.
+    ///
     /// The file watcher asks this before reloading, so a save
-    /// switchyard performed does not bounce back as a reload.
-    pub(crate) fn was_self_write(&self, path: &Path, content: &str) -> bool {
-        self.written_hashes.lock().get(path) == Some(&content_hash(content))
+    /// switchyard performed does not bounce back as a reload. The
+    /// answer is deliberately one-shot: a remembered hash that
+    /// stayed remembered would go on suppressing forever, so an
+    /// operator reverting the file to exactly that content by hand
+    /// (an editor undo, a `git checkout --`) would be ignored and
+    /// the world would stay on whatever it had drifted to. Forgetting
+    /// on the first match costs at most one extra reload of content
+    /// identical to what is already live — a no-op — and never a
+    /// missed edit.
+    pub(crate) fn take_self_write(&self, path: &Path, content: &str) -> bool {
+        let mut hashes = self.written_hashes.lock();
+        if hashes.get(path) == Some(&content_hash(content)) {
+            hashes.remove(path);
+            return true;
+        }
+        false
     }
 
-    /// Remember that `path` is a microgrid source file, keeping the
-    /// order in which sources first appeared. Called by the loader
-    /// after a file's eval registered (or re-claimed) a microgrid;
-    /// a file that registers nothing is not a source and is not
-    /// recorded. See [`Config::source_files`].
+    /// Remember that the loader evaluated `path`, keeping the order
+    /// in which files first arrived. Called by the loader after a
+    /// successful eval, whether or not the file registered a
+    /// microgrid — a driver script that only arms timers is a file
+    /// worth watching and worth re-evaluating on its own.
+    /// See [`Config::source_files`].
     pub(crate) fn note_source_file(&self, path: &Path) {
         let mut files = self.source_files.lock();
         if !files.iter().any(|p| p == path) {
@@ -410,15 +427,26 @@ impl Config {
         }
     }
 
+    /// Every file the loader has evaluated, in first-load order.
+    /// This is the *watch* set (plus `enterprise.lisp` and the
+    /// `(watch-file …)` registrations) and the set of paths a single
+    /// file edit may be reloaded on its own — not the whole-world
+    /// reload list, which is [`Config::registered_sources`].
+    pub(crate) fn loader_visited_files(&self) -> Vec<PathBuf> {
+        self.source_files.lock().clone()
+    }
+
     /// Every file that backs at least one registered microgrid, each
-    /// listed once, in the order the files first registered one.
+    /// listed once, in the order the files first arrived.
     ///
-    /// This IS the reload list: the world is the set of live
-    /// microgrids, and each microgrid names the file it came from,
-    /// so there is no replay list to drift out of sync with the
+    /// This IS the whole-world reload list: the world is the set of
+    /// live microgrids, and each microgrid names the file it came
+    /// from, so there is no replay list to drift out of sync with the
     /// registry. A file whose microgrids are all gone drops out by
     /// itself; a microgrid typed into the REPL has no source and
-    /// contributes nothing to reload.
+    /// contributes nothing to reload. A driver-only script is not
+    /// here either — it is re-run when its own file changes, not
+    /// when some other file does.
     pub(crate) fn registered_sources(&self) -> Vec<PathBuf> {
         let live: Vec<PathBuf> = self
             .microgrids
@@ -428,10 +456,10 @@ impl Config {
             .collect();
         let order = self.source_files.lock();
         let mut out: Vec<PathBuf> = order.iter().filter(|p| live.contains(p)).cloned().collect();
-        // A source that never went through the loader — the create
-        // endpoint writes a file and registers its microgrid in one
-        // step — has no recorded order; append it after the ones
-        // that do, in registry (id) order.
+        // A source the loader never saw — the create endpoint writes
+        // a file and registers its microgrid in one step, without
+        // going through `load_file` — has no recorded order; append
+        // it after the ones that do, in registry (id) order.
         for path in live {
             if !out.contains(&path) {
                 out.push(path);
