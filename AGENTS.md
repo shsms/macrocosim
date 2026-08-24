@@ -162,7 +162,27 @@ UI").
   push), so a clipping battery shows on the inverter and the meters above
   it, and several inverters on one bus share the clip in proportion. The
   API gateway (server.rs) intersects bounds for setpoint validation —
-  components never read each other's bounds.
+  components never read each other's bounds. Reactive power (Q) terminates
+  at the inverter — a real DC bus carries no Q, so `Battery::dc_power_w`
+  is pure signed active power with no apparent-power blend, and only the
+  inverter's own AC-side axis models Q at all.
+- **`PowerAxis` (`src/sim/axis.rs`) is the one control path shared by
+  active and reactive power.** Both inverters and the EV charger put P
+  on a `PowerAxis` (rated band + TTL augmentations, command-delay, ramp);
+  both inverters put Q on a second `PowerAxis` whose static shape comes
+  from a `ReactiveCapability` (PF cap, kVA cap, both, or neither)
+  evaluated at the OTHER axis's live P instead of a rated pair of its
+  own. Both axes re-clamp their armed target to the live envelope every
+  tick, so a narrowing bound (a tightening augmentation, or the EV
+  charger's SoC derate feeding its axis as a dynamic band) actually
+  slews the output down rather than waiting for the next command; a
+  battery inverter still clips a narrowing SoC band by scaling the
+  published value (`dc_accept_ratio`), not by re-clamping the armed
+  target — todo.org d5b keeps that question open. `:reactive-pf-limit`
+  sets `k` in `|Q| ≤ k × |P|` — a ratio of apparent quantities, not
+  true power factor (cos φ); the meter's own PF driver, landing in a
+  later sub-project, will compute real cos φ off the meter's P and Q
+  telemetry instead.
 - **Single physics tick, registration order = tick order.** `MicrogridSite::spawn_physics`
   runs one `tokio::time::interval` at `physics_tick_ms` and calls `tick()` on
   every component in registration order. Children register first because Lisp

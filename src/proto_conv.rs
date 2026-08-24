@@ -139,11 +139,16 @@ pub fn make_component_proto(
                 upper: Some(upper),
             }),
         });
-        // Reactive config bounds: the STATIC capability hull — the
-        // widest Q reachable at any P in the rated range — not a live
-        // sample at the current P. A component with no Q axis at all
-        // (`reactive_capability() == None`) honestly advertises
-        // `(0.0, 0.0)` instead of a fake ±p_max edge.
+        // Reactive config bounds: the capability hull — the widest Q
+        // reachable at any P in the rated range — not a live sample at
+        // the current P. "Static" here means computed fresh from the
+        // caps at read time, not fixed at construction: the caps
+        // themselves are runtime-mutable (`set-reactive-pf-limit` /
+        // `set-reactive-apparent-va`), so this hull tracks whatever PF
+        // / kVA band is live right now, not a frozen nameplate value.
+        // A component with no Q axis at all (`reactive_capability() ==
+        // None`) honestly advertises `(0.0, 0.0)` instead of a fake
+        // ±p_max edge.
         if cat != ElectricalComponentCategory::Battery {
             let p_max = lower.abs().max(upper.abs());
             let (rlo, rhi) = c

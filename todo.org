@@ -444,7 +444,11 @@ call or a non-local change.
 
 ** Fidelity
 
-*** TODO [#B] Reactive config bounds sampled at live P, not rated — research first :reactive:fidelity:
+*** DONE [#B] Reactive config bounds sampled at live P, not rated — research first :reactive:fidelity:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-24 Mo 19:53] \\
+  Resolved: config bounds now advertise the static capability hull (ReactiveCapability::hull at rated p_max) via make_component_proto, not a live-P sample; (0,0) for components with no Q axis.
+:END:
 =make_component_proto= (=src/proto_conv.rs:107=) fills the static
 =AcPowerReactive= =MetricConfigBounds= from =c.reactive_bounds()=, whose
 inverter impls sample at *live* P (=battery_inverter= =measured_w=,
@@ -471,7 +475,11 @@ generation sees headroom that isn't there. Fold =min_avail_w= into the
 reported lower bound — but confirm against the real frequenz API (does it
 report irradiance-limited inclusion bounds for PV?).
 
-*** TODO [#B] dc_power_w is signed-apparent but its bounds are active-only :telemetry:reactive:
+*** DONE [#B] dc_power_w is signed-apparent but its bounds are active-only :telemetry:reactive:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-24 Mo 19:53] \\
+  Resolved: dc_power_w is pure P now — Q terminates at the inverter (Task 4), so the battery's DC value and its active SoC-derated bounds sit on the same scale again.
+:END:
 A battery's =DcPower= telemetry value is =√(P²+Q²)·sign(P)= while the
 attached bounds are the active SoC-derated envelope (=battery.rs= /
 =proto_conv.rs=). Value and bounds sit on different scales whenever Q≠0;
@@ -995,7 +1003,11 @@ same watts. Decision: give it the inverter-style trip — and pick the
 recovery semantic (await re-dispatch like the battery inverter, or
 auto-resume).
 
-*** TODO [#B] PV health-trip never trips the reactive ramp :reactive:fidelity:
+*** DONE [#B] PV health-trip never trips the reactive ramp :reactive:fidelity:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-24 Mo 19:53] \\
+  Resolved: PV health-trip now trips the Q axis (PowerAxis) alongside the active axis, so a tripped inverter's reactive ramp snaps to zero instead of teleporting on recovery.
+:END:
 =solar_inverter.rs= zeroes published Q while tripped but leaves
 =reactive.ramp.actual= and the armed command; recovery teleports Q
 back (~5 kVAR in one tick), skipping the slew =ReactivePath::trip='s
@@ -1286,6 +1298,14 @@ re-clamps its target to the live envelope every tick. Open question
 whether the active path should do the same (honour-until-TTL today
 vs silently shrinking an accepted command); decide with a real
 controller in the loop.
+
+Update (2026-08-24): the reactive path's own-envelope re-clamp described
+above is now codified generically in =PowerAxis= (re-clamps every tick,
+shared by both the active and reactive axes) rather than being
+reactive-specific logic. The open question this entry tracks is
+unchanged: whether an armed active setpoint should follow the same
+re-clamp when a battery's SoC-derated envelope narrows, or honour the
+command until TTL as it does today.
 
 ** d6. Persist-gate follow-ups (origin gating, form splitting) :design:lisp:
 
