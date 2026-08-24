@@ -175,17 +175,7 @@ fn strip_prefixes<'a>(token: &'a str, prefixes: &[&str]) -> &'a str {
 }
 
 use crate::lisp::escape_lisp_string as esc;
-
-/// Renders an f64 so tulisp reads it back as a float (always with a
-/// decimal point). Whole numbers of any magnitude get the `.1`
-/// form — a bare integer token above i64::MAX would not even parse.
-fn lisp_float(v: f64) -> String {
-    if v == v.trunc() && v.is_finite() {
-        format!("{v:.1}")
-    } else {
-        format!("{v}")
-    }
-}
+use crate::lisp::lisp_float;
 
 /// The configured bounds for one metric, by its token suffix.
 fn bounds_for<'a>(c: &'a ApiComponent, suffix: &str) -> Option<&'a Bounds> {

@@ -19,6 +19,7 @@ pub mod csv_profile;
 mod defuns;
 pub mod handle;
 pub mod make;
+pub mod microgrid_file;
 mod overrides;
 pub mod runtime_modes;
 mod snapshots;
@@ -90,6 +91,17 @@ pub(crate) fn escape_lisp_string(s: &str) -> String {
             c => vec![c],
         })
         .collect()
+}
+
+/// Renders an f64 so tulisp reads it back as a float (always with a
+/// decimal point). Whole numbers of any magnitude get the `.1`
+/// form — a bare integer token above i64::MAX would not even parse.
+pub(crate) fn lisp_float(v: f64) -> String {
+    if v == v.trunc() && v.is_finite() {
+        format!("{v:.1}")
+    } else {
+        format!("{v}")
+    }
 }
 
 impl Default for Metadata {
