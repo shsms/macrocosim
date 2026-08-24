@@ -17,7 +17,7 @@ use tulisp::{AsPlist, Error, Plist, TulispContext};
 use crate::lisp::value::LispValue;
 use crate::sim::{
     Battery, BatteryInverter, Category, ComponentHandle, EvCharger, Grid, Marker, Meter,
-    MicrogridSite, OperationalMode, SolarInverter,
+    MicrogridSite, OperationalMode, ReactiveSource, SolarInverter,
     battery::BatteryConfig,
     dynamic_scalar::DynamicScalar,
     ev_charger::EvChargerConfig,
@@ -59,6 +59,16 @@ AsPlist! {
         /// [`DynamicScalar`] in the constructor — see
         /// [`crate::sim::dynamic_scalar::DynamicScalar::from_lisp`].
         power: Option<LispValue> {= None},
+        /// Direct VAr source: constant, lambda, or symbol. Mutually
+        /// exclusive with `:power-factor`.
+        reactive_power<":reactive-power">: Option<LispValue> {= None},
+        /// Derive Q from this meter's own live P via a power factor
+        /// (true cos φ) in `(0.0, 1.0]`. Mutually exclusive with
+        /// `:reactive-power`.
+        power_factor<":power-factor">: Option<f64> {= None},
+        /// Whether the power-factor-derived Q is leading (negative)
+        /// rather than lagging. Requires `:power-factor`.
+        leading: Option<bool> {= None},
         successors: Option<Vec<ComponentHandle>> {= None},
         hidden: Option<bool> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
@@ -280,10 +290,13 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 .power
                 .as_ref()
                 .and_then(|v| DynamicScalar::from_lisp(v.as_inner(), 0.0));
+            let reactive_source =
+                meter_reactive_source(a.reactive_power.as_ref(), a.power_factor, a.leading)?;
             let meter = Meter::new(
                 id,
                 interval,
                 power_source,
+                reactive_source,
                 a.stream_jitter_pct.unwrap_or(0.0) as f32,
                 hidden,
             );
@@ -635,6 +648,44 @@ fn checked_ramp_rate(kw: &str, v: f64) -> Result<f32, Error> {
     Ok(v as f32)
 }
 
+/// Build a meter's `ReactiveSource` from its `:reactive-power` /
+/// `:power-factor` / `:leading` kwargs. The two source kwargs are
+/// mutually exclusive; `:leading` only makes sense alongside
+/// `:power-factor`; and `:power-factor` must be a true cos φ in
+/// `(0.0, 1.0]` — 0 (undefined tan) and anything above 1.0 (not a
+/// valid power factor) are rejected here rather than left to produce
+/// nonsense Q downstream.
+fn meter_reactive_source(
+    reactive_power: Option<&LispValue>,
+    power_factor: Option<f64>,
+    leading: Option<bool>,
+) -> Result<Option<ReactiveSource>, Error> {
+    if reactive_power.is_some() && power_factor.is_some() {
+        return Err(Error::invalid_argument(
+            "make-meter: :reactive-power and :power-factor are mutually exclusive",
+        ));
+    }
+    if leading.is_some() && power_factor.is_none() {
+        return Err(Error::invalid_argument(
+            "make-meter: :leading requires :power-factor",
+        ));
+    }
+    if let Some(pf) = power_factor {
+        if !(0.0..=1.0).contains(&pf) || pf == 0.0 {
+            return Err(Error::invalid_argument(format!(
+                "make-meter: :power-factor must be in (0.0, 1.0], got {pf}"
+            )));
+        }
+        return Ok(Some(ReactiveSource::PowerFactor {
+            pf: pf as f32,
+            leading: leading.unwrap_or(false),
+        }));
+    }
+    Ok(reactive_power
+        .and_then(|v| DynamicScalar::from_lisp(v.as_inner(), 0.0))
+        .map(ReactiveSource::Var))
+}
+
 /// Resolve the component id from an `:id` plist value, falling back to
 /// `MicrogridSite::next_id()` when omitted. Centralized so the
 /// validation stays in one place — every make-* funnels through here.
@@ -946,6 +997,47 @@ mod tests {
         ctx.eval_string("(setq consumer-power 2750.0)").unwrap();
         m.refresh_inputs(&mut ctx);
         assert!((m.aggregate_power_w(&site) - 2750.0).abs() < 1e-3);
+    }
+
+    /// `:reactive-power` / `:power-factor` / `:leading` validation:
+    /// the two source kwargs are mutually exclusive, `:leading`
+    /// requires `:power-factor`, and `:power-factor` must land in
+    /// `(0.0, 1.0]` — 0 and > 1 are rejected, 1.0 is accepted and
+    /// yields Q = 0 (unity power factor, cos φ = 1 → φ = 0).
+    #[test]
+    fn meter_reactive_kwargs_validate() {
+        let mut ctx = TulispContext::new();
+        use crate::sim::microgrids::{SiteRouter, new_current_microgrid, new_registry};
+        let site = MicrogridSite::new();
+        crate::lisp::handle::register(&mut ctx);
+        let router = SiteRouter::new(new_registry(), new_current_microgrid(), site.clone());
+        register(&mut ctx, router);
+
+        let err = ctx
+            .eval_string("(%make-meter :id 1 :reactive-power 500.0 :power-factor 0.9)")
+            .unwrap_err();
+        assert!(format!("{err}").contains("mutually exclusive"), "{err}");
+
+        let err = ctx
+            .eval_string("(%make-meter :id 2 :leading t)")
+            .unwrap_err();
+        assert!(format!("{err}").contains(":leading"), "{err}");
+
+        let err = ctx
+            .eval_string("(%make-meter :id 3 :power-factor 0.0)")
+            .unwrap_err();
+        assert!(format!("{err}").contains(":power-factor"), "{err}");
+
+        let err = ctx
+            .eval_string("(%make-meter :id 4 :power-factor 1.5)")
+            .unwrap_err();
+        assert!(format!("{err}").contains(":power-factor"), "{err}");
+
+        // 1.0 is a valid (unity) power factor — Q collapses to 0.
+        ctx.eval_string("(%make-meter :id 5 :power 1000.0 :power-factor 1.0)")
+            .expect("pf 1.0 is valid");
+        let m = site.get(5).unwrap();
+        assert!((m.aggregate_reactive_var(&site)).abs() < 1e-3);
     }
 
     /// `:sunlight%` accepts a lambda the same way meter `:power`

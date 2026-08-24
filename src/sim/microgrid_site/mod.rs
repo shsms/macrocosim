@@ -1310,7 +1310,7 @@ mod tests {
         w.register(SolarInverter::new(4, sec, SolarInverterConfig::default()));
         // A meter aggregating the solar inverter, so its override
         // exercises the children walk.
-        w.register(Meter::new(5, sec, None, 0.0, false));
+        w.register(Meter::new(5, sec, None, None, 0.0, false));
         w.connect(3, 1);
         w.connect(5, 4);
 
@@ -1669,12 +1669,14 @@ mod tests {
             1,
             std::time::Duration::from_secs(1),
             None,
+            None,
             0.0,
             false,
         ));
         site.register(crate::sim::Meter::new(
             2,
             std::time::Duration::from_secs(1),
+            None,
             None,
             0.0,
             true,

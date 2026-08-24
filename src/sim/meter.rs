@@ -8,13 +8,36 @@ use crate::sim::{
     Category, MicrogridSite, SimulatedComponent, Telemetry, dynamic_scalar::DynamicScalar,
 };
 
+/// A meter's reactive-power (Q) source — the VAr twin of the
+/// `:power` active-power source. Either a direct VAr value (constant,
+/// lambda, or symbol) or a derivation from the meter's own live P via
+/// a power factor.
+pub enum ReactiveSource {
+    /// VArs directly: constant, lambda, or symbol.
+    Var(DynamicScalar),
+    /// Derive Q from this meter's live P: `|P|·tan(acos(pf))`,
+    /// negated when leading. `pf` is true cos φ in `(0, 1]`.
+    PowerFactor { pf: f32, leading: bool },
+}
+
+/// The reactive source's construction-time freeze — the Q twin of
+/// `constructed_power`. `None` when the meter was built with no
+/// reactive source, or with a dynamic (lambda / symbol) `Var`.
+enum ConstructedReactive {
+    Var(f32),
+    PowerFactor { pf: f32, leading: bool },
+}
+
 /// A power meter sums its successors' active and reactive power, then
 /// voltage-splits the totals across the three phases. If the parent
 /// registered with explicit `:power` — a constant, a lambda, or a
 /// symbol — that value is used verbatim instead, modelling a
 /// headless consumer / CHP load. Lisp timers can also push a value
 /// in via `(set-meter-power id W)`, which collapses the source back
-/// to a constant.
+/// to a constant. The reactive axis mirrors this: an explicit
+/// `:reactive-power` or `:power-factor` source overrides the
+/// aggregate-from-successors path independently of the active axis,
+/// so a `:power` override no longer forces Q to zero (todo #537).
 pub struct Meter {
     id: u64,
     name: String,
@@ -25,6 +48,11 @@ pub struct Meter {
     /// replace the slot without contending against the per-tick
     /// aggregation read.
     power_source: RwLock<Option<DynamicScalar>>,
+    /// Override the aggregate-from-successors path with an explicit
+    /// reactive-power source — either a direct VAr value or a
+    /// power-factor derivation from this meter's own live P. RwLock
+    /// for the same reason as `power_source`.
+    reactive_source: RwLock<Option<ReactiveSource>>,
     stream_jitter_pct: f32,
     /// Excluded from gRPC component / connection listings, but still
     /// aggregated by parent meters via MicrogridSite::get. Used for synthetic
@@ -39,6 +67,10 @@ pub struct Meter {
     /// renderer keeps writing the original construction kwarg
     /// instead of resurrecting a runtime poke as if it were config.
     constructed_power: Option<f32>,
+    /// The `:reactive-power` / `:power-factor` this meter was
+    /// constructed with — the Q twin of `constructed_power`. See
+    /// there for why this is construction-only state.
+    constructed_reactive: Option<ConstructedReactive>,
 }
 
 impl Meter {
@@ -46,6 +78,7 @@ impl Meter {
         id: u64,
         interval: Duration,
         power_source: Option<DynamicScalar>,
+        reactive_source: Option<ReactiveSource>,
         stream_jitter_pct: f32,
         hidden: bool,
     ) -> Self {
@@ -53,14 +86,29 @@ impl Meter {
             .as_ref()
             .filter(|s| !s.is_dynamic())
             .map(|s| s.get());
+        let constructed_reactive = match &reactive_source {
+            Some(ReactiveSource::Var(s)) if !s.is_dynamic() => {
+                Some(ConstructedReactive::Var(s.get()))
+            }
+            Some(ReactiveSource::Var(_)) => None,
+            Some(ReactiveSource::PowerFactor { pf, leading }) => {
+                Some(ConstructedReactive::PowerFactor {
+                    pf: *pf,
+                    leading: *leading,
+                })
+            }
+            None => None,
+        };
         Self {
             id,
             name: format!("meter-{id}"),
             interval,
             power_source: RwLock::new(power_source),
+            reactive_source: RwLock::new(reactive_source),
             stream_jitter_pct,
             hidden,
             constructed_power,
+            constructed_reactive,
         }
     }
 
@@ -91,13 +139,20 @@ impl Meter {
     }
 
     fn aggregate_reactive(&self, site: &MicrogridSite) -> f32 {
-        // No reactive override on power-driven meters — those model
-        // pure-real loads (consumer kW, CHP). If we ever need a
-        // synthetic reactive load, add a `reactive_source` knob.
-        if self.power_source.read().is_some() {
-            return 0.0;
+        self.aggregate_reactive_with(site, || self.aggregate_active(site))
+    }
+
+    /// [`Self::aggregate_reactive`] with the active power supplied
+    /// lazily: only a PF source derives Q from P, so the Var and
+    /// child-sum arms never pay for the active walk, while `telemetry`
+    /// passes the `total_p` it already read and gets a P/Q pair taken
+    /// from one read.
+    fn aggregate_reactive_with(&self, site: &MicrogridSite, p: impl FnOnce() -> f32) -> f32 {
+        match self.reactive_source.read().as_ref() {
+            Some(ReactiveSource::Var(scalar)) => scalar.get(),
+            Some(ReactiveSource::PowerFactor { pf, leading }) => derive_pf_q(p(), *pf, *leading),
+            None => self.sum_children(site, |c| c.aggregate_reactive_var(site)),
         }
-        self.sum_children(site, |c| c.aggregate_reactive_var(site))
     }
 
     /// Replace the power source with a fresh constant. Used by
@@ -107,6 +162,29 @@ impl Meter {
     pub fn set_fixed_power(&self, watts: f32) {
         *self.power_source.write() = Some(DynamicScalar::constant(watts));
     }
+
+    /// Replace the reactive source with a fresh constant VAr value.
+    /// The Q twin of `set_fixed_power`.
+    pub fn set_fixed_reactive_power(&self, vars: f32) {
+        *self.reactive_source.write() = Some(ReactiveSource::Var(DynamicScalar::constant(vars)));
+    }
+
+    /// Replace the reactive source with a power-factor derivation
+    /// that tracks this meter's own live active power on every read.
+    pub fn set_power_factor_source(&self, pf: f32, leading: bool) {
+        *self.reactive_source.write() = Some(ReactiveSource::PowerFactor { pf, leading });
+    }
+}
+
+/// Derive reactive power from active power and a power factor:
+/// `|P|·tan(acos(pf))`, negated when leading. `pf` is true cos φ in
+/// `(0, 1]`; the clamp is a guard against `pf > 1` (whose `acos` is
+/// NaN). The lower bound is inert in f32 — `acos(f32::MIN_POSITIVE)`
+/// equals `acos(0.0)` bit for bit — so a `pf` of 0 still yields a
+/// nonsense Q. Construction validates the actual range; the clamp is
+/// only a backstop.
+fn derive_pf_q(p: f32, pf: f32, leading: bool) -> f32 {
+    p.abs() * pf.clamp(f32::MIN_POSITIVE, 1.0).acos().tan() * if leading { -1.0 } else { 1.0 }
 }
 
 impl fmt::Display for Meter {
@@ -135,13 +213,19 @@ impl SimulatedComponent for Meter {
         if let Some(scalar) = self.power_source.read().as_ref() {
             scalar.refresh(ctx);
         }
+        // Only the Var shape carries a Lisp-resolvable scalar — a PF
+        // source derives from live P on every read and needs no
+        // refresh of its own.
+        if let Some(ReactiveSource::Var(scalar)) = self.reactive_source.read().as_ref() {
+            scalar.refresh(ctx);
+        }
     }
     fn tick(&self, _world: &MicrogridSite, _now: DateTime<Utc>, _dt: Duration) {}
 
     fn telemetry(&self, site: &MicrogridSite) -> Telemetry {
         let grid = site.grid_state();
         let total_p = self.aggregate_active(site);
-        let total_q = self.aggregate_reactive(site);
+        let total_q = self.aggregate_reactive_with(site, || total_p);
 
         let pp = split_per_phase(total_p, grid.voltage_per_phase);
         let qq = split_per_phase(total_q, grid.voltage_per_phase);
@@ -187,6 +271,24 @@ impl SimulatedComponent for Meter {
         *self.power_source.write() = Some(scalar);
     }
 
+    fn set_reactive_power_override(&self, vars: f32) -> bool {
+        self.set_fixed_reactive_power(vars);
+        true
+    }
+
+    fn takes_reactive_power_override(&self) -> bool {
+        true
+    }
+
+    fn set_reactive_power_source(&self, scalar: DynamicScalar) {
+        *self.reactive_source.write() = Some(ReactiveSource::Var(scalar));
+    }
+
+    fn set_power_factor(&self, pf: f32, leading: bool) -> bool {
+        self.set_power_factor_source(pf, leading);
+        true
+    }
+
     fn is_hidden(&self) -> bool {
         self.hidden
     }
@@ -196,12 +298,16 @@ impl SimulatedComponent for Meter {
     }
 
     fn has_unrenderable_source(&self) -> bool {
-        // `constructed_power` holds the constant `:power` this meter
-        // was BUILT with, so an unset one with a live source means
-        // the value came from somewhere the renderer cannot write:
-        // a lambda / symbol binding, or a runtime `set-meter-power`
-        // over a meter constructed without `:power`.
-        self.constructed_power.is_none() && self.power_source.read().is_some()
+        // `constructed_power` / `constructed_reactive` hold the
+        // constant `:power` / `:reactive-power` / `:power-factor`
+        // this meter was BUILT with, so an unset one with a live
+        // source means the value came from somewhere the renderer
+        // cannot write: a lambda / symbol binding, or a runtime poke
+        // (`set-meter-power`, `set_fixed_reactive_power`,
+        // `set_power_factor_source`) over a meter constructed without
+        // that kwarg.
+        (self.constructed_power.is_none() && self.power_source.read().is_some())
+            || (self.constructed_reactive.is_none() && self.reactive_source.read().is_some())
     }
 
     fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
@@ -211,6 +317,18 @@ impl SimulatedComponent for Meter {
         }
         if let Some(p) = self.constructed_power.filter(|p| p.is_finite()) {
             kw.push((":power", crate::lisp::lisp_float32(p)));
+        }
+        match self.constructed_reactive {
+            Some(ConstructedReactive::Var(v)) if v.is_finite() => {
+                kw.push((":reactive-power", crate::lisp::lisp_float32(v)));
+            }
+            Some(ConstructedReactive::PowerFactor { pf, leading }) => {
+                kw.push((":power-factor", crate::lisp::lisp_float32(pf)));
+                if leading {
+                    kw.push((":leading", "t".to_string()));
+                }
+            }
+            _ => {}
         }
         if self.hidden {
             kw.push((":hidden", "t".to_string()));
@@ -318,7 +436,7 @@ mod tests {
             q: 0.0,
         });
         w.register_arc(inverter);
-        let meter = Meter::new(2, Duration::from_secs(1), None, 0.0, false);
+        let meter = Meter::new(2, Duration::from_secs(1), None, None, 0.0, false);
         w.register(meter);
         assert!(w.connect(2, 100));
         assert!(w.connect(2, 100));
@@ -351,15 +469,15 @@ mod tests {
 
         // Two parallel meters that each list the inverter as their
         // only successor — connect both edges so parent_count(100) = 2.
-        let meter_a = Meter::new(10, Duration::from_secs(1), None, 0.0, false);
-        let meter_b = Meter::new(11, Duration::from_secs(1), None, 0.0, false);
+        let meter_a = Meter::new(10, Duration::from_secs(1), None, None, 0.0, false);
+        let meter_b = Meter::new(11, Duration::from_secs(1), None, None, 0.0, false);
         w.register(meter_a);
         w.register(meter_b);
         w.connect(10, 100);
         w.connect(11, 100);
 
         // Top meter aggregates both parallel meters.
-        let top = Meter::new(2, Duration::from_secs(1), None, 0.0, false);
+        let top = Meter::new(2, Duration::from_secs(1), None, None, 0.0, false);
         w.register(top);
         w.connect(2, 10);
         w.connect(2, 11);
@@ -388,7 +506,7 @@ mod tests {
         // Visible meter with the inverter as a make-time child —
         // connections is the single source of truth so the
         // connect/disconnect dance flows through it directly.
-        let m = Meter::new(2, Duration::from_secs(1), None, 0.0, false);
+        let m = Meter::new(2, Duration::from_secs(1), None, None, 0.0, false);
         w.register(m);
         w.connect(2, 100);
         let m = w.get(2).unwrap();
@@ -411,7 +529,7 @@ mod tests {
             q: 0.0,
         });
         w.register_arc(inverter);
-        let m = Meter::new(2, Duration::from_secs(1), None, 0.0, false);
+        let m = Meter::new(2, Duration::from_secs(1), None, None, 0.0, false);
         w.register(m);
 
         // Pre-connect: nothing under the meter.
@@ -433,6 +551,7 @@ mod tests {
             2,
             Duration::from_secs(1),
             Some(DynamicScalar::constant(2750.0)),
+            None,
             0.0,
             false,
         );
@@ -456,7 +575,7 @@ mod tests {
         assert!(scalar.is_dynamic());
 
         let w = MicrogridSite::new();
-        let m = Meter::new(2, Duration::from_secs(1), Some(scalar), 0.0, false);
+        let m = Meter::new(2, Duration::from_secs(1), Some(scalar), None, 0.0, false);
         w.register(m);
         let m = w.get(2).unwrap();
 
@@ -481,12 +600,13 @@ mod tests {
             9000,
             Duration::from_secs(1),
             Some(DynamicScalar::constant(1500.0)),
+            None,
             0.0,
             true,
         );
         w.register(hidden_meter);
 
-        let parent = Meter::new(2, Duration::from_secs(1), None, 0.0, false);
+        let parent = Meter::new(2, Duration::from_secs(1), None, None, 0.0, false);
         w.register(parent);
         w.connect(2, 9000);
 
@@ -509,6 +629,7 @@ mod tests {
             1,
             Duration::from_secs(1),
             DynamicScalar::from_lisp(&1875.0f64.into(), 0.0),
+            None,
             0.0,
             false,
         );
@@ -526,8 +647,123 @@ mod tests {
             "pokes are not construction"
         );
         // No power source → no :power kwarg; hidden renders.
-        let h = Meter::new(2, Duration::from_secs(1), None, 0.0, true);
+        let h = Meter::new(2, Duration::from_secs(1), None, None, 0.0, true);
         assert!(!kw(&h).contains(":power"));
         assert!(kw(&h).contains(":hidden t"));
+    }
+
+    /// A `:power` override no longer zeroes Q (todo #537 fix): a
+    /// meter with BOTH a `:power` override and a `Var` reactive
+    /// source reports the Var value, not 0. A meter with a `:power`
+    /// override but NO reactive source still sums its children's Q —
+    /// the two axes are independent.
+    #[test]
+    fn reactive_var_source_and_children_sum() {
+        let w = MicrogridSite::new();
+
+        // Own reactive source wins outright — the P override doesn't
+        // touch it.
+        let m_with_reactive = Meter::new(
+            1,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(5_000.0)),
+            Some(ReactiveSource::Var(DynamicScalar::constant(750.0))),
+            0.0,
+            false,
+        );
+        w.register(m_with_reactive);
+        let m_with_reactive = w.get(1).unwrap();
+        assert!((m_with_reactive.aggregate_reactive_var(&w) - 750.0).abs() < 1e-3);
+
+        // No reactive source → sums children's Q, even though this
+        // meter has a P override (the pre-fix behaviour returned 0
+        // here).
+        let child = std::sync::Arc::new(FixedFlow {
+            id: 100,
+            p: 0.0,
+            q: 1_200.0,
+        });
+        w.register_arc(child);
+        let m_no_reactive = Meter::new(
+            2,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(5_000.0)),
+            None,
+            0.0,
+            false,
+        );
+        w.register(m_no_reactive);
+        w.connect(2, 100);
+        let m_no_reactive = w.get(2).unwrap();
+        assert!((m_no_reactive.aggregate_reactive_var(&w) - 1_200.0).abs() < 1e-3);
+    }
+
+    /// A `PowerFactor` reactive source derives Q from this meter's
+    /// OWN live P on every read: `pf 0.8` lagging on `:power 8000` →
+    /// `Q ≈ 8000·tan(acos(0.8)) = 6000`; leading negates it; and
+    /// moving the P override moves Q on the next read.
+    #[test]
+    fn power_factor_source_tracks_live_p() {
+        let w = MicrogridSite::new();
+        let m = Meter::new(
+            1,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(8_000.0)),
+            Some(ReactiveSource::PowerFactor {
+                pf: 0.8,
+                leading: false,
+            }),
+            0.0,
+            false,
+        );
+        w.register(m);
+        let m = w.get(1).unwrap();
+        assert!((m.aggregate_reactive_var(&w) - 6_000.0).abs() < 1.0);
+
+        // Leading flips the sign.
+        assert!(m.set_power_factor(0.8, true));
+        assert!((m.aggregate_reactive_var(&w) - -6_000.0).abs() < 1.0);
+
+        // Moving the P override moves Q on the next read — the PF
+        // source has no cached value of its own.
+        assert!(m.set_active_power_override(4_000.0));
+        assert!((m.aggregate_reactive_var(&w) - -3_000.0).abs() < 1.0);
+    }
+
+    /// `constructed_reactive` freezes the SAME way `constructed_power`
+    /// does: a `:reactive-power` kwarg survives into `constructor_kwargs`,
+    /// and a later runtime poke (`set_fixed_reactive_power`) doesn't
+    /// leak into it. A meter built with no reactive source, then
+    /// given a runtime PF source, becomes unrenderable — the same
+    /// rule that already applies to a runtime `:power` poke.
+    #[test]
+    fn constructed_reactive_freezes_for_rendering() {
+        let m = Meter::new(
+            1,
+            Duration::from_secs(1),
+            None,
+            Some(ReactiveSource::Var(DynamicScalar::constant(500.0))),
+            0.0,
+            false,
+        );
+        let kw = |m: &Meter| {
+            m.constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(kw(&m).contains(":reactive-power 500.0"));
+        m.set_fixed_reactive_power(999.0);
+        assert!(
+            kw(&m).contains(":reactive-power 500.0"),
+            "pokes are not construction"
+        );
+
+        // Built plain, then a runtime PF source lands — unrenderable.
+        let h = Meter::new(2, Duration::from_secs(1), None, None, 0.0, false);
+        assert!(!h.has_unrenderable_source());
+        h.set_power_factor_source(0.8, false);
+        assert!(h.has_unrenderable_source());
     }
 }

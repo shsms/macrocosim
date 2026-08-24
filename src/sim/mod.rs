@@ -37,5 +37,5 @@ pub use ev_charger::EvCharger;
 pub use grid::Grid;
 pub use inverter::{BatteryInverter, SolarInverter};
 pub use marker::Marker;
-pub use meter::Meter;
+pub use meter::{Meter, ReactiveSource};
 pub use microgrid_site::MicrogridSite;

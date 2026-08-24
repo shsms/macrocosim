@@ -820,8 +820,11 @@ mod tests {
     (%make-ev-charger :id 7)
     (%make-chp :id 8 :name "chp")
     (%make-meter :id 9 :operational-mode 'inactive)
+    (%make-meter :id 10 :power 2000.0 :reactive-power 500.0)
+    (%make-meter :id 11 :power 2000.0 :power-factor 0.9 :leading t)
     (connect 1 2) (connect 2 4) (connect 4 5)
-    (connect 2 6) (connect 2 7) (connect 2 8) (connect 2 3) (connect 2 9)))
+    (connect 2 6) (connect 2 7) (connect 2 8) (connect 2 3) (connect 2 9)
+    (connect 2 10) (connect 2 11)))
 "#;
         let (cfg, _dir) = config_with(body);
         let (def, site) = {

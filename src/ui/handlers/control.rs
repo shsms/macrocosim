@@ -264,7 +264,14 @@ mod tests {
     #[test]
     fn rejected_drive_applies_nothing() {
         let site = MicrogridSite::new();
-        site.register(Meter::new(5, Duration::from_secs(1), None, 0.0, false));
+        site.register(Meter::new(
+            5,
+            Duration::from_secs(1),
+            None,
+            None,
+            0.0,
+            false,
+        ));
 
         let req = DriveRequest {
             power_w: Some(5_000.0),

@@ -456,6 +456,35 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// Default no-op for non-meter components.
     fn set_active_power_source(&self, _scalar: DynamicScalar) {}
 
+    /// Override the reactive-power value a meter publishes with a
+    /// constant. The Q twin of [`Self::set_active_power_override`].
+    /// Returns whether the component supports the stimulus; the
+    /// default is an unsupported no-op.
+    fn set_reactive_power_override(&self, _vars: f32) -> bool {
+        false
+    }
+
+    /// Whether [`Self::set_reactive_power_override`] applies to this
+    /// component. See [`Self::takes_active_power_override`] for why
+    /// the predicates exist.
+    fn takes_reactive_power_override(&self) -> bool {
+        false
+    }
+
+    /// Replace the meter's reactive-power source with a Lisp
+    /// expression re-resolved each tick. The Q twin of
+    /// [`Self::set_active_power_source`]. Default no-op for
+    /// non-meter components.
+    fn set_reactive_power_source(&self, _scalar: DynamicScalar) {}
+
+    /// Replace the meter's reactive-power source with a power-factor
+    /// derivation that tracks the meter's own live active power.
+    /// Returns whether the component supports the stimulus; the
+    /// default is an unsupported no-op.
+    fn set_power_factor(&self, _pf: f32, _leading: bool) -> bool {
+        false
+    }
+
     /// Update the live cloud-cover percentage on a solar inverter.
     /// Used by `(set-solar-sunlight id PCT)` with a numeric
     /// argument. Default no-op for non-solar components.
