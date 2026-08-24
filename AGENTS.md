@@ -96,7 +96,11 @@ sources, `every` drivers; never component construction — the
 generated block owns structure, and constructing more in the script
 section collides with it on the next load).
 `microgrid_file::{parse,compose,render_block}` split / rejoin /
-derive the two sections.
+derive the two sections. `(set-microgrid-name ID NAME)` and
+`(set-microgrid-tso ID TSO)` edit the head's own arguments and
+persist like any other structural edit; the `:grpc-port` has no
+setter on purpose — a listening gRPC server pins it, so moving one
+needs an unload (a later sub-project).
 
 Files load explicitly — `(load "path.lisp")`, a boot-script arg, or
 the UI's Load — never implicitly. Loading a second file that declares

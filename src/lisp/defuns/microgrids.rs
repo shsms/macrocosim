@@ -1,8 +1,10 @@
-//! `(make-microgrid)` + the `current-microgrid-id` / `microgrid-name`
-//! accessors. Each `(make-microgrid …)` form mints a fresh
-//! `MicrogridSite`, inserts a registry entry, flips the
-//! `CurrentMicrogrid` pointer, and funcalls the `:topology` lambda
-//! so nested make-* forms register into the new site.
+//! `(make-microgrid)`, the `current-microgrid-id` / `microgrid-name`
+//! accessors, and the `set-microgrid-name` / `set-microgrid-tso`
+//! setters that edit a live microgrid's definition. Each
+//! `(make-microgrid …)` form mints a fresh `MicrogridSite`, inserts a
+//! registry entry, flips the `CurrentMicrogrid` pointer, and funcalls
+//! the `:topology` lambda so nested make-* forms register into the
+//! new site.
 
 use std::sync::Arc;
 
@@ -95,6 +97,57 @@ pub(in crate::lisp) fn register(
                     .and_then(|id| r.get(&id))
                     .or_else(|| r.values().next());
                 Ok(entry.map(|e| e.def.name.clone()).unwrap_or_default())
+            },
+        );
+    }
+    // Structural edits to the microgrid's own definition — the two
+    // `(make-microgrid …)` head arguments a person changes after the
+    // fact. (There is deliberately no `:grpc-port` setter: the port
+    // is pinned by a listening gRPC server, so moving it needs an
+    // unload, which is a later sub-project.)
+    //
+    // Both bump the site's STRUCTURAL version even though no
+    // component moved: that counter is what `Config::eval` diffs to
+    // decide a microgrid's managed file needs rewriting, and the head
+    // these setters edit lives in that file.
+    {
+        let reg = registry.clone();
+        ctx.defun(
+            "set-microgrid-name",
+            move |id: i64, name: String| -> Result<bool, tulisp::Error> {
+                let mut r = reg.lock();
+                let entry = r.get_mut(&(id as u64)).ok_or_else(|| {
+                    tulisp::Error::invalid_argument(format!(
+                        "set-microgrid-name: no microgrid with id {id}"
+                    ))
+                })?;
+                entry.def.name = name;
+                entry.site.bump_structural_version();
+                Ok(true)
+            },
+        );
+    }
+    {
+        let reg = registry.clone();
+        ctx.defun(
+            "set-microgrid-tso",
+            move |id: i64, tso: TulispObject| -> Result<bool, tulisp::Error> {
+                // nil clears the label; anything else must be a
+                // string (the TSO zone is free-form text).
+                let tso = if tso.null() {
+                    None
+                } else {
+                    Some(String::try_from(tso)?)
+                };
+                let mut r = reg.lock();
+                let entry = r.get_mut(&(id as u64)).ok_or_else(|| {
+                    tulisp::Error::invalid_argument(format!(
+                        "set-microgrid-tso: no microgrid with id {id}"
+                    ))
+                })?;
+                entry.def.tso = tso;
+                entry.site.bump_structural_version();
+                Ok(true)
             },
         );
     }
@@ -420,6 +473,56 @@ mod tests {
             "the copy binds a port of its own"
         );
         assert!(copy.site.get(77).is_some(), "the copy carries the topology");
+    }
+
+    /// `set-microgrid-name` / `set-microgrid-tso` edit the registry
+    /// def AND land in the managed file's `(make-microgrid …)` head,
+    /// so the new name survives a reload. Neither moves a component,
+    /// so both have to bump the structural version themselves — that
+    /// counter is the persist trigger.
+    #[test]
+    fn microgrid_attribute_setters_persist_into_the_managed_file() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let def = crate::sim::microgrids::MicrogridDef {
+            id: 20,
+            name: "before".into(),
+            grpc_port: 8890,
+            tso: None,
+        };
+        let path = dir.join("microgrids/20.lisp");
+        crate::lisp::microgrid_file::write_atomic(
+            &path,
+            &crate::lisp::microgrid_file::compose(
+                &crate::lisp::microgrid_file::render_empty_block(&def),
+                crate::lisp::microgrid_file::FRESH_SCRIPT_HEADER,
+            ),
+        )
+        .unwrap();
+        cfg.load_file(&path).unwrap();
+
+        cfg.eval("(set-microgrid-name 20 \"after\")").unwrap();
+        cfg.eval("(set-microgrid-tso 20 \"BW\")").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(":name \"after\""), "{text}");
+        assert!(text.contains(":tso \"BW\""), "{text}");
+        assert_eq!(cfg.microgrids().lock()[&20].def.name, "after");
+
+        // The file is what a reload rebuilds from, so both edits come
+        // back out of it.
+        cfg.reload_file(&path).unwrap();
+        let entry = cfg.microgrids().lock()[&20].clone();
+        assert_eq!(entry.def.name, "after");
+        assert_eq!(entry.def.tso.as_deref(), Some("BW"));
+
+        // nil clears the label again, and that clears it in the file.
+        cfg.eval("(set-microgrid-tso 20 nil)").unwrap();
+        assert!(
+            !std::fs::read_to_string(&path).unwrap().contains(":tso"),
+            "a cleared TSO leaves no :tso in the head"
+        );
+        // An unregistered id is an error, not a silent no-op.
+        assert!(cfg.eval("(set-microgrid-name 4242 \"x\")").is_err());
     }
 
     /// A loaded microgrid remembers the file it came from; a REPL one

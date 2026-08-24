@@ -54,12 +54,11 @@ export const COMPLETIONS = [
   "set-voltage-per-phase",
   "set-frequency",
   // Metadata
-  "set-microgrid-id",
   "set-enterprise-id",
   "set-microgrid-name",
+  "set-microgrid-tso",
   "set-socket-addr",
   "set-default-request-lifetime-ms",
-  "get-microgrid-id",
   // Scenarios — lifecycle, journal + reporter, CSV recording.
   // Lifecycle defuns are Rust-side; the *-end-after / random-*
   // helpers are Lisp wrappers in sim/common.lisp + sim/scenarios.lisp.

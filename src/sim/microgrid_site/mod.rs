@@ -255,6 +255,16 @@ impl MicrogridSite {
             .fetch_add(1, Ordering::Release);
     }
 
+    /// Mark this site's *config* as moved without touching a
+    /// component. The site's own mutators bump the structural
+    /// version themselves; this is for edits that live one level up,
+    /// on the microgrid's `MicrogridDef` — its name, its TSO label —
+    /// which the managed file's `(make-microgrid …)` head carries and
+    /// which therefore have to reach the same persist trigger.
+    pub fn bump_structural_version(&self) {
+        self.bump_structural();
+    }
+
     /// Read the current sample-lag offset (ms). The server uses this
     /// to shift telemetry timestamps into the past, modelling a server
     /// that delivers samples with stale timestamps.
