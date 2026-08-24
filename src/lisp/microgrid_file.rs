@@ -34,7 +34,10 @@ pub const GENERATED_END: &str = ";;; switchyard:end";
 /// of a freshly created managed file.
 pub const FRESH_SCRIPT_HEADER: &str = "\
 ;; Anything below is yours. It runs after the structure, in this
-;; microgrid's scope, on every load.
+;; microgrid's scope, on every load. Drive meters, define scenarios,
+;; set setpoints here — do not construct components (the generated
+;; block above owns the structure; constructing more here collides
+;; on the next load).
 ";
 
 /// The ownership comment written at the top of the script section

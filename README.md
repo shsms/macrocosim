@@ -46,8 +46,8 @@ script on demand from the Microgrids tab or the REPL:
 (load "examples/berlin-demo.lisp")
 ```
 
-Relative paths (and all persistent state: overrides journals,
-`snapshots/`, runtime-created microgrid stubs) anchor to
+Relative paths (and all persistent state: managed microgrid files
+under `microgrids/`, `enterprise.lisp`, `snapshots/`) anchor to
 `--state-dir`, defaulting to the directory the server was started
 from. See `sim/defaults.lisp` for the per-category default knobs and
 `sim/common.lisp` for the runtime helpers — both are embedded into
@@ -93,7 +93,7 @@ swctl pool battery                                          # loopback BatteryPo
 swctl scenario report                                       # journal report / CI gate
 swctl scenario list                                         # registered scenarios
 swctl scenario run cloud-fade --wait --assert              # run one live + gate
-swctl snapshot save before-test                             # persist overrides
+swctl snapshot save before-test                             # freeze the mg's managed file
 swctl dashboard --tail                                      # one-line/sec pulse bar
 swctl dispatch list 1                                       # dispatch API CRUD
 swctl dispatch create 1 <type> battery --duration 3600

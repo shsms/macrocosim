@@ -36,8 +36,14 @@ is wiring the topology + animating the environment.
     tulisp-async wiring, background loops
   - `defuns/` — every `register_*` installer, one file per topic
     (clock, scenarios, microgrids, metadata, runtime_modes, …)
-  - `overrides.rs` / `snapshots.rs` — per-mg override-file persistence
-    + snapshot save/load on `Config`
+  - `microgrid_file.rs` — text format for a managed microgrid file
+    (generated block + script section); `parse` / `compose` /
+    `render_block`
+  - `overrides.rs` — structural-eval persist-on-write: regenerates a
+    microgrid's managed file, or `enterprise.lisp` for enterprise-wide
+    state
+  - `undo.rs` — per-microgrid undo stack over the managed-file rewrites
+  - `snapshots.rs` — per-mg snapshot save/load under `snapshots/{id}/`
   - `make.rs` — `(make-*)` constructors via `AsPlist!`
   - `handle.rs` — `ComponentHandle` ↔ `Shared<dyn TulispAny>` round trip
 - `src/ui/` — embedded web UI server
@@ -70,11 +76,56 @@ is wiring the topology + animating the environment.
 - `sim/common.lisp` — Lisp helpers (`every`, `cancel-timers`,
   `reset-state`); embedded into the binary with `defaults.lisp` +
   `scenarios.lisp` as the prelude
-- `examples/berlin-demo.lisp` — self-contained demo world: topology
-  + environment animation + the seven starter scenarios. Boot
-  scripts are optional (`switchyard [script …]`); a bare boot loads
-  worlds on demand via `(load …)` / the Microgrids tab, and
-  `--state-dir` anchors journals / snapshots / relative paths
+- `examples/berlin-demo.lisp` — self-contained demo world: generated
+  topology block + a script section with the environment animation
+  and the seven starter scenarios. Boot scripts are optional
+  (`switchyard [script …]`); a bare boot loads worlds on demand via
+  `(load …)` / the Microgrids tab, and `--state-dir` anchors
+  `microgrids/`, `enterprise.lisp`, `snapshots/`, and relative paths
+
+## Managed microgrid files
+
+Each microgrid lives in one `.lisp` file: a switchyard-generated
+block (`;;; switchyard:generated` … `;;; switchyard:end`) holding a
+full `(make-microgrid :id … :name … :grpc-port … :topology (lambda ()
+…))` — every component as a flat `%make-*` plus `connect` calls,
+rewritten from live state on every structural eval — followed by a
+hand-written script section that runs after the structure, in that
+microgrid's scope, on every load (scenarios, `set-meter-power`
+sources, `every` drivers; never component construction — the
+generated block owns structure, and constructing more in the script
+section collides with it on the next load).
+`microgrid_file::{parse,compose,render_block}` split / rejoin /
+derive the two sections.
+
+Files load explicitly — `(load "path.lisp")`, a boot-script arg, or
+the UI's Load — never implicitly. Loading a second file that declares
+an id already owned by a DIFFERENT file is a hard error naming the
+owner; re-loading the SAME file re-registers its microgrid in place,
+reusing the live site so boot-spawned physics / gRPC survive. A
+driver-only script — timers perturbing somebody else's world, no
+`(make-microgrid …)` of its own — is watched and hot-reloaded per
+file just like any other loaded file, but a *whole-world* reload
+(the undo/settings-failure path) only replays files that register a
+microgrid; a driver-only script sits out of that replay list.
+
+`enterprise.lisp` carries enterprise-wide state: id, timezone,
+request-lifetime bounds, the assets/dispatch socket addresses, and
+every `*-defaults` plist. `Config::persist_enterprise` rewrites it
+whenever an eval touches enterprise-wide state — same two-section
+shape as a microgrid file.
+
+Per-microgrid snapshots live under `snapshots/{mg_id}/{name}.lisp`
+(`src/lisp/snapshots.rs`) — a frozen copy of that microgrid's managed
+file; loading one writes it back over the live file and reloads just
+that microgrid. Undo (`src/lisp/undo.rs`) is per-microgrid too: one
+stack per mg id over the managed-file rewrites.
+
+The pre-migration overrides journal and `(load-overrides)` replay are
+gone. `load-overrides` survives only as a no-op deprecation shim in
+`sim/common.lisp` — a warning for any old, unmigrated file that still
+calls it ("this microgrid predates managed files — use Adopt in the
+UI").
 
 ## Architectural rules
 
@@ -111,6 +162,11 @@ cargo run --bin swctl -- tree
 cargo run --bin swctl -- stream 1001 --samples 5
 cargo run --bin swctl -- set-power 1001 5000
 ```
+
+`ui-assets/` changes: `npx @biomejs/biome check ui-assets` (config in
+`biome.json`) — `npx biome` alone resolves to an unrelated no-op
+package on the npm registry, not this project's linter, so always
+spell out `@biomejs/biome`.
 
 Each registered microgrid binds its own gRPC port; the first
 defaults to `[::1]:8800` and subsequent microgrids step by ten
@@ -205,8 +261,9 @@ rebuild; a script that wants live defaults-editing can still
   `src/lisp/runtime_modes.rs`. **Symbols only** — `:health 'error`
   works, `:health "error"` errors with a type mismatch. Note the
   split: `OperationalMode` is microgrid CONFIG (persists via the
-  overrides gate, drives the formula engine); the other three are
-  runtime fault knobs that depend on it.
+  structural-eval rewrite of the microgrid's managed file, drives the
+  formula engine); the other three are runtime fault knobs that
+  depend on it.
 - `LispValue` (`src/lisp/value.rs`) — passthrough wrapper that lets a
   raw `TulispObject` ride through `AsPlist!` (works around the
   blanket-`From<T> for T` `Infallible` mismatch). Used for `:power`
