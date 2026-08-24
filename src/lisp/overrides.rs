@@ -86,21 +86,19 @@ impl Config {
     ///
     /// An eval consisting only of `(load "file")` forms is a load,
     /// not an edit, so it is routed through [`Config::load_file`]
-    /// instead of a bare `eval_string`: the microgrids the file
-    /// registers are attributed to it, and its path joins the
-    /// reload-replay list.
+    /// instead of a bare `eval_string`: that way the microgrids the
+    /// file registers are attributed to it, and a reload rebuilds
+    /// them from the file.
     ///
     /// A load MIXED with other top-level forms still runs through the
-    /// plain eval path (the other forms need it); the loaded files
-    /// are recorded for reload just the same.
+    /// plain eval path (the other forms need it), so its microgrids
+    /// are attributed to no file — same as if they had been typed.
     fn eval_locked(&self, ctx: &mut tulisp::TulispContext, src: &str) -> Result<String, String> {
         let (loads, has_other_forms) = top_level_load_paths(src);
         // A pure-load eval IS a load: route it through the loader so
         // the file becomes the ambient source of whatever microgrids
-        // it registers, and joins the reload-replay list. Every such
-        // load is recorded — the file is the artifact, and a file the
-        // operator asked for is part of the world whether or not it
-        // happened to move the topology.
+        // it registers — and so a reload rebuilds them from the file,
+        // exactly like a boot script's.
         if !loads.is_empty() && !has_other_forms {
             for path in &loads {
                 // `load_file_locked` already bumped exactly the sites
@@ -118,31 +116,6 @@ impl Config {
             Err(e) => Err(e.format(ctx)),
         };
         if result.is_ok() {
-            for path in loads {
-                let resolved = if path.is_absolute() {
-                    path
-                } else {
-                    self.state_dir.join(path)
-                };
-                // Canonicalized so a relative and an absolute
-                // spelling of the same file dedup to one replay
-                // entry (tulisp canonicalizes its load path the
-                // same way).
-                match resolved.canonicalize() {
-                    Ok(canonical) => self.record_loaded_file(canonical),
-                    Err(_) => {
-                        // (load) resolved it some other way or the
-                        // file moved mid-eval; reload just won't
-                        // replay it.
-                        log::warn!(
-                            "eval loaded {} but the path does not resolve under {}; \
-                             it will not survive a reload",
-                            resolved.display(),
-                            self.state_dir.display()
-                        );
-                    }
-                }
-            }
             self.persist_changed(ctx, src, &before);
         }
         // Bump the version on the microgrid the eval actually
@@ -764,25 +737,23 @@ mod tests {
         assert!(cfg.microgrids().lock().contains_key(&55));
     }
 
-    /// A pure-load eval goes through the loader, so the file joins
-    /// the reload-replay list whether or not it moved the topology.
-    /// A load is not an edit to be gated: the operator asked for that
-    /// FILE, and a file that is part of the world stays part of it
-    /// across a reload. (A purely imperative script's forms simply
-    /// run again on reload — same as re-typing them.)
+    /// A pure-load eval goes through the loader and its forms run,
+    /// but a script that registers no microgrid is not a source
+    /// file: reload replays the files the live microgrids came from,
+    /// and this one backs none. Its `setq` stands in the interpreter
+    /// like a typed one — nothing replays it.
     #[test]
-    fn pure_loads_are_recorded_whatever_they_registered() {
+    fn a_load_that_registers_nothing_is_not_a_source() {
         let (cfg, dir) = config_with("nil");
         let script = dir.join("poke.lisp");
         std::fs::write(&script, "(setq some-transient-var 42)").unwrap();
         cfg.eval("(load \"poke.lisp\")").unwrap();
         assert_eq!(cfg.eval_silent("some-transient-var").unwrap(), "42");
         assert!(
-            cfg.loaded_files
-                .lock()
+            !cfg.registered_sources()
                 .iter()
                 .any(|p| p.ends_with("poke.lisp")),
-            "a loaded file joins the reload-replay list"
+            "a file backing no microgrid is not part of the reload list"
         );
     }
 

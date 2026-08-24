@@ -146,13 +146,17 @@ impl Default for Metadata {
 
 #[derive(Clone)]
 pub struct Config {
-    /// Every file whose eval built the current world, in load order:
-    /// the boot scripts, then anything added at runtime — successful
-    /// top-level `(load …)` evals and the files the create / import
-    /// endpoints write. `reload` replays exactly this list, so a
-    /// microgrid loaded (or created) after boot survives a reload
-    /// the same way boot-script ones do.
-    pub(crate) loaded_files: Arc<Mutex<Vec<PathBuf>>>,
+    /// Order-keeping side note for [`Config::registered_sources`]:
+    /// every microgrid source file the loader has seen, canonicalized
+    /// and dedup'd, in the order it first registered a microgrid.
+    ///
+    /// It is NOT the reload list — the registry is (a source whose
+    /// microgrids are gone is skipped, and a file that registered
+    /// nothing never lands here). All this vector carries is
+    /// *ordering*: the registry is a BTreeMap, so iterating it yields
+    /// id order, and reload wants files replayed in the order they
+    /// first arrived.
+    pub(crate) source_files: Arc<Mutex<Vec<PathBuf>>>,
     /// Anchor for everything persistent — overrides journals,
     /// `snapshots/`, runtime-created microgrid files — and for the
     /// relative-path resolution of `(load …)` / `(file-exists-p …)`.
@@ -388,24 +392,51 @@ impl Config {
     }
 
     /// Is `content` exactly what switchyard last wrote to `path`?
-    // Consumed by the file watcher (next change).
-    #[allow(dead_code)]
+    /// The file watcher asks this before reloading, so a save
+    /// switchyard performed does not bounce back as a reload.
     pub(crate) fn was_self_write(&self, path: &Path, content: &str) -> bool {
         self.written_hashes.lock().get(path) == Some(&content_hash(content))
     }
 
-    /// Append `path` to the reload-replay list (dedup'd): the file's
-    /// eval contributed to the current world, so `reload` must replay
-    /// it. Called for runtime `(load …)` evals and for the files
-    /// the create / import endpoints write.
-    pub(crate) fn record_loaded_file(&self, path: PathBuf) {
-        // Canonical form so every spelling of the same file (relative
-        // argv, absolute REPL path, handler-built path) dedups
-        // to one replay entry.
-        let path = path.canonicalize().unwrap_or(path);
-        let mut files = self.loaded_files.lock();
-        if !files.contains(&path) {
-            files.push(path);
+    /// Remember that `path` is a microgrid source file, keeping the
+    /// order in which sources first appeared. Called by the loader
+    /// after a file's eval registered (or re-claimed) a microgrid;
+    /// a file that registers nothing is not a source and is not
+    /// recorded. See [`Config::source_files`].
+    pub(crate) fn note_source_file(&self, path: &Path) {
+        let mut files = self.source_files.lock();
+        if !files.iter().any(|p| p == path) {
+            files.push(path.to_path_buf());
         }
+    }
+
+    /// Every file that backs at least one registered microgrid, each
+    /// listed once, in the order the files first registered one.
+    ///
+    /// This IS the reload list: the world is the set of live
+    /// microgrids, and each microgrid names the file it came from,
+    /// so there is no replay list to drift out of sync with the
+    /// registry. A file whose microgrids are all gone drops out by
+    /// itself; a microgrid typed into the REPL has no source and
+    /// contributes nothing to reload.
+    pub(crate) fn registered_sources(&self) -> Vec<PathBuf> {
+        let live: Vec<PathBuf> = self
+            .microgrids
+            .lock()
+            .values()
+            .filter_map(|e| e.source.clone())
+            .collect();
+        let order = self.source_files.lock();
+        let mut out: Vec<PathBuf> = order.iter().filter(|p| live.contains(p)).cloned().collect();
+        // A source that never went through the loader — the create
+        // endpoint writes a file and registers its microgrid in one
+        // step — has no recorded order; append it after the ones
+        // that do, in registry (id) order.
+        for path in live {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        out
     }
 }
