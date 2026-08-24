@@ -542,12 +542,24 @@ deferred; nothing fixed this pass.
 
 ** Fidelity / consistency (new)
 
-*** TODO [#B] Meter reactive aggregation drops :power-meter and CHP Q :reactive:telemetry:
-=Meter::aggregate_reactive= (=src/sim/meter.rs=) returns 0 when
-=power_source= is set, and =Chp= carries no reactive state, so a CHP /
-load modelled via a =:power= meter contributes no Q to its parent. The
-main meter's =reactive_power_var= (and any PF / apparent-power derived
-from it) under-reports.
+*** DONE [#B] Meter reactive aggregation drops :power-meter and CHP Q :reactive:telemetry:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-24 Mo 21:12] \\
+  Resolved: meters report their own reactive source (:reactive-power / :power-factor) or their children's Q sum; a :power override no longer zeroes Q.
+:END:
+=Meter::aggregate_reactive= (=src/sim/meter.rs=) returned 0 whenever
+=power_source= was set, and =Chp= carries no reactive state, so a CHP /
+load modelled via a =:power= meter contributed no Q to its parent, and
+the main meter's =reactive_power_var= (and any PF / apparent-power
+derived from it) under-reported.
+
+*** TODO [#C] Extension-trait shape for the normalized reactive accessor :reactive:design:
+=SimulatedComponent= now carries the =reactive_bounds= /
+=reactive_bounds_raw= pair with a provided-method default keeping them
+in sync. The normalized accessor could move to an extension trait so
+implementors only ever see (and can only override) the raw one, making
+the "implement raw, never the normalized twin" rule structural instead
+of a doc-comment convention.
 
 *** TODO [#C] Meter + assets status are always healthy            :telemetry:
 =Meter::telemetry= always reports state =ready= regardless of children

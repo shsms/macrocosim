@@ -62,6 +62,8 @@ exercises the simulator:
 | `(set-component-command-mode ID K)`    | `'normal` / `'timeout` / `'error`                        |
 | `(set-active-power ID W &OPTIONAL MS CLAMP)` | gRPC-style setpoint; MS = lifetime in ms, non-nil CLAMP clamps into the live envelope instead of rejecting |
 | `(set-reactive-power ID VAR &OPTIONAL MS CLAMP)` | same for the reactive axis; CLAMP pulls into `reactive_setpoint_envelope` (own PF / kVA band ∩ children's Q bands ∩ live augmentations), falling back to the component's own band when no child reports one |
+| `(set-meter-reactive-power ID VAL)`    | drive a meter's `:reactive-power` (number / lambda / `'symbol`)  |
+| `(set-meter-power-factor ID PF &OPTIONAL LEADING)` | drive a meter's `:power-factor` (true cos φ in `(0, 1]`); non-nil LEADING negates the derived Q |
 
 `(set-meter-power 100 (lambda () (csv-lookup …)))` and
 `(set-meter-power 100 'consumer-power)` install the lambda or
@@ -75,6 +77,17 @@ dynamic source back to a constant.
 physics keeps simulating, but the gRPC stream goes quiet and
 SetPower requests hang. Useful for exercising downstream apps
 that need to cope with stale or unresponsive sources.
+
+Two more defuns wrap the reactive setters above for a
+`define-scenario`'s `:drive` section. Unlike everything in the table
+above, these aren't setters themselves — bare at the REPL they just
+build a plist and touch nothing; only `scenario--run`, walking the
+`:drive` list, calls the setter they name:
+
+| Defun                                      | Effect                                                        |
+|---------------------------------------------|----------------------------------------------------------------|
+| `(drive-meter-reactive ID SOURCE)`          | `:drive`-section wrapper; compiles to `set-meter-reactive-power` |
+| `(drive-meter-pf ID PF &OPTIONAL LEADING)`  | `:drive`-section wrapper; compiles to `set-meter-power-factor`  |
 
 ## Helpers in `sim/scenarios.lisp`
 
@@ -111,6 +124,8 @@ unchanged.
 |--------------------------------|-----------------------------------------------------------|
 | `scenario_elapsed_s`           | seconds since `scenario-start`; frozen on stop            |
 | `peak_main_meter_w`            | max active-power on the main meter so far                 |
+| `peak_main_meter_var`          | max \|reactive-power\| on the main meter so far (tracked by magnitude, not signed max — Q swings both ways) |
+| `site_pf_at_peak_var`          | power factor `\|P\| / sqrt(P² + Q²)` on the main meter at the instant `peak_main_meter_var` was recorded (a paired sample, not independently-peaked P and Q); `null` before any main-meter PQ sample, or when P and Q were both 0 at that instant |
 | `main_meter_id`                | id of the main meter (derived from the topology — see below), or `null` |
 | `total_battery_charged_wh`     | sum across batteries; positive DC power → charging        |
 | `total_battery_discharged_wh`  | sum across batteries; negative DC power → discharging     |
@@ -155,6 +170,12 @@ commands) get two extra files:
   outcome). Written on each request, not sampled.
 - `<id>-bounds.csv` — the effective active-power envelope over
   time, sampled at the same 1 Hz pass as telemetry.
+
+Components with a reactive-power envelope (a different set — an
+inverter has one, the battery behind it doesn't) get one more:
+
+- `<id>-reactive-bounds.csv` — the effective reactive-power (Q)
+  envelope over time, sampled at the same 1 Hz pass as telemetry.
 
 `(scenario-stop)` flushes and closes all files;
 `(scenario-stop-csv)` does the same on demand mid-scenario.

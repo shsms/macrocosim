@@ -163,9 +163,11 @@ UI").
   it, and several inverters on one bus share the clip in proportion. The
   API gateway (server.rs) intersects bounds for setpoint validation —
   components never read each other's bounds. Reactive power (Q) terminates
-  at the inverter — a real DC bus carries no Q, so `Battery::dc_power_w`
-  is pure signed active power with no apparent-power blend, and only the
-  inverter's own AC-side axis models Q at all.
+  at the inverter on the DC-bus path — a real DC bus carries no Q, so
+  `Battery::dc_power_w` is pure signed active power with no apparent-power
+  blend, and only the inverter's own AC-side `PowerAxis` models Q with a
+  rated band and augmentations. (A meter's reactive source — below — is a
+  separate, simpler VAr/PF value, not a `PowerAxis`.)
 - **`PowerAxis` (`src/sim/axis.rs`) is the one control path shared by
   active and reactive power.** Both inverters and the EV charger put P
   on a `PowerAxis` (rated band + TTL augmentations, command-delay, ramp);
@@ -180,9 +182,13 @@ UI").
   published value (`dc_accept_ratio`), not by re-clamping the armed
   target — todo.org d5b keeps that question open. `:reactive-pf-limit`
   sets `k` in `|Q| ≤ k × |P|` — a ratio of apparent quantities, not
-  true power factor (cos φ); the meter's own PF driver, landing in a
-  later sub-project, will compute real cos φ off the meter's P and Q
-  telemetry instead.
+  true power factor (cos φ). A meter's own
+  reactive source is the real thing: mutually-exclusive `:reactive-power`
+  (a VAr constant, lambda, or symbol) or `:power-factor` + `:leading`
+  (true cos φ in `(0, 1]`, deriving `Q = |P|·tan(acos(pf))` off the
+  meter's own live P, negated when leading). Like `:power`, a fixed
+  numeric reactive source freezes into the persisted managed file; a
+  lambda or symbol source doesn't, and leaves the meter unrenderable.
 - **Single physics tick, registration order = tick order.** `MicrogridSite::spawn_physics`
   runs one `tokio::time::interval` at `physics_tick_ms` and calls `tick()` on
   every component in registration order. Children register first because Lisp
@@ -379,6 +385,6 @@ GCP active-power limiter is the motivating case).
 
 ## Roadmap and deferred work
 
-See `todo.org` for the forward-looking roadmap (scenario framework,
-reactive plist values, integration tests, CI) and known open design
-questions.
+See `todo.org` for the forward-looking roadmap (browser-driven UI
+tests, additional gRPC services, physics realism upgrades, CI
+end-to-end testing) and known open design questions.
