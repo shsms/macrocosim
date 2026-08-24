@@ -207,6 +207,20 @@ pub fn rewrite_grpc_port(text: &str, new_port: u16) -> Result<String, String> {
     )
 }
 
+/// The microgrid id declared by a generated `block` (the text
+/// `parse` hands back in [`ParsedFile::generated`], markers already
+/// stripped) — `None` when the block carries no `(make-microgrid …
+/// :id N …)` head it can read.
+///
+/// The loader uses this to know which microgrid's scope the script
+/// section belongs to when the block's own eval registered nothing
+/// new, which is what a same-file reload looks like (the entry is
+/// reused in place, so the registry key set doesn't move).
+pub fn head_id(block: &str) -> Option<u64> {
+    let span = head_kwarg_span(block, ":id").ok().flatten()?;
+    block[span.0..span.1].trim().parse().ok()
+}
+
 /// Replace the value of `kwarg` in the `(make-microgrid …)` form of
 /// `text`'s generated block with `value`, and return the whole file
 /// text. `Ok(None)` means the form carries no such kwarg — the
@@ -222,8 +236,24 @@ fn rewrite_head_kwarg(text: &str, kwarg: &str, value: &str) -> Result<Option<Str
             "cannot rewrite {kwarg} in an unmanaged file — edit it by hand"
         ));
     };
+    let Some((start, end)) = head_kwarg_span(&block, kwarg)? else {
+        return Ok(None);
+    };
 
-    let cst = tulisp_fmt::parse(&block).map_err(|e| format!("failed to parse block: {e:?}"))?;
+    let mut new_block = String::with_capacity(block.len());
+    new_block.push_str(&block[..start]);
+    new_block.push_str(value);
+    new_block.push_str(&block[end..]);
+
+    Ok(Some(compose(&new_block, &parsed.script)))
+}
+
+/// Byte range of `kwarg`'s value atom inside a generated `block`, or
+/// `None` when the `(make-microgrid …)` head carries no such kwarg.
+/// Errors only when the block does not parse, or holds no
+/// `(make-microgrid …)` form at all.
+fn head_kwarg_span(block: &str, kwarg: &str) -> Result<Option<(usize, usize)>, String> {
+    let cst = tulisp_fmt::parse(block).map_err(|e| format!("failed to parse block: {e:?}"))?;
     let form = cst
         .nodes
         .iter()
@@ -243,10 +273,10 @@ fn rewrite_head_kwarg(text: &str, kwarg: &str, value: &str) -> Result<Option<Str
     // own atoms are walked — a nested `(%make-* :id …)` lives inside
     // a child List, so component ids can never be hit.
     let mut found_kw = false;
-    let value_span = form.iter().find_map(|c| {
+    Ok(form.iter().find_map(|c| {
         if found_kw {
             return match c {
-                CstNode::Atom { span, .. } => Some(span.clone()),
+                CstNode::Atom { span, .. } => Some((span.start, span.end)),
                 _ => None,
             };
         }
@@ -254,17 +284,7 @@ fn rewrite_head_kwarg(text: &str, kwarg: &str, value: &str) -> Result<Option<Str
             found_kw = true;
         }
         None
-    });
-    let Some(value_span) = value_span else {
-        return Ok(None);
-    };
-
-    let mut new_block = String::with_capacity(block.len());
-    new_block.push_str(&block[..value_span.start]);
-    new_block.push_str(value);
-    new_block.push_str(&block[value_span.end..]);
-
-    Ok(Some(compose(&new_block, &parsed.script)))
+    }))
 }
 
 /// Render the generated block for a live microgrid: a

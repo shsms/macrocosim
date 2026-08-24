@@ -15,7 +15,7 @@ use std::time::Duration;
 use notify::{RecommendedWatcher, Watcher};
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::broadcast;
-use tulisp::{Error, SharedMut, TulispContext};
+use tulisp::{Error, SharedMut, TulispContext, TulispObject};
 
 use crate::sim::MicrogridSite;
 use crate::sim::microgrids::SiteRouter;
@@ -482,15 +482,12 @@ impl Config {
         };
         let text = std::fs::read_to_string(&resolved)
             .map_err(|e| LoadError::Other(format!("cannot read {}: {e}", resolved.display())))?;
-        // Parse only to classify the file: a managed file's structure
-        // is switchyard's to rewrite, an unmanaged one's is the
-        // author's. Either way the WHOLE file is what we evaluate —
-        // the generated block and the script section are both live
-        // lisp.
-        let managed = super::microgrid_file::parse(&text)
-            .map_err(|e| LoadError::Other(format!("{}: {e}", resolved.display())))?
-            .generated
-            .is_some();
+        // A managed file's structure is switchyard's to rewrite, an
+        // unmanaged one's is the author's — and the split also
+        // decides how the file is evaluated (see below).
+        let parsed = super::microgrid_file::parse(&text)
+            .map_err(|e| LoadError::Other(format!("{}: {e}", resolved.display())))?;
+        let managed = parsed.generated.is_some();
         // Canonicalized so every spelling of one file compares equal
         // — that comparison is what distinguishes a reload of this
         // file from a second file claiming its ids.
@@ -501,8 +498,40 @@ impl Config {
             path: canonical.clone(),
             managed,
         };
-        let result = with_loading(&self.loading, file, || {
-            ctx.eval_file(&resolved.to_string_lossy())
+        let result = with_loading(&self.loading, file, || match &parsed.generated {
+            // Managed file: the two sections are evaluated
+            // separately, because they run in different scopes. The
+            // generated block registers the microgrid (its
+            // `:topology` lambda is scoped by `make-microgrid`
+            // itself); the script section is promised to run "in this
+            // microgrid's scope", which only holds if we put it
+            // there — a top-level form otherwise resolves through the
+            // router's fallback, i.e. the LOWEST registered id.
+            //
+            // Cost of the split: tulisp reports positions inside the
+            // script section against an eval-string bucket rather
+            // than the file. The load path is unaffected — `(load …)`
+            // resolves against the state dir globally
+            // (`set_load_path`), not against the evaluating file.
+            Some(generated) => {
+                ctx.eval_string(generated)?;
+                if parsed.script.trim().is_empty() {
+                    return Ok(TulispObject::nil());
+                }
+                match self.block_microgrid_id(generated, &before) {
+                    Some(id) => {
+                        crate::sim::microgrids::with_microgrid(&self.current_microgrid, id, || {
+                            ctx.eval_string(&parsed.script)
+                        })
+                    }
+                    // A block that declared no microgrid we can name
+                    // (a hand-mangled head) leaves the script where
+                    // an unmanaged file's would run.
+                    None => ctx.eval_string(&parsed.script),
+                }
+            }
+            // Unmanaged file: one script, one scope, one eval.
+            None => ctx.eval_file(&resolved.to_string_lossy()),
         });
         if let Err(e) = result {
             let formatted = e.format(ctx);
@@ -529,6 +558,31 @@ impl Config {
             })
             .collect();
         Ok(new_ids)
+    }
+
+    /// Which microgrid a just-evaluated generated `block` belongs to,
+    /// given the registry key set from before its eval.
+    ///
+    /// A generated block holds exactly one `(make-microgrid …)`, so a
+    /// first load leaves exactly one new key and the diff names it —
+    /// including when the head auto-allocated its id. A same-file
+    /// reload reuses its entry in place and moves no key, so the diff
+    /// is empty and the head's own `:id` is read instead.
+    fn block_microgrid_id(&self, block: &str, before: &HashSet<u64>) -> Option<u64> {
+        let new_ids: Vec<u64> = {
+            let reg = self.microgrids.lock();
+            reg.keys()
+                .filter(|id| !before.contains(id))
+                .copied()
+                .collect()
+        };
+        match new_ids[..] {
+            [id] => Some(id),
+            // No new entry (a reload) — or, for a hand-edited block
+            // with several heads, no single answer: fall back to what
+            // the block itself declares.
+            _ => super::microgrid_file::head_id(block),
+        }
     }
 
     /// Copy a managed microgrid file to `microgrids/{new_id}.lisp`
@@ -1606,6 +1660,76 @@ mod tests {
         let r = reg.lock();
         assert_eq!(r.len(), 1);
         assert!(r.get(&9).unwrap().site.get(1).is_some());
+    }
+
+    /// Write a managed microgrid file for `id` with one meter
+    /// (`meter_id`) in its generated block and `script` as its
+    /// hand-written section. Returns the path.
+    fn managed_file(
+        dir: &std::path::Path,
+        id: u64,
+        meter_id: u64,
+        script: &str,
+    ) -> std::path::PathBuf {
+        let path = dir.join(format!("microgrids/{id}.lisp"));
+        let block = format!(
+            "(make-microgrid :id {id} :name \"m{id}\" :grpc-port {}\n  :topology\n  \
+             (lambda ()\n    (%make-meter :id {meter_id})))",
+            8800 + id as u16,
+        );
+        let text = super::super::microgrid_file::compose(&block, script);
+        super::super::microgrid_file::write_atomic(&path, &text).unwrap();
+        path
+    }
+
+    /// The script section of a managed file runs in ITS microgrid's
+    /// scope, not in whatever scope the router happens to fall back
+    /// to. With a lower-id microgrid already registered, the fallback
+    /// would resolve to that one and the script's own component would
+    /// come back "not found" — failing the load of a file that is
+    /// perfectly correct.
+    #[test]
+    fn managed_script_section_runs_in_its_own_microgrids_scope() {
+        let (cfg, dir) = config_with(
+            "(make-microgrid :id 9 :grpc-port 8800 :topology \
+             (lambda () (%make-meter :id 1 :power 10.0)))",
+        );
+        // Component 50 exists only in microgrid 20; microgrid 9 is
+        // the lower id, so it is what an unscoped script would hit.
+        let path = managed_file(&dir, 20, 50, "(set-meter-power 50 1234.0)\n");
+        cfg.load_file(&path).expect("the script runs in mg 20");
+        cfg.refresh_once();
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        let twenty = &r[&20].site;
+        assert!(
+            (twenty.get(50).unwrap().aggregate_power_w(twenty) - 1234.0).abs() < 1e-3,
+            "mg 20's own meter carries the driven value",
+        );
+        let nine = &r[&9].site;
+        assert!(
+            (nine.get(1).unwrap().aggregate_power_w(nine) - 10.0).abs() < 1e-3,
+            "mg 9 is untouched by mg 20's script",
+        );
+    }
+
+    /// The same scoping holds on the reload path — `reload_file`
+    /// re-runs the script section, so its drivers must land back on
+    /// the file's own microgrid.
+    #[test]
+    fn reload_re_runs_the_script_section_in_scope() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let path = managed_file(&dir, 20, 50, "(set-meter-power 50 1234.0)\n");
+        cfg.load_file(&path).unwrap();
+        managed_file(&dir, 20, 50, "(set-meter-power 50 4321.0)\n");
+        cfg.reload_file(&path)
+            .expect("reload runs the script in scope");
+        cfg.refresh_once();
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        let twenty = &r[&20].site;
+        assert!((twenty.get(50).unwrap().aggregate_power_w(twenty) - 4321.0).abs() < 1e-3);
     }
 
     /// `reload_file` is per file: it rebuilds only the microgrids
