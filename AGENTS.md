@@ -66,8 +66,10 @@ is wiring the topology + animating the environment.
     `hovercard.js` `envelopeBar`, labelled in VAr); the Dashboard has
     a Grid reactive power tile on the `grid_reactive_power` aggregate
     stream, whose meta line derives site PF client-side from the
-    latest grid P and Q samples, and battery-inverter rows carry a
-    muted Q column; the inspector's knob table offers
+    latest grid P and Q samples, and every dashboard row tier shares
+    a six-column template whose last column is a muted Q readout
+    (filled on inverter rows, `—` elsewhere); the inspector's knob
+    table offers
     `set-reactive-power` on inverters and `set-meter-reactive-power`
     / `set-meter-power-factor` (with a `leading` checkbox) on meters.
 - `tools/ui-smoke/` — Playwright smoke scripts run by hand against a
@@ -81,6 +83,7 @@ is wiring the topology + animating the environment.
   cp examples/berlin-demo.lisp "$SD/microgrids/2200.lisp"
   ./target/debug/switchyard --state-dir "$SD" --ephemeral-ports \
       --emit-endpoints="$SD/endpoints.json" "$SD/microgrids/2200.lisp" &
+  until [ -f "$SD/endpoints.json" ]; do sleep 0.2; done
   SW_UI=http://$(jq -r .ui "$SD/endpoints.json") \
       node tools/ui-smoke/live-topology.mjs
   ```
