@@ -139,20 +139,17 @@ pub fn make_component_proto(
                 upper: Some(upper),
             }),
         });
-        // Reactive config bounds: prefer the trait's reactive_bounds()
-        // sampled at full rated active P (the worst-case-most-restrictive
-        // headroom). Falls back to the ±max-rated edge for components
-        // that don't implement reactive_bounds yet.
+        // Reactive config bounds: the STATIC capability hull — the
+        // widest Q reachable at any P in the rated range — not a live
+        // sample at the current P. A component with no Q axis at all
+        // (`reactive_capability() == None`) honestly advertises
+        // `(0.0, 0.0)` instead of a fake ±p_max edge.
         if cat != ElectricalComponentCategory::Battery {
             let p_max = lower.abs().max(upper.abs());
-            // Config bounds carry one Bounds pair, so a multi-band Q
-            // envelope collapses to its FIRST band here — same
-            // first-band collapse as the WS/history scalar.
             let (rlo, rhi) = c
-                .reactive_bounds()
-                .and_then(|b| b.0.first().cloned())
-                .map(|b| (b.lower.unwrap_or(-p_max), b.upper.unwrap_or(p_max)))
-                .unwrap_or((-p_max, p_max));
+                .reactive_capability()
+                .map(|caps| caps.hull(p_max))
+                .unwrap_or((0.0, 0.0));
             bounds.push(MetricConfigBounds {
                 metric: Metric::AcPowerReactive as i32,
                 config_bounds: Some(Bounds {
@@ -386,9 +383,156 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        proto_conv::telemetry_to_proto,
-        sim::{EvCharger, MicrogridSite, SimulatedComponent, ev_charger::EvChargerConfig},
+        proto::common::metrics::Metric,
+        proto_conv::{make_component_proto, telemetry_to_proto},
+        sim::{
+            Battery, BatteryInverter, EvCharger, Grid, MicrogridSite, SimulatedComponent,
+            battery::BatteryConfig, ev_charger::EvChargerConfig,
+            inverter::battery_inverter::BatteryInverterConfig, reactive::ReactiveCapability,
+        },
     };
+
+    /// Pull the AC_POWER_REACTIVE config-bounds pair `make_component_proto`
+    /// advertises for a component, if it advertised one at all.
+    fn reactive_config_bounds(comp: &dyn SimulatedComponent) -> Option<(f32, f32)> {
+        let site = MicrogridSite::new();
+        let proto = make_component_proto(comp, &site, 1);
+        proto
+            .metric_config_bounds
+            .iter()
+            .find(|b| b.metric == Metric::AcPowerReactive as i32)
+            .map(|b| {
+                let bounds = b.config_bounds.as_ref().expect("bounds present");
+                (
+                    bounds.lower.expect("lower set"),
+                    bounds.upper.expect("upper set"),
+                )
+            })
+    }
+
+    /// A PF-only inverter (rated ±30 kW, k=0.35) advertises the PF
+    /// hull ±10.5 kVAr as its static config bound EVEN WHILE IDLE
+    /// (P=0) — the config bound is the capability hull over the whole
+    /// rated P range, not a live sample at the current P (which for a
+    /// PF-only cap is 0 at P=0, the pre-fix behavior this replaces).
+    #[test]
+    fn pf_only_inverter_advertises_pf_hull_while_idle() {
+        let cfg = BatteryInverterConfig {
+            rated_lower_w: -30_000.0,
+            rated_upper_w: 30_000.0,
+            reactive: ReactiveCapability {
+                pf_limit: Some(0.35),
+                apparent_va: None,
+            },
+            ..Default::default()
+        };
+        let inv = BatteryInverter::new(1, Duration::from_secs(1), cfg);
+        let (lo, hi) =
+            reactive_config_bounds(&inv).expect("reactive config bounds present for a Q axis");
+        assert!((lo + 10_500.0).abs() < 1.0, "got lo={lo}");
+        assert!((hi - 10_500.0).abs() < 1.0, "got hi={hi}");
+    }
+
+    /// A kVA-only inverter advertises ±S as its config bound — the
+    /// hull is widest at P=0 for a kVA-only cap, so this one happens
+    /// to coincide with the live value at idle, but it's the hull
+    /// that's being advertised.
+    #[test]
+    fn kva_only_inverter_advertises_kva_hull() {
+        let cfg = BatteryInverterConfig {
+            rated_lower_w: -30_000.0,
+            rated_upper_w: 30_000.0,
+            reactive: ReactiveCapability {
+                pf_limit: None,
+                apparent_va: Some(20_000.0),
+            },
+            ..Default::default()
+        };
+        let inv = BatteryInverter::new(1, Duration::from_secs(1), cfg);
+        let (lo, hi) = reactive_config_bounds(&inv).expect("reactive config bounds present");
+        assert!((lo + 20_000.0).abs() < 1.0, "got lo={lo}");
+        assert!((hi - 20_000.0).abs() < 1.0, "got hi={hi}");
+    }
+
+    /// Both caps set: the config bound is the PF-line/kVA-circle
+    /// crossing value from `ReactiveCapability::hull`, not either cap
+    /// alone. k=1, s=5000, rated 10000 → crossing at P*=s/sqrt(2)
+    /// (≤ rated) → hull = k*s/sqrt(2).
+    #[test]
+    fn both_caps_inverter_advertises_crossing_hull() {
+        let cfg = BatteryInverterConfig {
+            rated_lower_w: -10_000.0,
+            rated_upper_w: 10_000.0,
+            reactive: ReactiveCapability {
+                pf_limit: Some(1.0),
+                apparent_va: Some(5_000.0),
+            },
+            ..Default::default()
+        };
+        let inv = BatteryInverter::new(1, Duration::from_secs(1), cfg);
+        let (lo, hi) = reactive_config_bounds(&inv).expect("reactive config bounds present");
+        let expected = 5_000.0 / 2f32.sqrt();
+        assert!((hi - expected).abs() < 1.0, "got hi={hi}");
+        assert!((lo + expected).abs() < 1.0, "got lo={lo}");
+    }
+
+    /// Neither cap set (the `:reactive-pf-limit 0 :reactive-apparent-va
+    /// 0` config) advertises ±p_rated — the neither-cap fallback cone
+    /// from `ReactiveCapability::hull`.
+    #[test]
+    fn neither_cap_inverter_advertises_rated_p_as_hull() {
+        let cfg = BatteryInverterConfig {
+            rated_lower_w: -8_000.0,
+            rated_upper_w: 8_000.0,
+            reactive: ReactiveCapability {
+                pf_limit: None,
+                apparent_va: None,
+            },
+            ..Default::default()
+        };
+        let inv = BatteryInverter::new(1, Duration::from_secs(1), cfg);
+        let (lo, hi) = reactive_config_bounds(&inv).expect("reactive config bounds present");
+        assert!((lo + 8_000.0).abs() < 1.0, "got lo={lo}");
+        assert!((hi - 8_000.0).abs() < 1.0, "got hi={hi}");
+    }
+
+    /// A component with no Q axis at all (EV charger) advertises an
+    /// honest `(0.0, 0.0)` config bound — not the old `±p_max` fake
+    /// fallback that made it look like it had reactive headroom it
+    /// doesn't model.
+    #[test]
+    fn ev_charger_advertises_zero_reactive_config_bounds() {
+        let ev = EvCharger::new(1, Duration::from_secs(1), EvChargerConfig::default());
+        let (lo, hi) =
+            reactive_config_bounds(&ev).expect("a config-bounds entry is present, honestly zero");
+        assert_eq!((lo, hi), (0.0, 0.0));
+    }
+
+    /// Same honest-zero requirement for the grid connection point.
+    #[test]
+    fn grid_advertises_zero_reactive_config_bounds() {
+        let grid = Grid::new(1, 100, Some((-50_000.0, 50_000.0)), 0.0);
+        let (lo, hi) =
+            reactive_config_bounds(&grid).expect("a config-bounds entry is present, honestly zero");
+        assert_eq!((lo, hi), (0.0, 0.0));
+    }
+
+    /// A battery still advertises `DcPower` only — no `AcPowerReactive`
+    /// entry at all, since batteries are skipped by the reactive arm
+    /// regardless of Q-axis presence.
+    #[test]
+    fn battery_advertises_dc_power_only_no_reactive_entry() {
+        let bat = Battery::new(1, Duration::from_secs(1), BatteryConfig::default());
+        let site = MicrogridSite::new();
+        let proto = make_component_proto(&bat, &site, 1);
+        let metrics: Vec<i32> = proto
+            .metric_config_bounds
+            .iter()
+            .map(|b| b.metric)
+            .collect();
+        assert!(metrics.contains(&(Metric::DcPower as i32)));
+        assert!(!metrics.contains(&(Metric::AcPowerReactive as i32)));
+    }
 
     /// A P-only AC component (the EV charger) must still emit an
     /// `AcPowerReactive` sample of 0 on the streaming path, not omit

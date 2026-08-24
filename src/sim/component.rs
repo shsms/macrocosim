@@ -506,6 +506,16 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
         None
     }
 
+    /// The Q axis's static capability shape (PF cap, kVA cap, both, or
+    /// neither) — the config-time data behind `reactive_bounds()`'s
+    /// live sample. `None` for components with no Q axis at all.
+    /// `make_component_proto` uses this (via `ReactiveCapability::hull`)
+    /// to advertise the static reactive config bound instead of a
+    /// live-P sample.
+    fn reactive_capability(&self) -> Option<crate::sim::reactive::ReactiveCapability> {
+        None
+    }
+
     /// Rated fuse current at the grid connection point.
     fn rated_fuse_current(&self) -> Option<u32> {
         None

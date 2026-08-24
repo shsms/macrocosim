@@ -340,6 +340,10 @@ impl SimulatedComponent for BatteryInverter {
         )
     }
 
+    fn reactive_capability(&self) -> Option<crate::sim::reactive::ReactiveCapability> {
+        self.reactive.capability()
+    }
+
     fn set_reactive_pf_limit(&self, pf: Option<f32>) {
         self.reactive.set_pf_limit(pf);
     }
