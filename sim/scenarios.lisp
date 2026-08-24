@@ -45,6 +45,9 @@ ID KIND)` after a uniform-random gap, reverts to 'ok after a
 uniform-random duration, and reschedules — so a single
 `(random-outage ...)` call drives outages for the lifetime of the
 scenario (or until the timer is cancelled by `reset-state`)."
+  ;; Remembered for the whole chain: every re-schedule happens inside
+  ;; a timer callback, where `current-source-file' is already nil.
+  (setq random-outage--file (current-source-file))
   (setq random-outage--ids ids)
   (setq random-outage--min-every    (or (plist-get opts :min-every)    60.0))
   (setq random-outage--max-every    (or (plist-get opts :max-every)    300.0))
@@ -58,15 +61,25 @@ scenario (or until the timer is cancelled by `reset-state`)."
 (already-fired) handle first — without the prune a multi-day run
 accumulates thousands of dead one-shot handles that only
 `reset-state' ever cleared. Only one outage chain runs per process
-(see above), so a single replacement slot suffices."
+(see above), so a single replacement slot suffices.
+
+Entries are (FILE . TIMER) conses, so the prune compares the cdr.
+The new entry is filed under `random-outage--file' — the file that
+STARTED the chain — and not under `current-source-file', which is
+nil inside a timer callback: a chain re-scheduled from its own
+callback must stay attributable to its file, or a reload of that
+file could not cancel it and the outage rate would double."
   (when (and (boundp 'random-outage--timer) random-outage--timer)
     (let (kept)
-      (dolist (tm active-timers)
-        (unless (eq tm random-outage--timer)
-          (setq kept (cons tm kept))))
+      (dolist (entry active-timers)
+        (unless (eq (cdr entry) random-outage--timer)
+          (setq kept (cons entry kept))))
       (setq active-timers kept)))
   (setq random-outage--timer timer)
-  (setq active-timers (cons timer active-timers)))
+  (setq active-timers
+        (cons (cons (if (boundp 'random-outage--file) random-outage--file nil)
+                    timer)
+              active-timers)))
 
 (defun random-outage--schedule ()
   "Schedule the next outage after a uniform-random gap."
@@ -247,10 +260,13 @@ inside `at`, e.g. (at \"60s\" (event 'clouds \"rolling in\"))."
 
 (defun scenario--at (secs thunk)
   "Schedule THUNK to run once at scenario time SECS (seconds).
-The timer goes on `active-timers' so `reset-state' cancels it: a
-config reload mid-scenario must not let stale cues and checks fire
-into the rebuilt world."
-  (setq active-timers (cons (run-with-timer secs nil thunk) active-timers)))
+The timer goes on `active-timers' — paired with the file that
+started the scenario, like every other tracked timer — so a reload
+cancels it: a config reload mid-scenario must not let stale cues
+and checks fire into the rebuilt world."
+  (setq active-timers
+        (cons (cons (current-source-file) (run-with-timer secs nil thunk))
+              active-timers)))
 
 (defun scenario--run (name seed setup drive agents cues expect record-dir)
   "Compile and start the scenario NAME: reset the journal, seed RNG,

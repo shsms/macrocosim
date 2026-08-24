@@ -808,8 +808,11 @@ mod tests {
         }
         assert_eq!(cfg.eval("(length active-timers)").unwrap(), "1");
         // An unrelated tracked timer survives the chain's pruning.
+        // Entries are (FILE . TIMER) conses; this one is REPL-armed,
+        // so its file is nil.
         cfg.eval(
-            "(setq active-timers (cons (run-with-timer 9999 nil (lambda () nil)) active-timers))",
+            "(setq active-timers \
+               (cons (cons nil (run-with-timer 9999 nil (lambda () nil))) active-timers))",
         )
         .unwrap();
         cfg.eval("(random-outage--track (run-with-timer 9999 nil (lambda () nil)))")
