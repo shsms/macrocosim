@@ -113,6 +113,23 @@ file just like any other loaded file, but a *whole-world* reload
 (the undo/settings-failure path) only replays files that register a
 microgrid; a driver-only script sits out of that replay list.
 
+"Load as N" (`Config::load_as`, `POST /api/load-as`) answers that
+collision by copying the managed file to `microgrids/N.lisp` and
+re-numbering everything the enterprise makes unique: the head's
+`:id` becomes N, `:grpc-port` becomes a free one (the original's is
+held by a listening gRPC server), and every component in the
+`:topology` lambda gets a fresh `:id` off the enterprise allocator,
+with each `(connect a b)` moved to match. Without the component
+re-mint a copy of a *populated* live microgrid always fails
+("component id X is already registered in microgrid Y") — component
+ids are enterprise-unique and a generated block pins every one of
+them. Unmanaged files are refused: there is no generated block to
+re-number mechanically. Only the generated block is re-numbered —
+the hand-written script section is the author's and is copied
+verbatim, so any component id it names (a `set-meter-power` source,
+an `every` driver) still points at the ORIGINAL's components and
+has to be hand-fixed after a load-as.
+
 `enterprise.lisp` carries enterprise-wide state: id, timezone,
 request-lifetime bounds, the assets/dispatch socket addresses, and
 every `*-defaults` plist. `Config::persist_enterprise` rewrites it
@@ -232,7 +249,12 @@ so construction + validation stay identical.
    last-occurrence-wins resolution lets per-component plist values
    override the defaults.
 5. (Optional) Override `subtype()` if proto needs `InverterType::Foo` / etc.
-6. Register through `register_with_modes(...)` so the component gets
+6. Add the category to `COMPONENT_MAKE_FNS` in
+   `src/lisp/microgrid_file.rs` — the closed set "load as N" uses to
+   spot a component form. Miss it and a copy keeps the original's
+   ids for that type (`every_component_make_fn_is_a_real_constructor`
+   guards the entries, but cannot see a type that was never added).
+7. Register through `register_with_modes(...)` so the component gets
    the shared config + runtime kwargs: `:operational-mode` (config,
    persisted; derives the runtime knobs) plus `:health` /
    `:telemetry-mode` / `:command-mode` (runtime fault knobs, checked

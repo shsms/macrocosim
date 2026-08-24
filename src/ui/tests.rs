@@ -1224,6 +1224,32 @@ async fn snapshots_are_per_microgrid() {
     // The ambient endpoint is gone.
     let (st, _) = call(config.clone(), get("/api/snapshots")).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
+    // Loading the same snapshot `as_id` lands it BESIDE the original.
+    // It runs through load_as, so it inherits the fresh component
+    // ids: microgrid 31 still holds meter 600, and the copy holds an
+    // equivalent meter under an id of its own.
+    let (st, body) = call(
+        config.clone(),
+        post_json("/api/mg/31/snapshots/load", r#"{"name":"one","as_id":32}"#),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let registry = config.microgrids();
+    let reg = registry.lock();
+    assert!(
+        reg.get(&31).unwrap().site.get(600).is_some(),
+        "the original keeps its component"
+    );
+    let copied: Vec<u64> = reg
+        .get(&32)
+        .expect("the copy registered")
+        .site
+        .components()
+        .iter()
+        .map(|c| c.id())
+        .collect();
+    assert_eq!(copied.len(), 1, "the copy carries the snapshot's topology");
+    assert_ne!(copied[0], 600, "under a component id of its own");
 }
 
 /// Adopt takes a hand-written single-microgrid file over: the live

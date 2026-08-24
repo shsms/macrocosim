@@ -637,12 +637,14 @@ impl Config {
     /// whose target file already exists, so a copy can never clobber
     /// a microgrid that exists.
     ///
-    /// The copy also gets its own `:grpc-port`. A microgrid's port is
-    /// held by a listening gRPC server, so a second copy carrying the
-    /// original's port would be refused at load ("already bound by
-    /// microgrid N") — which is the whole point of the copy failing
-    /// for the one case it exists to serve: duplicating a file that
-    /// is already loaded.
+    /// The copy also gets its own `:grpc-port` and a fresh `:id` for
+    /// every component. A microgrid's port is held by a listening
+    /// gRPC server, and component ids are enterprise-unique, so a
+    /// copy carrying either of the original's would be refused at
+    /// load ("already bound by microgrid N", "component id X is
+    /// already registered in microgrid Y") — which is the whole point
+    /// of the copy failing for the one case it exists to serve:
+    /// duplicating a file that is already loaded.
     pub fn load_as(&self, path: &Path, new_id: u64) -> Result<u64, String> {
         let resolved = self.resolve_in_state_dir(path);
         let text = std::fs::read_to_string(&resolved)
@@ -662,6 +664,16 @@ impl Config {
         // loader allocates one for it anyway.
         let rewritten = super::microgrid_file::rewrite_grpc_port(&rewritten, free_port)
             .map_err(|e| format!("{}: {e}", resolved.display()))?;
+        // Fresh component ids from the enterprise allocator — the
+        // same counter `MicrogridSite::next_id` draws from, so
+        // nothing the copy declares can collide with a live
+        // component, and `reserve_id` keeps the counter above the
+        // explicit ids we just wrote.
+        let allocator = self.enterprise_id_allocator.clone();
+        let rewritten = super::microgrid_file::remap_component_ids(&rewritten, || {
+            allocator.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        })
+        .map_err(|e| format!("{}: {e}", resolved.display()))?;
         let target = self.microgrids_dir().join(format!("{new_id}.lisp"));
         if target.exists() {
             return Err(format!(

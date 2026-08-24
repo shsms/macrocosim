@@ -472,7 +472,76 @@ mod tests {
             copy.def.grpc_port, original.def.grpc_port,
             "the copy binds a port of its own"
         );
-        assert!(copy.site.get(77).is_some(), "the copy carries the topology");
+        // The topology comes across, under ids of its own — see
+        // `load_as_remints_component_ids_of_a_live_original`.
+        let copied: Vec<u64> = copy.site.components().iter().map(|c| c.id()).collect();
+        assert_eq!(copied.len(), 1, "the copy carries the topology");
+        assert_ne!(copied[0], 77, "under a fresh component id");
+    }
+
+    /// The case "load as N" exists for, with a populated microgrid:
+    /// component ids are enterprise-unique, so a copy that kept the
+    /// original's ids would die on "component id X is already
+    /// registered in microgrid Y" the moment the original is live.
+    /// The copy therefore gets fresh ids for every component — and
+    /// the same shape, because the `connect` calls move with them.
+    #[test]
+    fn load_as_remints_component_ids_of_a_live_original() {
+        let (cfg, dir) = config_with(
+            "(make-microgrid :id 9 :name \"m\" :grpc-port 8800 :topology \
+             (lambda () (%make-grid-connection-point :id 70) (%make-meter :id 71) \
+             (%make-battery-inverter :id 72) (connect 70 71) (connect 71 72)))",
+        );
+        // The managed file for the LIVE microgrid 9, rendered from
+        // its own state — exactly what the load picker hands back.
+        let (def, site) = {
+            let reg = cfg.microgrids();
+            let r = reg.lock();
+            let e = r.get(&9).unwrap();
+            (e.def.clone(), e.site.clone())
+        };
+        let src = dir.join("mg9.lisp");
+        std::fs::write(
+            &src,
+            crate::lisp::microgrid_file::compose(
+                &crate::lisp::microgrid_file::render_block(&def, &site),
+                "",
+            ),
+        )
+        .unwrap();
+
+        let id = cfg
+            .load_as(&src, 11)
+            .expect("copy loads beside the original");
+        assert_eq!(id, 11);
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        let original = &r.get(&9).expect("original still registered").site;
+        let copy = &r.get(&11).expect("copy registered").site;
+
+        let ids = |s: &crate::sim::MicrogridSite| -> Vec<u64> {
+            s.components().iter().map(|c| c.id()).collect()
+        };
+        let (old_ids, new_ids) = (ids(original), ids(copy));
+        assert_eq!(old_ids, vec![70, 71, 72], "the original is untouched");
+        assert_eq!(new_ids.len(), 3, "same component count");
+        assert!(
+            new_ids.iter().all(|n| !old_ids.contains(n)),
+            "every copied component got a fresh id: {new_ids:?}"
+        );
+        // Same graph, different numbers: translate the original's
+        // edges through the positional id map and compare.
+        let map: std::collections::HashMap<u64, u64> = old_ids
+            .iter()
+            .copied()
+            .zip(new_ids.iter().copied())
+            .collect();
+        let expected: Vec<(u64, u64)> = original
+            .all_connections()
+            .into_iter()
+            .map(|(a, b)| (map[&a], map[&b]))
+            .collect();
+        assert_eq!(copy.all_connections(), expected, "isomorphic edge set");
     }
 
     /// `set-microgrid-name` / `set-microgrid-tso` edit the registry

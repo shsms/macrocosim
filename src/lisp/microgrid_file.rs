@@ -2,8 +2,11 @@
 //! switchyard-generated block (structure, rewritten on every save)
 //! followed by a hand-written script section (loaded verbatim,
 //! never touched by switchyard). `parse` / `compose` split and
-//! rejoin the two; `rewrite_id` patches the microgrid id inside the
-//! generated block without disturbing anything else in the file.
+//! rejoin the two; `rewrite_id` / `rewrite_grpc_port` /
+//! `remap_component_ids` patch the microgrid id, its gRPC port, and
+//! every component id inside the generated block without disturbing
+//! anything else in the file (the three together are what turns a
+//! file into a second, independent copy of its microgrid).
 //!
 //! `render_block` / `render_empty_block` render the generated block
 //! from live state, the inverse of `parse`. Between them these are
@@ -212,6 +215,177 @@ pub fn rewrite_grpc_port(text: &str, new_port: u16) -> Result<String, String> {
     )
 }
 
+/// Mint a fresh id for every component in the generated block of
+/// `text` and rewrite every mention of the old ids: the `:id` of
+/// each `%make-*` form, and both endpoints of each `(connect a b)`.
+///
+/// Component ids are enterprise-unique — `make.rs`'s `id_or_next`
+/// refuses an explicit id any other microgrid already owns — and a
+/// generated block pins an explicit `:id` on every component. So a
+/// copy of a file whose original is live and populated needs ids of
+/// its own, or it dies on "component id X is already registered in
+/// microgrid Y". `next_id` supplies them; [`Config::load_as`] passes
+/// the enterprise allocator, the same counter `MicrogridSite::next_id`
+/// draws from, so the fresh ids collide with nothing.
+///
+/// Only forms inside the `:topology` lambda are touched. The
+/// `(make-microgrid … :id …)` head keeps whatever id it carries —
+/// that one is [`rewrite_id`]'s business. `text` may be a whole
+/// managed file (the script section rides through untouched) or a
+/// bare generated block.
+///
+/// Errors when a `(connect a b)` names a number no `%make-*` form in
+/// the block declared: that block is already inconsistent, and
+/// splicing half of it would turn a loud failure into a silently
+/// mis-wired copy.
+pub fn remap_component_ids(text: &str, mut next_id: impl FnMut() -> u64) -> Result<String, String> {
+    let parsed = parse(text)?;
+    let block = parsed.generated.as_deref().unwrap_or(text);
+    let remapped = remap_in_block(block, &mut next_id)?;
+    Ok(match &parsed.generated {
+        Some(_) => compose(&remapped, &parsed.script),
+        None => remapped,
+    })
+}
+
+/// The body of [`remap_component_ids`], on a bare generated block.
+fn remap_in_block(block: &str, next_id: &mut impl FnMut() -> u64) -> Result<String, String> {
+    use std::collections::HashMap;
+
+    let cst = tulisp_fmt::parse(block).map_err(|e| format!("failed to parse block: {e:?}"))?;
+    let head = microgrid_form(&cst)?;
+    // A head with no `:topology` lambda declares no components, so
+    // there is nothing to remint.
+    let Some(CstNode::List {
+        children: forms, ..
+    }) = kwarg_value(head, ":topology")
+    else {
+        return Ok(block.to_string());
+    };
+
+    // Pass 1: every id mention, with its byte span, in textual order.
+    let mut declared: Vec<(std::ops::Range<usize>, u64)> = Vec::new();
+    let mut referenced: Vec<(std::ops::Range<usize>, u64)> = Vec::new();
+    collect_component_ids(forms, &mut declared, &mut referenced);
+
+    // Pass 2: allocate old → new in declaration order, then splice
+    // every mention (declarations and connect endpoints alike).
+    let mut fresh: HashMap<u64, u64> = HashMap::new();
+    let mut splices: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for (span, old) in declared {
+        let new = *fresh.entry(old).or_insert_with(&mut *next_id);
+        splices.push((span, new.to_string()));
+    }
+    for (span, old) in referenced {
+        let new = fresh.get(&old).ok_or_else(|| {
+            format!("connect references component id {old} not declared in this block")
+        })?;
+        splices.push((span, new.to_string()));
+    }
+
+    // Back-to-front, so an earlier splice's length change can never
+    // move a span we have not applied yet.
+    splices.sort_by_key(|(span, _)| std::cmp::Reverse(span.start));
+    let mut out = block.to_string();
+    for (span, text) in splices {
+        out.replace_range(span, &text);
+    }
+    Ok(out)
+}
+
+/// Every component category, by the suffix its constructors share.
+/// `src/lisp/make.rs` is the source of truth — it registers one
+/// `%make-<name>` defun per entry here, and `sim/defaults.lisp` the
+/// matching `make-<name>` wrapper. Adding a component type means
+/// adding it here too, or a copy of a microgrid using it will keep
+/// the original's ids for those components.
+///
+/// The list is CLOSED on purpose. A prefix test (`starts_with
+/// "make-"`) would also match a user-defined helper — nothing stops
+/// a hand-edited `:topology` calling `(make-load-profile :id 3 …)` —
+/// and renumbering that `:id`, which means whatever the helper says
+/// it means, would corrupt the copy. Worse, counting the helper as a
+/// declaration would let a genuinely undeclared `connect` endpoint
+/// resolve, turning a loud error into a silently mis-wired copy.
+const COMPONENT_MAKE_FNS: &[&str] = &[
+    "grid-connection-point",
+    "meter",
+    "battery",
+    "battery-inverter",
+    "solar-inverter",
+    "ev-charger",
+    "chp",
+    "wind-turbine",
+    "steam-boiler",
+    "power-transformer",
+    "breaker",
+];
+
+/// Does a form head build a component? Both spellings count: the
+/// `%make-*` primitives switchyard renders, and the public `make-*`
+/// wrappers a person may well have hand-written into `:topology`
+/// (it is ordinary lisp — nothing stops them, and they declare an
+/// `:id` just the same). Missing the wrapper spelling would leave
+/// those components on the original's ids and make a `connect` to
+/// one look undeclared.
+///
+/// `make-microgrid` is not in the set, so the block's own head can
+/// never be mistaken for a component even if a hand-mangled block
+/// nests one inside its own `:topology`.
+fn declares_a_component(head: &str) -> bool {
+    let name = head
+        .strip_prefix("%make-")
+        .or_else(|| head.strip_prefix("make-"));
+    name.is_some_and(|name| COMPONENT_MAKE_FNS.contains(&name))
+}
+
+/// Walk `forms` — the `:topology` lambda's children — collecting the
+/// span and current value of every component id mention: `declared`
+/// gets the `:id` of each component-constructing form, `referenced`
+/// gets both endpoints of each `(connect a b)`.
+///
+/// Recursive, so a hand-edited block that wraps its components in a
+/// `progn` (or nests them the pre-flat way) is walked too; a
+/// switchyard-rendered block is flat and never needs the descent.
+fn collect_component_ids(
+    forms: &[CstNode],
+    declared: &mut Vec<(std::ops::Range<usize>, u64)>,
+    referenced: &mut Vec<(std::ops::Range<usize>, u64)>,
+) {
+    for node in forms {
+        let CstNode::List { children, .. } = node else {
+            continue;
+        };
+        let mut atoms = children.iter().filter_map(|c| match c {
+            CstNode::Atom { text, span } => Some((text.as_str(), span)),
+            _ => None,
+        });
+        match atoms.next() {
+            Some((name, _)) if declares_a_component(name) => {
+                // A form with no `:id`, or a non-numeric one, is left
+                // alone: the loader auto-allocates for it anyway.
+                if let Some(CstNode::Atom { text, span }) = kwarg_value(children, ":id")
+                    && let Ok(old) = text.parse::<u64>()
+                {
+                    declared.push((span.clone(), old));
+                }
+            }
+            Some(("connect", _)) => {
+                // Everything after the head atom. A non-numeric
+                // endpoint is a variable reference, not an id we can
+                // map — leave it as written.
+                for (text, span) in atoms {
+                    if let Ok(old) = text.parse::<u64>() {
+                        referenced.push((span.clone(), old));
+                    }
+                }
+            }
+            _ => {}
+        }
+        collect_component_ids(children, declared, referenced);
+    }
+}
+
 /// The microgrid id declared by a generated `block` (the text
 /// `parse` hands back in [`ParsedFile::generated`], markers already
 /// stripped) — `None` when the block carries no `(make-microgrid …
@@ -259,8 +433,23 @@ fn rewrite_head_kwarg(text: &str, kwarg: &str, value: &str) -> Result<Option<Str
 /// `(make-microgrid …)` form at all.
 fn head_kwarg_span(block: &str, kwarg: &str) -> Result<Option<(usize, usize)>, String> {
     let cst = tulisp_fmt::parse(block).map_err(|e| format!("failed to parse block: {e:?}"))?;
-    let form = cst
-        .nodes
+    let form = microgrid_form(&cst)?;
+    // Only the head's own children are walked — a nested
+    // `(%make-* :id …)` lives inside a child List, so component ids
+    // can never be hit here.
+    Ok(match kwarg_value(form, kwarg) {
+        Some(CstNode::Atom { span, .. }) => Some((span.start, span.end)),
+        // Missing, or a value that isn't a plain atom (a list, a
+        // quoted form): nothing this splice can rewrite.
+        _ => None,
+    })
+}
+
+/// The children of the `(make-microgrid …)` form in a parsed
+/// generated block. A generated block holds exactly one, and every
+/// rewrite in this module works off its children.
+fn microgrid_form(cst: &tulisp_fmt::cst::Cst) -> Result<&[CstNode], String> {
+    cst.nodes
         .iter()
         .find_map(|n| match n {
             CstNode::List { children, .. } => {
@@ -268,28 +457,31 @@ fn head_kwarg_span(block: &str, kwarg: &str) -> Result<Option<(usize, usize)>, S
                     CstNode::Atom { text, .. } => Some(text.as_str()),
                     _ => None,
                 });
-                (first_atom == Some("make-microgrid")).then_some(children)
+                (first_atom == Some("make-microgrid")).then_some(children.as_slice())
             }
             _ => None,
         })
-        .ok_or_else(|| "no (make-microgrid …) form found in the generated block".to_string())?;
+        .ok_or_else(|| "no (make-microgrid …) form found in the generated block".to_string())
+}
 
-    // The atom right after the keyword is its value. Only the head's
-    // own atoms are walked — a nested `(%make-* :id …)` lives inside
-    // a child List, so component ids can never be hit.
-    let mut found_kw = false;
-    Ok(form.iter().find_map(|c| {
-        if found_kw {
-            return match c {
-                CstNode::Atom { span, .. } => Some((span.start, span.end)),
-                _ => None,
-            };
+/// The node holding `kwarg`'s value inside a form's `children`: the
+/// first real node after the `kwarg` atom, skipping trivia (comments
+/// and line breaks can sit between a keyword and its value).
+/// `None` when the form carries no such keyword.
+fn kwarg_value<'a>(children: &'a [CstNode], kwarg: &str) -> Option<&'a CstNode> {
+    let mut seen_kwarg = false;
+    for child in children {
+        if seen_kwarg {
+            match child {
+                CstNode::Comment { .. } | CstNode::LineBreak { .. } => continue,
+                value => return Some(value),
+            }
         }
-        if matches!(c, CstNode::Atom { text, .. } if text == kwarg) {
-            found_kw = true;
+        if matches!(child, CstNode::Atom { text, .. } if text == kwarg) {
+            seen_kwarg = true;
         }
-        None
-    }))
+    }
+    None
 }
 
 /// Render the generated block for a live microgrid: a
@@ -457,6 +649,147 @@ mod tests {
         assert_eq!(rewrite_grpc_port(&text, 8899).unwrap(), text);
         // Unmanaged text is refused, same as rewrite_id.
         assert!(rewrite_grpc_port("(make-microgrid :id 1 :grpc-port 8800)", 8899).is_err());
+    }
+
+    #[test]
+    fn remap_component_ids_renumbers_makes_and_connects_together() {
+        let text = compose(
+            "(make-microgrid :id 2201 :name \"a\" :grpc-port 8810\n  :topology\n  (lambda ()\n\
+             \x20   (%make-grid-connection-point :id 70)\n\
+             \x20   (%make-meter :id 71 :name \"main\")\n\
+             \x20   (%make-battery-inverter :id 72)\n\
+             \x20   (connect 70 71)\n\
+             \x20   (connect 71 72)))",
+            ";; mine\n(set-meter-power 71 1000.0)\n",
+        );
+        let mut next = 900u64;
+        let out = remap_component_ids(&text, || {
+            next += 1;
+            next
+        })
+        .unwrap();
+
+        // Fresh ids in declaration order, and the connects moved with
+        // them — same shape, different numbers.
+        assert!(
+            out.contains("(%make-grid-connection-point :id 901)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("(%make-meter :id 902 :name \"main\")"),
+            "{out}"
+        );
+        assert!(out.contains("(%make-battery-inverter :id 903)"), "{out}");
+        assert!(out.contains("(connect 901 902)"), "{out}");
+        assert!(out.contains("(connect 902 903)"), "{out}");
+        assert!(!out.contains(" 70"), "no old id survives: {out}");
+        // The head's own id is not a component id.
+        assert!(out.contains("(make-microgrid :id 2201"), "{out}");
+        // The script section is the author's, ids and all.
+        assert!(out.contains("(set-meter-power 71 1000.0)"), "{out}");
+        // Still one well-formed managed file.
+        assert!(parse(&out).unwrap().generated.is_some());
+    }
+
+    #[test]
+    fn remap_component_ids_rejects_a_connect_to_an_undeclared_id() {
+        let text = compose(
+            "(make-microgrid :id 1 :topology\n  (lambda ()\n    (%make-meter :id 5)\n\
+             \x20   (connect 5 6)))",
+            "",
+        );
+        let err = remap_component_ids(&text, || 900).unwrap_err();
+        assert!(err.contains("component id 6"), "{err}");
+        // An empty topology has nothing to remint and is left alone.
+        let empty = compose("(make-microgrid :id 1 :topology (lambda () nil))", "");
+        assert_eq!(remap_component_ids(&empty, || 900).unwrap(), empty);
+    }
+
+    /// `:topology` is ordinary lisp, so a hand-edited block may build
+    /// its components with the public `make-*` wrappers rather than
+    /// the `%make-*` primitives switchyard renders. Those declare
+    /// component ids just the same, so the re-mint has to see them —
+    /// otherwise they keep the original's ids (an instant collision)
+    /// and a `connect` to one is refused as "not declared in this
+    /// block", which is both wrong and misleading.
+    #[test]
+    fn remap_component_ids_sees_the_public_wrapper_spellings() {
+        let text = compose(
+            "(make-microgrid :id 2201 :name \"a\" :grpc-port 8810\n  :topology\n  (lambda ()\n\
+             \x20   (%make-grid-connection-point :id 1)\n\
+             \x20   (make-meter :id 71)\n\
+             \x20   (connect 1 71)))",
+            "",
+        );
+        let mut next = 900u64;
+        let out = remap_component_ids(&text, || {
+            next += 1;
+            next
+        })
+        .unwrap();
+        assert!(
+            out.contains("(%make-grid-connection-point :id 901)"),
+            "{out}"
+        );
+        assert!(out.contains("(make-meter :id 902)"), "{out}");
+        assert!(out.contains("(connect 901 902)"), "{out}");
+        // The head is `make-microgrid`, which is NOT a component
+        // constructor — its id must survive the wrapper match.
+        assert!(out.contains("(make-microgrid :id 2201"), "{out}");
+    }
+
+    /// The closed set has to stay in step with `make.rs`, which is
+    /// the source of truth — a name that drifts out of it silently
+    /// stops being reminted. Every entry must name a real pair of
+    /// constructors that take an `:id`, which is the whole basis of
+    /// the re-mint, so each one is actually built here.
+    #[test]
+    fn every_component_make_fn_is_a_real_constructor() {
+        use super::super::test_support::config_with;
+        let (cfg, _dir) = config_with("nil");
+        let mut id = 7000u64;
+        for name in COMPONENT_MAKE_FNS {
+            for spelling in [format!("%make-{name}"), format!("make-{name}")] {
+                id += 1;
+                cfg.eval_silent(&format!("({spelling} :id {id})"))
+                    .unwrap_or_else(|e| {
+                        panic!("{spelling} is in COMPONENT_MAKE_FNS but does not build: {e}")
+                    });
+            }
+        }
+    }
+
+    /// The constructor set is CLOSED. A user-defined helper whose
+    /// name merely starts with `make-` is not a component, and its
+    /// `:id` kwarg means whatever the helper says it means — renaming
+    /// that number would corrupt the copy, and counting it as
+    /// "declared" would let a genuinely undeclared `connect` slip
+    /// through as a silently mis-wired edge instead of erroring.
+    #[test]
+    fn remap_component_ids_ignores_a_lookalike_helper() {
+        let text = compose(
+            "(make-microgrid :id 2201 :topology\n  (lambda ()\n\
+             \x20   (%make-meter :id 5)\n\
+             \x20   (make-load-profile :id 3 :shape 'flat)))",
+            "",
+        );
+        let out = remap_component_ids(&text, || 900).unwrap();
+        assert!(out.contains("(%make-meter :id 900)"), "{out}");
+        assert!(
+            out.contains("(make-load-profile :id 3 :shape 'flat)"),
+            "a helper's own :id is not a component id: {out}"
+        );
+        // And it is not "declared", so a connect to it still errors
+        // loudly rather than being wired to something arbitrary.
+        let connected = compose(
+            "(make-microgrid :id 2201 :topology\n  (lambda ()\n\
+             \x20   (%make-meter :id 5)\n\
+             \x20   (make-load-profile :id 3)\n\
+             \x20   (connect 5 3)))",
+            "",
+        );
+        let err = remap_component_ids(&connected, || 900).unwrap_err();
+        assert!(err.contains("component id 3"), "{err}");
     }
 
     #[test]
