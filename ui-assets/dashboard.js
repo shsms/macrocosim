@@ -15,11 +15,31 @@ import { formatScaled } from "./live.js";
 // scaling ladder.
 function fmt(quantity, unit, value) {
   if (value == null || !Number.isFinite(value)) return "—";
+  // The wire unit for reactive power is SI "var"; every user-facing
+  // readout in the app spells it "VAr", so map it on display only.
+  const shown = unit === "var" ? "VAr" : unit;
   if (quantity === "Power" || quantity === "ReactivePower" || unit === "W" || unit === "var") {
-    return formatScaled(value, unit);
+    return formatScaled(value, shown);
   }
   // Voltage, frequency, percentage etc. — fixed unit, modest precision.
-  return `${value.toFixed(2)} ${unit}`;
+  return `${value.toFixed(2)} ${shown}`;
+}
+
+// Site power factor as the Q tile's meta line prints it, derived from
+// the latest grid P and Q. Pure so it can be unit-checked: the tile
+// itself only owns the element lookup.
+//
+// Sign convention only: opposite signs on P and Q read as leading,
+// same signs as lagging — the same rule the topology hover card uses.
+// The qualifier is dropped differently here: this tile drops it once
+// PF rounds to unity (>= 0.995), so a clean unity reading doesn't
+// flicker between leading and lagging on noise, where the hover card
+// drops it inside a |Q| dead band instead.
+export function sitePfText(p, q) {
+  if (!Number.isFinite(p) || !Number.isFinite(q) || (p === 0 && q === 0)) return "site PF —";
+  const pf = Math.abs(p) / Math.hypot(p, q);
+  const tag = pf >= 0.995 ? "" : p * q < 0 ? " leading" : " lagging";
+  return `site PF ${pf.toFixed(2)}${tag}`;
 }
 
 // Latest value of one metric for one component, read off a short
@@ -84,23 +104,13 @@ export const dashboardTiles = (() => {
     return Number.isNaN(v) ? null : v;
   }
   // Grid power and grid reactive power are separate microgrid_sample
-  // streams; PF only makes sense once both have landed. Opposite
-  // signs on P and Q read as leading, same signs as lagging (matches
-  // the topology hover-card convention), and the qualifier drops off
-  // once PF rounds to unity so a clean unity reading doesn't flicker
-  // between leading/lagging on noise.
-  function updateSitePf() {
+  // streams; PF only makes sense once both have landed. The default
+  // pair is whatever the spark rings hold — the WS hot path; callers
+  // that just painted fresher numbers (reseedLatest) pass those in.
+  function updateSitePf(p = latestValue("grid_power"), q = latestValue("grid_reactive_power")) {
     const el = document.getElementById("site-pf");
     if (!el) return;
-    const p = latestValue("grid_power");
-    const q = latestValue("grid_reactive_power");
-    if (!Number.isFinite(p) || !Number.isFinite(q) || (p === 0 && q === 0)) {
-      el.textContent = "site PF —";
-      return;
-    }
-    const pf = Math.abs(p) / Math.hypot(p, q);
-    const tag = pf >= 0.995 ? "" : p * q < 0 ? " leading" : " lagging";
-    el.textContent = `site PF ${pf.toFixed(2)}${tag}`;
+    el.textContent = sitePfText(p, q);
   }
   // The tile elements are static markup in index.html, so the
   // per-stream lookups are resolved once and cached — paint() runs
@@ -202,6 +212,12 @@ export const dashboardTiles = (() => {
           el.classList.toggle("muted", snap.value == null);
         }
       }
+      // The site-PF meta line is derived from the two grid streams, so
+      // it goes stale exactly in the dropped-frame case this reseed
+      // exists for. Recompute it from what we just painted, falling
+      // back to the ring for a stream this snapshot didn't carry.
+      const painted = (stream) => map[stream]?.value ?? latestValue(stream);
+      updateSitePf(painted("grid_power"), painted("grid_reactive_power"));
     } catch (_) {
       // Best-effort. If the loopback isn't up yet (503 elsewhere),
       // the tiles stay on their last value until the next tick.
@@ -326,6 +342,15 @@ function socClass(v) {
   if (v < 10 || v > 95) return "soc-warn";
   return "soc-ok";
 }
+// Column 6 of every dashboard row: the reactive-power readout, muted
+// throughout because it reads as secondary to the active power beside
+// it. Tiers that carry no Q at all (batteries, EV, CHP) still render
+// the cell with a `—`: the shared six-column template in style.css
+// only keeps the health pill aligned across tiers while every row
+// fills every track. `VAr` is the display spelling of the "var"
+// stream unit, as everywhere else in the UI.
+const reactiveCell = (v) =>
+  `<span class="tier-q muted">${v == null || !Number.isFinite(v) ? "—" : formatScaled(v, "VAr")}</span>`;
 
 // ─── Battery pairs: battery + paired battery-inverter, one row each ───────
 //
@@ -390,6 +415,7 @@ export const batteryPairs = (() => {
           <span class="tier2-soc-text">${fmtRowSoc(b.soc)}</span>
         </span>
         <span class="tier2-power">${fmtRowPower(b.power_w)}</span>
+        ${reactiveCell(null)}
       `;
       batCell.addEventListener("click", () => jumpToTopology(id));
       wrap.appendChild(batCell);
@@ -403,7 +429,7 @@ export const batteryPairs = (() => {
           <span class="tier3-subtype muted">${inv.subtype || "—"}</span>
           <span class="tier3-health ${ihCls}">${inv.health}</span>
           ${envelopeBar(inv.lower, inv.measured, inv.upper, fmtRowPower)}
-          <span class="tier3-reactive muted">${inv.reactive == null ? "—" : formatScaled(inv.reactive, "var")}</span>
+          ${reactiveCell(inv.reactive)}
         `;
         invCell.addEventListener("click", () => jumpToTopology(inverterId));
       } else {
@@ -663,7 +689,9 @@ function makeRowModule({ gridId, sectionSel, filter, fields, rowClass, rowHtml }
 // and rows that jump around read as mysterious). The envelope
 // marker's at-bound dot carries that signal instead. Battery
 // inverters are intentionally absent from this section; they pair
-// with their batteries in the Batteries section above.
+// with their batteries in the Batteries section above — but they
+// share the row shape, Q column included: a solar inverter publishes
+// `reactive_power_var` on the same telemetry path.
 export const pvRows = makeRowModule({
   gridId: "pv-rows",
   sectionSel: ".dash-pv",
@@ -672,6 +700,7 @@ export const pvRows = makeRowModule({
     measured: "active_power_w",
     lower: "active_power_lower_bound_w",
     upper: "active_power_upper_bound_w",
+    reactive: "reactive_power_var",
   },
   rowClass: () => "tier3-row",
   rowHtml: (d) => `
@@ -679,6 +708,7 @@ export const pvRows = makeRowModule({
         <span class="tier3-subtype muted">${d.subtype || "—"}</span>
         <span class="tier3-health ${d.health === "ok" ? "health-ok" : "health-bad"}">${d.health}</span>
         ${envelopeBar(d.lower, d.measured, d.upper, fmtRowPower)}
+        ${reactiveCell(d.reactive)}
       `,
 });
 
@@ -701,6 +731,7 @@ export const evRows = makeRowModule({
           <span class="tier5-soc-text">${fmtRowSoc(d.soc)}</span>
         </span>
         <span class="tier5-power">${fmtRowPower(d.power_w)}</span>
+        ${reactiveCell(null)}
       `;
   },
 });
@@ -719,5 +750,6 @@ export const chpRows = makeRowModule({
         <span class="tier5-health ${d.health === "ok" ? "health-ok" : "health-bad"}">${d.health}</span>
         <span class="tier5-soc-wrap muted">—</span>
         <span class="tier5-power">${fmtRowPower(d.power_w)}</span>
+        ${reactiveCell(null)}
       `,
 });

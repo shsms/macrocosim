@@ -201,6 +201,19 @@ const unit = await page.evaluate(async () => {
   eq("non-numeric command value stays raw", cmdText({ kind: "mode", value: "idle", ts: now - 1000, accepted: true, reason: "" }), "mode idle · 1 s ago · accepted");
   eq("augment_bounds shows no value", cmdText({ kind: "augment_bounds", value: 0, ts: now - 3000, accepted: true, reason: "" }), "augment bounds · 3 s ago · accepted");
   eq("augment_reactive_bounds shows no value either", cmdText({ kind: "augment_reactive_bounds", value: 0, ts: now - 3000, accepted: true, reason: "" }), "augment reactive bounds · 3 s ago · accepted");
+  // dashboard.js: the site-PF line under the grid reactive tile.
+  // Same sign convention as the hover card's PF (opposite signs read
+  // as leading), but the qualifier drops at the unity threshold here
+  // rather than inside a dead band.
+  const dash = await import("/assets/dashboard.js");
+  eq("site pf unity drops the qualifier", dash.sitePfText(10000, 200), "site PF 1.00");
+  eq("site pf lagging (same signs)", dash.sitePfText(8000, 6000), "site PF 0.80 lagging");
+  eq("site pf leading (opposite signs)", dash.sitePfText(8000, -6000), "site PF 0.80 leading");
+  eq("site pf leading with exported p", dash.sitePfText(-8000, 6000), "site PF 0.80 leading");
+  eq("site pf missing q", dash.sitePfText(8000, null), "site PF —");
+  eq("site pf NaN p", dash.sitePfText(Number.NaN, 100), "site PF —");
+  eq("site pf both zero", dash.sitePfText(0, 0), "site PF —");
+
   // palette comes from :root tokens; values unchanged
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   eq("token --pill-surface", css("--pill-surface"), "#242a33");

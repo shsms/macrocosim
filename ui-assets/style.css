@@ -744,6 +744,31 @@ body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
   border-left: 2px solid var(--accent);
   padding-left: 6px;
 }
+/* ── The shared dashboard row template ───────────────────────────────
+   Every dashboard row tier lays out on this ONE six-column track
+   list: name · subtype/category · health · wide slot · power ·
+   reactive power. Sharing it is what keeps the health pill in
+   column 3 at the same x on every row — most visibly between the
+   two stacked rows of a .bat-pair, where a battery (tier2) sits
+   above its inverter (tier3).
+
+   The track list is shared rather than per-tier because the fr
+   tracks make it a package deal: drop the 6th track from one tier
+   and column 1's 1.5fr absorbs the freed width, moving columns 2
+   and 3 on that row only. So a tier with no value for a slot
+   renders a muted `—` placeholder in it (batteries have no subtype
+   and no Q; EV/CHP rows have no Q) instead of leaving the track
+   out. Edit the list here, not in the per-tier blocks below. */
+.tier2-row,
+.tier3-row,
+.tier5-row {
+  grid-template-columns:
+    minmax(140px, 1.5fr) 80px 80px minmax(160px, 3fr) minmax(100px, 1fr) minmax(90px, 1fr);
+}
+/* Column 6 on every tier: the reactive-power readout, muted when
+   the row has no Q to show. */
+.tier-q { text-align: right; white-space: nowrap; }
+
 /* Standalone (non-paired) tier rows pick up an equivalent left
    offset so their column origin matches the rows inside
    .bat-pair, which are indented by the 2px border + 6px padding
@@ -762,13 +787,6 @@ body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
 }
 .tier2-row {
   display: grid;
-  /* Shared 5-column template with tier3 / tier5 so the health pill
-     in column 3 lines up vertically across every dashboard row.
-     Batteries don't have a subtype, so column 2 holds an `—`
-     placeholder that keeps the alignment without claiming the slot
-     means anything. */
-  grid-template-columns:
-    minmax(140px, 1.5fr) 80px 80px minmax(160px, 3fr) minmax(100px, 1fr);
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
@@ -834,14 +852,10 @@ body.compact .tier2-soc-text { font-size: 10px; }
 
 .tier3-row {
   display: grid;
-  /* Same template as tier2 / tier5 so the health pill aligns
-     vertically across the dashboard. The envelope fills cols 4-5
-     since the row has no separate power readout — see the
-     .tier3-row .envelope rule below. Col 6 holds the reactive-power
-     readout via .tier3-reactive; only the battery-pair inverter cell
-     renders it today, so PV/CHP tier3 rows just leave it blank. */
-  grid-template-columns:
-    minmax(140px, 1.5fr) 80px 80px minmax(160px, 3fr) minmax(100px, 1fr) minmax(90px, 1fr);
+  /* Track list comes from the shared row template above. Inverter
+     rows have no separate power readout, so the envelope spans
+     columns 4-5 (see the .tier3-row .envelope rule below) and the
+     reactive readout takes column 6. */
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
@@ -854,7 +868,6 @@ body.compact .tier2-soc-text { font-size: 10px; }
 .tier3-row .envelope {
   grid-column: 4 / span 2;
 }
-.tier3-reactive { text-align: right; white-space: nowrap; }
 .tier3-row:hover { border-color: var(--accent); }
 .tier3-name { font-weight: 500; }
 .tier3-subtype { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -1217,11 +1230,10 @@ body.compact .envelope-marker { width: 10px; height: 10px; margin-left: -5px; ma
 
 .tier5-row {
   display: grid;
-  /* Matches tier2 / tier3 so the health pill in column 3 stays
-     vertically aligned with the rows in the Batteries + PV
-     sections above. */
-  grid-template-columns:
-    minmax(140px, 1.5fr) 80px 80px minmax(160px, 3fr) minmax(100px, 1fr);
+  /* Track list comes from the shared row template near .tier2-row,
+     which is what keeps the health pill in column 3 aligned with
+     the rows in the Batteries + PV sections above. EV/CHP rows
+     carry no Q, so column 6 renders a muted placeholder. */
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
