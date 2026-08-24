@@ -73,7 +73,7 @@ struct Cli {
     json: bool,
 
     /// Target microgrid id for per-microgrid HTTP-routed subcommands
-    /// (`pool`, `dashboard --tail`). When set, swctl
+    /// (`pool`, `dashboard --tail`, `snapshot`). When set, swctl
     /// reads from `/api/mg/{id}/...` instead of the legacy
     /// single-microgrid `/api/...` paths. Default = the lowest id
     /// reported by `GET /api/microgrids`, which matches the
@@ -170,9 +170,10 @@ enum Cmd {
     #[command(subcommand)]
     Scenario(ScenarioCmd),
 
-    /// Save / load / list snapshots of the persisted-overrides
-    /// file. Routes through the UI HTTP surface; gRPC isn't
-    /// touched.
+    /// Save / load / list snapshots of one microgrid's file.
+    /// Picks the microgrid with the global --microgrid-id, or the
+    /// lowest registered one. Routes through the UI HTTP surface;
+    /// gRPC isn't touched.
     #[command(subcommand)]
     Snapshot(SnapshotCmd),
 
@@ -282,15 +283,21 @@ enum PoolCmd {
 
 #[derive(Subcommand, Debug)]
 enum SnapshotCmd {
-    /// Copy the current overrides file to snapshots/NAME.lisp.
+    /// Copy the microgrid's file to snapshots/MG_ID/NAME.lisp.
     Save {
         /// Snapshot name (file-name component only; no slashes).
         name: String,
     },
-    /// Replace the current overrides with snapshots/NAME.lisp and
-    /// reload.
-    Load { name: String },
-    /// List existing snapshots, alphabetical.
+    /// Restore snapshots/MG_ID/NAME.lisp over the microgrid's file
+    /// and reload it.
+    Load {
+        name: String,
+        /// Load the snapshot as a NEW microgrid under this id
+        /// instead of restoring it over the original.
+        #[arg(long)]
+        as_id: Option<u64>,
+    },
+    /// List the microgrid's snapshots, alphabetical.
     List,
 }
 
@@ -1202,22 +1209,15 @@ async fn run_snapshot(
     microgrid_id: Option<u64>,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Snapshots route through the legacy /api/snapshots/* endpoint
-    // for now (per-mg /api/mg/{id}/snapshots/* lands when the
-    // override-path migration finishes). --microgrid-id is accepted
-    // for forward-compat but unused — say so instead of silently
-    // operating on the ambient scope the user didn't pick.
-    if let Some(id) = microgrid_id {
-        eprintln!(
-            "swctl: --microgrid-id {id} is not honoured by snapshots yet; \
-             the server's current scope applies"
-        );
-    }
     let http = reqwest::Client::new();
+    // Snapshots belong to one microgrid: they copy that microgrid's
+    // own file. Same selection rule as the other per-mg subcommands —
+    // --microgrid-id, else the lowest registered id.
+    let mg = resolve_microgrid_id(&http, ui_addr, microgrid_id).await?;
     match cmd {
         SnapshotCmd::Save { name } => {
             let resp: serde_json::Value = http
-                .post(format!("{ui_addr}/api/snapshots/save"))
+                .post(format!("{ui_addr}/api/mg/{mg}/snapshots/save"))
                 .json(&serde_json::json!({ "name": name }))
                 .send()
                 .await?
@@ -1234,24 +1234,29 @@ async fn run_snapshot(
                 );
             }
         }
-        SnapshotCmd::Load { name } => {
-            http.post(format!("{ui_addr}/api/snapshots/load"))
-                .json(&serde_json::json!({ "name": name }))
+        SnapshotCmd::Load { name, as_id } => {
+            let mut body = serde_json::json!({ "name": name });
+            if let Some(id) = as_id {
+                body["as_id"] = serde_json::json!(id);
+            }
+            let resp: serde_json::Value = http
+                .post(format!("{ui_addr}/api/mg/{mg}/snapshots/load"))
+                .json(&body)
                 .send()
                 .await?
-                .error_for_status()?;
+                .error_for_status()?
+                .json()
+                .await?;
             if json {
-                println!(
-                    "{{\"ok\":true,\"loaded\":{}}}",
-                    serde_json::to_string(&name)?
-                );
+                println!("{}", serde_json::to_string_pretty(&resp)?);
             } else {
-                println!("loaded {name}");
+                let loaded = resp.get("id").and_then(|v| v.as_u64()).unwrap_or(mg);
+                println!("loaded {name} into microgrid {loaded}");
             }
         }
         SnapshotCmd::List => {
             let resp: serde_json::Value = http
-                .get(format!("{ui_addr}/api/snapshots"))
+                .get(format!("{ui_addr}/api/mg/{mg}/snapshots"))
                 .send()
                 .await?
                 .error_for_status()?
@@ -1266,7 +1271,7 @@ async fn run_snapshot(
                     .cloned()
                     .unwrap_or_default();
                 if names.is_empty() {
-                    println!("(no snapshots)");
+                    println!("(no snapshots for microgrid {mg})");
                 } else {
                     for n in names {
                         if let Some(s) = n.as_str() {

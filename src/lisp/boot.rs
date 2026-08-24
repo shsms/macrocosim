@@ -22,11 +22,73 @@ use crate::sim::microgrids::SiteRouter;
 
 use super::{Config, Metadata, defuns};
 
+/// Why a [`Config::load_file`] call failed.
+///
+/// One case is singled out because callers act on it rather than
+/// just reporting it: a file whose `(make-microgrid …)` claims an id
+/// some OTHER file already loaded. The load endpoint turns that into
+/// a "load it under a free id instead?" offer, so it needs the id as
+/// a number — not a sentence to grep for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadError {
+    /// The file declares microgrid `id`, which is already live from
+    /// somewhere else. [`Config::load_as`] is the way in.
+    Collision { id: u64 },
+    /// Anything else: unreadable file, malformed markers, a lisp
+    /// error in the file. The string is the formatted diagnostic.
+    Other(String),
+}
+
+impl LoadError {
+    /// Sort a formatted lisp error into a variant. The collision is
+    /// raised deep inside the `(make-microgrid …)` defun, so the only
+    /// thing that crosses back out is its message — this is the ONE
+    /// place that reads it, and everything above gets the id typed.
+    fn classify(formatted: String) -> Self {
+        match collision_id_in(&formatted) {
+            Some(id) => LoadError::Collision { id },
+            None => LoadError::Other(formatted),
+        }
+    }
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadError::Collision { id } => write!(f, "microgrid {id} is already loaded"),
+            LoadError::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+/// The microgrid id named by a "microgrid N is already loaded (…)"
+/// message anywhere inside `msg` — the number immediately before the
+/// phrase. `None` when the message says something else.
+fn collision_id_in(msg: &str) -> Option<u64> {
+    const PHRASE: &str = "is already loaded";
+    let mut rest = msg;
+    while let Some(at) = rest.find(PHRASE) {
+        let digits: String = rest[..at]
+            .trim_end()
+            .chars()
+            .rev()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if !digits.is_empty() {
+            return digits.chars().rev().collect::<String>().parse().ok();
+        }
+        rest = &rest[at + PHRASE.len()..];
+    }
+    None
+}
+
 impl Config {
     /// Build a config from one script file — the single-script
     /// convenience for embedders and tests. The state dir is the
-    /// script's directory, which keeps journals / snapshots /
-    /// runtime-created microgrid files next to the script — the entry-config
+    /// script's directory, which keeps `enterprise.lisp` /
+    /// snapshots / managed microgrid files next to the script — the entry-config
     /// contract this constructor has always had. (The binary's CLI
     /// goes through [`Config::new_with`], whose default is the cwd.)
     /// Returns the formatted lisp error on parse / eval failure —
@@ -46,8 +108,8 @@ impl Config {
     /// embedded prelude — topologies then arrive at runtime through
     /// `(load …)` / the REPL / the HTTP create + import endpoints.
     ///
-    /// `state_dir` anchors everything persistent (overrides journals,
-    /// `snapshots/`, runtime-created microgrid files) and the
+    /// `state_dir` anchors everything persistent (`enterprise.lisp`,
+    /// `snapshots/`, managed microgrid files) and the
     /// relative-path resolution of `(load …)` / `(file-exists-p …)`.
     /// `None` falls back to the process cwd — one anchor regardless
     /// of where the scripts live, so a `(load …)` typed into the
@@ -246,6 +308,8 @@ impl Config {
             current_microgrid,
             enterprise_id_allocator,
             import_lock: Arc::new(tokio::sync::Mutex::new(())),
+            create_lock: Arc::new(tokio::sync::Mutex::new(())),
+            undo: super::undo::new_undo_histories(),
             microgrid_registered,
             written_hashes: Arc::new(Mutex::new(std::collections::HashMap::new())),
             timer_handle: timer_handle.clone(),
@@ -266,7 +330,7 @@ impl Config {
             // for a script that doesn't exist.
             let path = PathBuf::from(script);
             let path = path.canonicalize().unwrap_or(path);
-            cfg.load_file(&path)?;
+            cfg.load_file(&path).map_err(|e| e.to_string())?;
         }
         warn_orphaned_chp_defaults(&mut cfg.ctx.borrow_mut());
 
@@ -396,7 +460,7 @@ impl Config {
     /// own `(make-microgrid …)` forms reuse their entries in place
     /// (so live runtimes keep their site handles) and the returned id
     /// list is empty, since nothing is *new*.
-    pub fn load_file(&self, path: &Path) -> Result<Vec<u64>, String> {
+    pub fn load_file(&self, path: &Path) -> Result<Vec<u64>, LoadError> {
         let mut ctx = self.ctx.borrow_mut();
         self.load_file_locked(&mut ctx, path)
     }
@@ -408,7 +472,7 @@ impl Config {
         &self,
         ctx: &mut TulispContext,
         path: &Path,
-    ) -> Result<Vec<u64>, String> {
+    ) -> Result<Vec<u64>, LoadError> {
         use crate::sim::microgrids::{LoadingFile, with_loading};
 
         let resolved = if path.is_absolute() {
@@ -417,14 +481,14 @@ impl Config {
             self.state_dir.join(path)
         };
         let text = std::fs::read_to_string(&resolved)
-            .map_err(|e| format!("cannot read {}: {e}", resolved.display()))?;
+            .map_err(|e| LoadError::Other(format!("cannot read {}: {e}", resolved.display())))?;
         // Parse only to classify the file: a managed file's structure
         // is switchyard's to rewrite, an unmanaged one's is the
         // author's. Either way the WHOLE file is what we evaluate —
         // the generated block and the script section are both live
         // lisp.
         let managed = super::microgrid_file::parse(&text)
-            .map_err(|e| format!("{}: {e}", resolved.display()))?
+            .map_err(|e| LoadError::Other(format!("{}: {e}", resolved.display())))?
             .generated
             .is_some();
         // Canonicalized so every spelling of one file compares equal
@@ -443,7 +507,7 @@ impl Config {
         if let Err(e) = result {
             let formatted = e.format(ctx);
             log::error!("Tulisp error in {}:\n{formatted}", resolved.display());
-            return Err(formatted);
+            return Err(LoadError::classify(formatted));
         }
         // Only on success: a file that failed to evaluate contributed
         // nothing and is not part of the world. A file that DID
@@ -506,7 +570,7 @@ impl Config {
         // and report the load error.
         if let Err(e) = self.load_file(&target) {
             let _ = std::fs::remove_file(&target);
-            return Err(e);
+            return Err(e.to_string());
         }
         Ok(new_id)
     }
@@ -791,7 +855,9 @@ impl Config {
         {
             entry.site.reset();
         }
-        let new_ids = self.load_file_locked(ctx, &canonical)?;
+        let new_ids = self
+            .load_file_locked(ctx, &canonical)
+            .map_err(|e| e.to_string())?;
         // Tell UI subscribers this file's microgrids rebuilt.
         // `load_file_locked` bumps only the ids that are new; a plain
         // re-load has none, and its rebuilt sites still need the
@@ -899,7 +965,8 @@ impl Config {
             // be replayed with itself as the ambient loading file, or
             // its own `(make-microgrid …)` forms would look like a
             // stranger re-claiming ids the file already owns.
-            self.load_file_locked(ctx, file)?;
+            self.load_file_locked(ctx, file)
+                .map_err(|e| e.to_string())?;
         }
         warn_orphaned_chp_defaults(ctx);
         if self.microgrids.lock().is_empty() {
@@ -1232,6 +1299,22 @@ fn log_topology_validation(site: &MicrogridSite, phase: &str) {
 mod tests {
     use super::super::Config;
     use super::super::test_support::{config_with, next_unique};
+
+    /// The id in a collision message survives being wrapped in
+    /// tulisp's trace formatting — that number is what the load
+    /// endpoint offers a free id against.
+    #[test]
+    fn collision_messages_yield_their_microgrid_id() {
+        assert_eq!(
+            super::collision_id_in(
+                "eval error:\n  microgrid 9 is already loaded (from /tmp/x/config.lisp)\n  at …"
+            ),
+            Some(9)
+        );
+        assert_eq!(super::collision_id_in("cannot read /tmp/nope.lisp"), None);
+        // No number in front of the phrase: not a collision we can act on.
+        assert_eq!(super::collision_id_in("the file is already loaded"), None);
+    }
 
     /// A bare boot (no scripts) is a legitimate live state: empty
     /// registry, DSL live, topologies arrive on demand.

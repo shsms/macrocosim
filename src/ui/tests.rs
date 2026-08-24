@@ -294,123 +294,6 @@ async fn history_endpoint_returns_empty_for_unknown_component() {
     assert!(parsed["samples"].as_array().unwrap().is_empty());
 }
 
-/// The overrides dialog reads whatever a pre-managed-files
-/// switchyard journaled for this microgrid. Nothing writes a journal
-/// any more, so the test seeds one the way an older version left it.
-#[tokio::test]
-async fn overrides_endpoint_lists_a_legacy_journal() {
-    let cfg = config_with("(set-microgrid-id 7) (%make-grid-connection-point :id 1)").await;
-    seed_legacy_journal(&cfg, &["(rename-component 1 \"a\")"]);
-    let (status, body) = call(cfg, get("/api/overrides")).await;
-    assert_eq!(status, StatusCode::OK);
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let entries = parsed["persisted"].as_array().unwrap();
-    assert_eq!(entries.len(), 1);
-    assert!(
-        entries
-            .iter()
-            .any(|e| e["source"].as_str().unwrap().contains("rename"))
-    );
-    assert_eq!(parsed["count"], 1);
-}
-
-/// Minimal local `load-overrides` defun for tests — the real one in
-/// `sim/common.lisp` is a deprecation no-op now, and these tests
-/// cover the dialog that still reads a legacy journal.
-const LOAD_OVERRIDES_HELPER: &str = "(defun load-overrides ()
-       (when (file-exists-p \"microgrids/config.7.overrides.lisp\")
-         (load \"microgrids/config.7.overrides.lisp\")))
-     (load-overrides)";
-
-/// Write `forms` into microgrid 7's legacy overrides journal, one
-/// per line — the shape an older switchyard's per-eval append left
-/// behind.
-fn seed_legacy_journal(cfg: &Config, forms: &[&str]) {
-    let path = cfg
-        .state_dir()
-        .join("microgrids")
-        .join("config.7.overrides.lisp");
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, format!("{}\n", forms.join("\n\n"))).unwrap();
-}
-
-#[tokio::test]
-async fn persisted_remove_drops_form_immediately() {
-    // A legacy journal holds two forms. DELETE /api/persisted/0
-    // rewrites the file without the first and reloads; only the
-    // second form survives in the file. (The forms no longer replay
-    // into the site — `load-overrides` is a deprecation no-op.)
-    let body = format!(
-        "(set-microgrid-id 7) (%make-grid-connection-point :id 1) {LOAD_OVERRIDES_HELPER}",
-    );
-    let cfg = config_with(&body).await;
-    seed_legacy_journal(
-        &cfg,
-        &["(rename-component 1 \"a\")", "(rename-component 1 \"b\")"],
-    );
-
-    let (_, body) = call(cfg.clone(), get("/api/overrides")).await;
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(parsed["persisted"].as_array().unwrap().len(), 2);
-
-    let req = axum::http::Request::builder()
-        .method(axum::http::Method::DELETE)
-        .uri("/api/persisted/0")
-        .body(axum::body::Body::empty())
-        .unwrap();
-    let (status, _) = call(cfg.clone(), req).await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
-
-    let (_, body) = call(cfg.clone(), get("/api/overrides")).await;
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let persisted = parsed["persisted"].as_array().unwrap();
-    assert_eq!(persisted.len(), 1);
-    assert!(persisted[0]["source"].as_str().unwrap().contains("\"b\""));
-
-    // 404 on out-of-range idx.
-    let req = axum::http::Request::builder()
-        .method(axum::http::Method::DELETE)
-        .uri("/api/persisted/99")
-        .body(axum::body::Body::empty())
-        .unwrap();
-    let (status, _) = call(cfg, req).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn persisted_bulk_remove_drops_indices_in_one_reload() {
-    let body = format!(
-        "(set-microgrid-id 7) (%make-grid-connection-point :id 1) {LOAD_OVERRIDES_HELPER}",
-    );
-    let cfg = config_with(&body).await;
-    seed_legacy_journal(
-        &cfg,
-        &[
-            "(rename-component 1 \"a\")",
-            "(rename-component 1 \"b\")",
-            "(rename-component 1 \"c\")",
-        ],
-    );
-
-    // Drop idx 0 + 2 in one round trip → only "b" survives.
-    let req = axum::http::Request::builder()
-        .method(axum::http::Method::POST)
-        .uri("/api/persisted/delete")
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(r#"{"indices":[0,2]}"#))
-        .unwrap();
-    let (status, body) = call(cfg.clone(), req).await;
-    assert_eq!(status, StatusCode::OK);
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(parsed["removed"], 2);
-
-    let (_, body) = call(cfg.clone(), get("/api/overrides")).await;
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let persisted = parsed["persisted"].as_array().unwrap();
-    assert_eq!(persisted.len(), 1);
-    assert!(persisted[0]["source"].as_str().unwrap().contains("\"b\""));
-}
-
 #[tokio::test]
 async fn eval_endpoint_mutates_world() {
     // Confirm an /api/eval call that registers a component shows
@@ -1229,4 +1112,261 @@ async fn operational_mode_eval_derives_and_is_enforced() {
             .unwrap()
             .contains("streams no telemetry")
     );
+}
+
+/// Loading a file whose microgrid id is already live is refused with
+/// a 409 that names the collision and suggests a free id — the load
+/// picker turns that into a "load as N" button, which lands the same
+/// file a second time under the free id.
+#[tokio::test]
+async fn load_endpoint_offers_load_as_on_collision() {
+    let (config, dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    let text = crate::lisp::microgrid_file::compose(
+        "(make-microgrid :id 9 :name \"dup\" :grpc-port 8890\n  :topology\n  (lambda ()\n    nil))",
+        "",
+    );
+    std::fs::write(dir.join("dup.lisp"), &text).unwrap();
+    let (st, body) = call(
+        config.clone(),
+        post_json("/api/load", r#"{"path":"dup.lisp"}"#),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["collision_id"], 9);
+    let suggested = v["suggested_id"].as_u64().unwrap();
+    let (st, _) = call(
+        config.clone(),
+        post_json(
+            "/api/load-as",
+            &format!(r#"{{"path":"dup.lisp","id":{suggested}}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(config.microgrids().lock().contains_key(&suggested));
+}
+
+/// Undo walks back one structural edit of a managed microgrid — the
+/// file is rewritten from the previous generated block and reloaded —
+/// and redo walks forward again.
+#[tokio::test]
+async fn undo_reverts_the_last_structural_edit() {
+    let (config, _dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    let (st, body) = call(
+        config.clone(),
+        post_json("/api/microgrids/create", r#"{"name":"u","id":30}"#),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    call(
+        config.clone(),
+        post("/api/mg/30/eval", "(%make-meter :id 500)"),
+    )
+    .await;
+    call(
+        config.clone(),
+        post("/api/mg/30/eval", "(%make-meter :id 501)"),
+    )
+    .await;
+    let (st, _) = call(config.clone(), post("/api/mg/30/undo", "")).await;
+    assert_eq!(st, StatusCode::OK);
+    let site = config.microgrids().lock().get(&30).unwrap().site.clone();
+    assert!(
+        site.get(500).is_some() && site.get(501).is_none(),
+        "one step undone"
+    );
+    let (st, _) = call(config.clone(), post("/api/mg/30/redo", "")).await;
+    assert_eq!(st, StatusCode::OK);
+    let site = config.microgrids().lock().get(&30).unwrap().site.clone();
+    assert!(site.get(501).is_some(), "redo restores");
+}
+
+/// Snapshots are per microgrid: they live under `snapshots/{id}/`,
+/// copy that microgrid's own file, and restore it in place. The
+/// ambient (whole-world) snapshot endpoints are gone.
+#[tokio::test]
+async fn snapshots_are_per_microgrid() {
+    let (config, dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    call(
+        config.clone(),
+        post_json("/api/microgrids/create", r#"{"name":"s","id":31}"#),
+    )
+    .await;
+    call(
+        config.clone(),
+        post("/api/mg/31/eval", "(%make-meter :id 600)"),
+    )
+    .await;
+    let (st, _) = call(
+        config.clone(),
+        post_json("/api/mg/31/snapshots/save", r#"{"name":"one"}"#),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(dir.join("snapshots/31/one.lisp").exists());
+    call(
+        config.clone(),
+        post("/api/mg/31/eval", "(remove-component 600)"),
+    )
+    .await;
+    let (st, _) = call(
+        config.clone(),
+        post_json("/api/mg/31/snapshots/load", r#"{"name":"one"}"#),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let site = config.microgrids().lock().get(&31).unwrap().site.clone();
+    assert!(site.get(600).is_some(), "restore brings the meter back");
+    // The ambient endpoint is gone.
+    let (st, _) = call(config.clone(), get("/api/snapshots")).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}
+
+/// Adopt takes a hand-written single-microgrid file over: the live
+/// structure is written as a generated block and the original form is
+/// commented out, so later structural edits regenerate the file.
+#[tokio::test]
+async fn adopt_makes_an_unmanaged_single_mg_file_managed() {
+    let (config, dir) = config_with_dir(
+        "(make-microgrid :id 9 :grpc-port 8800 :topology \
+                                         (lambda () (%make-meter :id 700 :power 100.0)))",
+    )
+    .await;
+    let (st, body) = call(config.clone(), post("/api/mg/9/adopt", "")).await;
+    assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let text = std::fs::read_to_string(dir.join("config.lisp")).unwrap();
+    assert!(text.starts_with(";;; switchyard:generated"));
+    assert!(
+        text.contains(";; (make-microgrid"),
+        "original form commented out: {text}"
+    );
+    // Managed now: a structural edit rewrites the file.
+    call(
+        config.clone(),
+        post("/api/mg/9/eval", "(%make-meter :id 701)"),
+    )
+    .await;
+    let text = std::fs::read_to_string(dir.join("config.lisp")).unwrap();
+    assert!(text.contains("(%make-meter :id 701"));
+}
+
+/// Two creates racing must end up as two microgrids, not one: the
+/// create lock keeps each one's id + port claim valid until the file
+/// it wrote has been loaded and its entry is in the registry.
+#[tokio::test]
+async fn concurrent_creates_get_distinct_microgrids() {
+    let (config, _dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    let (a, b) = tokio::join!(
+        call(
+            config.clone(),
+            post_json("/api/microgrids/create", r#"{"name":"a"}"#)
+        ),
+        call(
+            config.clone(),
+            post_json("/api/microgrids/create", r#"{"name":"b"}"#)
+        ),
+    );
+    assert_eq!(a.0, StatusCode::OK, "{}", String::from_utf8_lossy(&a.1));
+    assert_eq!(b.0, StatusCode::OK, "{}", String::from_utf8_lossy(&b.1));
+    let id_of = |body: &[u8]| {
+        serde_json::from_slice::<serde_json::Value>(body).unwrap()["id"]
+            .as_u64()
+            .unwrap()
+    };
+    assert_ne!(id_of(&a.1), id_of(&b.1), "each create gets its own id");
+    assert_eq!(config.microgrids().lock().len(), 3);
+}
+
+/// Create takes an explicit id and port, and refuses either when it
+/// is already claimed — the create dialog turns that into an inline
+/// error rather than quietly picking something else.
+#[tokio::test]
+async fn create_refuses_a_taken_id_or_port() {
+    let (config, _dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    let (st, body) = call(
+        config.clone(),
+        post_json(
+            "/api/microgrids/create",
+            r#"{"name":"pinned","id":40,"grpc_port":8899}"#,
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["id"], 40);
+    assert_eq!(v["grpc_port"], 8899);
+    assert_eq!(v["managed"], true);
+
+    let (st, _) = call(
+        config.clone(),
+        post_json("/api/microgrids/create", r#"{"name":"again","id":40}"#),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT, "id 40 is taken");
+    let (st, _) = call(
+        config.clone(),
+        post_json(
+            "/api/microgrids/create",
+            r#"{"name":"again","grpc_port":8899}"#,
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT, "port 8899 is taken");
+}
+
+/// Adopt rewrites a whole file from ONE microgrid's live state, so a
+/// file declaring two microgrids is refused instead of losing one.
+#[tokio::test]
+async fn adopt_refuses_a_file_declaring_two_microgrids() {
+    let (config, _dir) = config_with_dir(
+        "(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))\n\
+         (make-microgrid :id 10 :grpc-port 8810 :topology (lambda () nil))",
+    )
+    .await;
+    let (st, body) = call(config.clone(), post("/api/mg/9/adopt", "")).await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert!(
+        String::from_utf8_lossy(&body).contains("split the file first"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(!config.microgrids().lock().get(&9).unwrap().managed);
+}
+
+/// Undo depths are readable without taking a step, and both stacks
+/// stay empty for a microgrid nothing has edited.
+#[tokio::test]
+async fn undo_depths_track_edits() {
+    let (config, _dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    call(
+        config.clone(),
+        post_json("/api/microgrids/create", r#"{"name":"d","id":32}"#),
+    )
+    .await;
+    let (st, body) = call(config.clone(), get("/api/mg/32/undo")).await;
+    assert_eq!(st, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["undo_depth"], 0);
+    // Nothing to undo yet.
+    let (st, _) = call(config.clone(), post("/api/mg/32/undo", "")).await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    call(
+        config.clone(),
+        post("/api/mg/32/eval", "(%make-meter :id 800)"),
+    )
+    .await;
+    let (_, body) = call(config.clone(), get("/api/mg/32/undo")).await;
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["undo_depth"], 1);
+    assert_eq!(v["redo_depth"], 0);
+    // An unmanaged microgrid has no history to walk.
+    let (st, _) = call(config.clone(), post("/api/mg/9/undo", "")).await;
+    assert_eq!(st, StatusCode::CONFLICT);
 }

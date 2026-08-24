@@ -68,19 +68,18 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
             microgrid_history_for_mg, microgrid_latest, microgrid_latest_for_mg, microgrid_status,
             microgrid_status_for_mg,
         },
-        microgrids::{microgrids_create, microgrids_import, microgrids_list},
-        overrides::{
-            overrides_list, overrides_list_for_mg, overrides_text_for_mg,
-            overrides_text_replace_for_mg, persisted_bulk_remove, persisted_bulk_remove_for_mg,
-            persisted_remove, persisted_remove_for_mg,
+        microgrids::{
+            adopt_for_mg, load_file, load_file_as, microgrids_create, microgrids_import,
+            microgrids_list,
         },
         scenarios::{
             scenario_csv_file, scenario_csv_list, scenario_events, scenario_report,
             scenario_summary, scenarios_list, scenarios_start, scenarios_stop,
         },
         scripts::scripts_list,
-        snapshots::{snapshots_list, snapshots_load, snapshots_save},
+        snapshots::{snapshots_list_for_mg, snapshots_load_for_mg, snapshots_save_for_mg},
         topology::{topology, topology_for_mg},
+        undo::{redo_for_mg, undo_depths_for_mg, undo_for_mg},
     };
     Router::new()
         .route("/", get(index))
@@ -93,12 +92,6 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/api/history", get(history))
         .route("/api/defaults", get(defaults))
         .route("/api/setpoints", get(setpoints))
-        .route("/api/overrides", get(overrides_list))
-        .route(
-            "/api/persisted/{idx}",
-            axum::routing::delete(persisted_remove),
-        )
-        .route("/api/persisted/delete", post(persisted_bulk_remove))
         .route("/api/logs", get(logs_backfill))
         .route("/api/scenario", get(scenario_summary))
         .route("/api/scenario/events", get(scenario_events))
@@ -110,13 +103,12 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/api/microgrid/latest", get(microgrid_latest))
         .route("/api/microgrid/history", get(microgrid_history))
         .route("/api/microgrid/formulas", get(microgrid_formulas))
-        .route("/api/snapshots", get(snapshots_list))
-        .route("/api/snapshots/save", post(snapshots_save))
-        .route("/api/snapshots/load", post(snapshots_load))
         .route("/api/scenarios", get(scenarios_list))
         .route("/api/scenarios/stop", post(scenarios_stop))
         .route("/api/scenarios/{name}/start", post(scenarios_start))
         .route("/api/scripts", get(scripts_list))
+        .route("/api/load", post(load_file))
+        .route("/api/load-as", post(load_file_as))
         .route("/api/microgrids", get(microgrids_list))
         .route("/api/microgrids/create", post(microgrids_create))
         .route(
@@ -153,18 +145,20 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
             "/api/mg/{mg_id}/microgrid/formulas",
             get(microgrid_formulas_for_mg),
         )
+        .route("/api/mg/{mg_id}/adopt", post(adopt_for_mg))
         .route(
-            "/api/mg/{mg_id}/overrides/text",
-            get(overrides_text_for_mg).post(overrides_text_replace_for_mg),
+            "/api/mg/{mg_id}/undo",
+            get(undo_depths_for_mg).post(undo_for_mg),
         )
-        .route("/api/mg/{mg_id}/overrides", get(overrides_list_for_mg))
+        .route("/api/mg/{mg_id}/redo", post(redo_for_mg))
+        .route("/api/mg/{mg_id}/snapshots", get(snapshots_list_for_mg))
         .route(
-            "/api/mg/{mg_id}/persisted/{idx}",
-            axum::routing::delete(persisted_remove_for_mg),
+            "/api/mg/{mg_id}/snapshots/save",
+            post(snapshots_save_for_mg),
         )
         .route(
-            "/api/mg/{mg_id}/persisted/delete",
-            post(persisted_bulk_remove_for_mg),
+            "/api/mg/{mg_id}/snapshots/load",
+            post(snapshots_load_for_mg),
         )
         .route(
             "/api/mg/{mg_id}/dispatches",

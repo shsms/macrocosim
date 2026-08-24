@@ -28,8 +28,8 @@ struct Args {
     /// Microgrids tab.
     scripts: Vec<PathBuf>,
 
-    /// Anchor directory for persistent state (overrides journals,
-    /// snapshots/, runtime-created microgrid files) and for relative
+    /// Anchor directory for persistent state (enterprise.lisp,
+    /// snapshots/, managed microgrid files) and for relative
     /// `(load …)` paths. Defaults to the current directory.
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,

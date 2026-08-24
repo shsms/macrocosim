@@ -1,91 +1,147 @@
-//! Snapshot save / load on `Config`.
+//! Per-microgrid snapshots on `Config`.
 //!
-//! A snapshot is a frozen copy of the per-microgrid overrides file.
-//! `save_snapshot("name")` writes `snapshots/name.lisp`; `load_snapshot`
-//! copies it back over the overrides file and triggers a reload.
-//! Live physics state (mid-flight setpoints, current SoC, ramps)
-//! isn't captured — the site re-spins from baseline once the
+//! A snapshot is a frozen copy of one microgrid's own file, kept
+//! under `snapshots/{mg_id}/{name}.lisp`. Saving copies the file;
+//! loading writes the copy back over it and reloads just that file,
+//! so the microgrid comes back with the topology it had when the
+//! snapshot was taken. Loading `as_id` instead lands the snapshot as
+//! a SECOND, new microgrid ([`Config::load_as`]) and leaves the
+//! original alone.
+//!
+//! Only managed microgrids can be snapshotted: an unmanaged file is
+//! the author's, and writing one back would clobber hand-written
+//! text. Live physics state (mid-flight setpoints, current SoC,
+//! ramps) is not captured — the site re-spins from baseline once the
 //! snapshotted topology is back in place.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::Config;
+use super::{Config, microgrid_file};
 
-impl Config {
-    /// Directory snapshots are stored in: a `snapshots/` subdirectory
-    /// under the state dir. Lazily created on the first
-    /// `save_snapshot` call.
-    pub fn snapshots_dir(&self) -> PathBuf {
-        self.state_dir.join("snapshots")
-    }
+/// Why a snapshot call failed. Typed rather than stringly so the
+/// HTTP layer can pick a status code without reading messages.
+#[derive(Debug)]
+pub enum SnapshotError {
+    /// The name is not a single safe file-name component.
+    InvalidName(String),
+    /// No such microgrid, or no such snapshot.
+    NotFound(String),
+    /// The microgrid has no managed file to copy or restore.
+    Unmanaged(String),
+    /// Filesystem trouble, or a reload that failed afterwards.
+    Failed(String),
+}
 
-    /// Copy the current per-microgrid overrides file to
-    /// `snapshots/<name>.lisp`. The snapshot is a frozen-in-time copy
-    /// of the user's accumulated edits — replaying it (via
-    /// `load_snapshot`) recovers the same dashboard / topology shape
-    /// without re-running the manual click stream. Live physics state
-    /// (ramps, mid-flight setpoints, current SoC, etc.) is NOT
-    /// captured here — those derive from the snapshotted topology
-    /// once the site re-spins from baseline.
-    ///
-    /// Returns the absolute path of the snapshot file on success.
-    /// Errors if the name resolves to anything outside `snapshots/`
-    /// (path-traversal guard) or if the overrides file isn't readable.
-    pub fn save_snapshot(&self, name: &str) -> std::io::Result<PathBuf> {
-        let dir = self.snapshots_dir();
-        let dest = sanitise_snapshot_path(&dir, name)?;
-        fs::create_dir_all(&dir)?;
-        // Empty (no overrides for this mg yet) is a valid snapshot —
-        // the user just hasn't edited anything. Treat a missing
-        // resolvable scope the same way: write an empty snapshot so
-        // load_snapshot can replay it. Reading a path that doesn't
-        // exist falls through to the same empty-file write.
-        match self.overrides_path() {
-            Some(src) if src.exists() => {
-                fs::copy(&src, &dest)?;
-            }
-            _ => {
-                fs::write(&dest, "")?;
-            }
+impl std::fmt::Display for SnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SnapshotError::InvalidName(m)
+            | SnapshotError::NotFound(m)
+            | SnapshotError::Unmanaged(m)
+            | SnapshotError::Failed(m) => f.write_str(m),
         }
-        Ok(dest)
-    }
-
-    /// Replace the current overrides file with `snapshots/<name>.lisp`
-    /// and reload, so the site derives from base config.lisp +
-    /// the snapshotted overrides.
-    pub fn load_snapshot(&self, name: &str) -> Result<(), String> {
-        let dir = self.snapshots_dir();
-        let src = sanitise_snapshot_path(&dir, name)
-            .map_err(|e| format!("invalid snapshot name: {e}"))?;
-        if !src.exists() {
-            return Err(format!("snapshot {name:?} not found"));
-        }
-        let dest = self
-            .overrides_path()
-            .ok_or_else(|| "no resolvable microgrid scope; can't pick a destination".to_string())?;
-        // Atomic replace (temp + rename), mirroring the other
-        // overrides-file rewrite paths — a copy interrupted midway
-        // must not leave a truncated overrides file behind. The
-        // microgrids/ dir may not exist yet if nothing was persisted
-        // before the first snapshot load.
-        if let Some(dir) = dest.parent() {
-            fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-        }
-        let tmp = dest.with_extension("lisp.tmp");
-        fs::copy(&src, &tmp).map_err(|e| format!("copy snapshot failed: {e}"))?;
-        fs::rename(&tmp, &dest).map_err(|e| format!("replace overrides failed: {e}"))?;
-        self.reload()
-    }
-
-    /// Names of every `*.lisp` file in `snapshots/`, sorted lex.
-    pub fn list_snapshots(&self) -> Vec<String> {
-        list_snapshots_in(&self.snapshots_dir())
     }
 }
 
-fn sanitise_snapshot_path(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
+impl std::error::Error for SnapshotError {}
+
+impl Config {
+    /// Directory holding microgrid `mg_id`'s snapshots:
+    /// `snapshots/{mg_id}/` under the state dir. Created lazily by
+    /// the first save.
+    pub fn snapshots_dir_for(&self, mg_id: u64) -> PathBuf {
+        self.state_dir.join("snapshots").join(mg_id.to_string())
+    }
+
+    /// Copy microgrid `mg_id`'s file to
+    /// `snapshots/{mg_id}/{name}.lisp` and return the snapshot's
+    /// path. Refuses an unmanaged microgrid — there is no
+    /// switchyard-owned file to freeze.
+    pub fn save_snapshot_for(&self, mg_id: u64, name: &str) -> Result<PathBuf, SnapshotError> {
+        let source = self.managed_file_of(mg_id)?;
+        let dir = self.snapshots_dir_for(mg_id);
+        let dest = sanitise_snapshot_path(&dir, name)?;
+        fs::create_dir_all(&dir)
+            .map_err(|e| SnapshotError::Failed(format!("create {}: {e}", dir.display())))?;
+        fs::copy(&source, &dest).map_err(|e| {
+            SnapshotError::Failed(format!(
+                "copy {} to {}: {e}",
+                source.display(),
+                dest.display()
+            ))
+        })?;
+        Ok(dest)
+    }
+
+    /// Restore snapshot `name` of microgrid `mg_id`.
+    ///
+    /// With `as_id` unset the snapshot is written back over the
+    /// microgrid's own file and that file alone is reloaded, so the
+    /// microgrid returns to its snapshotted structure in place.
+    ///
+    /// With `as_id` set nothing existing is touched: the snapshot is
+    /// loaded as a NEW microgrid under that id (a copy of the site
+    /// next to the original). Returns the id that was loaded, if any.
+    pub fn load_snapshot_for(
+        &self,
+        mg_id: u64,
+        name: &str,
+        as_id: Option<u64>,
+    ) -> Result<Option<u64>, SnapshotError> {
+        let dir = self.snapshots_dir_for(mg_id);
+        let snapshot = sanitise_snapshot_path(&dir, name)?;
+        if !snapshot.exists() {
+            return Err(SnapshotError::NotFound(format!(
+                "snapshot {name:?} not found for microgrid {mg_id}"
+            )));
+        }
+        if let Some(new_id) = as_id {
+            let id = self
+                .load_as(&snapshot, new_id)
+                .map_err(SnapshotError::Failed)?;
+            return Ok(Some(id));
+        }
+        let dest = self.managed_file_of(mg_id)?;
+        let text = fs::read_to_string(&snapshot).map_err(|e| {
+            SnapshotError::Failed(format!("cannot read {}: {e}", snapshot.display()))
+        })?;
+        microgrid_file::write_atomic(&dest, &text)
+            .map_err(|e| SnapshotError::Failed(format!("write {}: {e}", dest.display())))?;
+        // Our own write: the watcher must not treat it as a human
+        // edit and reload the file a second time.
+        self.record_self_write(&dest, &text);
+        // Per file, not the whole world — restoring one microgrid's
+        // snapshot leaves every other microgrid running.
+        self.reload_file(&dest).map_err(SnapshotError::Failed)?;
+        Ok(Some(mg_id))
+    }
+
+    /// Names of microgrid `mg_id`'s snapshots, sorted lexically.
+    /// Empty when it has none.
+    pub fn list_snapshots_for(&self, mg_id: u64) -> Vec<String> {
+        list_snapshots_in(&self.snapshots_dir_for(mg_id))
+    }
+
+    /// The managed file backing microgrid `mg_id`, or the reason
+    /// there isn't one.
+    fn managed_file_of(&self, mg_id: u64) -> Result<PathBuf, SnapshotError> {
+        let registry = self.microgrids.lock();
+        let entry = registry
+            .get(&mg_id)
+            .ok_or_else(|| SnapshotError::NotFound(format!("microgrid {mg_id} not registered")))?;
+        if !entry.managed {
+            return Err(SnapshotError::Unmanaged(format!(
+                "microgrid {mg_id} is not managed by switchyard; adopt it first"
+            )));
+        }
+        entry.source.clone().ok_or_else(|| {
+            SnapshotError::Unmanaged(format!("microgrid {mg_id} has no file to snapshot"))
+        })
+    }
+}
+
+fn sanitise_snapshot_path(dir: &Path, name: &str) -> Result<PathBuf, SnapshotError> {
     // Reject anything that could escape the snapshots dir via `..`,
     // an absolute path, or path separators. We only accept a single
     // file-name component.
@@ -95,10 +151,9 @@ fn sanitise_snapshot_path(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
         || name.contains("..")
         || name.starts_with('.')
     {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("invalid snapshot name {name:?}"),
-        ));
+        return Err(SnapshotError::InvalidName(format!(
+            "invalid snapshot name {name:?}"
+        )));
     }
     Ok(dir.join(format!("{name}.lisp")))
 }

@@ -1,6 +1,12 @@
-//! `/api/microgrids` — list every registered microgrid + the
-//! create endpoint that allocates a fresh id + port and notifies
-//! the binary's registered-microgrid listener to boot the runtime.
+//! Microgrids as files: list them, create one, import one from a
+//! site export, load one from a file on disk (`/api/load`, plus
+//! `/api/load-as` for a second copy under a free id), and adopt a
+//! hand-written file so switchyard may rewrite its structure.
+//!
+//! Create and import both mint a managed file and load it — the file
+//! is the microgrid's declaration, so the registry entry always comes
+//! from a load — and both notify the binary's registered-microgrid
+//! listener, which boots the runtime for the new site.
 
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
@@ -16,6 +22,12 @@ pub(in crate::ui) async fn microgrids_list(
 #[derive(Deserialize)]
 pub(in crate::ui) struct CreateMicrogridBody {
     name: String,
+    /// Microgrid id to claim. Omit to take the lowest free one.
+    #[serde(default)]
+    id: Option<u64>,
+    /// gRPC port to bind. Omit to take the next free one.
+    #[serde(default)]
+    grpc_port: Option<u16>,
     #[serde(default)]
     tso: Option<String>,
 }
@@ -26,6 +38,9 @@ pub(in crate::ui) struct CreateMicrogridResp {
     name: String,
     grpc_port: u16,
     tso: Option<String>,
+    /// Always true — create writes a switchyard-generated file, so
+    /// the new microgrid's structure is switchyard's to rewrite.
+    managed: bool,
 }
 
 /// POST /api/microgrids/create — auto-allocates id + grpc_port,
@@ -44,7 +59,14 @@ pub(in crate::ui) async fn microgrids_create(
     State(config): State<Config>,
     Json(body): Json<CreateMicrogridBody>,
 ) -> Result<Json<CreateMicrogridResp>, (StatusCode, String)> {
-    let created = create_core(&config, &body.name, body.tso.as_deref())?;
+    let created = create_serialized(
+        &config,
+        &body.name,
+        body.id,
+        body.grpc_port,
+        body.tso.as_deref(),
+    )
+    .await?;
     // Notify enterprise-wide subscribers: the binary's listener boots
     // the runtime (physics + history + gRPC server + loopback), and
     // the WS event pump starts forwarding topology_changed / sample
@@ -56,15 +78,46 @@ pub(in crate::ui) async fn microgrids_create(
     Ok(Json(created))
 }
 
-/// The shared create path: allocates id + port, writes the managed
+/// [`create_core`] under the create lock, on the blocking pool.
+///
+/// The lock is what makes the id + port validation inside
+/// `create_core` mean anything: the check reads the registry, but the
+/// insert only happens later, when the freshly written file is
+/// loaded, and no lock can span both (the load evaluates lisp). One
+/// create at a time closes that window, so two concurrent creates
+/// cannot pick the same id and collapse into one microgrid — the
+/// second one sees the first in the registry and gets a 409.
+///
+/// The whole body is blocking work (file writes plus a lisp eval),
+/// hence `super::blocking`, the same way import runs its eval.
+async fn create_serialized(
+    config: &Config,
+    name: &str,
+    id: Option<u64>,
+    grpc_port: Option<u16>,
+    tso: Option<&str>,
+) -> Result<CreateMicrogridResp, (StatusCode, String)> {
+    let create_lock = config.create_lock();
+    let _serialized = create_lock.lock().await;
+    let cfg = config.clone();
+    let (name, tso) = (name.to_string(), tso.map(str::to_string));
+    super::blocking(move || create_core(&cfg, &name, id, grpc_port, tso.as_deref())).await?
+}
+
+/// The shared create path: claims id + port, writes the managed
 /// microgrid file, and loads it. The registry entry, its source and
 /// its managed flag all come from the load — the file is the
 /// microgrid's declaration, and nothing else may insert one. Does
 /// NOT notify the runtime spawner — the caller does, after any extra
 /// work of its own (the import evals its components in between).
+///
+/// Callers must hold the create lock; [`create_serialized`] is the
+/// only way in.
 fn create_core(
     config: &Config,
     name: &str,
+    want_id: Option<u64>,
+    want_port: Option<u16>,
     tso: Option<&str>,
 ) -> Result<CreateMicrogridResp, (StatusCode, String)> {
     use crate::lisp::microgrid_file as file;
@@ -73,17 +126,45 @@ fn create_core(
     if name.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name must be non-empty".into()));
     }
-    // Id + port from one look at the registry. Two creates racing
-    // for the same id are caught below — either the file is already
-    // there, or the load reports the id as taken — so a race costs
-    // one request an error, never a clobbered microgrid.
+    // Id + port from one look at the registry: a requested one has to
+    // be free, an omitted one is allocated. Both are still valid when
+    // the load below inserts the entry, because the create lock keeps
+    // any other create out in between.
     let registry = config.microgrids();
     let def = {
         let r = registry.lock();
+        let id = match want_id {
+            Some(id) if r.contains_key(&id) => {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!("microgrid {id} is already registered"),
+                ));
+            }
+            Some(id) => id,
+            None => next_free_id_in(&r),
+        };
+        let grpc_port = match want_port {
+            Some(0) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "grpc_port must be 1..=65535".into(),
+                ));
+            }
+            Some(p) => {
+                if let Some((other, _)) = r.iter().find(|(_, e)| e.def.grpc_port == p) {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        format!("gRPC port {p} is already bound by microgrid {other}"),
+                    ));
+                }
+                p
+            }
+            None => next_free_port_in(&r),
+        };
         MicrogridDef {
-            id: next_free_id_in(&r),
+            id,
             name: name.clone(),
-            grpc_port: next_free_port_in(&r),
+            grpc_port,
             tso: tso.map(str::to_string),
         }
     };
@@ -107,13 +188,18 @@ fn create_core(
     // and report the error.
     if let Err(e) = config.load_file(&path) {
         let _ = std::fs::remove_file(&path);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
+        let status = match e {
+            crate::lisp::LoadError::Collision { .. } => StatusCode::CONFLICT,
+            crate::lisp::LoadError::Other(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        return Err((status, e.to_string()));
     }
     Ok(CreateMicrogridResp {
         id: def.id,
         name: def.name,
         grpc_port: def.grpc_port,
         tso: def.tso,
+        managed: true,
     })
 }
 
@@ -204,7 +290,7 @@ pub(in crate::ui) async fn microgrids_import(
             ));
         }
     }
-    let created = create_core(&config, &body.name, body.tso.as_deref())?;
+    let created = create_serialized(&config, &body.name, None, None, body.tso.as_deref()).await?;
     // Move the shared allocator past the imported ids before any
     // component is built, so nothing auto-allocates into that range.
     // Saturating: an export carrying id u64::MAX must not overflow
@@ -244,4 +330,266 @@ pub(in crate::ui) async fn microgrids_import(
         components: import.components.len(),
         connections: import.connections.len(),
     }))
+}
+
+#[derive(Deserialize)]
+pub(in crate::ui) struct LoadBody {
+    /// Path of the file to load. Relative paths resolve against the
+    /// state dir, the same anchor `(load …)` uses.
+    path: String,
+}
+
+/// POST /api/load — evaluate a microgrid file and register whatever
+/// microgrids it declares.
+///
+/// The interesting failure is a collision: the file declares an id
+/// some other file already loaded. That gets a 409 carrying the id,
+/// whether the file is a managed one (only those can be re-idded
+/// mechanically), and a free id to offer — so the UI can turn the
+/// refusal into a "load it as N instead?" button that posts to
+/// `/api/load-as`.
+pub(in crate::ui) async fn load_file(
+    State(config): State<Config>,
+    Json(body): Json<LoadBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let cfg = config.clone();
+    let path = std::path::PathBuf::from(&body.path);
+    let loaded = super::blocking(move || cfg.load_file(&path)).await?;
+    match loaded {
+        Ok(ids) => Ok(Json(serde_json::json!({ "loaded": ids }))),
+        Err(crate::lisp::LoadError::Collision { id }) => {
+            let suggested = crate::sim::microgrids::next_free_id(&config.microgrids());
+            Err(collision_response(&config, &body.path, id, suggested))
+        }
+        Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+    }
+}
+
+/// The 409 body for a collision. `managed` decides which offer the
+/// UI makes: a managed file can be re-idded by `/api/load-as`, a
+/// hand-written one has to be edited by a person.
+fn collision_response(
+    config: &Config,
+    path: &str,
+    collision_id: u64,
+    suggested_id: u64,
+) -> (StatusCode, String) {
+    let resolved = config.state_dir().join(path);
+    let managed = std::fs::read_to_string(&resolved)
+        .ok()
+        .and_then(|text| crate::lisp::microgrid_file::parse(&text).ok())
+        .is_some_and(|parsed| parsed.generated.is_some());
+    let body = serde_json::json!({
+        "error": format!("microgrid {collision_id} is already loaded"),
+        "collision_id": collision_id,
+        "managed": managed,
+        "suggested_id": suggested_id,
+    });
+    (StatusCode::CONFLICT, body.to_string())
+}
+
+#[derive(Deserialize)]
+pub(in crate::ui) struct LoadAsBody {
+    path: String,
+    /// Id the copy is registered under.
+    id: u64,
+}
+
+/// POST /api/load-as — copy a managed microgrid file under a free id
+/// and load the copy, so one file can back two live microgrids. The
+/// answer to the collision 409 above.
+pub(in crate::ui) async fn load_file_as(
+    State(config): State<Config>,
+    Json(body): Json<LoadAsBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let path = std::path::PathBuf::from(&body.path);
+    let id = super::blocking(move || config.load_as(&path, body.id))
+        .await?
+        .map_err(|e| (StatusCode::CONFLICT, e))?;
+    Ok(Json(serde_json::json!({ "id": id })))
+}
+
+/// POST /api/mg/{mg_id}/adopt — take a hand-written microgrid file
+/// over, so switchyard may rewrite its structure from then on.
+///
+/// The live structure is written as a generated block at the top of
+/// the file and the original `(make-microgrid …)` form is commented
+/// out below it, where it stays readable as a record of what the file
+/// used to say. Everything else in the file — comments, `every`
+/// blocks, defuns — is carried through untouched and keeps running.
+///
+/// A microgrid with no file at all (declared from the REPL) gets a
+/// fresh `microgrids/{id}.lisp` instead.
+pub(in crate::ui) async fn adopt_for_mg(
+    State(config): State<Config>,
+    axum::extract::Path(mg_id): axum::extract::Path<u64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let warnings = super::blocking(move || adopt(&config, mg_id)).await??;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "warnings": warnings }),
+    ))
+}
+
+/// [`adopt_for_mg`]'s body: all blocking (file read + write) work.
+/// Returns the warnings the caller should show.
+fn adopt(config: &Config, mg_id: u64) -> Result<Vec<String>, (StatusCode, String)> {
+    use crate::lisp::microgrid_file as file;
+
+    let registry = config.microgrids();
+    let (def, site, source, managed) = {
+        let r = registry.lock();
+        let e = r.get(&mg_id).ok_or((
+            StatusCode::NOT_FOUND,
+            format!("microgrid {mg_id} not registered"),
+        ))?;
+        (e.def.clone(), e.site.clone(), e.source.clone(), e.managed)
+    };
+    if managed {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("microgrid {mg_id} is already managed"),
+        ));
+    }
+    // Live state the generated block cannot write down. Reported, not
+    // refused: the structure still round-trips, but these inputs go
+    // back to their constructed values and have to be re-established
+    // from the script section.
+    let warnings: Vec<String> = site
+        .components()
+        .iter()
+        .filter(|c| c.has_unrenderable_source())
+        .map(|c| {
+            format!(
+                "component {} ({}) is driven by a lisp expression, which the generated \
+                 block cannot carry — re-apply it from the script section",
+                c.id(),
+                c.make_fn()
+            )
+        })
+        .collect();
+
+    let block = file::render_block(&def, &site);
+    let (path, text) = match source {
+        Some(path) => {
+            // One file, one microgrid: adopting rewrites the whole
+            // file from ONE microgrid's live state, so a file that
+            // declares several would lose the others.
+            let sharers = registry
+                .lock()
+                .values()
+                .filter(|e| e.source.as_deref() == Some(path.as_path()))
+                .count();
+            if sharers > 1 {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!(
+                        "{} declares {sharers} microgrids; split the file first, one \
+                         microgrid per file",
+                        path.display()
+                    ),
+                ));
+            }
+            let original = std::fs::read_to_string(&path).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("cannot read {}: {e}", path.display()),
+                )
+            })?;
+            let script = comment_out_make_microgrid(&original, mg_id)
+                .map_err(|e| (StatusCode::CONFLICT, format!("{}: {e}", path.display())))?;
+            (path, file::compose(&block, &script))
+        }
+        // Nothing on disk backs this microgrid yet — give it the same
+        // file the create endpoint would have written.
+        None => {
+            let path = config.microgrids_dir().join(format!("{mg_id}.lisp"));
+            if path.exists() {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!("{} already exists; refusing to clobber", path.display()),
+                ));
+            }
+            (path, file::compose(&block, file::FRESH_SCRIPT_HEADER))
+        }
+    };
+    file::write_atomic(&path, &text).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write {}: {e}", path.display()),
+        )
+    })?;
+    // Our own write: the watcher must not read it back as a human
+    // edit and reload the file underneath us.
+    config.record_self_write(&path, &text);
+    let canonical = path.canonicalize().unwrap_or(path);
+    config.note_source_file(&canonical);
+    if let Some(entry) = registry.lock().get_mut(&mg_id) {
+        entry.source = Some(canonical);
+        entry.managed = true;
+        // The file now carries exactly what is live.
+        entry.unsaved = false;
+    }
+    Ok(warnings)
+}
+
+/// Comment out the top-level `(make-microgrid …)` form for `mg_id` in
+/// `text`, leaving every other line as it was. The generated block
+/// composed above the result replaces what the form used to do, so
+/// leaving it live would declare the microgrid twice.
+///
+/// Errors when the form cannot be found at top level — a file that
+/// builds its microgrid some other way (inside a `let`, from a
+/// helper defun) is not something adopt can mechanically supersede.
+fn comment_out_make_microgrid(text: &str, mg_id: u64) -> Result<String, String> {
+    use tulisp_fmt::cst::CstNode;
+
+    let cst = tulisp_fmt::parse(text).map_err(|e| format!("failed to parse: {e:?}"))?;
+    type ParsedId = Option<Result<u64, std::num::ParseIntError>>;
+    let forms: Vec<(std::ops::Range<usize>, ParsedId)> = cst
+        .nodes
+        .iter()
+        .filter_map(|n| {
+            let CstNode::List { children, .. } = n else {
+                return None;
+            };
+            let mut atoms = children.iter().filter_map(|c| match c {
+                CstNode::Atom { text, .. } => Some(text.as_str()),
+                _ => None,
+            });
+            if atoms.next() != Some("make-microgrid") {
+                return None;
+            }
+            // Whatever the form's `:id` says, if it says anything.
+            let declared = atoms
+                .clone()
+                .skip_while(|a| *a != ":id")
+                .nth(1)
+                .map(|v| v.parse::<u64>());
+            Some((n.span(), declared))
+        })
+        .collect();
+    let span = match forms.iter().find(|(_, id)| *id == Some(Ok(mg_id))) {
+        Some((span, _)) => span.clone(),
+        // One form with no explicit `:id` got an auto-allocated one,
+        // and with a single form in the file that is ours.
+        None if forms.len() == 1 && forms[0].1.is_none() => forms[0].0.clone(),
+        None => {
+            return Err(format!(
+                "no top-level (make-microgrid …) form for microgrid {mg_id} found"
+            ));
+        }
+    };
+    // Start from the beginning of the form's line so a form indented
+    // under a comment column still comments out cleanly.
+    let start = text[..span.start].rfind('\n').map_or(0, |i| i + 1);
+    let commented: String = text[start..span.end]
+        .lines()
+        .map(|l| format!(";; {l}\n"))
+        .collect();
+    Ok(format!(
+        "{};; superseded by the generated block above:\n{}{}",
+        &text[..start],
+        commented,
+        &text[span.end..]
+    ))
 }

@@ -157,9 +157,8 @@ pub fn compose(generated_block: &str, script: &str) -> String {
 }
 
 /// Write `text` to `path` atomically: write to a `.tmp` sibling,
-/// flush, then rename over the target. Mirrors
-/// `Config::replace_overrides_text_locked` — a crash mid-write
-/// leaves the old content in place rather than a truncated file.
+/// flush, then rename over the target — a crash mid-write leaves
+/// the old content in place rather than a truncated file.
 pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;

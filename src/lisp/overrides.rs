@@ -7,34 +7,12 @@
 //! `enterprise.lisp` (`Config::persist_enterprise`). Runtime pokes
 //! (`set-meter-power`, health flips, scenario steps) change no file:
 //! the script section is where a hand-written poke belongs.
-//!
-//! The `persisted_overrides*` / `overrides_text*` functions below
-//! serve the legacy overrides journal dialog. Nothing writes a
-//! journal any more; they are read/prune paths over files an older
-//! switchyard wrote, and go away with their routes.
 
-use std::collections::HashSet;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-
-use chrono::Utc;
-use serde::Serialize;
 
 use super::microgrid_file;
 use super::{Config, DEFAULT_CATEGORIES};
-
-/// One top-level form found in the per-microgrid override file. The
-/// `idx` is the form's 0-based position; stable until the next
-/// `remove_persisted_overrides` rewrites the file. `source` is the
-/// form rendered via tulisp's `Display` impl — round-trips through
-/// eval but doesn't preserve the original spelling (comments
-/// stripped, whitespace normalized).
-#[derive(Debug, Clone, Serialize)]
-pub struct PersistedOverride {
-    pub idx: usize,
-    pub source: String,
-}
 
 impl Config {
     /// Evaluate `src` in the interpreter and, on success, save
@@ -104,7 +82,8 @@ impl Config {
                 // `load_file_locked` already bumped exactly the sites
                 // the load created or rebuilt; the ambient site the
                 // other paths bump is not necessarily one of them.
-                self.load_file_locked(ctx, path)?;
+                self.load_file_locked(ctx, path)
+                    .map_err(|e| e.to_string())?;
             }
             // `(load …)` is a statement, not an expression; mirror
             // elisp and report success rather than a file's last form.
@@ -128,9 +107,8 @@ impl Config {
         result
     }
 
-    /// Read-only eval — same machinery as `eval` but the result is
-    /// NOT appended to the override file and the site version does
-    /// NOT bump. For UI introspection (e.g. "what's the current
+    /// Read-only eval — same machinery as `eval` but nothing is
+    /// saved to any file and the site version does NOT bump. For UI introspection (e.g. "what's the current
     /// value of battery-defaults?") that shouldn't surface as a
     /// persisted edit.
     pub fn eval_silent(&self, src: &str) -> Result<String, String> {
@@ -226,6 +204,11 @@ impl Config {
             return Ok(());
         };
         let block = microgrid_file::render_block(&def, &site);
+        // What the file says right now becomes the undo step: one
+        // press of Undo puts exactly these bytes back. Read before
+        // the overwrite, obviously — afterwards the previous block is
+        // gone.
+        self.push_undo_step(id, &path);
         match self.write_two_section(&path, &block, microgrid_file::FRESH_SCRIPT_HEADER) {
             Ok(()) => {
                 self.set_unsaved(id, false);
@@ -361,250 +344,6 @@ impl Config {
         if let Some(entry) = self.microgrids.lock().get_mut(&id) {
             entry.unsaved = unsaved;
         }
-    }
-
-    /// One entry per top-level form in the per-microgrid override
-    /// file (`config.<microgrid-id>.overrides.lisp`). Returns an
-    /// empty vec if the file is missing or malformed — load-overrides
-    /// will surface a parse error on the next reload, so we don't
-    /// bother propagating it here.
-    ///
-    /// Parsed with tulisp-fmt's Cst parser rather than the
-    /// interpreter: this runs on every overrides-pill refresh, and
-    /// doing the file read + parse under the interpreter lock stalled
-    /// concurrent evals (and the lisp refresh loop) on disk I/O. As a
-    /// bonus the Cst keeps the user's original spelling, so the
-    /// dialog shows the form as written instead of Display-normalized.
-    pub fn persisted_overrides(&self) -> Vec<PersistedOverride> {
-        let Some(path) = self.overrides_path() else {
-            return Vec::new();
-        };
-        Self::persisted_overrides_from(&path)
-    }
-
-    /// [`persisted_overrides`](Self::persisted_overrides) for an
-    /// explicit microgrid id. Lock-free like the ambient variant: the
-    /// per-mg file path is a pure function of the id, so no scope
-    /// pointer (and no interpreter lock) is involved.
-    pub fn persisted_overrides_for(&self, mg_id: u64) -> Vec<PersistedOverride> {
-        Self::persisted_overrides_from(&self.overrides_path_for(mg_id))
-    }
-
-    /// [`persisted_overrides`](Self::persisted_overrides) against an
-    /// already-resolved path, so callers that must resolve the
-    /// ambient scope exactly once (under the interpreter lock) can
-    /// reuse their resolution.
-    fn persisted_overrides_from(path: &Path) -> Vec<PersistedOverride> {
-        use tulisp_fmt::cst::CstNode;
-        let Ok(text) = fs::read_to_string(path) else {
-            return Vec::new();
-        };
-        let Ok(cst) = tulisp_fmt::parse(&text) else {
-            return Vec::new();
-        };
-        cst.nodes
-            .iter()
-            // Top-level expression forms only — trivia (comments,
-            // blank lines) doesn't count toward the idx the delete
-            // endpoints address forms by.
-            .filter(|n| !matches!(n, CstNode::Comment { .. } | CstNode::LineBreak { .. }))
-            .enumerate()
-            .map(|(idx, n)| PersistedOverride {
-                idx,
-                source: text[n.span()].trim().to_string(),
-            })
-            .collect()
-    }
-
-    /// Drop a set of persisted-override entries (by their
-    /// file-position idx) and re-derive MicrogridSite state. Atomic: the
-    /// override file is rewritten without those forms (temp +
-    /// rename, with a `tulisp-fmt` pretty-print pass over the
-    /// surviving forms), then `reload()` re-runs config.lisp +
-    /// `load-overrides` on the new file so the deleted forms'
-    /// effects vanish via the MicrogridSite reset inside reload.
-    ///
-    /// Returns the count of forms actually dropped — out-of-range
-    /// indices are silently ignored. An IO error during rewrite
-    /// leaves the site state untouched (the file was renamed
-    /// atomically only on success).
-    ///
-    /// Bulk shape so the UI's checkbox-toolbar can prune N entries
-    /// in one round trip with one reload, instead of N round trips
-    /// with N reloads.
-    pub fn remove_persisted_overrides(&self, indices: &[usize]) -> std::io::Result<usize> {
-        // One interpreter lock across resolve → read → rewrite →
-        // reload, resolving the path exactly once. overrides_path()
-        // follows the ambient microgrid scope, whose contract
-        // requires this lock (see SiteRouter::with_microgrid) — an
-        // unlocked call racing a scoped /api/mg/{id}/eval could
-        // resolve one microgrid's file for the read and ANOTHER's
-        // for the rename, silently overwriting that file's
-        // persisted edits.
-        let mut ctx = self.ctx.borrow_mut();
-        self.remove_persisted_overrides_locked(&mut ctx, indices)
-    }
-
-    /// [`remove_persisted_overrides`](Self::remove_persisted_overrides)
-    /// against an explicit microgrid id — the per-mg delete routes
-    /// resolve their target through the scoped-eval machinery instead
-    /// of whatever the ambient pointer happens to hold.
-    pub fn remove_persisted_overrides_for(
-        &self,
-        mg_id: u64,
-        indices: &[usize],
-    ) -> std::io::Result<usize> {
-        self.scoped(mg_id, |cfg, ctx| {
-            cfg.remove_persisted_overrides_locked(ctx, indices)
-        })
-    }
-
-    fn remove_persisted_overrides_locked(
-        &self,
-        ctx: &mut tulisp::TulispContext,
-        indices: &[usize],
-    ) -> std::io::Result<usize> {
-        let Some(path) = self.overrides_path() else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "no resolvable microgrid scope; can't rewrite overrides",
-            ));
-        };
-        let drop: HashSet<usize> = indices.iter().copied().collect();
-        let entries = Self::persisted_overrides_from(&path);
-        let kept: Vec<String> = entries
-            .iter()
-            .filter(|o| !drop.contains(&o.idx))
-            .map(|o| o.source.clone())
-            .collect();
-        let dropped = entries.len() - kept.len();
-        if dropped == 0 {
-            return Ok(0);
-        }
-        let tmp = path.with_extension("lisp.tmp");
-        {
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&tmp)?;
-            writeln!(file, ";; ── {} ──", Utc::now().to_rfc3339())?;
-            writeln!(file)?;
-            // Hand each surviving form to tulisp-fmt so the file
-            // stays readable. format_with_width returns the same
-            // source on failure; we fall back to the raw text
-            // rather than dropping a form. Blank line between
-            // forms keeps multi-line `let*` paste shapes visually
-            // separable.
-            for src in &kept {
-                let fmt =
-                    tulisp_fmt::format_with_width(src, 80).unwrap_or_else(|_| format!("{src}\n"));
-                file.write_all(fmt.as_bytes())?;
-                writeln!(file)?;
-            }
-            file.flush()?;
-        }
-        fs::rename(&tmp, &path)?;
-        // A reload error after a successful rewrite leaves the file
-        // on disk and the site reset to empty — the next save
-        // (or a manual `reload`) is the recovery path. Surface the
-        // error as IO so the HTTP handler can return 5xx; the
-        // user's already lost the broken forms either way.
-        if let Err(msg) = self.reload_locked(ctx) {
-            return Err(std::io::Error::other(format!(
-                "reload after rewrite failed: {msg}"
-            )));
-        }
-        Ok(dropped)
-    }
-
-    /// Read the raw text of the active microgrid's overrides file.
-    /// Empty string when the file doesn't exist yet (no edits have
-    /// been persisted) or the scope can't resolve. Used by the
-    /// canvas-undo handler to snapshot state before each mutation.
-    pub fn overrides_text(&self) -> std::io::Result<String> {
-        let Some(path) = self.overrides_path() else {
-            return Ok(String::new());
-        };
-        match fs::read_to_string(&path) {
-            Ok(s) => Ok(s),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Replace the overrides file with `content` and reload. The
-    /// canvas-undo handler restores a snapshot of the file taken
-    /// before a mutation; redo replays the snapshot taken after.
-    /// Atomic rewrite (temp + rename) so an interruption mid-write
-    /// can't corrupt the file.
-    pub fn replace_overrides_text(&self, content: &str) -> std::io::Result<()> {
-        let mut ctx = self.ctx.borrow_mut();
-        self.replace_overrides_text_locked(&mut ctx, content)
-    }
-
-    /// `replace_overrides_text` body against an already-held
-    /// interpreter guard — the scoped per-mg HTTP handler holds the
-    /// lock across the scope flip, and the reload at the tail must
-    /// reuse it rather than re-borrow.
-    pub(crate) fn replace_overrides_text_locked(
-        &self,
-        ctx: &mut tulisp::TulispContext,
-        content: &str,
-    ) -> std::io::Result<()> {
-        let Some(path) = self.overrides_path() else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "no resolvable microgrid scope; can't rewrite overrides",
-            ));
-        };
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("lisp.tmp");
-        {
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&tmp)?;
-            file.write_all(content.as_bytes())?;
-            file.flush()?;
-        }
-        fs::rename(&tmp, &path)?;
-        if let Err(msg) = self.reload_locked(ctx) {
-            return Err(std::io::Error::other(format!(
-                "reload after override-text replace failed: {msg}"
-            )));
-        }
-        Ok(())
-    }
-
-    /// Resolve the per-microgrid overrides file path. Keyed off the
-    /// active microgrid id (set by /api/mg/{id}/eval and the
-    /// scenarios per-mg replay), falling back to the first registry
-    /// entry when nothing's selected.
-    ///
-    /// Returns `None` when neither source resolves — current is
-    /// `None` AND the registry is empty. The boot path can't reach
-    /// that case (`Config::new` rejects an empty registry), but
-    /// guarding against it here keeps a future `(reset-microgrid)`-
-    /// then-eval flow from writing to a meaningless
-    /// `config.0.overrides.lisp`.
-    pub(super) fn overrides_path(&self) -> Option<PathBuf> {
-        let mg_id = self
-            .current_microgrid
-            .read()
-            .or_else(|| self.microgrids.lock().keys().next().copied())?;
-        Some(self.overrides_path_for(mg_id))
-    }
-
-    /// [`overrides_path`](Self::overrides_path) for an explicit
-    /// microgrid id — a pure function of the id, no ambient scope.
-    pub(super) fn overrides_path_for(&self, mg_id: u64) -> PathBuf {
-        self.state_dir
-            .join("microgrids")
-            .join(format!("config.{mg_id}.overrides.lisp"))
     }
 }
 

@@ -8,9 +8,11 @@
 //!
 //! - `boot` — `Config::new`, the long-lived loops (lisp refresh,
 //!   request-timeout sweep), the tags-table pass, hot-reload + watch.
-//! - `overrides` — `eval` + persisted-override file plumbing.
-//! - `snapshots` — `save_snapshot` / `load_snapshot` against the
-//!   per-microgrid overrides file.
+//! - `overrides` — `eval` and the file regeneration it triggers.
+//! - `snapshots` — `save_snapshot_for` / `load_snapshot_for` against
+//!   a microgrid's own file.
+//! - `undo` — the per-microgrid undo / redo stacks over managed
+//!   microgrid files.
 //! - `defuns` — every `ctx.defun(...)` installer the config DSL
 //!   exposes.
 
@@ -23,6 +25,7 @@ pub mod microgrid_file;
 mod overrides;
 pub mod runtime_modes;
 mod snapshots;
+mod undo;
 pub mod value;
 
 #[cfg(test)]
@@ -40,7 +43,9 @@ use tulisp::{SharedMut, TulispContext};
 use crate::sim::MicrogridSite;
 use crate::sim::microgrids::{CurrentMicrogrid, SharedSiteRouter};
 
-pub use overrides::PersistedOverride;
+pub use boot::LoadError;
+pub use snapshots::SnapshotError;
+pub use undo::UndoDepths;
 
 /// Enterprise-level gateway settings the Lisp config can override.
 /// Per-microgrid identity (id, name, grpc_port, TSO) lives in the
@@ -158,8 +163,8 @@ pub struct Config {
     /// whole-world reload replays is derived from the registry, not
     /// from here.
     pub(crate) source_files: Arc<Mutex<Vec<PathBuf>>>,
-    /// Anchor for everything persistent — overrides journals,
-    /// `snapshots/`, runtime-created microgrid files — and for the
+    /// Anchor for everything persistent — `enterprise.lisp`,
+    /// `snapshots/`, managed microgrid files — and for the
     /// relative-path resolution of `(load …)` / `(file-exists-p …)`.
     pub(crate) state_dir: PathBuf,
     pub(crate) ctx: SharedMut<TulispContext>,
@@ -254,6 +259,19 @@ pub struct Config {
     /// map and ignores a match, so a save switchyard performed does
     /// not bounce back as a reload of the file it just wrote.
     pub(crate) written_hashes: Arc<Mutex<HashMap<PathBuf, u64>>>,
+    /// Per-microgrid undo / redo stacks over managed microgrid
+    /// files. A structural edit pushes the block the file carried
+    /// before it; `/api/mg/{id}/undo` pops it back. See
+    /// [`crate::lisp::undo`].
+    pub(crate) undo: undo::SharedUndo,
+    /// Serializes `/api/microgrids/create` requests (import's create
+    /// step included). Create validates an id + port against the
+    /// registry, then writes a file and loads it — and the load
+    /// cannot run under the registry lock (it evaluates lisp). One
+    /// create at a time is what keeps the validation authoritative,
+    /// so two concurrent creates can never collapse onto one id. A
+    /// tokio mutex because the handler holds it across `await`s.
+    pub(crate) create_lock: Arc<tokio::sync::Mutex<()>>,
     /// Present only for a headless `Config` (built by
     /// [`Config::new_headless`]): the hand-advanced clock that drives
     /// the timer queue and `now`. `None` for a live `Config`, whose
@@ -277,6 +295,11 @@ impl Config {
     /// The import-serialization lock — see the field doc.
     pub(crate) fn import_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
         self.import_lock.clone()
+    }
+
+    /// The create-serialization lock — see the field doc.
+    pub(crate) fn create_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.create_lock.clone()
     }
 
     pub fn microgrids(&self) -> crate::sim::microgrids::SharedMicrogrids {

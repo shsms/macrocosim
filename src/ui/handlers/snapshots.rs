@@ -1,68 +1,80 @@
-//! Snapshot save / load endpoints. Calls `Config::save_snapshot`
-//! and `Config::load_snapshot`; both wrap blocking IO.
+//! Per-microgrid snapshot endpoints — list / save / load under
+//! `/api/mg/{mg_id}/snapshots`. Each one wraps a `Config` call that
+//! does blocking file IO (and, for load, a reload) on the blocking
+//! pool.
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::lisp::Config;
+use crate::lisp::{Config, SnapshotError};
 
 #[derive(Serialize)]
 pub(in crate::ui) struct SnapshotsListResp {
     snapshots: Vec<String>,
 }
 
-pub(in crate::ui) async fn snapshots_list(State(config): State<Config>) -> Json<SnapshotsListResp> {
-    Json(SnapshotsListResp {
-        snapshots: config.list_snapshots(),
-    })
+pub(in crate::ui) async fn snapshots_list_for_mg(
+    State(config): State<Config>,
+    Path(mg_id): Path<u64>,
+) -> Result<Json<SnapshotsListResp>, (StatusCode, String)> {
+    super::require_mg(&config, mg_id)?;
+    Ok(Json(SnapshotsListResp {
+        snapshots: config.list_snapshots_for(mg_id),
+    }))
 }
 
 #[derive(Deserialize)]
-pub(in crate::ui) struct SnapshotsBody {
+pub(in crate::ui) struct SnapshotsSaveBody {
     name: String,
 }
 
-pub(in crate::ui) async fn snapshots_save(
+pub(in crate::ui) async fn snapshots_save_for_mg(
     State(config): State<Config>,
-    Json(body): Json<SnapshotsBody>,
+    Path(mg_id): Path<u64>,
+    Json(body): Json<SnapshotsSaveBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let path = super::blocking(move || config.save_snapshot(&body.name))
+    let path = super::blocking(move || config.save_snapshot_for(mg_id, &body.name))
         .await?
-        // Only the sanitiser's rejection is the caller's fault
-        // (InvalidInput); disk-full / permissions are server-side
-        // 500s a client shouldn't retry as a "bad request".
-        .map_err(|e| {
-            let status = if e.kind() == std::io::ErrorKind::InvalidInput {
-                StatusCode::BAD_REQUEST
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (status, e.to_string())
-        })?;
+        .map_err(status_for)?;
     Ok(Json(serde_json::json!({
         "ok": true,
         "path": path.display().to_string(),
     })))
 }
 
-pub(in crate::ui) async fn snapshots_load(
+#[derive(Deserialize)]
+pub(in crate::ui) struct SnapshotsLoadBody {
+    name: String,
+    /// Load the snapshot as a NEW microgrid under this id instead of
+    /// restoring it over the original. Omit to restore in place.
+    #[serde(default)]
+    as_id: Option<u64>,
+}
+
+pub(in crate::ui) async fn snapshots_load_for_mg(
     State(config): State<Config>,
-    Json(body): Json<SnapshotsBody>,
+    Path(mg_id): Path<u64>,
+    Json(body): Json<SnapshotsLoadBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    super::blocking(move || config.load_snapshot(&body.name))
+    let loaded = super::blocking(move || config.load_snapshot_for(mg_id, &body.name, body.as_id))
         .await?
-        // load_snapshot returns String errors; classify by the known
-        // client-fault prefixes, everything else (copy/rename IO,
-        // reload failure) is a 500.
-        .map_err(|e| {
-            let status = if e.starts_with("invalid snapshot name") {
-                StatusCode::BAD_REQUEST
-            } else if e.starts_with("snapshot ") && e.ends_with("not found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            (status, e)
-        })?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+        .map_err(status_for)?;
+    Ok(Json(serde_json::json!({ "ok": true, "id": loaded })))
+}
+
+/// Map a snapshot failure onto the status code that describes it:
+/// the caller's fault (name, missing snapshot, unmanaged microgrid)
+/// versus ours (IO, a failed reload).
+fn status_for(e: SnapshotError) -> (StatusCode, String) {
+    let status = match e {
+        SnapshotError::InvalidName(_) => StatusCode::BAD_REQUEST,
+        SnapshotError::NotFound(_) => StatusCode::NOT_FOUND,
+        SnapshotError::Unmanaged(_) => StatusCode::CONFLICT,
+        SnapshotError::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, e.to_string())
 }

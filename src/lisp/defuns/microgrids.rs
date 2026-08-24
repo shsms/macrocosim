@@ -303,12 +303,10 @@ mod tests {
             "(make-microgrid :id 9 :grpc-port 8801 :topology (lambda () nil))",
         )
         .unwrap();
+        // Typed, not a sentence to grep: the load endpoint offers
+        // "load it as a free id instead?" off the id.
         let err = cfg.load_file(&other).unwrap_err();
-        assert!(err.contains("microgrid 9 is already loaded"), "{err}");
-        assert!(
-            err.contains("config.lisp"),
-            "error names the owning file: {err}"
-        );
+        assert_eq!(err, crate::lisp::LoadError::Collision { id: 9 });
     }
 
     /// Re-loading the SAME file keeps the reuse-in-place semantics the
@@ -335,6 +333,10 @@ mod tests {
             .eval("(make-microgrid :id 9 :grpc-port 8801 :topology (lambda () nil))")
             .unwrap_err();
         assert!(err.contains("already loaded"), "{err}");
+        assert!(
+            err.contains("config.lisp"),
+            "error names the owning file: {err}"
+        );
     }
 
     /// Component ids are enterprise-unique: a second microgrid reusing
@@ -352,7 +354,7 @@ mod tests {
              (lambda () (%make-meter :id 42)))",
         )
         .unwrap();
-        let err = cfg.load_file(&other).unwrap_err();
+        let err = cfg.load_file(&other).unwrap_err().to_string();
         assert!(err.contains("42"), "{err}");
         assert!(
             !cfg.microgrids().lock().contains_key(&10),

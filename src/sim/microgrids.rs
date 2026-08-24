@@ -234,8 +234,8 @@ pub fn new_current_microgrid() -> CurrentMicrogrid {
 /// the restore, so an unwinding eval can't leave the pointer stuck
 /// on a temporary scope).
 ///
-/// The pointer is ambient global state that every scoped defun (and
-/// `Config::overrides_path`) reads at invocation time, so the flip
+/// The pointer is ambient global state that every scoped defun
+/// reads at invocation time, so the flip
 /// is only race-free while no other interpreter work can run:
 /// callers MUST hold the interpreter lock across this call. The
 /// sanctioned entry points — `Config::scoped` / `eval_in_mg` and the
