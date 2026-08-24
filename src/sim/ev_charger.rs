@@ -199,11 +199,15 @@ impl SimulatedComponent for EvCharger {
             category: Some(Category::EvCharger),
             active_power_w: Some(p),
             // The EV is a P-only AC component — it never takes a Q
-            // setpoint — but the formula engine's convergence pass
-            // treats an absent reactive sample as "unknown", not
-            // "zero". Advertising Some(0.0) here (and, via the
+            // setpoint. Advertising Some(0.0) here (and, via the
             // streaming path in proto_conv.rs, an AcPowerReactive
-            // sample of 0) tells it honestly that Q is settled at 0.
+            // sample of 0) keeps per-component telemetry, the WS
+            // feed, and the UI hover readout honest that Q is
+            // settled at 0, rather than silently omitting the
+            // metric. (Not required for upstream formula
+            // convergence — the aggregation's own COALESCE(..., 0.0)
+            // already covers a component that never streams Q; see
+            // the SP3 mutation-check in tests/ui_http.rs.)
             reactive_power_var: Some(0.0),
             soc_pct: Some(s.soc_pct),
             soc_lower_pct: Some(self.cfg.soc_lower_pct),

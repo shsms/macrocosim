@@ -121,12 +121,15 @@ axes), but everything around them does not:
   stay, and the docs say so in one sentence.
 - **EV chargers stay P-only, but honestly so.** No Q axis; they
   advertise `(0, 0)` config bounds AND publish
-  `reactive_power_var: Some(0.0)` in telemetry. The telemetry zero
-  is load-bearing: the upstream formula engine blocks per operand
-  until every term emits a sample of the requested metric, so a
-  P-only component that stays silent on Q would starve the grid-Q
-  formula stream forever. Any P-only AC component follows the same
-  rule.
+  `reactive_power_var: Some(0.0)` in telemetry, so per-component
+  telemetry, the WS feed, and the UI hover readout stay truthful
+  about Q being settled at 0 rather than silently omitted. Any
+  P-only AC component follows the same rule. (Corrected 2026-08-24,
+  SP3 mutation-check: the telemetry zero is *not* load-bearing for
+  upstream formula convergence — the aggregation's own
+  `COALESCE(..., 0.0)` already resolves a component that never
+  streams Q, confirmed against the vendored `frequenz-microgrid`
+  crate sources.)
 - **The battery loses its Q axis.** Reactive power terminates on the
   inverter's AC side: inverters no longer push a Q share to children,
   `set_dc_active_reactive` is removed from the trait (its only real
@@ -280,7 +283,9 @@ axes), but everything around them does not:
   validation-vs-tracking envelope split (EV SoC derate clips output
   but never rejects accepts).
 - Formula convergence: a grid-Q formula over a site containing an
-  EV charger converges (the telemetry-zero rule).
+  EV charger converges, exercising the loopback stream end to end.
+  (Corrected 2026-08-24, SP3 mutation-check: convergence does not
+  depend on the EV's telemetry zero — see the note above.)
 - Meter: PF sign tests (lagging/leading), live-P tracking, override
   vs children aggregation, restart round-trip of the new kwargs.
 - Scenario: drive-meter-reactive / drive-meter-pf end to end with

@@ -244,11 +244,19 @@ async fn site_import_creates_microgrid_with_working_formulas() {
 /// (this task) because it needs the loopback stream Task 1 added:
 /// `grid_reactive_power`, fed by the upstream grid `AcPowerReactive`
 /// formula. That formula spans every AC component under the grid —
-/// including the EV charger, whose `reactive_power_var: Some(0.0)`
-/// telemetry (src/sim/ev_charger.rs) is what lets it converge at
-/// all: an *absent* Q sample reads as "unknown" upstream, not
-/// "zero", and the aggregation never resolves. This test proves the
-/// mechanism end to end rather than just asserting the constant.
+/// including the EV charger, the concrete case of a component whose
+/// formula term is present but whose Q slot never streams from the
+/// device's own physics. SP3's mutation-check (temporarily flipping
+/// the EV's `reactive_power_var` to `None`) plus a trace of the
+/// vendored `frequenz-microgrid` crate sources found that
+/// convergence does *not* actually depend on that sample: the crate
+/// creates a resampler for every component the formula references
+/// eagerly (before any data arrives), so a component that never
+/// streams the metric simply resolves to `None` in its slot, and
+/// the formula's own `COALESCE(..., 0.0)` absorbs it — the EV's
+/// `Some(0.0)` is honest per-component telemetry, not a convergence
+/// unblock. This test still proves the `grid_reactive_power` stream
+/// end to end over that topology.
 #[tokio::test(flavor = "multi_thread")]
 async fn grid_reactive_formula_converges_over_a_site_with_an_ev_charger() {
     let topology = r#"
