@@ -106,14 +106,28 @@ impl Config {
         let text = fs::read_to_string(&snapshot).map_err(|e| {
             SnapshotError::Failed(format!("cannot read {}: {e}", snapshot.display()))
         })?;
+        // Restoring replaces the whole file, generated block
+        // included, so it is a structural edit like any other and
+        // takes the interpreter lock for the same reason `persist`
+        // does: nothing may write the file between the block we read
+        // for the undo stack and the bytes we put in its place.
+        let mut ctx = self.ctx.borrow_mut();
+        let replaced = super::undo::read_generated_block(&dest);
         microgrid_file::write_atomic(&dest, &text)
             .map_err(|e| SnapshotError::Failed(format!("write {}: {e}", dest.display())))?;
         // Our own write: the watcher must not treat it as a human
         // edit and reload the file a second time.
         self.record_self_write(&dest, &text);
+        // A restore is undoable: the block it displaced goes on the
+        // stack, exactly as a structural eval's would, so Undo walks
+        // back out of the restore instead of skipping over it.
+        if let Some(replaced) = replaced {
+            self.push_undo_block(mg_id, replaced);
+        }
         // Per file, not the whole world — restoring one microgrid's
         // snapshot leaves every other microgrid running.
-        self.reload_file(&dest).map_err(SnapshotError::Failed)?;
+        self.reload_file_locked(&mut ctx, &dest)
+            .map_err(SnapshotError::Failed)?;
         Ok(Some(mg_id))
     }
 

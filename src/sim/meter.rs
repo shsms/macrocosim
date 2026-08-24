@@ -196,8 +196,11 @@ impl SimulatedComponent for Meter {
     }
 
     fn has_unrenderable_source(&self) -> bool {
-        // A dynamic `:power` leaves `constructed_power` unset, so
-        // there is a live source but no constant to render.
+        // `constructed_power` holds the constant `:power` this meter
+        // was BUILT with, so an unset one with a live source means
+        // the value came from somewhere the renderer cannot write:
+        // a lambda / symbol binding, or a runtime `set-meter-power`
+        // over a meter constructed without `:power`.
         self.constructed_power.is_none() && self.power_source.read().is_some()
     }
 

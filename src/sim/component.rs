@@ -538,11 +538,14 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// The `%make-*` primitive that rebuilds this component on load.
     fn make_fn(&self) -> &'static str;
 
-    /// Does this component carry an input the generated block cannot
-    /// write down — a `:power` / `:sunlight%` bound to a lambda or a
-    /// symbol, which only means something while the interpreter is
-    /// running? Adopt warns about these: rendering drops them, and
-    /// they have to be re-applied from the file's script section.
+    /// Does this component carry an input value the generated block
+    /// cannot write down? Two shapes qualify: a `:power` /
+    /// `:sunlight%` bound to a lambda or symbol, which only means
+    /// something while the interpreter is running, and a value poked
+    /// in at runtime over a component that was built without that
+    /// kwarg — the renderer writes construction arguments, not
+    /// pokes, so either way the value is dropped. Adopt warns about
+    /// these; they have to be set again from the script section.
     fn has_unrenderable_source(&self) -> bool {
         false
     }

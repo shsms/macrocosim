@@ -54,16 +54,15 @@ pub struct UndoDepths {
 }
 
 impl Config {
-    /// Push the generated block `path` currently holds onto
-    /// microgrid `id`'s undo stack and drop the redo stack. Called by
-    /// [`Config::persist`] immediately before it overwrites the file.
+    /// Stack `block` — the generated block a rewrite just replaced —
+    /// as microgrid `id`'s newest undo step, and drop the redo stack:
+    /// a fresh edit starts a new branch of history.
     ///
-    /// A file that is missing, unreadable or carries no generated
-    /// block contributes no step — there is nothing to go back to.
-    pub(super) fn push_undo_step(&self, id: u64, path: &Path) {
-        let Some(block) = read_block(path) else {
-            return;
-        };
+    /// The invariant every rewrite of a generated block keeps: the
+    /// block it replaced is what one press of Undo puts back. Call it
+    /// AFTER the write succeeds, or a failed write leaves a step that
+    /// undoes to a state the file never had.
+    pub(super) fn push_undo_block(&self, id: u64, block: String) {
         let mut histories = self.undo.lock();
         let history = histories.entry(id).or_default();
         history.undo.push_back(block);
@@ -101,22 +100,28 @@ impl Config {
     /// write it into the file, reload that file, and push the block
     /// it displaced onto the other stack.
     ///
-    /// The history lock is taken twice, in short bursts, rather than
-    /// held across the write + reload: `persist` pushes a step while
-    /// holding the interpreter lock, and the reload below takes that
-    /// same interpreter lock — holding the history lock across it
-    /// would invert the order and deadlock. A pop that then fails to
-    /// write puts its block straight back.
+    /// Everything after the first line runs under the interpreter
+    /// lock, because a step is a read-modify-write of the file: it
+    /// composes the popped block with the script section the file
+    /// carries RIGHT NOW. A `/api/mg/{id}/eval` persisting in between
+    /// would otherwise be overwritten with no trace, and the redo
+    /// stack would hold a block that no longer follows from the
+    /// file. Taking the interpreter lock first is also the order
+    /// `persist` takes (interpreter, then history), so the two can
+    /// never deadlock against each other.
     fn step(&self, id: u64, dir: Direction) -> Result<UndoDepths, String> {
         let path = self.managed_source(id)?;
+        let mut ctx = self.ctx.borrow_mut();
         let Some(block) = self.pop(id, dir) else {
             return Err(format!("microgrid {id} has nothing to {dir}"));
         };
-        match self.apply_block(&path, &block) {
+        match self.apply_block_locked(&mut ctx, &path, &block) {
             Ok(displaced) => {
                 self.push(id, dir.opposite(), displaced);
                 Ok(self.undo_depths(id))
             }
+            // The write never happened, so the step is still ahead of
+            // us: put it back where it came from.
             Err(e) => {
                 self.push(id, dir, block);
                 Err(e)
@@ -127,7 +132,16 @@ impl Config {
     /// Write `block` into `path` as its generated block, keeping the
     /// file's script section, and reload just that file. Returns the
     /// block that was displaced, for the opposite stack.
-    fn apply_block(&self, path: &Path, block: &str) -> Result<String, String> {
+    ///
+    /// Takes the interpreter guard its caller already holds — see
+    /// [`Config::step`] for why the whole read-modify-write sits
+    /// inside it.
+    fn apply_block_locked(
+        &self,
+        ctx: &mut tulisp::TulispContext,
+        path: &Path,
+        block: &str,
+    ) -> Result<String, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let parsed =
@@ -143,7 +157,7 @@ impl Config {
         self.record_self_write(path, &composed);
         // Per file, never the whole world: undoing one microgrid's
         // edit must not rebuild every other microgrid.
-        self.reload_file(path)?;
+        self.reload_file_locked(ctx, path)?;
         Ok(displaced)
     }
 
@@ -216,8 +230,171 @@ impl std::fmt::Display for Direction {
 }
 
 /// The generated block of the file at `path`, or `None` when the
-/// file is missing, unreadable, or not a managed file.
-fn read_block(path: &Path) -> Option<String> {
+/// file is missing, unreadable, or not a managed file. What a caller
+/// about to overwrite that block reads first, so it can stack the
+/// block it is replacing.
+pub(super) fn read_generated_block(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     microgrid_file::parse(&text).ok()?.generated
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::super::test_support::config_with;
+    use crate::lisp::microgrid_file;
+
+    /// Load a managed microgrid file with an empty topology, the way
+    /// the create endpoint writes one, and return its path.
+    fn managed(cfg: &crate::lisp::Config, dir: &std::path::Path, id: u64, port: u16) -> PathBuf {
+        let def = crate::sim::microgrids::MicrogridDef {
+            id,
+            name: format!("m{id}"),
+            grpc_port: port,
+            tso: None,
+        };
+        let path = dir.join(format!("microgrids/{id}.lisp"));
+        microgrid_file::write_atomic(
+            &path,
+            &microgrid_file::compose(
+                &microgrid_file::render_empty_block(&def),
+                microgrid_file::FRESH_SCRIPT_HEADER,
+            ),
+        )
+        .unwrap();
+        cfg.load_file(&path).unwrap();
+        path
+    }
+
+    /// The generated block of `path` and the block microgrid `id`'s
+    /// live state renders to. A quiescent managed microgrid has these
+    /// equal: every path that writes the file writes what is live,
+    /// and every path that rewrites the block reloads from it.
+    fn file_and_live(
+        cfg: &crate::lisp::Config,
+        path: &std::path::Path,
+        id: u64,
+    ) -> (String, String) {
+        let on_disk = super::read_generated_block(path).expect("managed file");
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        let e = r.get(&id).unwrap();
+        (on_disk, microgrid_file::render_block(&e.def, &e.site))
+    }
+
+    /// An undo step is a read-modify-write of the microgrid's file,
+    /// so the WHOLE of it — read, compose, write, reload — runs
+    /// under the interpreter lock, the same lock a structural eval
+    /// holds while it persists. Proven by the file: while a thread
+    /// holds that lock, undo must not have touched it yet.
+    ///
+    /// Taking the interpreter lock first and the history lock inside
+    /// it is also the only order either path uses, which is what
+    /// keeps undo and persist from deadlocking against each other.
+    #[test]
+    fn undo_does_not_touch_the_file_until_it_holds_the_interpreter() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let path = managed(&cfg, &dir, 25, 8895);
+        cfg.eval_in_mg(25, "(%make-meter :id 400)").unwrap();
+        let before = super::read_generated_block(&path).unwrap();
+
+        let interpreter = cfg.interpreter();
+        let guard = interpreter.borrow_mut();
+        std::thread::scope(|s| {
+            let cfg2 = cfg.clone();
+            let stepper = s.spawn(move || cfg2.undo(25).expect("undo once the lock is free"));
+            // Long enough that an undo doing its read-modify-write
+            // outside the lock would have finished the write.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            assert_eq!(
+                super::read_generated_block(&path).unwrap(),
+                before,
+                "undo must not rewrite the file while an eval holds the interpreter"
+            );
+            drop(guard);
+            stepper.join().unwrap();
+        });
+        assert_ne!(
+            super::read_generated_block(&path).unwrap(),
+            before,
+            "the step lands once the lock is free"
+        );
+        let reg = cfg.microgrids();
+        assert!(reg.lock()[&25].site.get(400).is_none(), "the step landed");
+    }
+
+    /// Undo and structural evals hammering one microgrid must leave
+    /// the file carrying exactly what is live — and must not deadlock
+    /// (a history-then-interpreter lock order would hang here).
+    #[test]
+    fn undo_and_eval_racing_leave_file_and_state_agreeing() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let path = managed(&cfg, &dir, 23, 8893);
+        cfg.eval_in_mg(23, "(%make-grid-connection-point :id 1)")
+            .unwrap();
+
+        std::thread::scope(|s| {
+            let a = cfg.clone();
+            let b = cfg.clone();
+            s.spawn(move || {
+                for i in 0..30 {
+                    a.eval_in_mg(23, &format!("(rename-component 1 \"a{i}\")"))
+                        .unwrap();
+                }
+            });
+            s.spawn(move || {
+                for _ in 0..30 {
+                    // Either direction may legitimately have nothing
+                    // left to walk; only the file's consistency is
+                    // under test.
+                    let _ = b.undo(23);
+                    let _ = b.redo(23);
+                }
+            });
+        });
+
+        let (on_disk, live) = file_and_live(&cfg, &path, 23);
+        assert_eq!(on_disk.trim(), live.trim(), "file must carry live state");
+    }
+
+    /// Restoring a snapshot rewrites the generated block, so it
+    /// stacks the block it replaced like any other structural edit —
+    /// Undo walks back OUT of a restore instead of stepping over it
+    /// to some older state.
+    #[test]
+    fn a_snapshot_restore_is_undoable() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let path = managed(&cfg, &dir, 24, 8894);
+        cfg.eval_in_mg(24, "(%make-meter :id 300)").unwrap();
+        cfg.save_snapshot_for(24, "before").unwrap();
+        cfg.eval_in_mg(24, "(%make-meter :id 301)").unwrap();
+        let depth_before = cfg.undo_depths(24).undo;
+
+        cfg.load_snapshot_for(24, "before", None).unwrap();
+        {
+            let reg = cfg.microgrids();
+            let r = reg.lock();
+            assert!(r[&24].site.get(301).is_none(), "restored to the snapshot");
+        }
+        assert_eq!(
+            cfg.undo_depths(24).undo,
+            depth_before + 1,
+            "the restore stacked the block it replaced"
+        );
+
+        cfg.undo(24).expect("undo the restore");
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        assert!(
+            r[&24].site.get(301).is_some(),
+            "undo walks back out of the restore"
+        );
+        drop(r);
+        let (on_disk, live) = file_and_live(&cfg, &path, 24);
+        assert_eq!(on_disk.trim(), live.trim());
+    }
 }

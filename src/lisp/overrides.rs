@@ -206,11 +206,15 @@ impl Config {
         let block = microgrid_file::render_block(&def, &site);
         // What the file says right now becomes the undo step: one
         // press of Undo puts exactly these bytes back. Read before
-        // the overwrite, obviously — afterwards the previous block is
-        // gone.
-        self.push_undo_step(id, &path);
+        // the overwrite (afterwards the previous block is gone) but
+        // stacked only once the overwrite succeeded — a failed write
+        // left the file alone, so there is nothing to go back from.
+        let previous = super::undo::read_generated_block(&path);
         match self.write_two_section(&path, &block, microgrid_file::FRESH_SCRIPT_HEADER) {
             Ok(()) => {
+                if let Some(previous) = previous {
+                    self.push_undo_block(id, previous);
+                }
                 self.set_unsaved(id, false);
                 Ok(())
             }

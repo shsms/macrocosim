@@ -450,18 +450,20 @@ fn adopt(config: &Config, mg_id: u64) -> Result<Vec<String>, (StatusCode, String
             format!("microgrid {mg_id} is already managed"),
         ));
     }
-    // Live state the generated block cannot write down. Reported, not
-    // refused: the structure still round-trips, but these inputs go
-    // back to their constructed values and have to be re-established
-    // from the script section.
+    // Live state the generated block cannot write down — a
+    // lambda-bound input, or a value poked in at runtime that was
+    // never a constructor argument. Reported, not refused: the
+    // structure still round-trips, but these inputs come back at
+    // their constructed values and have to be set again from the
+    // script section.
     let warnings: Vec<String> = site
         .components()
         .iter()
         .filter(|c| c.has_unrenderable_source())
         .map(|c| {
             format!(
-                "component {} ({}) is driven by a lisp expression, which the generated \
-                 block cannot carry — re-apply it from the script section",
+                "component {} ({}) carries an input value the generated block cannot \
+                 write down — set it again from the script section",
                 c.id(),
                 c.make_fn()
             )
