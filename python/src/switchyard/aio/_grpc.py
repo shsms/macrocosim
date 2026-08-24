@@ -79,6 +79,10 @@ class AsyncGrpcClient:
         """A component's active power — the latest cached stream sample."""
         return await self._read_metric(component_id, "AC_POWER_ACTIVE")
 
+    async def reactive_power(self, component_id: int) -> float | None:
+        """A component's reactive power — the latest cached stream sample."""
+        return await self._read_metric(component_id, "AC_POWER_REACTIVE")
+
     async def soc(self, component_id: int) -> float | None:
         """Battery state of charge (%)."""
         return await self._read_metric(component_id, "BATTERY_SOC_PCT")

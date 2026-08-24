@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import time, timedelta
 
 from frequenz.quantities import (
@@ -10,6 +11,7 @@ from frequenz.quantities import (
     Energy,
     Percentage,
     Power,
+    ReactivePower,
     Voltage,
 )
 
@@ -64,6 +66,43 @@ def test_value_kinds_render_correctly() -> None:
     assert ":hidden t" in lisp
     assert ":health 'error" in lisp  # symbol, not a string
     assert ":interval 5000" in lisp  # milliseconds, no decimal
+
+
+def test_meter_reactive_kwargs_render_correctly() -> None:
+    # A constant VAr load renders as :reactive-power with the VAr value.
+    lisp = meter(
+        id=2, reactive_power=ReactivePower.from_kilo_volt_amperes_reactive(1.5)
+    ).to_lisp()
+    assert ":reactive-power 1500.0" in lisp
+
+    # The power-factor form renders the ratio plus the leading flag.
+    lisp = meter(id=3, power_factor=0.8, leading=True).to_lisp()
+    assert ":power-factor 0.8" in lisp
+    assert ":leading t" in lisp
+
+    # leading defaults to absent, not `nil`, when not asked for.
+    lisp = meter(id=4, power_factor=0.9).to_lisp()
+    assert ":power-factor 0.9" in lisp
+    assert ":leading" not in lisp
+
+
+def test_live_signal_path_exposes_reactive_power() -> None:
+    """`Meter.reactive_power` reads through the bound *async* Site.
+
+    `_bind` is only ever called with `switchyard.aio.Site`, so the read
+    path needs the async twins — the sync ones alone leave the signal
+    raising AttributeError on first use.
+    """
+    from switchyard.aio._grpc import AsyncGrpcClient
+    from switchyard.aio._site import Site as AsyncSite
+    from switchyard.runtime import Site as SyncSite
+
+    for holder in (AsyncSite, AsyncGrpcClient, SyncSite):
+        assert hasattr(holder, "active_power"), holder
+        assert hasattr(holder, "reactive_power"), holder
+
+    assert inspect.iscoroutinefunction(AsyncSite.reactive_power)
+    assert inspect.iscoroutinefunction(AsyncGrpcClient.reactive_power)
 
 
 def test_to_lisp_atom_converts_typed_values() -> None:
