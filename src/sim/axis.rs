@@ -251,10 +251,12 @@ impl PowerAxis {
 
     /// ramp.snap_to(v) alone: the live output jumps to `v` with no
     /// slew, while the command delay AND the published value are left
-    /// exactly as they were. Solar's health gate is the only caller —
-    /// a tripped PV inverter's output collapses instantly, but its
+    /// exactly as they were. Both callers are solar: its health gate
+    /// (a tripped PV inverter's output collapses instantly, but its
     /// armed curtailment must survive so a recovery resumes there
-    /// instead of at full sun.
+    /// instead of at full sun) and `SolarInverter::new`, which seeds
+    /// the ramp at the sunlight floor so a fresh inverter is already
+    /// generating rather than slewing up from zero on its first tick.
     pub fn snap_output(&self, v: f32) {
         self.ramp.snap_to(v);
     }

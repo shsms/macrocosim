@@ -562,6 +562,82 @@ mod tests {
         assert!((inv.aggregate_reactive_var(&w) - 1_500.0).abs() < 1.0);
     }
 
+    /// A reset releases a curtailment back to the SUNLIGHT FLOOR, not
+    /// to zero: a PV inverter with nothing dispatched at it generates
+    /// whatever the sun gives, so `reset_setpoint` parks the active
+    /// axis at `min_avail_w()` and the next tick has it producing
+    /// there again. Both entry points do it — the full reset and the
+    /// per-axis path the `TimeoutTracker` calls when only the ACTIVE
+    /// request's lifetime lapses, which must leave a Q command running
+    /// alongside untouched.
+    ///
+    /// What a tick can actually see is the release: the armed
+    /// curtailment is gone and production is back at the floor. The
+    /// `min_avail_w()` park value handed to `PowerAxis::reset` is
+    /// belt-and-braces on top — `step`'s `IdleTarget::Value(avail)`
+    /// re-derives the same floor before the ramp advances, so no tick
+    /// ever aims at a stale target either way. Parking at 0 there
+    /// would be a latent trap for any future caller that reads the
+    /// axis between the reset and the next tick, which is why the park
+    /// value stays the floor.
+    #[test]
+    fn reset_releases_a_curtailment_back_to_the_sunlight_floor() {
+        use crate::timeout_tracker::SetpointAxis;
+
+        let w = MicrogridSite::new();
+        // -10 kW rated at 60% sun → a -6 kW floor, distinct from both
+        // zero and the curtailments dispatched below.
+        let mut cfg = cfg_with_sun(60.0);
+        cfg.reactive = ReactiveCapability {
+            pf_limit: None,
+            apparent_va: Some(10_000.0),
+        };
+        cfg.reactive_command_delay = Duration::ZERO;
+        cfg.reactive_ramp_rate_var_per_s = f32::INFINITY;
+        w.register(SolarInverter::new(1, Duration::from_secs(1), cfg));
+        let inv = w.get(1).unwrap();
+        let dt = Duration::from_millis(100);
+        let floor = -6_000.0;
+
+        // Curtail to -2 kW, well inside what the sun allows.
+        inv.set_active_setpoint(-2_000.0).unwrap();
+        inv.tick(&w, Utc::now(), dt);
+        assert!(
+            (inv.aggregate_power_w(&w) - (-2_000.0)).abs() < 1.0,
+            "curtailed to -2 kW, got {}",
+            inv.aggregate_power_w(&w),
+        );
+
+        // Full reset: production returns to the floor, NOT to 0 W.
+        inv.reset_setpoint();
+        inv.tick(&w, Utc::now(), dt);
+        assert!(
+            (inv.aggregate_power_w(&w) - floor).abs() < 1.0,
+            "reset must return to the sunlight floor {floor}, got {}",
+            inv.aggregate_power_w(&w),
+        );
+
+        // The active-axis TTL path, with a Q command running alongside.
+        inv.set_active_setpoint(-1_000.0).unwrap();
+        inv.set_reactive_setpoint(3_000.0).unwrap();
+        inv.tick(&w, Utc::now(), dt);
+        assert!((inv.aggregate_power_w(&w) - (-1_000.0)).abs() < 1.0);
+        assert!((inv.aggregate_reactive_var(&w) - 3_000.0).abs() < 1.0);
+
+        inv.reset_setpoint_axis(SetpointAxis::Active);
+        inv.tick(&w, Utc::now(), dt);
+        assert!(
+            (inv.aggregate_power_w(&w) - floor).abs() < 1.0,
+            "an expired curtailment releases to the floor {floor}, got {}",
+            inv.aggregate_power_w(&w),
+        );
+        assert!(
+            (inv.aggregate_reactive_var(&w) - 3_000.0).abs() < 1.0,
+            "the Q command survives an active-axis expiry, got {}",
+            inv.aggregate_reactive_var(&w),
+        );
+    }
+
     /// An augmentation demanding MORE production than the sun allows
     /// does not overlap the sunlight band at all, so the active axis
     /// has nowhere legal to sit and parks at 0. It must NOT produce at

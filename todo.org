@@ -1006,7 +1006,13 @@ auto-resume).
 *** DONE [#B] PV health-trip never trips the reactive ramp :reactive:fidelity:
 :LOGBOOK:
 - State "DONE"       from "TODO"       [2026-08-24 Mo 19:53] \\
-  Resolved: PV health-trip now trips the Q axis (PowerAxis) alongside the active axis, so a tripped inverter's reactive ramp snaps to zero instead of teleporting on recovery.
+  Resolved: PV health-trip now gives the Q axis the full =PowerAxis::trip=
+  (delay reset + ramp snap + publish 0), so a tripped inverter's reactive
+  ramp snaps to zero instead of teleporting on recovery and its Volt/VAR
+  command has to be re-dispatched. NOT alongside the active axis: that one
+  deliberately keeps its armed curtailment and only snaps its output
+  (=snap_output(0)=), because a recovered PV inverter reconnects and picks
+  generation back up at the curtailment it was already given.
 :END:
 =solar_inverter.rs= zeroes published Q while tripped but leaves
 =reactive.ramp.actual= and the armed command; recovery teleports Q
@@ -1306,6 +1312,14 @@ reactive-specific logic. The open question this entry tracks is
 unchanged: whether an armed active setpoint should follow the same
 re-clamp when a battery's SoC-derated envelope narrows, or honour the
 command until TTL as it does today.
+
+Adjacent, and now symmetric on both axes: the wall-clock vs tick-clock
+TTL asymmetry. Telemetry and the setpoint/augment gates sample the
+envelope at =Utc::now()= (no site clock on a gRPC/UI thread) while
+=PowerAxis::step= judges augmentation liveness on the tick clock, so a
+scenario running on a scaled or frozen clock can see an augmentation
+expire in one and not the other. Worth fixing once, for both axes,
+alongside whatever this entry settles on.
 
 ** d6. Persist-gate follow-ups (origin gating, form splitting) :design:lisp:
 

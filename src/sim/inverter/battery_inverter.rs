@@ -828,17 +828,20 @@ mod tests {
     /// non-overlapping pair), so `tracking_envelope_at` returns a
     /// truly empty `VecBounds` — unlike the apparent-power-rim case
     /// above. `telemetry()`'s `reactive_power_bounds` and the
-    /// `reactive_bounds()` trait method (read by the config-bounds
-    /// proto and the CLAMP arm) must both normalize that empty
-    /// envelope to a PRESENT `(0.0, 0.0)` band — an absent band would
+    /// `reactive_bounds()` trait method (read by the CLAMP arm and by
+    /// the site's `reactive_setpoint_envelope`; the config-bounds
+    /// proto advertises the capability hull instead) must both
+    /// normalize that empty envelope to a PRESENT `(0.0, 0.0)` band —
+    /// an absent band would
     /// leave the WS/history/hovercard surfaces on stale non-zero
     /// bounds exactly when the operator should see "no headroom".
     ///
-    /// Constructs `BatteryInverter` directly (not through
-    /// `MicrogridSite::register`) so the test can reach the private
-    /// `reactive` axis and install the augmentation — there is no
-    /// trait-level `augment_reactive_bounds` today, only
-    /// `augment_active_bounds`.
+    /// The augmentation goes in through the trait's
+    /// `augment_reactive_bounds`, the same door the gRPC route uses.
+    /// The inverter is still constructed directly rather than through
+    /// `MicrogridSite::register` because the sanity check below reads
+    /// the private `reactive` axis, which only the concrete type
+    /// exposes.
     #[test]
     fn zero_headroom_from_a_disjoint_q_augmentation_publishes_a_present_zero_band() {
         let inv = BatteryInverter::new(
@@ -857,7 +860,7 @@ mod tests {
         let t0 = Utc::now();
         // At P=0 the caps band is [-1000, 1000]; a live augmentation
         // at [2000, 3000] shares nothing with it.
-        inv.reactive.augment(
+        inv.augment_reactive_bounds(
             t0,
             VecBounds::single(2000.0, 3000.0),
             Duration::from_secs(60),
@@ -887,5 +890,13 @@ mod tests {
             .expect("reactive_bounds() present even at zero headroom");
         assert_eq!(rb.0.len(), 1);
         assert_eq!((rb.0[0].lower, rb.0[0].upper), (Some(0.0), Some(0.0)));
+
+        // The un-normalized twin the augment gate reads stays empty —
+        // that is what makes a further augmentation disjoint from
+        // everything instead of overlapping a phantom (0, 0) band.
+        let raw = inv
+            .reactive_bounds_raw()
+            .expect("an inverter always reports a raw Q envelope");
+        assert!(raw.0.is_empty(), "raw must stay empty, got {raw}");
     }
 }
