@@ -122,9 +122,22 @@ impl Config {
             }
             // The write never happened, so the step is still ahead of
             // us: put it back where it came from.
-            Err(e) => {
+            Err(StepFailure::NotWritten(e)) => {
                 self.push(id, dir, block);
                 Err(e)
+            }
+            // The file DOES carry the popped block now — only
+            // re-evaluating it failed (typically the script section
+            // driving a component the older block doesn't declare).
+            // So the step was taken, and the block it displaced goes
+            // on the opposite stack: the newer structure stays one
+            // press of Redo away. Pushing the popped block back
+            // instead would drop `displaced` on the floor, leaving
+            // the file and the history disagreeing and every further
+            // press repeating the same failure.
+            Err(StepFailure::ReloadFailed { error, displaced }) => {
+                self.push(id, dir.opposite(), displaced);
+                Err(error)
             }
         }
     }
@@ -141,24 +154,35 @@ impl Config {
         ctx: &mut tulisp::TulispContext,
         path: &Path,
         block: &str,
-    ) -> Result<String, String> {
+    ) -> Result<String, StepFailure> {
+        // Everything down to the write leaves the file as it was.
+        let unwritten = StepFailure::NotWritten;
         let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        let parsed =
-            microgrid_file::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-        let displaced = parsed
-            .generated
-            .ok_or_else(|| format!("{} carries no switchyard-generated block", path.display()))?;
+            .map_err(|e| unwritten(format!("cannot read {}: {e}", path.display())))?;
+        let parsed = microgrid_file::parse(&text)
+            .map_err(|e| unwritten(format!("{}: {e}", path.display())))?;
+        let displaced = parsed.generated.ok_or_else(|| {
+            unwritten(format!(
+                "{} carries no switchyard-generated block",
+                path.display()
+            ))
+        })?;
         let composed = microgrid_file::compose(block, &parsed.script);
         microgrid_file::write_atomic(path, &composed)
-            .map_err(|e| format!("write {}: {e}", path.display()))?;
+            .map_err(|e| unwritten(format!("write {}: {e}", path.display())))?;
         // Our own write — the watcher must not bounce it back as an
         // edit and reload the file a second time.
         self.record_self_write(path, &composed);
         // Per file, never the whole world: undoing one microgrid's
         // edit must not rebuild every other microgrid.
-        self.reload_file_locked(ctx, path)?;
-        Ok(displaced)
+        //
+        // The file already carries `block`, so a failure from here on
+        // is a step that HAPPENED: hand `displaced` back with the
+        // error so the caller stacks it instead of un-popping.
+        match self.reload_file_locked(ctx, path) {
+            Ok(_) => Ok(displaced),
+            Err(error) => Err(StepFailure::ReloadFailed { error, displaced }),
+        }
     }
 
     /// The managed file backing microgrid `id`. Undo rewrites that
@@ -202,6 +226,21 @@ impl Config {
             Direction::Redo => history.redo.push(block),
         }
     }
+}
+
+/// Why applying one step failed, split by whether the file was
+/// already rewritten. The two need opposite recoveries, and getting
+/// it wrong loses a block: an un-pop after a successful write drops
+/// the displaced block, and stacking a displaced block that was
+/// never displaced invents history.
+enum StepFailure {
+    /// The file still carries what it carried before, so the step is
+    /// still ahead of us and belongs back on the stack it came off.
+    NotWritten(String),
+    /// The file now carries the popped block; only re-evaluating it
+    /// failed. The step counts as taken, and `displaced` — the block
+    /// the write replaced — belongs on the opposite stack.
+    ReloadFailed { error: String, displaced: String },
 }
 
 /// Which stack a step comes off.
@@ -358,6 +397,48 @@ mod tests {
 
         let (on_disk, live) = file_and_live(&cfg, &path, 23);
         assert_eq!(on_disk.trim(), live.trim(), "file must carry live state");
+    }
+
+    /// An undo whose RELOAD fails still rewrote the file, so the step
+    /// happened: the block it displaced must land on the redo stack,
+    /// or the newer structure is gone for good — the file carries the
+    /// older block, the history says the newer one is still current,
+    /// and every further press of Undo replays the same failure.
+    ///
+    /// Reachable whenever the hand-written script section drives a
+    /// component only the newer block declares, which is the ordinary
+    /// shape of a managed file: add a meter, then drive it.
+    #[test]
+    fn a_failed_reload_leaves_the_displaced_block_on_the_redo_stack() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let path = managed(&cfg, &dir, 26, 8896);
+        cfg.eval_in_mg(26, "(%make-meter :id 400)").unwrap();
+        // A script section that only works while meter 400 exists.
+        // Undoing back past the meter therefore fails its reload.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let block = microgrid_file::parse(&text).unwrap().generated.unwrap();
+        let composed = microgrid_file::compose(&block, "(set-meter-power 400 1000.0)\n");
+        microgrid_file::write_atomic(&path, &composed).unwrap();
+        cfg.record_self_write(&path, &composed);
+
+        let err = cfg
+            .undo(26)
+            .expect_err("the script section fails to reload");
+        assert!(err.contains("400"), "the reload error is reported: {err}");
+        assert_eq!(
+            cfg.undo_depths(26).redo,
+            1,
+            "the displaced block is still recoverable"
+        );
+
+        cfg.redo(26).expect("redo puts the newer block back");
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        assert!(
+            r[&26].site.get(400).is_some(),
+            "and the world it describes works again"
+        );
     }
 
     /// Restoring a snapshot rewrites the generated block, so it
