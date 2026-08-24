@@ -31,6 +31,14 @@ pub struct Meter {
     /// loads / generators that present as a power flow without being
     /// a discrete addressable component.
     hidden: bool,
+    /// The `:power` value this meter was constructed with, when it
+    /// was a plain constant — `None` for a dynamic (lambda / symbol)
+    /// source or no source at all. Only construction-time state:
+    /// later pokes via `set_active_power_override` /
+    /// `set_fixed_power` never touch this, so the microgrid-file
+    /// renderer keeps writing the original construction kwarg
+    /// instead of resurrecting a runtime poke as if it were config.
+    constructed_power: Option<f32>,
 }
 
 impl Meter {
@@ -41,6 +49,10 @@ impl Meter {
         stream_jitter_pct: f32,
         hidden: bool,
     ) -> Self {
+        let constructed_power = power_source
+            .as_ref()
+            .filter(|s| !s.is_dynamic())
+            .map(|s| s.get());
         Self {
             id,
             name: format!("meter-{id}"),
@@ -48,6 +60,7 @@ impl Meter {
             power_source: RwLock::new(power_source),
             stream_jitter_pct,
             hidden,
+            constructed_power,
         }
     }
 
@@ -177,6 +190,30 @@ impl SimulatedComponent for Meter {
     fn is_hidden(&self) -> bool {
         self.hidden
     }
+
+    fn make_fn(&self) -> &'static str {
+        "%make-meter"
+    }
+
+    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+        let mut kw = Vec::new();
+        if self.interval != Duration::from_millis(1000) {
+            kw.push((":interval", self.interval.as_millis().to_string()));
+        }
+        if let Some(p) = self.constructed_power.filter(|p| p.is_finite()) {
+            kw.push((":power", crate::lisp::lisp_float(p as f64)));
+        }
+        if self.hidden {
+            kw.push((":hidden", "t".to_string()));
+        }
+        if self.stream_jitter_pct != 0.0 {
+            kw.push((
+                ":stream-jitter-pct",
+                crate::lisp::lisp_float(self.stream_jitter_pct as f64),
+            ));
+        }
+        kw
+    }
 }
 
 /// Voltage-weighted per-phase split of a single total. Mirrors a real
@@ -250,6 +287,12 @@ mod tests {
         }
         fn aggregate_reactive_var(&self, _: &MicrogridSite) -> f32 {
             self.q
+        }
+        fn make_fn(&self) -> &'static str {
+            "%make-test-stub"
+        }
+        fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+            Vec::new()
         }
     }
 
@@ -444,5 +487,38 @@ mod tests {
         // gRPC-facing `connections()` view.
         assert!(w.connections().is_empty());
         assert_eq!(w.hidden_connections(), vec![(2, 9000)]);
+    }
+
+    /// `constructed_power` captures only the constant `:power` a
+    /// meter was built with — later pokes via
+    /// `set_active_power_override` must not leak into it. A meter
+    /// with no power source at all renders no `:power` kwarg.
+    #[test]
+    fn meter_records_constructed_power_constant_only() {
+        // Constant power → kwarg present; poked value must NOT change it.
+        let m = Meter::new(
+            1,
+            Duration::from_secs(1),
+            DynamicScalar::from_lisp(&1875.0f64.into(), 0.0),
+            0.0,
+            false,
+        );
+        let kw = |m: &Meter| {
+            m.constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(kw(&m).contains(":power 1875.0"));
+        m.set_active_power_override(9999.0);
+        assert!(
+            kw(&m).contains(":power 1875.0"),
+            "pokes are not construction"
+        );
+        // No power source → no :power kwarg; hidden renders.
+        let h = Meter::new(2, Duration::from_secs(1), None, 0.0, true);
+        assert!(!kw(&h).contains(":power"));
+        assert!(kw(&h).contains(":hidden t"));
     }
 }

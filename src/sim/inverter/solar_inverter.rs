@@ -35,6 +35,12 @@ pub struct SolarInverterConfig {
     /// Reactive slew rate (VAR/s). 2000 default ≈ 5 s OLRT for a
     /// 10 kVAR window — IEEE 1547-2018 Cat B baseline.
     pub reactive_ramp_rate_var_per_s: f32,
+    /// True when `:sunlight%` was constructed as a lambda or symbol
+    /// rather than a plain number. Not a plist kwarg itself — it
+    /// only tells the microgrid-file renderer to omit `:sunlight%`
+    /// (a dynamic source can't round-trip as a static number) rather
+    /// than write out `sunlight_pct`'s stale fallback value.
+    pub sunlight_dynamic: bool,
 }
 
 impl Default for SolarInverterConfig {
@@ -49,6 +55,7 @@ impl Default for SolarInverterConfig {
             reactive: ReactiveCapability::microsim_default(),
             reactive_command_delay: Duration::from_millis(100),
             reactive_ramp_rate_var_per_s: 2000.0,
+            sunlight_dynamic: false,
         }
     }
 }
@@ -303,6 +310,34 @@ impl SimulatedComponent for SolarInverter {
     fn set_sunlight_source(&self, scalar: DynamicScalar) {
         SolarInverter::set_sunlight_source(self, scalar);
     }
+
+    fn make_fn(&self) -> &'static str {
+        "%make-solar-inverter"
+    }
+
+    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+        let mut kw = super::common_inverter_kwargs(super::CommonInverterCfg {
+            rated_lower_w: self.cfg.rated_lower_w,
+            rated_upper_w: self.cfg.rated_upper_w,
+            command_delay: self.cfg.command_delay,
+            ramp_rate_w_per_s: self.cfg.ramp_rate_w_per_s,
+            interval: self.interval,
+            stream_jitter_pct: self.cfg.stream_jitter_pct,
+            reactive: self.cfg.reactive,
+            reactive_command_delay: self.cfg.reactive_command_delay,
+            reactive_ramp_rate_var_per_s: self.cfg.reactive_ramp_rate_var_per_s,
+        });
+        // A dynamic sunlight source can't round-trip as a static
+        // number — the renderer omits :sunlight% entirely rather
+        // than writing the (possibly stale) fallback value.
+        if !self.cfg.sunlight_dynamic {
+            kw.push((
+                ":sunlight%",
+                crate::lisp::lisp_float(self.cfg.sunlight_pct as f64),
+            ));
+        }
+        kw
+    }
 }
 
 #[cfg(test)]
@@ -399,5 +434,40 @@ mod tests {
         w.set_health(1, Health::Ok);
         inv.tick(&w, Utc::now(), dt);
         assert!((inv.aggregate_power_w(&w) - (-10_000.0)).abs() < 1.0);
+    }
+
+    /// A static `:sunlight%` renders as its own kwarg, sharing the
+    /// same rated / command-delay / reactive kwargs as the battery
+    /// inverter.
+    #[test]
+    fn constructor_kwargs_round_trip_solar() {
+        let mut cfg = cfg_with_sun(42.0);
+        cfg.rated_lower_w = -12_000.0;
+        let inv = SolarInverter::new(5, Duration::from_secs(1), cfg);
+        assert_eq!(inv.make_fn(), "%make-solar-inverter");
+        let s = inv
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(s.contains(":sunlight% 42.0"));
+        assert!(s.contains(":rated-lower -12000.0"));
+    }
+
+    /// A lambda- or symbol-driven sunlight source can't round-trip
+    /// as a static number, so `:sunlight%` is omitted entirely.
+    #[test]
+    fn constructor_kwargs_omits_sunlight_pct_when_dynamic() {
+        let mut cfg = cfg_with_sun(100.0);
+        cfg.sunlight_dynamic = true;
+        let inv = SolarInverter::new(6, Duration::from_secs(1), cfg);
+        let s = inv
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!s.contains(":sunlight%"));
     }
 }

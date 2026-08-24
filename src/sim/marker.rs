@@ -69,4 +69,68 @@ impl SimulatedComponent for Marker {
             ..Default::default()
         }
     }
+
+    fn make_fn(&self) -> &'static str {
+        match self.category {
+            Category::Chp => "%make-chp",
+            Category::WindTurbine => "%make-wind-turbine",
+            Category::SteamBoiler => "%make-steam-boiler",
+            Category::PowerTransformer => "%make-power-transformer",
+            Category::Breaker => "%make-breaker",
+            other => unreachable!("Marker::make_fn with non-marker category {other:?}"),
+        }
+    }
+
+    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+        let mut kw = Vec::new();
+        if self.stream_jitter_pct != 0.0 {
+            kw.push((
+                ":stream-jitter-pct",
+                crate::lisp::lisp_float(self.stream_jitter_pct as f64),
+            ));
+        }
+        kw
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `make_fn` maps every marker category to its `%make-*`
+    /// primitive; `:stream-jitter-pct` renders only when non-zero.
+    #[test]
+    fn constructor_kwargs_and_make_fn_by_category() {
+        let m = Marker::new(1, Category::Chp, 3.0);
+        assert_eq!(m.make_fn(), "%make-chp");
+        let s = m
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(s.contains(":stream-jitter-pct 3.0"));
+
+        assert_eq!(
+            Marker::new(2, Category::WindTurbine, 0.0).make_fn(),
+            "%make-wind-turbine"
+        );
+        assert_eq!(
+            Marker::new(3, Category::SteamBoiler, 0.0).make_fn(),
+            "%make-steam-boiler"
+        );
+        assert_eq!(
+            Marker::new(4, Category::PowerTransformer, 0.0).make_fn(),
+            "%make-power-transformer"
+        );
+        assert_eq!(
+            Marker::new(5, Category::Breaker, 0.0).make_fn(),
+            "%make-breaker"
+        );
+        assert!(
+            Marker::new(2, Category::WindTurbine, 0.0)
+                .constructor_kwargs()
+                .is_empty()
+        );
+    }
 }

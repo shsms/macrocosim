@@ -532,6 +532,18 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// Replace the apparent-power (kVA) cap on the reactive envelope
     /// at runtime. `None` disables the kVA constraint.
     fn set_reactive_apparent_va(&self, _va: Option<f32>) {}
+
+    // ── microgrid-file rendering ──────────────────────────────────────
+
+    /// The `%make-*` primitive that rebuilds this component on load.
+    fn make_fn(&self) -> &'static str;
+
+    /// Construction kwargs as lisp-syntax (key, value) pairs, excluding
+    /// `:id`, `:name`, `:successors` and runtime-mode kwargs — the
+    /// microgrid-file renderer supplies those. Values follow the file
+    /// format rules: floats via `lisp_float`, non-finite values omitted,
+    /// disabled reactive caps pinned as `0`.
+    fn constructor_kwargs(&self) -> Vec<(&'static str, String)>;
 }
 
 /// Cloneable handle that we hand to Lisp via `Shared<dyn TulispAny>`.

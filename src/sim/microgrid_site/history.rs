@@ -217,6 +217,12 @@ mod tests {
                 ..Default::default()
             }
         }
+        fn make_fn(&self) -> &'static str {
+            "%make-test-stub"
+        }
+        fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+            Vec::new()
+        }
     }
 
     /// Driving `record_history_snapshot` directly populates the
@@ -253,6 +259,12 @@ mod tests {
                     soc_pct: Some(72.5),
                     ..Default::default()
                 }
+            }
+            fn make_fn(&self) -> &'static str {
+                "%make-test-stub"
+            }
+            fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+                Vec::new()
             }
         }
 
@@ -310,6 +322,12 @@ mod tests {
                     soc_pct: Some(60.0),
                     ..Default::default()
                 }
+            }
+            fn make_fn(&self) -> &'static str {
+                "%make-test-stub"
+            }
+            fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+                Vec::new()
             }
         }
         let w = MicrogridSite::new();
@@ -398,6 +416,12 @@ mod tests {
                     dc_power_w: Some(5000.0),
                     ..Default::default()
                 }
+            }
+            fn make_fn(&self) -> &'static str {
+                "%make-test-stub"
+            }
+            fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+                Vec::new()
             }
         }
         let w = MicrogridSite::new();

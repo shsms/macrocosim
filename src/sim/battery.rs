@@ -280,4 +280,58 @@ impl SimulatedComponent for Battery {
         let s = self.state.lock();
         Some(VecBounds::single(s.effective_lower_w, s.effective_upper_w))
     }
+
+    fn make_fn(&self) -> &'static str {
+        "%make-battery"
+    }
+
+    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+        let lf = |v: f32| crate::lisp::lisp_float(v as f64);
+        let mut kw = vec![
+            (":capacity", lf(self.cfg.capacity_wh)),
+            (":initial-soc", lf(self.cfg.initial_soc_pct)),
+            (":soc-lower", lf(self.cfg.soc_lower_pct)),
+            (":soc-upper", lf(self.cfg.soc_upper_pct)),
+            (":voltage", lf(self.cfg.voltage_v)),
+            (":rated-lower", lf(self.cfg.rated_lower_w)),
+            (":rated-upper", lf(self.cfg.rated_upper_w)),
+            (":soc-protect-margin", lf(self.cfg.soc_protect_margin_pct)),
+        ];
+        if self.interval != Duration::from_millis(1000) {
+            kw.push((":interval", self.interval.as_millis().to_string()));
+        }
+        if self.cfg.stream_jitter_pct != 0.0 {
+            kw.push((":stream-jitter-pct", lf(self.cfg.stream_jitter_pct)));
+        }
+        kw
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every construction kwarg round-trips into the rendered form,
+    /// and `:interval` renders only when it departs from the 1000 ms
+    /// default.
+    #[test]
+    fn constructor_kwargs_round_trip_battery() {
+        let cfg = BatteryConfig {
+            capacity_wh: 50_000.0,
+            initial_soc_pct: 20.0,
+            ..Default::default()
+        };
+        let b = Battery::new(7, Duration::from_millis(500), cfg);
+        assert_eq!(b.make_fn(), "%make-battery");
+        let kw = b.constructor_kwargs();
+        let s = kw
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(s.contains(":capacity 50000.0"));
+        assert!(s.contains(":initial-soc 20.0"));
+        assert!(s.contains(":interval 500"));
+        assert!(s.contains(":rated-lower -30000.0"));
+    }
 }

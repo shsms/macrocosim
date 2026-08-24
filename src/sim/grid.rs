@@ -73,4 +73,57 @@ impl SimulatedComponent for Grid {
     fn stream_jitter_pct(&self) -> f32 {
         self.stream_jitter_pct
     }
+
+    fn make_fn(&self) -> &'static str {
+        "%make-grid-connection-point"
+    }
+
+    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+        let mut kw = Vec::new();
+        if self.rated_fuse_current != 0 {
+            kw.push((":rated-fuse-current", self.rated_fuse_current.to_string()));
+        }
+        if let Some((l, u)) = self.rated_active_bounds {
+            kw.push((":rated-lower", crate::lisp::lisp_float(l as f64)));
+            kw.push((":rated-upper", crate::lisp::lisp_float(u as f64)));
+        }
+        if self.stream_jitter_pct != 0.0 {
+            kw.push((
+                ":stream-jitter-pct",
+                crate::lisp::lisp_float(self.stream_jitter_pct as f64),
+            ));
+        }
+        kw
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sim::SimulatedComponent;
+
+    /// All-defaults grid renders no kwargs at all — the loader's
+    /// own defaults reconstruct the same state.
+    #[test]
+    fn constructor_kwargs_empty_for_defaults() {
+        let g = Grid::new(1, 0, None, 0.0);
+        assert_eq!(g.make_fn(), "%make-grid-connection-point");
+        assert!(g.constructor_kwargs().is_empty());
+    }
+
+    /// Every non-default field round-trips into its kwarg.
+    #[test]
+    fn constructor_kwargs_round_trip_grid() {
+        let g = Grid::new(2, 200, Some((-50_000.0, 50_000.0)), 2.5);
+        let kw = g.constructor_kwargs();
+        let s = kw
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(s.contains(":rated-fuse-current 200"));
+        assert!(s.contains(":rated-lower -50000.0"));
+        assert!(s.contains(":rated-upper 50000.0"));
+        assert!(s.contains(":stream-jitter-pct 2.5"));
+    }
 }

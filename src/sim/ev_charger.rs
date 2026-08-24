@@ -269,6 +269,37 @@ impl SimulatedComponent for EvCharger {
         let aug = self.bounds.lock().effective();
         Some(soc.intersect(&aug))
     }
+
+    fn make_fn(&self) -> &'static str {
+        "%make-ev-charger"
+    }
+
+    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+        let lf = |v: f32| crate::lisp::lisp_float(v as f64);
+        let mut kw = vec![
+            (":rated-lower", lf(self.cfg.rated_lower_w)),
+            (":rated-upper", lf(self.cfg.rated_upper_w)),
+            (":initial-soc", lf(self.cfg.initial_soc_pct)),
+            (":soc-lower", lf(self.cfg.soc_lower_pct)),
+            (":soc-upper", lf(self.cfg.soc_upper_pct)),
+            (":soc-protect-margin", lf(self.cfg.soc_protect_margin_pct)),
+            (":capacity", lf(self.cfg.capacity_wh)),
+            (
+                ":command-delay-ms",
+                self.cfg.command_delay.as_millis().to_string(),
+            ),
+        ];
+        if self.cfg.ramp_rate_w_per_s.is_finite() {
+            kw.push((":ramp-rate", lf(self.cfg.ramp_rate_w_per_s)));
+        }
+        if self.interval != Duration::from_millis(1000) {
+            kw.push((":interval", self.interval.as_millis().to_string()));
+        }
+        if self.cfg.stream_jitter_pct != 0.0 {
+            kw.push((":stream-jitter-pct", lf(self.cfg.stream_jitter_pct)));
+        }
+        kw
+    }
 }
 
 #[cfg(test)]
@@ -383,5 +414,30 @@ mod tests {
 
         let eff = ev.effective_active_bounds().unwrap();
         assert_eq!(eff.0[0].upper, Some(22_000.0));
+    }
+
+    /// Every construction kwarg round-trips; `:ramp-rate` renders
+    /// only when finite and `:interval` only when it departs from
+    /// the 1000 ms default.
+    #[test]
+    fn constructor_kwargs_round_trip_ev_charger() {
+        let cfg = EvChargerConfig {
+            capacity_wh: 40_000.0,
+            rated_upper_w: 11_000.0,
+            ..Default::default()
+        };
+        let ev = EvCharger::new(9, Duration::from_millis(500), cfg);
+        assert_eq!(ev.make_fn(), "%make-ev-charger");
+        let s = ev
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(s.contains(":capacity 40000.0"));
+        assert!(s.contains(":rated-upper 11000.0"));
+        assert!(s.contains(":interval 500"));
+        assert!(s.contains(":command-delay-ms 500"));
+        assert!(!s.contains(":ramp-rate"), "infinite ramp is omitted");
     }
 }

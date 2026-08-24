@@ -303,6 +303,24 @@ impl SimulatedComponent for BatteryInverter {
     fn set_reactive_apparent_va(&self, va: Option<f32>) {
         self.reactive.set_apparent_va(va);
     }
+
+    fn make_fn(&self) -> &'static str {
+        "%make-battery-inverter"
+    }
+
+    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+        super::common_inverter_kwargs(super::CommonInverterCfg {
+            rated_lower_w: self.cfg.rated_lower_w,
+            rated_upper_w: self.cfg.rated_upper_w,
+            command_delay: self.cfg.command_delay,
+            ramp_rate_w_per_s: self.cfg.ramp_rate_w_per_s,
+            interval: self.interval,
+            stream_jitter_pct: self.cfg.stream_jitter_pct,
+            reactive: self.cfg.reactive,
+            reactive_command_delay: self.cfg.reactive_command_delay,
+            reactive_ramp_rate_var_per_s: self.cfg.reactive_ramp_rate_var_per_s,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -684,5 +702,29 @@ mod tests {
         inv.set_active_setpoint(2000.0).unwrap();
         inv.tick(&w, Utc::now(), dt);
         assert!((inv.aggregate_power_w(&w) - 2000.0).abs() < 1.0);
+    }
+
+    /// A disabled PF cap (`None`) must pin as literal `0`, not be
+    /// omitted — an omitted kwarg would resurrect the 0.35 PF default
+    /// on load. Infinite ramp rates are omitted instead of rendered
+    /// as a non-finite literal.
+    #[test]
+    fn constructor_kwargs_pin_reactive_disabled_as_zero() {
+        let mut cfg = BatteryInverterConfig::default();
+        cfg.reactive.pf_limit = None; // disabled at construction
+        let inv = BatteryInverter::new(3, Duration::from_secs(1), cfg);
+        assert_eq!(inv.make_fn(), "%make-battery-inverter");
+        let s = inv
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            s.contains(":reactive-pf-limit 0"),
+            "None must pin as 0, got {s}"
+        );
+        assert!(!s.contains(":ramp-rate"), "infinite ramp is omitted");
+        assert!(s.contains(":command-delay-ms 0"));
     }
 }

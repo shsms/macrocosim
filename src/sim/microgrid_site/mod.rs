@@ -553,6 +553,15 @@ impl MicrogridSite {
             .collect()
     }
 
+    /// Every `(parent, child)` edge, hidden or not, in insertion
+    /// order — an unfiltered clone of the raw connections graph.
+    /// Unlike [`Self::children_of`] this isn't scoped to one parent;
+    /// the microgrid-file renderer walks the whole graph to emit
+    /// `:successors` / `(connect …)` forms.
+    pub fn all_connections(&self) -> Vec<(u64, u64)> {
+        self.inner.connections.read().clone()
+    }
+
     /// Edges where at least one endpoint is hidden — the complement
     /// of [`Self::connections`]. The UI surfaces these as a separate
     /// `hidden_connections` field so a hidden meter's outgoing edges
@@ -799,6 +808,15 @@ impl MicrogridSite {
         // Renames count as structural for persistence purposes — a
         // display name set from the UI should survive a reload.
         self.bump_structural();
+    }
+
+    /// The raw `name_overrides` entry for `id`, or `None` if the
+    /// component has never been renamed. Unlike [`Self::display_name`]
+    /// this never falls back to the component's auto-generated
+    /// default — the microgrid-file renderer needs to know whether
+    /// `:name` was actually set, not just what name currently reads.
+    pub fn name_override(&self, id: u64) -> Option<String> {
+        self.inner.name_overrides.read().get(&id).cloned()
     }
 
     /// User-facing display name — override if present, else the
@@ -1511,6 +1529,12 @@ mod tests {
         fn telemetry(&self, _: &MicrogridSite) -> crate::sim::Telemetry {
             crate::sim::Telemetry::default()
         }
+        fn make_fn(&self) -> &'static str {
+            "%make-test-stub"
+        }
+        fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
+            Vec::new()
+        }
     }
 
     #[test]
@@ -1558,6 +1582,40 @@ mod tests {
         assert_eq!(w.display_name(7).as_deref(), Some("frontside-meter"));
         // The component's intrinsic name() is untouched.
         assert_eq!(w.get(7).unwrap().name(), "stub-7");
+    }
+
+    /// `name_override` returns only an actual rename, never the
+    /// component's auto default; `all_connections` is the raw,
+    /// unfiltered, insertion-ordered edge list — unlike `connections`
+    /// it doesn't drop edges touching a hidden component.
+    #[test]
+    fn name_override_and_all_connections_are_raw() {
+        let site = MicrogridSite::new();
+        site.register(crate::sim::Meter::new(
+            1,
+            std::time::Duration::from_secs(1),
+            None,
+            0.0,
+            false,
+        ));
+        site.register(crate::sim::Meter::new(
+            2,
+            std::time::Duration::from_secs(1),
+            None,
+            0.0,
+            true,
+        ));
+        site.connect(1, 2);
+        assert_eq!(
+            site.name_override(1),
+            None,
+            "auto default is not an override"
+        );
+        site.rename(1, "main".into());
+        assert_eq!(site.name_override(1).as_deref(), Some("main"));
+        // Hidden endpoint edges are still listed, in insertion order.
+        assert_eq!(site.all_connections(), vec![(1, 2)]);
+        assert!(site.connections().is_empty(), "visible-only stays filtered");
     }
 
     /// `reset()` clears history alongside the rest of the MicrogridSite so a

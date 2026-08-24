@@ -423,6 +423,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                     }
                 } else {
                     dynamic_sunlight = DynamicScalar::from_lisp(raw, cfg.sunlight_pct);
+                    cfg.sunlight_dynamic = true;
                 }
             }
             if let Some(v) = a.rated_lower {
