@@ -98,10 +98,14 @@ impl PowerAxis {
     ///
     /// The static piece is skipped entirely when `rated` is `None`
     /// (a Q axis) AND no augmentation is live — that combination means
-    /// "no static constraint", not "constrained to nothing". Any OTHER
-    /// empty result — a P axis's rated band emptied by a disjoint
-    /// augmentation, a Q axis's caps band emptied by a disjoint
-    /// augmentation, or the intersection of otherwise non-empty pieces
+    /// "no static constraint", not "constrained to nothing". Note the
+    /// second half: when augmentations ARE live and their product is
+    /// empty, they exclude one another — the opposite answer — so
+    /// `has_live_augmentations`, not emptiness alone, decides. Any
+    /// OTHER empty result — a P axis's rated band
+    /// emptied by a disjoint augmentation, a Q axis's caps band emptied
+    /// by a disjoint augmentation, two live augmentations disjoint from
+    /// each other, or the intersection of otherwise non-empty pieces
     /// coming up empty — IS folded in as a real, if degenerate,
     /// constraint: `accept` rejects every nonzero value against it,
     /// it does NOT treat it as unconstrained (see `accept`'s doc).
@@ -120,8 +124,13 @@ impl PowerAxis {
     ) -> VecBounds {
         let mut acc: Option<VecBounds> = None;
 
-        let static_eff = self.augs.lock().effective_at(now);
-        if !(self.rated.is_none() && static_eff.0.is_empty()) {
+        // One lock for both reads so the two answers describe the same
+        // augmentation queue.
+        let (static_eff, any_live) = {
+            let augs = self.augs.lock();
+            (augs.effective_at(now), augs.has_live_augmentations(now))
+        };
+        if !(self.rated.is_none() && static_eff.0.is_empty() && !any_live) {
             acc = Some(static_eff);
         }
 
@@ -639,6 +648,63 @@ mod tests {
             Duration::from_secs(60),
         );
         assert!(ax.accept(3_500.0, t0, 0.0).is_err());
+    }
+
+    /// Two live Q augmentations that are mutually disjoint leave no
+    /// legal band at all. "Live, but nothing fits" is a real
+    /// constraint — it is NOT the "no augmentation live" case a Q axis
+    /// skips because it has no static band of its own. Skipping it
+    /// would silently revert the axis to the bare caps band and let
+    /// through values neither augmentation permits, so `accept` must
+    /// reject every nonzero value and `step` must park at 0.
+    #[test]
+    fn mutually_disjoint_live_q_augmentations_leave_no_legal_band() {
+        let ax = q_axis(
+            ReactiveCapability {
+                pf_limit: None,
+                apparent_va: Some(5_000.0),
+            },
+            Duration::ZERO,
+            f32::INFINITY,
+        );
+        let t0 = Utc::now();
+        // Baseline: at P = 0 the caps band is ±5 kVAr and 2 kVAr rides it.
+        ax.accept(2_000.0, t0, 0.0).unwrap();
+        assert_eq!(ax.step(t0, Duration::from_secs(1), q_ctx(0.0)), 2_000.0);
+
+        // Two live augmentations with no overlap between them.
+        ax.augment(
+            t0,
+            VecBounds::single(-4_000.0, -3_000.0),
+            Duration::from_secs(60),
+        );
+        ax.augment(
+            t0,
+            VecBounds::single(-500.0, 500.0),
+            Duration::from_secs(60),
+        );
+
+        let env = ax.validation_envelope_at(t0, 0.0);
+        assert!(
+            env.0.is_empty(),
+            "disjoint live augmentations leave nothing legal, got {env}"
+        );
+        // Neither augmentation's own band is accepted either — there is
+        // no value both permit.
+        assert!(ax.accept(2_000.0, t0, 0.0).is_err());
+        assert!(ax.accept(-3_500.0, t0, 0.0).is_err());
+        assert!(ax.accept(400.0, t0, 0.0).is_err());
+        // The armed 2 kVAr is re-clamped to the park, not to the caps band.
+        assert_eq!(
+            ax.step(
+                t0 + chrono::Duration::seconds(1),
+                Duration::from_secs(1),
+                q_ctx(0.0)
+            ),
+            0.0
+        );
+        // The park rule survives regardless.
+        assert!(ax.accept(0.0, t0, 0.0).is_ok());
     }
 
     #[test]

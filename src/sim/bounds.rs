@@ -336,6 +336,16 @@ impl ComponentBounds {
         out
     }
 
+    /// Whether any augmentation is still live at `now`. The companion
+    /// [`Self::effective_at`] needs for the `augmentations_only()`
+    /// mode: an empty result there means "no constraint" only when
+    /// nothing is live — with live augmentations that exclude each
+    /// other it means the opposite, "nothing is legal". Nobody can
+    /// tell those apart from the returned bands alone.
+    pub fn has_live_augmentations(&self, now: DateTime<Utc>) -> bool {
+        self.augmented.iter().any(|a| a.live_at(now))
+    }
+
     /// Effective bounds now: rated ∩ all augmentations live at the
     /// current instant. See [`Self::effective_at`].
     pub fn effective(&self) -> VecBounds {
@@ -532,6 +542,43 @@ mod tests {
         // Once both expire, the envelope is unconstrained again.
         let eff = cb.effective_at(t0 + chrono::Duration::seconds(120));
         assert!(eff.0.is_empty());
+    }
+
+    /// An empty `effective_at` in augmentations-only mode is ambiguous
+    /// on its own: it means "nothing live, so no constraint" OR "live
+    /// augmentations that exclude each other, so nothing is legal".
+    /// `has_live_augmentations` is what tells the two apart — callers
+    /// (`PowerAxis::envelope`) must fold the second case in as a real,
+    /// if degenerate, constraint instead of skipping it.
+    #[test]
+    fn has_live_augmentations_separates_unconstrained_from_mutually_disjoint() {
+        let mut cb = ComponentBounds::augmentations_only();
+        let t0 = Utc::now();
+        assert!(!cb.has_live_augmentations(t0), "nothing armed yet");
+
+        cb.add_augmentation(
+            t0,
+            VecBounds::single(-4_000.0, -3_000.0),
+            Duration::from_secs(60),
+        );
+        cb.add_augmentation(
+            t0,
+            VecBounds::single(-500.0, 500.0),
+            Duration::from_secs(60),
+        );
+        assert!(
+            cb.effective_at(t0).0.is_empty(),
+            "the two augmentations exclude each other"
+        );
+        assert!(
+            cb.has_live_augmentations(t0),
+            "…but they ARE live: empty here means 'nothing is legal'"
+        );
+
+        // Once both lapse the emptiness means "unconstrained" again.
+        let later = t0 + chrono::Duration::seconds(120);
+        assert!(cb.effective_at(later).0.is_empty());
+        assert!(!cb.has_live_augmentations(later));
     }
 
     /// The fail-safe park: 0 W is accepted even when an augmentation

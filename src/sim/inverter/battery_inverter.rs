@@ -231,16 +231,16 @@ impl SimulatedComponent for BatteryInverter {
             p,
             self.reactive.published(),
             self.active.effective_static(),
-            // A genuinely empty envelope (a live Q augmentation
-            // disjoint from the caps band — the caps band alone is
-            // always a well-formed, present band even at the
-            // apparent-power rim) normalizes to a present (0, 0)
-            // band — otherwise every telemetry consumer sees an
-            // absent bound instead of the real "zero headroom"
-            // answer.
-            self.reactive
-                .tracking_envelope_at(Utc::now(), p, None)
-                .or_zero_band(),
+            // The trait's telemetry-shaped Q envelope: the live
+            // envelope at the measured P it samples itself (normally
+            // the `p` above, though a concurrent tick between the two
+            // reads can slide it by one step), with a genuinely empty
+            // one (a live Q augmentation disjoint from the caps band, or two
+            // live augmentations disjoint from each other) normalized
+            // to a present (0, 0) band — otherwise every telemetry
+            // consumer sees an absent bound instead of the real "zero
+            // headroom" answer. Always `Some` for an inverter.
+            self.reactive_bounds().unwrap_or_default(),
         )
     }
 
@@ -331,13 +331,9 @@ impl SimulatedComponent for BatteryInverter {
         Some(self.active.effective_static())
     }
 
-    fn reactive_bounds(&self) -> Option<crate::sim::bounds::VecBounds> {
+    fn reactive_bounds_raw(&self) -> Option<crate::sim::bounds::VecBounds> {
         let p = *self.measured_w.lock();
-        Some(
-            self.reactive
-                .tracking_envelope_at(Utc::now(), p, None)
-                .or_zero_band(),
-        )
+        Some(self.reactive.tracking_envelope_at(Utc::now(), p, None))
     }
 
     fn reactive_capability(&self) -> Option<crate::sim::reactive::ReactiveCapability> {

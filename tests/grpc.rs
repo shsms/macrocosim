@@ -71,6 +71,38 @@ async fn first_reactive_bounds(
     .expect("a reactive sample carrying bounds")
 }
 
+/// Subscribe to `id` and block until its AC active power reaches
+/// `at_least` W. Panics if it doesn't within 5 s. Lets a test wait for
+/// a commanded setpoint to reach the physics loop's published value
+/// instead of guessing at a sleep.
+async fn wait_for_active_power(
+    c: &mut MicrogridClient<tonic::transport::Channel>,
+    id: u64,
+    at_least: f32,
+) {
+    let mut stream = c
+        .receive_electrical_component_telemetry_stream(
+            ReceiveElectricalComponentTelemetryStreamRequest {
+                electrical_component_id: id,
+                filter: None,
+            },
+        )
+        .await
+        .expect("subscribe")
+        .into_inner();
+    let reached = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Ok(Some(msg)) = stream.message().await {
+            if active_power_w(&msg).is_some_and(|p| p >= at_least) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("telemetry stream timed out");
+    assert!(reached, "component {id} never reached {at_least} W");
+}
+
 const TINY_TOPOLOGY: &str = r#"
 (%make-grid-connection-point :id 1
             :successors
@@ -517,6 +549,88 @@ async fn reactive_augmentation_is_accepted_and_narrows_the_stream() {
         })
         .await
         .expect_err("3 kVAr is outside the augmented ±1 kVAr band");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+}
+
+/// Zero Q headroom must not be a loophole in the augment gate.
+///
+/// The disjoint check runs against the component's LIVE Q envelope.
+/// Telemetry normalizes a genuinely empty envelope to a present
+/// `(0, 0)` band (`VecBounds::or_zero_band`) so consumers see "zero
+/// headroom" rather than an absent bound — but if the gate saw that
+/// normalized band it would accept any augmentation straddling zero,
+/// leaving two live, mutually disjoint augmentations on the axis. So
+/// the gate reads the RAW envelope, and an empty one is disjoint from
+/// everything.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disjoint_q_augmentation_is_rejected_at_zero_headroom() {
+    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+
+    // 1. At P = 0 the caps band is ±5 kVAr, so a [-4, -3] kVAr
+    //    augmentation overlaps it and is accepted.
+    c.augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+        electrical_component_id: 4,
+        target_metric: Metric::AcPowerReactive as i32,
+        bounds: vec![Bounds {
+            lower: Some(-4000.0),
+            upper: Some(-3000.0),
+        }],
+        request_lifetime: Some(30),
+    })
+    .await
+    .expect("an augmentation overlapping the idle caps band is accepted");
+
+    // 2. Drive P to the 5 kVA rim. The caps band collapses to (0, 0),
+    //    which no longer overlaps the live augmentation: the real Q
+    //    envelope is now EMPTY.
+    c.set_electrical_component_power(SetElectricalComponentPowerRequest {
+        electrical_component_id: 4,
+        power: 5000.0,
+        power_type: PowerType::Active as i32,
+        request_lifetime: Some(30),
+    })
+    .await
+    .expect("5 kW is inside the inverter's rated band");
+    wait_for_active_power(&mut c, 4, 4200.0).await;
+
+    // 3. [-500, 500] straddles zero, so it overlaps the NORMALIZED
+    //    (0, 0) band telemetry publishes — but it is disjoint from the
+    //    live [-4000, -3000] augmentation, and accepting it would leave
+    //    the axis with two live augmentations that exclude each other.
+    let err = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 4,
+            target_metric: Metric::AcPowerReactive as i32,
+            bounds: vec![Bounds {
+                lower: Some(-500.0),
+                upper: Some(500.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("an augmentation disjoint from the live Q envelope must be rejected");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("disjoint"),
+        "expected 'disjoint' in message, got {:?}",
+        err.message(),
+    );
+
+    // 4. Nothing was stored: the axis still reports the honest zero
+    //    headroom, and every nonzero Q setpoint is still refused.
+    let band = first_reactive_bounds(&mut c, 4).await;
+    assert_eq!(band.len(), 1, "expected one band, got {band:?}");
+    assert_eq!((band[0].lower, band[0].upper), (Some(0.0), Some(0.0)));
+    let err = c
+        .set_electrical_component_power(SetElectricalComponentPowerRequest {
+            electrical_component_id: 4,
+            power: 400.0,
+            power_type: PowerType::Reactive as i32,
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("no Q is legal with zero headroom");
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
 }
 

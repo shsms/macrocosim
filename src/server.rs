@@ -755,8 +755,18 @@ impl microgrid_server::Microgrid for MicrogridServer {
                     // rejected at full P, where the band has shrunk
                     // away from it. A client that gets bounced should
                     // retry when the operating point permits.
+                    //
+                    // `reactive_bounds_raw`, NOT `reactive_bounds`:
+                    // the latter normalizes an empty envelope to a
+                    // present (0, 0) band for telemetry's benefit, and
+                    // gating against that would accept any
+                    // augmentation straddling zero on a zero-headroom
+                    // axis — leaving two live, mutually disjoint
+                    // augmentations behind. Raw, an empty envelope is
+                    // disjoint from everything, exactly like the P
+                    // side's emptied-rated-band case.
                     let current = if reactive {
-                        component.reactive_bounds()
+                        component.reactive_bounds_raw()
                     } else {
                         component.effective_active_bounds()
                     };

@@ -500,9 +500,31 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     }
 
     /// Current reactive-power envelope (possibly multi-band) at the
-    /// component's current P. `None` for components that don't model
+    /// component's current P, normalized for TELEMETRY: a live
+    /// envelope with no legal band left is reported as a present
+    /// `(0, 0)` band rather than an absent one (see
+    /// [`VecBounds::or_zero_band`]), so a proto stream / WS scalar /
+    /// history chart shows "zero headroom" instead of leaving stale
+    /// bounds on screen. `None` for components that don't model
     /// reactive power.
+    ///
+    /// Implement [`Self::reactive_bounds_raw`] instead of this — the
+    /// default here is exactly that plus the normalization, so the two
+    /// can never drift apart.
     fn reactive_bounds(&self) -> Option<VecBounds> {
+        self.reactive_bounds_raw().map(VecBounds::or_zero_band)
+    }
+
+    /// The same envelope WITHOUT the zero-headroom normalization: an
+    /// empty `VecBounds` really means "no band is legal right now".
+    ///
+    /// The augment gate must use this one — its disjoint check is the
+    /// reason it exists: against the normalized band an
+    /// augmentation straddling zero looks like it overlaps a
+    /// zero-headroom axis, and accepting it can leave two live,
+    /// mutually disjoint augmentations. Against the raw envelope an
+    /// empty band is disjoint from everything, which is the truth.
+    fn reactive_bounds_raw(&self) -> Option<VecBounds> {
         None
     }
 

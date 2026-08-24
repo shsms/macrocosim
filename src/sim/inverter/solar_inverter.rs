@@ -238,16 +238,16 @@ impl SimulatedComponent for SolarInverter {
             p,
             self.reactive.published(),
             self.active.effective_static(),
-            // A genuinely empty envelope (a live Q augmentation
-            // disjoint from the caps band — the caps band alone is
-            // always a well-formed, present band even at the
-            // apparent-power rim) normalizes to a present (0, 0)
-            // band — otherwise every telemetry consumer sees an
-            // absent bound instead of the real "zero headroom"
-            // answer.
-            self.reactive
-                .tracking_envelope_at(Utc::now(), p, None)
-                .or_zero_band(),
+            // The trait's telemetry-shaped Q envelope: the live
+            // envelope at the measured P it samples itself (normally
+            // the `p` above, though a concurrent tick between the two
+            // reads can slide it by one step), with a genuinely empty
+            // one (a live Q augmentation disjoint from the caps band, or two
+            // live augmentations disjoint from each other) normalized
+            // to a present (0, 0) band — otherwise every telemetry
+            // consumer sees an absent bound instead of the real "zero
+            // headroom" answer. Always `Some` for an inverter.
+            self.reactive_bounds().unwrap_or_default(),
         )
     }
 
@@ -324,13 +324,9 @@ impl SimulatedComponent for SolarInverter {
         Some((self.cfg.rated_lower_w, self.cfg.rated_upper_w))
     }
 
-    fn reactive_bounds(&self) -> Option<VecBounds> {
+    fn reactive_bounds_raw(&self) -> Option<VecBounds> {
         let p = self.active.actual();
-        Some(
-            self.reactive
-                .tracking_envelope_at(Utc::now(), p, None)
-                .or_zero_band(),
-        )
+        Some(self.reactive.tracking_envelope_at(Utc::now(), p, None))
     }
 
     fn reactive_capability(&self) -> Option<crate::sim::reactive::ReactiveCapability> {
