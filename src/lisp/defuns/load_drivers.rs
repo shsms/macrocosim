@@ -3,7 +3,10 @@
 //! override), a lambda (re-resolved on every refresh tick), or a
 //! quoted symbol (deref the bound variable per refresh). Plus
 //! `(set-battery-soc)` — teleport a battery's charge state, for
-//! arranging a precondition from a scenario cue.
+//! arranging a precondition from a scenario cue. Plus the reactive
+//! Q twins: `(set-meter-reactive-power)` (same number / lambda /
+//! symbol dispatch as `set-meter-power`) and `(set-meter-power-factor)`
+//! (hold Q at a power factor that tracks the meter's own live P).
 
 use tulisp::{Error, TulispContext, TulispObject};
 
@@ -41,6 +44,66 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-meter-power: expected a number, lambda, or symbol — got {value}"
                 )));
             }
+            Ok(true)
+        },
+    );
+
+    // Drive a meter's `:reactive-power` slot from Lisp. The Q twin of
+    // set-meter-power above — same number / lambda / symbol dispatch,
+    // same lenient-bool convention (the typed control API is the
+    // strict door).
+    let r = router.clone();
+    ctx.defun(
+        "set-meter-reactive-power",
+        move |id: i64, value: TulispObject| -> Result<bool, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "set-meter-reactive-power: component {id} not found"
+                )));
+            };
+            if value.numberp() {
+                let vars = f64::try_from(&value)?;
+                // Lisp keeps the historic lenient behavior: the bool is
+                // only enforced by the typed control API.
+                let _ = c.set_reactive_power_override(vars as f32);
+            } else if let Some(scalar) =
+                crate::sim::dynamic_scalar::DynamicScalar::from_lisp(&value, 0.0)
+            {
+                c.set_reactive_power_source(scalar);
+            } else {
+                return Err(Error::invalid_argument(format!(
+                    "set-meter-reactive-power: expected a number, lambda, or symbol — got {value}"
+                )));
+            }
+            Ok(true)
+        },
+    );
+
+    // Hold a meter's reactive power at a power factor that tracks its
+    // own live active power. PF is deliberately validated HERE (and
+    // again by the typed control API) rather than in the trait door:
+    // `set_power_factor` does no range checking of its own, so this
+    // defun and the drive op are the only doors that enforce
+    // `0.0 < pf <= 1.0` before the value reaches the meter.
+    let r = router.clone();
+    ctx.defun(
+        "set-meter-power-factor",
+        move |id: i64, pf: f64, leading: Option<bool>| -> Result<bool, Error> {
+            if !(pf > 0.0 && pf <= 1.0) {
+                return Err(Error::invalid_argument(format!(
+                    "set-meter-power-factor: pf must be in (0.0, 1.0], got {pf}"
+                )));
+            }
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "set-meter-power-factor: component {id} not found"
+                )));
+            };
+            // Lisp keeps the historic lenient behavior: a non-meter is a
+            // no-op here, only the typed control API rejects it.
+            let _ = c.set_power_factor(pf as f32, leading.unwrap_or(false));
             Ok(true)
         },
     );
@@ -175,6 +238,65 @@ mod tests {
             cfg.eval("(set-meter-power 7 \"garbage\")").is_ok(),
             "string is accepted as an eval source — fallback governs",
         );
+    }
+
+    /// `(set-meter-reactive-power id VALUE)` mirrors `set-meter-power`'s
+    /// dispatch: a number installs a constant Q override, a lambda is
+    /// resolved on refresh, and a symbol re-derefs its bound variable
+    /// each refresh. Read back through `aggregate_reactive_var`.
+    #[test]
+    fn set_meter_reactive_power_accepts_number_lambda_symbol() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+
+        // Number → constant Q override, no refresh needed.
+        cfg.eval("(set-meter-reactive-power 7 500.0)").unwrap();
+        let m = cfg.site().get(7).unwrap();
+        assert!((m.aggregate_reactive_var(&cfg.site()) - 500.0).abs() < 1e-3);
+
+        // Lambda → dynamic source, resolved on the next refresh.
+        cfg.eval("(set-meter-reactive-power 7 (lambda () 1234.5))")
+            .unwrap();
+        cfg.refresh_once();
+        assert!((m.aggregate_reactive_var(&cfg.site()) - 1234.5).abs() < 1e-3);
+
+        // Symbol → deref the bound variable each refresh.
+        cfg.eval(
+            "(setq reactive-var-src 750.0)
+             (set-meter-reactive-power 7 'reactive-var-src)",
+        )
+        .unwrap();
+        cfg.refresh_once();
+        assert!((m.aggregate_reactive_var(&cfg.site()) - 750.0).abs() < 1e-3);
+        cfg.eval("(setq reactive-var-src 900.0)").unwrap();
+        cfg.refresh_once();
+        assert!((m.aggregate_reactive_var(&cfg.site()) - 900.0).abs() < 1e-3);
+    }
+
+    /// `(set-meter-power-factor id PF &optional LEADING)` derives Q
+    /// from the meter's own live P: 0.8 lagging on 8000 W → 6000 VAr;
+    /// LEADING flips the sign; an out-of-range PF errors before ever
+    /// touching the meter.
+    #[test]
+    fn set_meter_power_factor_derives_from_live_p() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 8000.0)");
+        let m = cfg.site().get(7).unwrap();
+
+        cfg.eval("(set-meter-power-factor 7 0.8)").unwrap();
+        assert!((m.aggregate_reactive_var(&cfg.site()) - 6_000.0).abs() < 1.0);
+
+        // Leading flips the sign.
+        cfg.eval("(set-meter-power-factor 7 0.8 t)").unwrap();
+        assert!((m.aggregate_reactive_var(&cfg.site()) - -6_000.0).abs() < 1.0);
+
+        // Out of (0.0, 1.0] errors, naming the range, and never reaches
+        // the trait door (set_power_factor does no validation itself).
+        let err = cfg.eval("(set-meter-power-factor 7 1.5)").unwrap_err();
+        assert!(err.to_string().contains("(0.0, 1.0]"), "{err}");
+        let err = cfg.eval("(set-meter-power-factor 7 0.0)").unwrap_err();
+        assert!(err.to_string().contains("(0.0, 1.0]"), "{err}");
+
+        // Unknown id errors.
+        assert!(cfg.eval("(set-meter-power-factor 99 0.8)").is_err());
     }
 
     /// `(set-battery-soc id PCT)` teleports the charge state; the next

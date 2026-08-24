@@ -41,6 +41,14 @@ pub(in crate::ui) struct DriveRequest {
     sunlight_pct: Option<f64>,
     /// Teleport a battery's state of charge to this percentage.
     soc_pct: Option<f64>,
+    /// Constant reactive-power override for a meter (VArs), if driving.
+    reactive_var: Option<f64>,
+    /// Hold a meter's reactive power at this power factor (cos phi,
+    /// `0.0 < power_factor <= 1.0`), tracking its own live active power.
+    power_factor: Option<f64>,
+    /// With `power_factor`, capacitive (leading) instead of the
+    /// default inductive (lagging). Meaningless without `power_factor`.
+    leading: Option<bool>,
 }
 
 /// Empty JSON on success; the error text on any rejection.
@@ -184,6 +192,29 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
             format!("component {id} does not take soc_pct (not a battery)"),
         ));
     }
+    // reactive_var and power_factor are both Q stimuli, gated by the
+    // same predicate as set-meter-reactive-power / set-meter-power-factor
+    // in Lisp: whether the component models a reactive-power override.
+    if req.reactive_var.is_some() && !component.takes_reactive_power_override() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} does not take reactive_var (not a meter)"),
+        ));
+    }
+    if req.power_factor.is_some() && !component.takes_reactive_power_override() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} does not take power_factor (not a meter)"),
+        ));
+    }
+    // `leading` only means something alongside `power_factor` — same
+    // shape as the health/command_mode cross-field check above.
+    if req.leading.is_some() && req.power_factor.is_none() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id}: leading requires power_factor in the same request"),
+        ));
+    }
     // Value sanity, same validate-first contract. The f64→f32 cast
     // turns any JSON number beyond f32 range into ±inf, and the meter
     // override installs whatever it's given — an inf/NaN would poison
@@ -193,6 +224,7 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         ("power_w", req.power_w),
         ("sunlight_pct", req.sunlight_pct),
         ("soc_pct", req.soc_pct),
+        ("reactive_var", req.reactive_var),
     ] {
         if let Some(v) = v
             && !(v as f32).is_finite()
@@ -202,6 +234,18 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
                 format!("{field} must be a finite number, got {v}"),
             ));
         }
+    }
+    // `set_power_factor` deliberately does no range validation of its
+    // own — this door and `set-meter-power-factor` in Lisp are the
+    // only places that enforce it, before the value ever reaches the
+    // trait door.
+    if let Some(pf) = req.power_factor
+        && !(pf > 0.0 && pf <= 1.0)
+    {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("power_factor must be in (0.0, 1.0], got {pf}"),
+        ));
     }
     // The debug_asserts catch a takes_* predicate drifting from its
     // setter: predicate true + setter false would be a 200 that did
@@ -217,6 +261,20 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
     if let Some(pct) = req.soc_pct {
         let applied = component.set_soc_pct(pct as f32);
         debug_assert!(applied, "takes_soc_pct disagrees with setter");
+    }
+    if let Some(vars) = req.reactive_var {
+        let applied = component.set_reactive_power_override(vars as f32);
+        debug_assert!(
+            applied,
+            "takes_reactive_power_override disagrees with setter"
+        );
+    }
+    if let Some(pf) = req.power_factor {
+        let applied = component.set_power_factor(pf as f32, req.leading.unwrap_or(false));
+        debug_assert!(
+            applied,
+            "takes_reactive_power_override disagrees with setter"
+        );
     }
     Ok(Json(serde_json::json!({})))
 }
@@ -277,6 +335,9 @@ mod tests {
             power_w: Some(5_000.0),
             sunlight_pct: None,
             soc_pct: Some(50.0), // not a battery → the whole request rejects
+            reactive_var: None,
+            power_factor: None,
+            leading: None,
         };
         assert!(apply_drive(&site, 5, &req).is_err());
 

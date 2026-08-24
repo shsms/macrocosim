@@ -627,6 +627,80 @@ async fn control_drive_sets_meter_power() {
     assert!(parsed["error"].as_str().unwrap().contains("999"));
 }
 
+/// The drive op's reactive twins mirror `power_w`: `reactive_var` lands
+/// a constant Q override, `power_factor` (+ optional `leading`) holds Q
+/// at a power factor tracking live P. A non-meter and an out-of-range
+/// power_factor are both 400s.
+#[tokio::test]
+async fn drive_op_accepts_reactive_var_and_power_factor() {
+    let cfg = config_with(
+        "(%make-meter :id 7 :power 8000.0)
+                            (%make-solar-inverter :id 8)",
+    )
+    .await;
+
+    // reactive_var: constant Q override.
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/7/drive", r#"{"reactive_var": 500.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let m = cfg.site().get(7).unwrap();
+    assert!((m.aggregate_reactive_var(&cfg.site()) - 500.0).abs() < 1e-3);
+
+    // power_factor + leading: Q derives from live P, sign flipped.
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/component/7/drive",
+            r#"{"power_factor": 0.8, "leading": true}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!((m.aggregate_reactive_var(&cfg.site()) - -6_000.0).abs() < 1.0);
+
+    // A non-meter rejects both new fields.
+    let (status, body) = call(
+        cfg.clone(),
+        post_json("/api/component/8/drive", r#"{"reactive_var": 100.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("reactive_var"));
+
+    let (status, body) = call(
+        cfg.clone(),
+        post_json("/api/component/8/drive", r#"{"power_factor": 0.8}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("power_factor"));
+
+    // power_factor out of (0.0, 1.0] is a 400 naming the range.
+    let (status, body) = call(
+        cfg.clone(),
+        post_json("/api/component/7/drive", r#"{"power_factor": 1.5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("(0.0, 1.0]"));
+
+    // leading without power_factor is an invalid request too.
+    let (status, body) = call(
+        cfg,
+        post_json("/api/component/7/drive", r#"{"leading": true}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(parsed["error"].as_str().unwrap().contains("leading"));
+}
+
 /// Status changes parse-then-apply: a valid health lands on the
 /// component's runtime, a bad value is a 400 and changes nothing.
 #[tokio::test]

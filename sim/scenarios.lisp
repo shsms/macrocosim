@@ -198,6 +198,17 @@ constant, a symbol, or a dynamic source like `timeline`). Compiles to
 `set-solar-sunlight`; for several inverters use one drive-solar each."
   (list :kind 'drive-solar :target id :source source))
 
+(defun drive-meter-reactive (id source)
+  "Drive section: feed meter ID reactive VArs from SOURCE (a constant,
+a symbol, or a dynamic source like `timeline`). Compiles to
+`set-meter-reactive-power`."
+  (list :kind 'drive-meter-reactive :target id :source source))
+
+(defun drive-meter-pf (id pf &optional leading)
+  "Drive section: hold meter ID at power factor PF (cos phi, 0..1],
+LEADING non-nil for capacitive. Compiles to `set-meter-power-factor`."
+  (list :kind 'drive-meter-pf :target id :pf pf :leading leading))
+
 (defun controller (id &rest args)
   "Agents section: an in-sim controller named ID firing :every TIME
 (default \"100ms\"), running the trailing LAMBDA each tick. Compiles to
@@ -245,12 +256,17 @@ inside `at`, e.g. (at \"60s\" (event 'clouds \"rolling in\"))."
 ;; branch on here.
 
 (defun scenario--drive (d)
-  "Install one drive item D — a `drive-meter` / `drive-solar` plist."
+  "Install one drive item D — a `drive-meter` / `drive-solar` /
+`drive-meter-reactive` / `drive-meter-pf` plist."
   (let ((target (plist-get d :target))
-        (source (plist-get d :source)))
-    (if (eq (plist-get d :kind) 'drive-solar)
-        (set-solar-sunlight target source)
-      (set-meter-power target source))))
+        (source (plist-get d :source))
+        (kind (plist-get d :kind)))
+    (cond
+     ((eq kind 'drive-solar) (set-solar-sunlight target source))
+     ((eq kind 'drive-meter-reactive) (set-meter-reactive-power target source))
+     ((eq kind 'drive-meter-pf)
+      (set-meter-power-factor target (plist-get d :pf) (plist-get d :leading)))
+     (t (set-meter-power target source)))))
 
 (defun scenario--agent (a)
   "Install one agent A — a `controller` plist — as an in-sim controller."

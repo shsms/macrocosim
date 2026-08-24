@@ -745,6 +745,51 @@ mod tests {
         assert!(events[0].payload.contains("rolling in"));
     }
 
+    /// `drive-meter-reactive` / `drive-meter-pf` tag their kind +
+    /// target (+ pf for the latter), mirroring `drive-meter`'s plist
+    /// shape — `scenario--drive` dispatches on `:kind`.
+    #[test]
+    fn reactive_drive_wrappers_tag_their_kind() {
+        let (cfg, dir) = config_with("");
+        let src = std::path::Path::new("sim/scenarios.lisp");
+        let dst_dir = dir.join("sim");
+        std::fs::create_dir_all(&dst_dir).unwrap();
+        std::fs::copy(src, dst_dir.join("scenarios.lisp")).unwrap();
+        cfg.eval("(load \"sim/scenarios.lisp\")").unwrap();
+
+        assert_eq!(
+            cfg.eval("(plist-get (drive-meter-reactive 100 500.0) :kind)")
+                .unwrap(),
+            "drive-meter-reactive"
+        );
+        assert_eq!(
+            cfg.eval("(plist-get (drive-meter-reactive 100 500.0) :target)")
+                .unwrap(),
+            "100"
+        );
+
+        assert_eq!(
+            cfg.eval("(plist-get (drive-meter-pf 100 0.8) :kind)")
+                .unwrap(),
+            "drive-meter-pf"
+        );
+        assert_eq!(
+            cfg.eval("(plist-get (drive-meter-pf 100 0.8) :pf)")
+                .unwrap(),
+            "0.8"
+        );
+        assert_eq!(
+            cfg.eval("(plist-get (drive-meter-pf 100 0.8) :leading)")
+                .unwrap(),
+            "nil"
+        );
+        assert_eq!(
+            cfg.eval("(plist-get (drive-meter-pf 100 0.8 t) :leading)")
+                .unwrap(),
+            "t"
+        );
+    }
+
     /// `define-scenario` extracts a sorted cue + check timeline from
     /// the `at` / `check` wrappers, with each entry's relative time and
     /// (for checks) the asserted component + metric — what the UI run
