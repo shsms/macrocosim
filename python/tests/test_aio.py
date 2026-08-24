@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from frequenz.quantities import Energy, Power
+from frequenz.quantities import Energy, Power, ReactivePower
 
 import switchyard as sw
 from switchyard.errors import EvalRejected
@@ -113,6 +113,40 @@ async def test_drive_posts_typed_control_payloads() -> None:
     site._http.control = fake_control  # type: ignore[method-assign]
     await site[6].drive(power=Power.from_kilowatts(20))
     assert calls == [("/api/component/6/drive", {"power_w": 20000.0})]
+
+
+async def test_meter_reactive_power_reads_and_drives_through_the_site() -> None:
+    # Meter.reactive_power's string couplings — the async
+    # Site.reactive_power reader and the drive payload key — are
+    # pinned here so a typo in either fails a test instead of a live
+    # session.
+    site = _site()
+    reads: list[int] = []
+
+    async def fake_reactive_power(
+        cid: int, mg_id: int | None = None
+    ) -> ReactivePower | None:
+        reads.append(cid)
+        return ReactivePower.from_volt_amperes_reactive(750.0)
+
+    site.reactive_power = fake_reactive_power  # type: ignore[method-assign]
+    calls: list[tuple[Any, ...]] = []
+
+    async def fake_control_component(
+        cid: int, action: str, payload: Any, mg_id: int | None = None
+    ) -> None:
+        calls.append((cid, action, payload))
+
+    site.control_component = fake_control_component  # type: ignore[method-assign]
+
+    m = sw.meter(id=7, power=100.0)
+    m._bind(site)
+    assert await m.reactive_power.try_read() == ReactivePower.from_volt_amperes_reactive(
+        750.0
+    )
+    assert reads == [7]
+    await m.reactive_power.set(ReactivePower.from_kilo_volt_amperes_reactive(1.5))
+    assert calls == [(7, "drive", {"reactive_var": 1500.0})]
 
 
 async def test_rejected_eval_raises_from_raw_drive() -> None:

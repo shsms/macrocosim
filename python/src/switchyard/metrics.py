@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Generic, TypeAlias, TypeVar
 
-from frequenz.quantities import Energy, Percentage, Power, Quantity
+from frequenz.quantities import Energy, Percentage, Power, Quantity, ReactivePower
 
 Q = TypeVar("Q", bound=Quantity)
 
@@ -96,6 +96,7 @@ class BoundMetric(Generic[Q]):
 # aggregate — so "battery_energy" always means flow through the pool.
 
 ACTIVE_POWER = MetricSpec("active_power", MetricKind.INSTANTANEOUS, Power)
+REACTIVE_POWER = MetricSpec("reactive_power", MetricKind.INSTANTANEOUS, ReactivePower)
 SOC = MetricSpec("soc", MetricKind.INSTANTANEOUS, Percentage)
 STORED_ENERGY = MetricSpec("stored_energy", MetricKind.INSTANTANEOUS, Energy)
 

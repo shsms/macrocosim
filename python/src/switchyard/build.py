@@ -30,11 +30,12 @@ from frequenz.quantities import (
     Percentage,
     Power,
     Quantity,
+    ReactivePower,
     Voltage,
 )
 
 from .enums import CommandMode, Health, TelemetryMode
-from .metrics import ACTIVE_POWER, SOC, STORED_ENERGY
+from .metrics import ACTIVE_POWER, REACTIVE_POWER, SOC, STORED_ENERGY
 from .signals import DrivenSignal, SettingSignal, Signal
 
 
@@ -224,6 +225,32 @@ class Meter(Component):
             cue=lambda v: f"(set-meter-power {self.component_id} {to_lisp_atom(v)})",
         )
 
+    @property
+    def reactive_power(self) -> DrivenSignal[ReactivePower]:
+        """The meter's reactive power — read the telemetry, set the VAr load."""
+
+        async def read() -> ReactivePower | None:
+            return await self._live().reactive_power(self.component_id, self._mg)
+
+        async def set_(value: ReactivePower) -> None:
+            await self._live().control_component(
+                self.component_id,
+                "drive",
+                {"reactive_var": value.as_volt_amperes_reactive()},
+                self._mg,
+            )
+
+        return DrivenSignal(
+            REACTIVE_POWER,
+            read,
+            set_,
+            f"meter {self.args.get('id')} reactive_power",
+            check_ref=lambda: (self.component_id, "reactive-power"),
+            cue=lambda v: (
+                f"(set-meter-reactive-power {self.component_id} {to_lisp_atom(v)})"
+            ),
+        )
+
 
 class Battery(Component):
     """A battery: charge state is both measurable and arrangeable."""
@@ -396,6 +423,9 @@ def meter(
     id: int | None = None,
     name: str | None = None,
     power: Power | RawLisp | None = None,
+    reactive_power: ReactivePower | RawLisp | None = None,
+    power_factor: float | None = None,
+    leading: bool | None = None,
     interval: timedelta | None = None,
     hidden: bool | None = None,
     stream_jitter_pct: Percentage | None = None,
@@ -407,6 +437,13 @@ def meter(
 ) -> Meter:
     """A meter. ``power`` seeds its published load (a ``Power``, or ``raw(...)``).
 
+    ``reactive_power`` seeds a constant VAr load (a ``ReactivePower``, or
+    ``raw(...)``); ``power_factor`` instead derives it from the meter's own
+    active power, held at that ratio (0.0, 1.0]. ``reactive_power`` and
+    ``power_factor`` are mutually exclusive — the server rejects both set.
+    ``leading`` makes a ``power_factor`` load capacitive instead of the
+    default inductive; it is meaningless without ``power_factor``.
+
     ``interval`` is the telemetry stream period; ``hidden`` keeps the
     meter out of the visible topology (helper meters).
     """
@@ -414,6 +451,9 @@ def meter(
         "id": id,
         "name": name,
         "power": power,
+        "reactive_power": reactive_power,
+        "power_factor": power_factor,
+        "leading": leading,
         "interval": _ms(interval),
         "hidden": hidden,
         "stream_jitter_pct": stream_jitter_pct,

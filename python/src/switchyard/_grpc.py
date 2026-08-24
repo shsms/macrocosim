@@ -106,6 +106,9 @@ class GrpcClient:
     def active_power(self, component_id: int) -> float | None:
         return self._read_metric(component_id, "AC_POWER_ACTIVE")
 
+    def reactive_power(self, component_id: int) -> float | None:
+        return self._read_metric(component_id, "AC_POWER_REACTIVE")
+
     def soc(self, component_id: int) -> float | None:
         """Battery state of charge (%)."""
         return self._read_metric(component_id, "BATTERY_SOC_PCT")

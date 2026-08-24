@@ -23,7 +23,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from frequenz.quantities import Energy, Percentage, Power
+from frequenz.quantities import Energy, Percentage, Power, ReactivePower
 
 from ._http import EvalResult, HttpClient, control_path
 from ._process import spawn_switchyard, terminate, which_binary
@@ -141,6 +141,13 @@ class Site:
         """A component's active power — one sample off its gRPC stream."""
         watts = self.grpc_client(mg_id).active_power(component_id)
         return None if watts is None else Power.from_watts(watts)
+
+    def reactive_power(
+        self, component_id: int, mg_id: int | None = None
+    ) -> ReactivePower | None:
+        """A component's reactive power — one sample off its gRPC stream."""
+        vars_ = self.grpc_client(mg_id).reactive_power(component_id)
+        return None if vars_ is None else ReactivePower.from_volt_amperes_reactive(vars_)
 
     def soc(self, component_id: int, mg_id: int | None = None) -> Percentage | None:
         """A battery's state of charge — one sample off its gRPC stream."""
