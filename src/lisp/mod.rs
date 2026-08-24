@@ -138,6 +138,21 @@ pub(crate) fn lisp_float(v: f64) -> String {
     }
 }
 
+/// [`lisp_float`] for a value that is natively `f32` — every
+/// component's config is. Formatting the `f32` directly gives the
+/// shortest decimal that round-trips *as an f32*; widening to f64
+/// first would print the f64 nearest to it instead, turning a
+/// configured `0.35` into `0.3499999940395355` in the generated
+/// block. Reading it back as an f32 yields the same bits either way,
+/// but only one of the two is a file a person can stand to read.
+pub(crate) fn lisp_float32(v: f32) -> String {
+    if v == v.trunc() && v.is_finite() {
+        format!("{v:.1}")
+    } else {
+        format!("{v}")
+    }
+}
+
 impl Default for Metadata {
     fn default() -> Self {
         Self {

@@ -86,7 +86,7 @@ impl SimulatedComponent for Marker {
         if self.stream_jitter_pct != 0.0 {
             kw.push((
                 ":stream-jitter-pct",
-                crate::lisp::lisp_float(self.stream_jitter_pct as f64),
+                crate::lisp::lisp_float32(self.stream_jitter_pct),
             ));
         }
         kw

@@ -5,7 +5,7 @@
     (%make-battery :id 1000 :capacity 92000.0 :initial-soc 85.0 :soc-lower 10.0 :soc-upper 90.0 :voltage 800.0 :rated-lower -30000.0 :rated-upper 30000.0 :soc-protect-margin 10.0 :stream-jitter-pct 8.0)
     (%make-battery-inverter :id 1001 :rated-lower -30000.0 :rated-upper 30000.0 :command-delay-ms 1500 :ramp-rate 5000.0 :stream-jitter-pct 8.0 :reactive-pf-limit 0 :reactive-apparent-va 32000.0 :reactive-command-delay-ms 100 :reactive-ramp-rate 2000.0)
     (%make-meter :id 1002 :interval 200 :stream-jitter-pct 4.0)
-    (%make-solar-inverter :id 200 :rated-lower -30000.0 :rated-upper 0.0 :command-delay-ms 0 :ramp-rate 2000.0 :stream-jitter-pct 5.0 :reactive-pf-limit 0.3499999940395355 :reactive-apparent-va 0 :reactive-command-delay-ms 100 :reactive-ramp-rate 2000.0)
+    (%make-solar-inverter :id 200 :rated-lower -30000.0 :rated-upper 0.0 :command-delay-ms 0 :ramp-rate 2000.0 :stream-jitter-pct 5.0 :reactive-pf-limit 0.35 :reactive-apparent-va 0 :reactive-command-delay-ms 100 :reactive-ramp-rate 2000.0 :sunlight% 100.0)
     (%make-meter :id 1003 :interval 200 :stream-jitter-pct 4.0)
     (%make-ev-charger :id 1004 :rated-lower 0.0 :rated-upper 22000.0 :initial-soc 92.0 :soc-lower 0.0 :soc-upper 100.0 :soc-protect-margin 10.0 :capacity 30000.0 :command-delay-ms 500 :ramp-rate 3000.0 :stream-jitter-pct 10.0)
     (%make-meter :id 1005 :interval 200 :stream-jitter-pct 4.0)

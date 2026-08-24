@@ -286,7 +286,7 @@ impl SimulatedComponent for Battery {
     }
 
     fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        let lf = |v: f32| crate::lisp::lisp_float(v as f64);
+        let lf = crate::lisp::lisp_float32;
         let mut kw = vec![
             (":capacity", lf(self.cfg.capacity_wh)),
             (":initial-soc", lf(self.cfg.initial_soc_pct)),

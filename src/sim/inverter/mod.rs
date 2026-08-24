@@ -67,7 +67,7 @@ pub(crate) struct CommonInverterCfg {
 /// jitter, and the reactive envelope. `SolarInverter` appends its own
 /// `:sunlight%` kwarg on top of this.
 pub(crate) fn common_inverter_kwargs(cfg: CommonInverterCfg) -> Vec<(&'static str, String)> {
-    let lf = |v: f32| crate::lisp::lisp_float(v as f64);
+    let lf = crate::lisp::lisp_float32;
     let mut kw = vec![
         (":rated-lower", lf(cfg.rated_lower_w)),
         (":rated-upper", lf(cfg.rated_upper_w)),

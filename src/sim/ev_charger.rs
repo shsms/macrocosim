@@ -275,7 +275,7 @@ impl SimulatedComponent for EvCharger {
     }
 
     fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        let lf = |v: f32| crate::lisp::lisp_float(v as f64);
+        let lf = crate::lisp::lisp_float32;
         let mut kw = vec![
             (":rated-lower", lf(self.cfg.rated_lower_w)),
             (":rated-upper", lf(self.cfg.rated_upper_w)),

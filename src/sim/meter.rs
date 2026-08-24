@@ -210,7 +210,7 @@ impl SimulatedComponent for Meter {
             kw.push((":interval", self.interval.as_millis().to_string()));
         }
         if let Some(p) = self.constructed_power.filter(|p| p.is_finite()) {
-            kw.push((":power", crate::lisp::lisp_float(p as f64)));
+            kw.push((":power", crate::lisp::lisp_float32(p)));
         }
         if self.hidden {
             kw.push((":hidden", "t".to_string()));
@@ -218,7 +218,7 @@ impl SimulatedComponent for Meter {
         if self.stream_jitter_pct != 0.0 {
             kw.push((
                 ":stream-jitter-pct",
-                crate::lisp::lisp_float(self.stream_jitter_pct as f64),
+                crate::lisp::lisp_float32(self.stream_jitter_pct),
             ));
         }
         kw

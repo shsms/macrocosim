@@ -339,7 +339,7 @@ impl SimulatedComponent for SolarInverter {
         if !self.cfg.sunlight_dynamic {
             kw.push((
                 ":sunlight%",
-                crate::lisp::lisp_float(self.cfg.sunlight_pct as f64),
+                crate::lisp::lisp_float32(self.cfg.sunlight_pct),
             ));
         }
         kw

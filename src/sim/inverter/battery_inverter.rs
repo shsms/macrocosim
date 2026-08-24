@@ -727,4 +727,24 @@ mod tests {
         assert!(!s.contains(":ramp-rate"), "infinite ramp is omitted");
         assert!(s.contains(":command-delay-ms 0"));
     }
+
+    /// Component config is `f32`, so its kwargs must render through
+    /// the `f32` shortest-round-trip form. Widening to `f64` first
+    /// prints the *f64* nearest 0.35f32 —
+    /// `:reactive-pf-limit 0.3499999940395355` — which is what ended
+    /// up committed in the generated block of a shipped example.
+    #[test]
+    fn constructor_kwargs_render_f32_without_widening_noise() {
+        let mut cfg = BatteryInverterConfig::default();
+        cfg.reactive.pf_limit = Some(0.35);
+        let inv = BatteryInverter::new(3, Duration::from_secs(1), cfg);
+        let s = inv
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(s.contains(":reactive-pf-limit 0.35"), "{s}");
+        assert!(!s.contains("0.3499"), "no widened-f64 tail: {s}");
+    }
 }

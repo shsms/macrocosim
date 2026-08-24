@@ -84,13 +84,13 @@ impl SimulatedComponent for Grid {
             kw.push((":rated-fuse-current", self.rated_fuse_current.to_string()));
         }
         if let Some((l, u)) = self.rated_active_bounds {
-            kw.push((":rated-lower", crate::lisp::lisp_float(l as f64)));
-            kw.push((":rated-upper", crate::lisp::lisp_float(u as f64)));
+            kw.push((":rated-lower", crate::lisp::lisp_float32(l)));
+            kw.push((":rated-upper", crate::lisp::lisp_float32(u)));
         }
         if self.stream_jitter_pct != 0.0 {
             kw.push((
                 ":stream-jitter-pct",
-                crate::lisp::lisp_float(self.stream_jitter_pct as f64),
+                crate::lisp::lisp_float32(self.stream_jitter_pct),
             ));
         }
         kw
