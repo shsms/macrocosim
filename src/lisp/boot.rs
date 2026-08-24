@@ -1767,6 +1767,64 @@ mod tests {
         );
     }
 
+    /// The Q twin of `stepped_runner_runs_a_registered_scenario`: the
+    /// `drive-meter-reactive` and `drive-meter-pf` dispatch arms in
+    /// `sim/scenarios.lisp` compile through `scenario--run` and really
+    /// drive the meters, checked by timed `:metric 'reactive-power`
+    /// expectations. Meter 2 follows a VAr timeline; meter 3 holds a
+    /// 0.8 lagging power factor against its own 8 kW of P, so its Q
+    /// settles at 8000 * tan(acos(0.8)) = 6 kVAr.
+    #[test]
+    fn stepped_runner_drives_reactive_and_power_factor() {
+        use std::time::Duration;
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "switchyard-stepped-q-{}-{}",
+            std::process::id(),
+            next_unique(),
+        ));
+        let sim = dir.join("sim");
+        std::fs::create_dir_all(&sim).unwrap();
+        for f in ["common.lisp", "scenarios.lisp"] {
+            std::fs::copy(format!("sim/{f}"), sim.join(f)).unwrap();
+        }
+        let body = "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18904 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 0.0)
+                        (%make-meter :id 3 :power 8000.0)))))
+(define-scenario :name \"q-ramp\"
+  :schedule 'relative :clock 'stepped :length \"60s\" :seed 7
+  :drive (list (drive-meter-reactive 2 (timeline (hold 500.0 :for 30)
+                                                 (ramp :to 2000.0 :over 30)))
+               (drive-meter-pf 3 0.8))
+  :expect (list (check \"10s\" :component 2 :metric 'reactive-power
+                       :approx 500.0 :tol 100.0)
+                (check \"59s\" :component 2 :metric 'reactive-power
+                       :approx 2000.0 :tol 400.0)
+                (check \"10s\" :component 3 :metric 'reactive-power
+                       :approx 6000.0 :tol 100.0)))";
+        let path = dir.join("config.lisp");
+        std::fs::write(&path, body).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (cfg, _clock) = rt
+            .block_on(async { Config::new_headless(path.to_str().unwrap()) })
+            .expect("headless config builds");
+        std::mem::forget(rt);
+
+        let steps = cfg
+            .run_scenario_stepped("q-ramp", Duration::from_secs(1))
+            .expect("scenario runs");
+        assert_eq!(steps, 60);
+
+        let report = cfg.site().scenario_report(chrono::Utc::now());
+        assert_eq!(report.checks_passed, 3, "report: {report:?}");
+        assert_eq!(report.checks_failed, 0, "report: {report:?}");
+    }
+
     /// `Config::refresh_once` drains tulisp-async's pending-timer
     /// queue. Without that, run-with-timer would just accumulate
     /// PendingTasks (same-ctx model — nothing fires them
