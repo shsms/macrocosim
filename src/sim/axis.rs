@@ -240,6 +240,16 @@ impl PowerAxis {
         self.ramp.set_target(park);
     }
 
+    /// ramp.snap_to(v) alone: the live output jumps to `v` with no
+    /// slew, while the command delay AND the published value are left
+    /// exactly as they were. Solar's health gate is the only caller —
+    /// a tripped PV inverter's output collapses instantly, but its
+    /// armed curtailment must survive so a recovery resumes there
+    /// instead of at full sun.
+    pub fn snap_output(&self, v: f32) {
+        self.ramp.snap_to(v);
+    }
+
     /// delay.reset + ramp.snap_to(0) + publish 0 — the health-trip snap.
     pub fn trip(&self) {
         self.delay.reset();
@@ -300,6 +310,34 @@ impl PowerAxis {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Q axis's per-tick context: the live P as the other axis, no
+    /// dynamic band, and hold when nothing is armed.
+    fn q_ctx(p_live: f32) -> StepCtx<'static> {
+        StepCtx {
+            other_axis: p_live,
+            dynamic: None,
+            idle: IdleTarget::Hold,
+        }
+    }
+
+    /// The `(lower, upper)` Q allowance at `p_live` — the first band
+    /// of the validation envelope.
+    fn q_bounds(ax: &PowerAxis, p_live: f32) -> (f32, f32) {
+        let env = ax.validation_envelope_at(Utc::now(), p_live);
+        let b = env.0.first().expect("a caps band is always one bucket");
+        (b.lower.unwrap(), b.upper.unwrap())
+    }
+
+    fn q_axis(caps: ReactiveCapability, command_delay: Duration, ramp: f32) -> PowerAxis {
+        PowerAxis::new(AxisConfig {
+            rated: None,
+            caps: Some(caps),
+            command_delay,
+            ramp_rate_per_s: ramp,
+            unit: "VAr",
+        })
+    }
 
     // P-flavored axis: rated bounds + augmentation TTL + re-clamp.
     #[test]
@@ -569,6 +607,155 @@ mod tests {
             Duration::from_secs(60),
         );
         assert!(ax.accept(3_500.0, t0, 0.0).is_err());
+    }
+
+    #[test]
+    fn q_axis_accept_then_step_drives_to_target() {
+        // No PF cap, ±10 kVA envelope. 100 ms delay, 1000 VAR/s slew.
+        let p = q_axis(
+            ReactiveCapability {
+                pf_limit: None,
+                apparent_va: Some(10_000.0),
+            },
+            Duration::from_millis(100),
+            1000.0,
+        );
+        let now = Utc::now();
+        // P = 0; envelope is ±10 kVA. Q=5000 is in-range.
+        assert!(p.accept(5000.0, now, 0.0).is_ok());
+
+        // Before the 100 ms delay elapses, no movement.
+        let q = p.step(
+            now + chrono::Duration::milliseconds(50),
+            Duration::from_millis(50),
+            q_ctx(0.0),
+        );
+        assert!(q.abs() < 1.0, "expected ~0 before delay, got {q}");
+
+        // After 1 s past the delay, ramp at 1000 VAR/s reaches 1 kVAR.
+        let q = p.step(
+            now + chrono::Duration::milliseconds(1100),
+            Duration::from_millis(1000),
+            q_ctx(0.0),
+        );
+        assert!((q - 1000.0).abs() < 1.0, "expected ~1000, got {q}");
+
+        // 6 s past the delay: ramp settled at 5000.
+        let q = p.step(
+            now + chrono::Duration::milliseconds(6100),
+            Duration::from_millis(5000),
+            q_ctx(0.0),
+        );
+        assert!((q - 5000.0).abs() < 1.0, "expected 5000, got {q}");
+        assert_eq!(p.published(), q);
+    }
+
+    #[test]
+    fn q_axis_rejects_out_of_envelope() {
+        let p = q_axis(
+            ReactiveCapability {
+                pf_limit: Some(0.5),
+                apparent_va: None,
+            },
+            Duration::ZERO,
+            f32::INFINITY,
+        );
+        // PF=0.5 at P=10k → ±5000 envelope. 6000 is out.
+        match p.accept(6000.0, Utc::now(), 10_000.0) {
+            Err(SetpointError::OutOfBounds {
+                value, envelope, ..
+            }) => {
+                assert_eq!(value, 6000.0);
+                let b = envelope.0.first().expect("single-bucket envelope");
+                let (lower, upper) = (b.lower.unwrap(), b.upper.unwrap());
+                assert!((lower + 5000.0).abs() < 1.0);
+                assert!((upper - 5000.0).abs() < 1.0);
+            }
+            other => panic!("expected OutOfBounds, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn q_axis_re_clamps_at_promotion() {
+        // Cap = ±10 kVA. No delay, no slew. Accept at P=0 (full
+        // envelope), then have P drift to 9 kW before tick — the
+        // command should be re-clamped to √(100-81)*1000 ≈ ±4359.
+        let p = q_axis(
+            ReactiveCapability {
+                pf_limit: None,
+                apparent_va: Some(10_000.0),
+            },
+            Duration::ZERO,
+            f32::INFINITY,
+        );
+        assert!(p.accept(8000.0, Utc::now(), 0.0).is_ok());
+        let q = p.step(Utc::now(), Duration::from_millis(100), q_ctx(9000.0));
+        assert!(q < 4400.0 && q > 4350.0, "expected ~4359, got {q}");
+    }
+
+    /// P drifting AFTER a Q command settled must also re-clamp: the
+    /// delay queue keeps returning the armed value on every poll, so
+    /// each step re-clamps it to the live envelope at the current P —
+    /// a sustained Volt/VAR setpoint can't push apparent power past
+    /// the kVA rating when active power later rises.
+    #[test]
+    fn q_axis_re_clamps_on_p_drift_after_settle() {
+        let p = q_axis(
+            ReactiveCapability {
+                pf_limit: None,
+                apparent_va: Some(10_000.0),
+            },
+            Duration::ZERO,
+            f32::INFINITY,
+        );
+        assert!(p.accept(8000.0, Utc::now(), 0.0).is_ok());
+        // Settles at the full 8 kVAR while P = 0.
+        let q = p.step(Utc::now(), Duration::from_millis(100), q_ctx(0.0));
+        assert!((q - 8000.0).abs() < 1.0, "expected 8000, got {q}");
+        // P rises to 9 kW under the settled Q — the next tick clamps
+        // to √(100−81)·1000 ≈ 4359.
+        let q = p.step(Utc::now(), Duration::from_millis(100), q_ctx(9000.0));
+        assert!(q < 4400.0 && q > 4350.0, "expected ~4359, got {q}");
+        // P falls back — the original commanded Q is restored.
+        let q = p.step(Utc::now(), Duration::from_millis(100), q_ctx(0.0));
+        assert!((q - 8000.0).abs() < 1.0, "expected 8000 back, got {q}");
+    }
+
+    #[test]
+    fn q_axis_override_published_wins() {
+        // step() publishes the ramp's value; override_published
+        // overwrites it. Mirrors the BatteryInverter's "measured = sum
+        // of children's accepted" path.
+        let p = q_axis(
+            ReactiveCapability::microsim_default(),
+            Duration::ZERO,
+            f32::INFINITY,
+        );
+        let _ = p.accept(3000.0, Utc::now(), 10_000.0);
+        let q = p.step(Utc::now(), Duration::from_millis(100), q_ctx(10_000.0));
+        assert!((q - 3000.0).abs() < 1.0);
+        p.override_published(2500.0);
+        assert_eq!(p.published(), 2500.0);
+    }
+
+    #[test]
+    fn q_axis_runtime_caps() {
+        let p = q_axis(
+            ReactiveCapability {
+                pf_limit: None,
+                apparent_va: Some(10_000.0),
+            },
+            Duration::ZERO,
+            f32::INFINITY,
+        );
+        // Initial: at P=0, Q can be ±10k.
+        assert!((q_bounds(&p, 0.0).1 - 10_000.0).abs() < 1.0);
+        // Drop kVA cap, add tight PF cap: at P=2k, Q ≤ 0.2×2k = ±400.
+        p.set_apparent_va(None);
+        p.set_pf_limit(Some(0.2));
+        let (lo, hi) = q_bounds(&p, 2000.0);
+        assert!((hi - 400.0).abs() < 1.0);
+        assert!((lo + 400.0).abs() < 1.0);
     }
 
     /// A non-finite idle target (e.g. a bad dynamic-scalar read) must

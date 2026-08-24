@@ -5,9 +5,8 @@ use parking_lot::Mutex;
 
 use crate::sim::{
     Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
-    bounds::ComponentBounds,
-    ramp::{CommandDelay, Ramp},
-    reactive::{ReactiveCapability, ReactivePath},
+    axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
+    reactive::ReactiveCapability,
     runtime::Health,
 };
 
@@ -52,12 +51,14 @@ pub struct BatteryInverter {
     name: String,
     interval: Duration,
     cfg: BatteryInverterConfig,
-    bounds: Mutex<ComponentBounds>,
-    delay: CommandDelay,
-    ramp: Ramp,
-    /// All reactive-side state — capability envelope, command-delay,
-    /// slew-rate ramp, last published Q. See [`ReactivePath`].
-    reactive: ReactivePath,
+    /// Active (P) control path: rated band + TTL augmentations,
+    /// command delay, slew ramp. Its `published` slot is unused — the
+    /// AC-side P telemetry reads `measured_w` below instead.
+    active: PowerAxis,
+    /// Reactive (Q) control path: the PF/kVA capability envelope
+    /// evaluated at the live P, command delay, slew ramp, and the
+    /// published Q telemetry / parent meters read.
+    reactive: PowerAxis,
     /// The AC-side value telemetry publishes. Set each tick to the
     /// power we *commanded* the healthy children to take — zeroed when
     /// the inverter is tripped or no healthy child accepted the push —
@@ -70,22 +71,28 @@ pub struct BatteryInverter {
 
 impl BatteryInverter {
     pub fn new(id: u64, interval: Duration, cfg: BatteryInverterConfig) -> Self {
-        let bounds = ComponentBounds::rated(cfg.rated_lower_w, cfg.rated_upper_w);
-        let delay = CommandDelay::new(cfg.command_delay);
-        let ramp = Ramp::new(cfg.ramp_rate_w_per_s, 0.0);
-        let reactive = ReactivePath::new(
-            cfg.reactive,
-            cfg.reactive_command_delay,
-            cfg.reactive_ramp_rate_var_per_s,
-        );
+        let active = PowerAxis::new(AxisConfig {
+            rated: Some((cfg.rated_lower_w, cfg.rated_upper_w)),
+            caps: None,
+            command_delay: cfg.command_delay,
+            ramp_rate_per_s: cfg.ramp_rate_w_per_s,
+            unit: "W",
+        });
+        // A Q axis has no rated band of its own — its static shape is
+        // the PF/kVA capability evaluated at the live P.
+        let reactive = PowerAxis::new(AxisConfig {
+            rated: None,
+            caps: Some(cfg.reactive),
+            command_delay: cfg.reactive_command_delay,
+            ramp_rate_per_s: cfg.reactive_ramp_rate_var_per_s,
+            unit: "VAr",
+        });
         Self {
             id,
             name: format!("inv-bat-{id}"),
             interval,
             cfg,
-            bounds: Mutex::new(bounds),
-            delay,
-            ramp,
+            active,
             reactive,
             measured_w: Mutex::new(0.0),
         }
@@ -113,8 +120,6 @@ impl SimulatedComponent for BatteryInverter {
     }
 
     fn tick(&self, site: &MicrogridSite, now: DateTime<Utc>, dt: Duration) {
-        self.bounds.lock().drop_expired(now);
-
         // Own-health gate: a faulted or standby inverter is electrically
         // offline — its IGBTs stop switching, so it pushes nothing to its
         // batteries and reports zero AC output. Distinct from the
@@ -129,31 +134,42 @@ impl SimulatedComponent for BatteryInverter {
         // matters, it needs its own mode rather than a Standby special
         // case here.
         if site.runtime_of(self.id).health != Health::Ok {
-            self.delay.reset();
-            self.ramp.snap_to(0.0);
+            self.active.trip();
             *self.measured_w.lock() = 0.0;
             self.reactive.trip();
             return;
         }
 
-        // Active path: clamp the pending command against our OWN
-        // bounds (no peeking at the children — the gateway gates
+        // Active path: the axis clamps the pending command against our
+        // OWN bounds (no peeking at the children — the gateway gates
         // out-of-envelope setpoints upstream). If one slips through,
         // the children will refuse the excess via their own clamp
         // and the published battery telemetry will reveal the gap.
-        if let Some(target) = self.delay.poll(now) {
-            // effective_at(now), not effective(): under the stepped
-            // sim clock, TTL liveness must be judged on the tick's
-            // own time base, not wall time.
-            let own = self.bounds.lock().effective_at(now);
-            self.ramp.set_target(own.clamp(target));
-        }
-
+        let commanded_p = self.active.step(
+            now,
+            dt,
+            StepCtx {
+                other_axis: 0.0,
+                dynamic: None,
+                idle: IdleTarget::Hold,
+            },
+        );
+        // p_live is the PREVIOUS tick's published P — read before the
+        // reactive step, exactly as the pre-axis code did, so the Q
+        // envelope is judged against the AC power the children
+        // actually accepted rather than what we just commanded.
         let p_live = *self.measured_w.lock();
-        let commanded_p = self.ramp.advance(dt);
         // Reactive: validated when accepted, re-clamped to the live
         // envelope at p_live as the command is promoted, then slewed.
-        let commanded_q = self.reactive.step(p_live, now, dt);
+        let commanded_q = self.reactive.step(
+            now,
+            dt,
+            StepCtx {
+                other_axis: p_live,
+                dynamic: None,
+                idle: IdleTarget::Hold,
+            },
+        );
 
         // Distribute equal share among the *healthy* children. Failed
         // batteries (Health::Error / Standby) are skipped, so the
@@ -214,8 +230,8 @@ impl SimulatedComponent for BatteryInverter {
             site,
             p,
             self.reactive.published(),
-            self.bounds.lock().effective(),
-            self.reactive.bounds_at(p),
+            self.active.effective_static(),
+            super::first_band(&self.reactive.tracking_envelope_at(Utc::now(), p, None)),
         )
     }
 
@@ -224,19 +240,24 @@ impl SimulatedComponent for BatteryInverter {
         // so children-summing happens in tick(). Validation here uses our
         // own (post-augmentation) bounds — anything beyond that is a hard
         // protocol error; the SoC clamp is enforced silently via tick().
-        self.bounds.lock().validate_active_setpoint(power_w)?;
-        self.delay.set_target(power_w);
-        Ok(())
+        //
+        // Wall clock, not the tick clock: this runs on a gRPC/UI
+        // thread with no access to the site's clock, and that is how
+        // setpoint validation has always judged augmentation liveness.
+        self.active.accept(power_w, Utc::now(), 0.0)
     }
 
     fn set_reactive_setpoint(&self, vars: f32) -> Result<(), SetpointError> {
-        self.reactive.accept_setpoint(*self.measured_w.lock(), vars)
+        self.reactive
+            .accept(vars, Utc::now(), *self.measured_w.lock())
     }
 
     fn reset_setpoint(&self) {
-        self.delay.reset();
-        self.ramp.set_target(0.0);
-        self.reactive.reset();
+        self.active.reset(0.0);
+        // A Q reset zeroes the published value immediately rather than
+        // waiting for the next tick to republish the ramp.
+        self.reactive.reset(0.0);
+        self.reactive.override_published(0.0);
         *self.measured_w.lock() = 0.0;
     }
 
@@ -247,11 +268,11 @@ impl SimulatedComponent for BatteryInverter {
         // so neither arm needs to touch it.
         use crate::timeout_tracker::SetpointAxis;
         match axis {
-            SetpointAxis::Active => {
-                self.delay.reset();
-                self.ramp.set_target(0.0);
+            SetpointAxis::Active => self.active.reset(0.0),
+            SetpointAxis::Reactive => {
+                self.reactive.reset(0.0);
+                self.reactive.override_published(0.0);
             }
-            SetpointAxis::Reactive => self.reactive.reset(),
         }
     }
 
@@ -261,7 +282,7 @@ impl SimulatedComponent for BatteryInverter {
         bounds: crate::sim::bounds::VecBounds,
         lifetime: Duration,
     ) {
-        self.bounds.lock().add_augmentation(ts, bounds, lifetime);
+        self.active.augment(ts, bounds, lifetime);
     }
 
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
@@ -289,11 +310,16 @@ impl SimulatedComponent for BatteryInverter {
     }
 
     fn effective_active_bounds(&self) -> Option<crate::sim::bounds::VecBounds> {
-        Some(self.bounds.lock().effective())
+        Some(self.active.effective_static())
     }
 
     fn reactive_bounds(&self) -> Option<(f32, f32)> {
-        Some(self.reactive.bounds_at(*self.measured_w.lock()))
+        let p = *self.measured_w.lock();
+        Some(super::first_band(&self.reactive.tracking_envelope_at(
+            Utc::now(),
+            p,
+            None,
+        )))
     }
 
     fn set_reactive_pf_limit(&self, pf: Option<f32>) {

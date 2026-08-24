@@ -46,6 +46,21 @@ pub(crate) fn inverter_telemetry(
     }
 }
 
+/// Squeeze a reactive envelope down to the single `(lower, upper)`
+/// pair the telemetry field still carries. An empty envelope — nothing
+/// the Q axis may legally sit at — reads as `(0.0, 0.0)`, the same
+/// "no headroom" answer `ReactiveCapability::q_bounds_at` gives when
+/// P is past the apparent-power rim. An open-ended edge (only
+/// reachable via a one-sided Q augmentation, which nothing submits
+/// today) reads as 0 rather than an infinity, because the proto
+/// bounds field must stay finite.
+pub(crate) fn first_band(envelope: &VecBounds) -> (f32, f32) {
+    match envelope.0.first() {
+        Some(b) => (b.lower.unwrap_or(0.0), b.upper.unwrap_or(0.0)),
+        None => (0.0, 0.0),
+    }
+}
+
 /// The fields `BatteryInverter` and `SolarInverter` share for
 /// [`common_inverter_kwargs`]. A plain field bag (rather than either
 /// config struct) since `BatteryInverterConfig` and
