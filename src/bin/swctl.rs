@@ -10,6 +10,7 @@
 //!   swctl set-power 1001 8000
 //!   swctl set-power 1001 -5000 --lifetime 30   # negative → discharge
 //!   swctl augment-bounds 1001 --lower -15000 --upper 15000 --lifetime 60
+//!   swctl augment-bounds 1001 --lower -3000 --upper 3000 --reactive --lifetime 60
 //!
 //! Scenario commands — HTTP (default --ui-addr http://127.0.0.1:8801):
 //!   swctl scenario start "demo"
@@ -143,16 +144,22 @@ enum Cmd {
         lifetime: Option<u64>,
     },
 
-    /// Augment a component's active-power bounds for a limited time.
+    /// Augment a component's active- or reactive-power bounds for a
+    /// limited time.
     AugmentBounds {
         /// Component ID.
         id: u64,
-        /// New lower bound (W).
+        /// New lower bound (W, or VAR with --reactive).
         #[arg(long, allow_hyphen_values = true)]
         lower: f32,
-        /// New upper bound (W).
+        /// New upper bound (W, or VAR with --reactive).
         #[arg(long, allow_hyphen_values = true)]
         upper: f32,
+        /// Target the reactive (Q) axis instead of active (P). The
+        /// server validates the bounds against the live Q envelope at
+        /// the component's current P.
+        #[arg(long)]
+        reactive: bool,
         /// Request lifetime in seconds (10..=900).
         #[arg(long, default_value_t = 60)]
         lifetime: u64,
@@ -462,8 +469,9 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     id,
                     lower,
                     upper,
+                    reactive,
                     lifetime,
-                } => cmd_augment(&mut client, id, lower, upper, lifetime).await,
+                } => cmd_augment(&mut client, id, lower, upper, reactive, lifetime).await,
                 _ => unreachable!("HTTP-backed commands are dispatched above"),
             }
         }
@@ -1718,12 +1726,18 @@ async fn cmd_augment(
     id: u64,
     lower: f32,
     upper: f32,
+    reactive: bool,
     lifetime: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use switchyard::proto::common::metrics::Bounds;
+    let target_metric = if reactive {
+        Metric::AcPowerReactive
+    } else {
+        Metric::AcPowerActive
+    };
     let req = AugmentElectricalComponentBoundsRequest {
         electrical_component_id: id,
-        target_metric: Metric::AcPowerActive as i32,
+        target_metric: target_metric as i32,
         bounds: vec![Bounds {
             lower: Some(lower),
             upper: Some(upper),
