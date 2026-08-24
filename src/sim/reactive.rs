@@ -89,6 +89,38 @@ impl ReactiveCapability {
         let (lo, hi) = self.q_bounds_at(p);
         q >= lo && q <= hi
     }
+
+    /// The widest Q reachable at ANY P in `[0, p_rated_abs]` — the
+    /// capability hull, not the bound at one particular P. Used by a
+    /// Q axis's static shape, since a Q axis has no rated band of its
+    /// own: the P axis's rated magnitude bounds what Q can ever reach.
+    ///
+    /// With neither cap set, `q_bounds_at` falls back to `|Q| ≤ |P|`,
+    /// which is widest at `P = p_rated_abs`. With only a PF cap,
+    /// `k·P` is widest at `P = p_rated_abs` too. With only a kVA cap,
+    /// the circle is widest at `P = 0`. With both, the PF line and
+    /// the kVA circle cross at `P* = s / √(1+k²)` — below `P*` the PF
+    /// line is the tighter (binding) constraint and grows with P, so
+    /// the hull is widest right at the crossing; at or past `P*` the
+    /// kVA circle is tighter and SHRINKS with P, so the hull is
+    /// widest at the smaller of `p_rated_abs` and `P*`.
+    pub fn hull(&self, p_rated_abs: f32) -> (f32, f32) {
+        let q = match (self.pf_limit, self.apparent_va) {
+            (None, None) => p_rated_abs,
+            (Some(k), None) => k * p_rated_abs,
+            (None, Some(s)) => s,
+            (Some(k), Some(s)) => {
+                let p_star = s / (1.0 + k * k).sqrt();
+                if p_star <= p_rated_abs {
+                    k * s / (1.0 + k * k).sqrt()
+                } else {
+                    let kva_q = (s * s - p_rated_abs * p_rated_abs).max(0.0).sqrt();
+                    (k * p_rated_abs).min(kva_q)
+                }
+            }
+        };
+        (-q, q)
+    }
 }
 
 /// Per-inverter reactive-power state machine. Owns the capability
@@ -390,6 +422,35 @@ mod tests {
         assert!((hi - 8_000.0).abs() < 1e-3);
         // P at the rim → no Q
         assert_eq!(cap.q_bounds_at(10_000.0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn hull_shapes() {
+        let pf = ReactiveCapability {
+            pf_limit: Some(0.5),
+            apparent_va: None,
+        };
+        assert_eq!(pf.hull(10_000.0), (-5_000.0, 5_000.0));
+        let kva = ReactiveCapability {
+            pf_limit: None,
+            apparent_va: Some(4_000.0),
+        };
+        assert_eq!(kva.hull(10_000.0), (-4_000.0, 4_000.0));
+        let neither = ReactiveCapability {
+            pf_limit: None,
+            apparent_va: None,
+        };
+        assert_eq!(neither.hull(10_000.0), (-10_000.0, 10_000.0));
+        // Both: k=1, s=5000 → cross at P*=s/√2≈3536 ≤ rated → hull ±k·s/√2.
+        let both = ReactiveCapability {
+            pf_limit: Some(1.0),
+            apparent_va: Some(5_000.0),
+        };
+        let (lo, hi) = both.hull(10_000.0);
+        assert!((hi - 5_000.0 / 2f32.sqrt()).abs() < 1.0 && (lo + hi).abs() < 1e-3);
+        // Both, rated below the crossing: k=1, s=5000, rated 2000 → ±min(2000, √(s²−4M))=±2000.
+        let (lo2, hi2) = both.hull(2_000.0);
+        assert!((hi2 - 2_000.0).abs() < 1.0 && (lo2 + hi2).abs() < 1e-3);
     }
 
     #[test]

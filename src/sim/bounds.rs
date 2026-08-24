@@ -247,6 +247,21 @@ impl ComponentBounds {
         }
     }
 
+    /// A `ComponentBounds` with no static rated band — used by a Q
+    /// axis, whose static shape comes from the reactive caps instead
+    /// of a rated pair. `effective_at` for this constructor means
+    /// "intersection of the live augmentations alone": empty (no
+    /// constraint) when none are live, unlike `rated()` where an
+    /// empty `rated` band never occurs (`VecBounds::single` always
+    /// produces one bucket) — that emptiness is what marks an
+    /// instance as augmentations-only.
+    pub fn augmentations_only() -> Self {
+        Self {
+            rated: VecBounds::default(),
+            augmented: VecDeque::new(),
+        }
+    }
+
     pub fn add_augmentation(
         &mut self,
         create_ts: DateTime<Utc>,
@@ -274,6 +289,24 @@ impl ComponentBounds {
     /// the same envelope the client does — not a stale one lingering up
     /// to a tick past its `valid_until`.
     pub fn effective_at(&self, now: DateTime<Utc>) -> VecBounds {
+        // An empty `rated` band only happens via `augmentations_only()`
+        // — a real `rated()` band is never empty (`VecBounds::single`
+        // always yields one bucket). In that mode there is no static
+        // constraint to intersect INTO; the effective bounds are just
+        // the live augmentations intersected with each other, or
+        // empty (unconstrained) when none are live.
+        if self.rated.0.is_empty() {
+            let mut out: Option<VecBounds> = None;
+            for a in &self.augmented {
+                if a.live_at(now) {
+                    out = Some(match out {
+                        None => a.bounds.clone(),
+                        Some(acc) => acc.intersect(&a.bounds),
+                    });
+                }
+            }
+            return out.unwrap_or_default();
+        }
         let mut out = self.rated.clone();
         for a in &self.augmented {
             if a.live_at(now) {
@@ -387,6 +420,46 @@ mod tests {
                 .0
                 .is_empty()
         );
+    }
+
+    /// `augmentations_only()` has no static band: with no live
+    /// augmentations the effective bounds are empty (unconstrained),
+    /// with one live augmentation they equal it, and with two they
+    /// intersect — the static-rated `rated()` path instead starts
+    /// from its own band and would report the rated band, not empty,
+    /// when nothing is augmented.
+    #[test]
+    fn augmentations_only_intersects_live_augmentations_alone() {
+        let mut cb = ComponentBounds::augmentations_only();
+        let t0 = Utc::now();
+        assert!(cb.effective_at(t0).0.is_empty());
+
+        cb.add_augmentation(
+            t0,
+            VecBounds::single(-1_000.0, 1_000.0),
+            Duration::from_secs(60),
+        );
+        let eff = cb.effective_at(t0);
+        assert_eq!(
+            (eff.0[0].lower, eff.0[0].upper),
+            (Some(-1_000.0), Some(1_000.0))
+        );
+
+        // A second, tighter live augmentation intersects in.
+        cb.add_augmentation(
+            t0,
+            VecBounds::single(-200.0, 500.0),
+            Duration::from_secs(60),
+        );
+        let eff = cb.effective_at(t0);
+        assert_eq!(
+            (eff.0[0].lower, eff.0[0].upper),
+            (Some(-200.0), Some(500.0))
+        );
+
+        // Once both expire, the envelope is unconstrained again.
+        let eff = cb.effective_at(t0 + chrono::Duration::seconds(120));
+        assert!(eff.0.is_empty());
     }
 
     /// The fail-safe park: 0 W is accepted even when an augmentation
