@@ -107,6 +107,13 @@ pub struct ScenarioJournal {
     /// until then. Stored as f64 to match the units the integrals
     /// below use.
     peak_main_meter_active_w: f64,
+    /// The main meter's (P, Q) pair at the instant of maximum |Q|
+    /// seen since the scenario started — a PAIRED sample, so the
+    /// report can derive power-factor-at-peak-Q without mixing P and
+    /// Q from different instants. `None` before `start` or before the
+    /// first main-meter PQ sample; resets on `start`, freezes on
+    /// `stop` like `peak_main_meter_active_w`.
+    peak_main_meter_pq: Option<(f64, f64)>,
     /// Per-battery charge / discharge energy integrals since
     /// `scenario_start`. BTreeMap so report ordering is stable.
     per_battery: BTreeMap<u64, BatteryIntegrals>,
@@ -150,6 +157,7 @@ impl ScenarioJournal {
         self.ended_at = None;
         self.events.clear();
         self.peak_main_meter_active_w = 0.0;
+        self.peak_main_meter_pq = None;
         self.per_battery.clear();
         self.per_pv.clear();
         self.window_avgs.clear();
@@ -195,6 +203,31 @@ impl ScenarioJournal {
 
     pub fn peak_main_meter_active_w(&self) -> f64 {
         self.peak_main_meter_active_w
+    }
+
+    /// Feed the main meter's (P, Q) pair from one snapshot pass. Kept
+    /// only while the peak-so-far updates by magnitude of Q, so the
+    /// stored pair is always the P alongside the largest |Q| seen —
+    /// exactly what a PF-at-peak-Q reading needs. No-op outside the
+    /// running window, matching `record_sample`.
+    pub fn record_main_meter_pq(&mut self, p: f32, q: f32) {
+        if !self.is_running() {
+            return;
+        }
+        let (p, q) = (p as f64, q as f64);
+        let is_new_peak = match self.peak_main_meter_pq {
+            Some((_, prev_q)) => q.abs() > prev_q.abs(),
+            None => true,
+        };
+        if is_new_peak {
+            self.peak_main_meter_pq = Some((p, q));
+        }
+    }
+
+    /// The (P, Q) pair at the instant of maximum |Q| since the
+    /// scenario started. `None` before any sample.
+    pub fn peak_main_meter_pq(&self) -> Option<(f64, f64)> {
+        self.peak_main_meter_pq
     }
 
     /// Compute the integration window for this snapshot relative

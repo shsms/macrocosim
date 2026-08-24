@@ -44,6 +44,35 @@ fn bound_edge(router: &SharedSiteRouter, id: i64, edge: Edge) -> Result<f64, Err
     })
 }
 
+/// The outermost edge of a component's live reactive-power envelope
+/// (`reactive_bounds()`'s FIRST band) on the requested side, in VAr.
+/// A component with no Q axis at all (`reactive_bounds()` is `None`)
+/// errors — mirrors `bound_edge`'s not-found-style shape, but names
+/// the missing axis instead of missing bounds.
+fn reactive_bound_edge(router: &SharedSiteRouter, id: i64, edge: Edge) -> Result<f64, Error> {
+    let w = router.site();
+    let c = w.get(id as u64).ok_or_else(|| {
+        Error::invalid_argument(format!(
+            "component-reactive-bound: component {id} not found"
+        ))
+    })?;
+    let bounds = c.reactive_bounds().ok_or_else(|| {
+        Error::invalid_argument(format!(
+            "component-reactive-bound: component {id} has no reactive envelope"
+        ))
+    })?;
+    let band = bounds.0.first();
+    let value = match edge {
+        Edge::Lower => band.and_then(|b| b.lower),
+        Edge::Upper => band.and_then(|b| b.upper),
+    };
+    value.map(|v| v as f64).ok_or_else(|| {
+        Error::invalid_argument(format!(
+            "component-reactive-bound: component {id} has an open bound on that side"
+        ))
+    })
+}
+
 pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     let r = router.clone();
     ctx.defun(
@@ -63,10 +92,36 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         move |id: i64| -> Result<f64, Error> { bound_edge(&r, id, Edge::Lower) },
     );
 
-    let r = router;
+    let r = router.clone();
     ctx.defun(
         "component-bound-upper",
         move |id: i64| -> Result<f64, Error> { bound_edge(&r, id, Edge::Upper) },
+    );
+
+    let r = router.clone();
+    ctx.defun(
+        "component-reactive-power",
+        move |id: i64| -> Result<f64, Error> {
+            let w = r.site();
+            let c = w.get(id as u64).ok_or_else(|| {
+                Error::invalid_argument(format!(
+                    "component-reactive-power: component {id} not found"
+                ))
+            })?;
+            Ok(c.aggregate_reactive_var(&w) as f64)
+        },
+    );
+
+    let r = router.clone();
+    ctx.defun(
+        "component-reactive-bound-lower",
+        move |id: i64| -> Result<f64, Error> { reactive_bound_edge(&r, id, Edge::Lower) },
+    );
+
+    let r = router;
+    ctx.defun(
+        "component-reactive-bound-upper",
+        move |id: i64| -> Result<f64, Error> { reactive_bound_edge(&r, id, Edge::Upper) },
     );
 }
 
@@ -122,6 +177,59 @@ mod tests {
             .parse()
             .unwrap();
         assert!((p - 2000.0).abs() < 1.0, "expected +2 kW, got {p}");
+    }
+
+    /// `component-reactive-power` mirrors `component-active-power` over
+    /// the Q axis; the bound queries mirror the active-bound queries
+    /// over `reactive_bounds()`'s first band. A component with no Q
+    /// axis (a battery — `reactive_bounds()` is `None`) errors on the
+    /// bound query instead of returning a bogus edge.
+    #[test]
+    fn reactive_queries_mirror_active() {
+        let (cfg, _dir) = config_with(
+            "(setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
+             (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
+                                       :reactive-pf-limit 0
+                                       :reactive-apparent-va 5000.0
+                                       :reactive-command-delay-ms 0
+                                       :reactive-ramp-rate 1e9
+                                       :successors (list b1))",
+        );
+        // Arm a Q setpoint and let it settle so component-reactive-power
+        // reads back the live value, mirroring the active-power test above.
+        cfg.eval("(set-reactive-power 2 1500.0 30000)").unwrap();
+        let site = cfg.site();
+        site.get(2)
+            .unwrap()
+            .tick(&site, Utc::now(), Duration::from_millis(100));
+        let q: f64 = cfg
+            .eval("(component-reactive-power 2)")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((q - 1500.0).abs() < 1.0, "expected +1.5 kVAr, got {q}");
+
+        // Bound queries return the caps band edges: ±5 kVAr at idle P.
+        let upper: f64 = cfg
+            .eval("(component-reactive-bound-upper 2)")
+            .unwrap()
+            .parse()
+            .unwrap();
+        let lower: f64 = cfg
+            .eval("(component-reactive-bound-lower 2)")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((upper - 5000.0).abs() < 1.0, "upper {upper}");
+        assert!((lower + 5000.0).abs() < 1.0, "lower {lower}");
+
+        // The battery has no Q axis: reactive_bounds() is None, so the
+        // bound query errors rather than returning a bogus edge.
+        let err = cfg.eval("(component-reactive-bound-upper 1)").unwrap_err();
+        assert!(
+            err.contains("no reactive envelope"),
+            "expected 'no reactive envelope' error, got {err}"
+        );
     }
 
     /// A scripted controller reads the live cap and actuates within it:

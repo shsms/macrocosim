@@ -57,6 +57,11 @@ impl MicrogridSite {
         // not active_power_w) get integrated too.
         let mut battery_samples: Vec<(u64, f32)> = Vec::new();
         let mut pv_samples: Vec<(u64, f32)> = Vec::new();
+        // The main meter's paired (P, Q) sample this pass, fed to the
+        // journal's peak-|Q| tracker below. Computed up front (cheap,
+        // no lock held) so it's available while walking the snapshots.
+        let main_id = self.main_meter_id();
+        let mut main_meter_pq: Option<(f32, f32)> = None;
         // Collect every telemetry snapshot BEFORE taking the
         // histories / CSV write locks: `telemetry()` re-enters
         // `runtime` / `connections` reads, and holding the write
@@ -67,7 +72,8 @@ impl MicrogridSite {
             .map(|c| {
                 let snap = c.telemetry(self);
                 let bounds = c.effective_active_bounds();
-                (c, snap, bounds)
+                let reactive_bounds = c.reactive_bounds();
+                (c, snap, bounds, reactive_bounds)
             })
             .collect();
         // Snapshot the physics-tick energy integrals (this read lock is
@@ -79,7 +85,8 @@ impl MicrogridSite {
             let mut histories = self.inner.histories.write();
             let mut csv_sinks = self.inner.scenario_csv.write();
             let mut bounds_sinks = self.inner.scenario_bounds_csv.write();
-            for (c, snap, bounds) in &snapshots {
+            let mut reactive_bounds_sinks = self.inner.scenario_reactive_bounds_csv.write();
+            for (c, snap, bounds, reactive_bounds) in &snapshots {
                 match c.category() {
                     Category::Battery => {
                         if let Some(p) = snap.dc_power_w {
@@ -93,6 +100,12 @@ impl MicrogridSite {
                     }
                     _ => {}
                 }
+                if Some(c.id()) == main_id {
+                    main_meter_pq = Some((
+                        snap.active_power_w.unwrap_or(0.0),
+                        snap.reactive_power_var.unwrap_or(0.0),
+                    ));
+                }
                 if let Some(sink) = csv_sinks.get_mut(&c.id())
                     && let Err(e) = sink.write_row(now, snap)
                 {
@@ -103,6 +116,12 @@ impl MicrogridSite {
                     && let Err(e) = sink.write_bounds_row(now, bounds)
                 {
                     log::warn!("bounds CSV write failed for {}: {e}", c.id());
+                }
+                if let Some(sink) = reactive_bounds_sinks.get_mut(&c.id())
+                    && let Some(reactive_bounds) = reactive_bounds
+                    && let Err(e) = sink.write_bounds_row(now, reactive_bounds)
+                {
+                    log::warn!("reactive bounds CSV write failed for {}: {e}", c.id());
                 }
                 let entry = histories
                     .entry(c.id())
@@ -123,7 +142,6 @@ impl MicrogridSite {
         // unflagged ids and unwatched metrics. Integrals advance
         // the cursor at the end so the next snapshot's dt is
         // measured from now.
-        let main_id = self.main_meter_id();
         {
             let mut journal = self.inner.scenario.write();
             for (id, metric, value) in &emitted {
@@ -134,6 +152,9 @@ impl MicrogridSite {
             }
             for (id, active_power_w) in &pv_samples {
                 journal.record_pv_sample(*id, *active_power_w, now);
+            }
+            if let Some((p, q)) = main_meter_pq {
+                journal.record_main_meter_pq(p, q);
             }
             journal.advance_sample_cursor(now);
         }

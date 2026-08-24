@@ -184,6 +184,11 @@ struct MicrogridSiteInner {
     /// component, sampled by `record_history_snapshot` at the same
     /// 1 Hz pass as telemetry. Same lifecycle as `scenario_csv`.
     scenario_bounds_csv: RwLock<CsvSinks>,
+    /// Effective-reactive-bounds CSV sinks — the Q twin of
+    /// `scenario_bounds_csv`, one per component with a Q axis
+    /// (`reactive_bounds().is_some()`), sampled at the same pass.
+    /// Same lifecycle as `scenario_csv`.
+    scenario_reactive_bounds_csv: RwLock<CsvSinks>,
     /// Directory the active (or most recent) CSV recording wrote to,
     /// so the UI can list + offer the files for download. Set by
     /// `scenario_open_csv`; survives `scenario-stop-csv` so links work
@@ -233,6 +238,7 @@ impl MicrogridSite {
                 scenario_csv: RwLock::new(CsvSinks::new()),
                 scenario_setpoints_csv: RwLock::new(CsvSinks::new()),
                 scenario_bounds_csv: RwLock::new(CsvSinks::new()),
+                scenario_reactive_bounds_csv: RwLock::new(CsvSinks::new()),
                 scenario_csv_dir: RwLock::new(None),
                 grid_frequency: RwLock::new(None),
                 stream_cancel_epoch: AtomicU64::new(0),
@@ -817,6 +823,7 @@ impl MicrogridSite {
         self.inner.scenario_csv.write().clear();
         self.inner.scenario_setpoints_csv.write().clear();
         self.inner.scenario_bounds_csv.write().clear();
+        self.inner.scenario_reactive_bounds_csv.write().clear();
         // Deliberately do NOT rewind `next_id`: the allocator is shared
         // across every site in an enterprise, so a per-site reset (a lone
         // `(reset-microgrid)`) must not rewind the global counter while

@@ -566,6 +566,87 @@ mod tests {
         );
     }
 
+    /// The reactive-bounds CSV mirrors the active-bounds one: opened
+    /// for components with a Q axis, one row per sampling pass, same
+    /// row shape (outer hull + `|`-joined bands) but in VAr and named
+    /// `<id>-reactive-bounds.csv`.
+    #[test]
+    fn reactive_bounds_csv_records_the_live_q_envelope() {
+        use chrono::Utc;
+        let (cfg, dir) = config_with(
+            "(setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
+             (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
+                                       :reactive-pf-limit 0
+                                       :reactive-apparent-va 5000.0
+                                       :reactive-command-delay-ms 0
+                                       :reactive-ramp-rate 1e9
+                                       :successors (list b1))",
+        );
+        let csv_dir = dir.join("csvs");
+        cfg.eval("(scenario-start \"q\")").unwrap();
+        cfg.eval(&format!(
+            "(scenario-record-csv {:?})",
+            csv_dir.to_str().unwrap()
+        ))
+        .unwrap();
+        cfg.site().record_history_snapshot(Utc::now());
+        cfg.eval("(scenario-stop-csv)").unwrap();
+
+        let path = csv_dir.join("2-reactive-bounds.csv");
+        assert!(path.exists(), "expected {path:?} to exist");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let rows: Vec<&str> = contents.lines().collect();
+        assert_eq!(rows[0], "ts_iso,lower_var,upper_var,bands");
+        assert_eq!(rows.len(), 2, "reactive bounds csv: {contents}");
+        // At idle P the caps band is the full ±5 kVAr envelope.
+        assert!(
+            rows[1].ends_with(",-5000,5000,-5000:5000"),
+            "reactive bounds row: {}",
+            rows[1]
+        );
+    }
+
+    /// The report carries the main meter's peak |Q| and the power
+    /// factor at that instant, paired from the same sample — the Q
+    /// twin of `main_meter_peak_tracks_active_power` above.
+    #[test]
+    fn report_carries_peak_q_and_pf_at_peak() {
+        use chrono::Utc;
+        let (cfg, _dir) = config_with(
+            "(%make-grid-connection-point
+               :id 1
+               :successors (list (%make-meter :id 2 :power 3000.0)))",
+        );
+        cfg.eval("(scenario-start \"pf\")").unwrap();
+        cfg.eval("(set-meter-power 2 3000.0)").unwrap();
+        cfg.eval("(set-meter-reactive-power 2 4000.0)").unwrap();
+        cfg.site().record_history_snapshot(Utc::now());
+        let r = cfg.site().scenario_report(Utc::now());
+        assert!(
+            (r.peak_main_meter_var - 4000.0).abs() < 1e-3,
+            "expected peak |Q| ~4000, got {}",
+            r.peak_main_meter_var
+        );
+        // pf = |P| / sqrt(P^2 + Q^2) = 3000 / 5000 = 0.6.
+        let expected_pf = 3000.0f64 / (3000.0f64.powi(2) + 4000.0f64.powi(2)).sqrt();
+        let pf = r
+            .site_pf_at_peak_var
+            .expect("pf should be present after a sample");
+        assert!(
+            (pf - expected_pf).abs() < 1e-6,
+            "expected pf ~{expected_pf}, got {pf}"
+        );
+
+        // A fresh scenario with no samples yet reports no PF.
+        cfg.eval("(scenario-start \"fresh\")").unwrap();
+        assert!(
+            cfg.site()
+                .scenario_report(Utc::now())
+                .site_pf_at_peak_var
+                .is_none()
+        );
+    }
+
     /// `(scenario-expect …)` reads the component's current value,
     /// returns t/nil, and records pass/fail (with the failure
     /// detail) on the scenario report.

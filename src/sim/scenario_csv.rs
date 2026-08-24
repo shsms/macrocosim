@@ -21,6 +21,11 @@
 //!   the setpoints file this lets a scenario replay-assert "the app
 //!   held a stable cap" vs "it oscillated" without an external log
 //!   scrape. Same envelope-bearing component set as setpoints.
+//! - `<id>-reactive-bounds.csv` — the Q twin of `<id>-bounds.csv`:
+//!   the live reactive-power envelope, sampled at the same pass, for
+//!   components that report one (`reactive_bounds().is_some()`) —
+//!   a different component set than the active-bounds files, since
+//!   an inverter has a Q axis but the battery behind it doesn't.
 //!
 //! Each sink is a `BufWriter<File>`; `(scenario-stop-csv)` and
 //! `(scenario-stop)` drop the writers, which flushes and closes
@@ -42,6 +47,7 @@ use crate::sim::setpoints::{SetpointEvent, SetpointOutcome};
 const CSV_HEADER: &str = "ts_iso,active_power_w,reactive_power_var,dc_power_w,soc_pct\n";
 const SETPOINTS_CSV_HEADER: &str = "ts_iso,kind,value,ttl_s,accepted,effective_value,reason\n";
 const BOUNDS_CSV_HEADER: &str = "ts_iso,lower_w,upper_w,bands\n";
+const REACTIVE_BOUNDS_CSV_HEADER: &str = "ts_iso,lower_var,upper_var,bands\n";
 
 /// One CSV sink — owns the file handle until dropped.
 pub(crate) struct CsvSink {
@@ -70,6 +76,18 @@ impl CsvSink {
     /// Open the effective-bounds timeline sink `dir/<id>-bounds.csv`.
     pub(crate) fn open_bounds(dir: &Path, id: u64) -> std::io::Result<Self> {
         Self::create(dir, format!("{id}-bounds.csv"), BOUNDS_CSV_HEADER)
+    }
+
+    /// Open the effective-reactive-bounds timeline sink
+    /// `dir/<id>-reactive-bounds.csv` — the Q twin of `open_bounds`.
+    /// Same row shape (`write_bounds_row` is unit-agnostic), different
+    /// header and file name.
+    pub(crate) fn open_reactive_bounds(dir: &Path, id: u64) -> std::io::Result<Self> {
+        Self::create(
+            dir,
+            format!("{id}-reactive-bounds.csv"),
+            REACTIVE_BOUNDS_CSV_HEADER,
+        )
     }
 
     /// Append one row from a telemetry snapshot. Empty cells for

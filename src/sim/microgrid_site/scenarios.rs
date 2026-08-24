@@ -51,6 +51,15 @@ pub(crate) struct ScenarioReport {
     pub name: Option<String>,
     pub scenario_elapsed_s: f64,
     pub peak_main_meter_w: f64,
+    /// Maximum |reactive power| seen on the main meter since the
+    /// scenario started — the Q twin of `peak_main_meter_w`, tracked
+    /// by magnitude rather than signed max (Q swings both ways).
+    pub peak_main_meter_var: f64,
+    /// Power factor `|P| / sqrt(P^2 + Q^2)` on the main meter at the
+    /// instant `peak_main_meter_var` was recorded — a paired sample,
+    /// not independently-peaked P and Q. `None` before any main-meter
+    /// PQ sample, or when both P and Q were 0 at that instant.
+    pub site_pf_at_peak_var: Option<f64>,
     pub main_meter_id: Option<u64>,
     pub total_battery_charged_wh: f64,
     pub total_battery_discharged_wh: f64,
@@ -140,27 +149,35 @@ impl MicrogridSite {
     /// Open fresh CSV sinks per registered component under `dir`:
     /// a telemetry file for every component, plus a received-setpoints
     /// and an effective-bounds file for each component that reports an
-    /// active-power envelope (the ones a control app commands).
-    /// Returns the total file count opened. Existing sinks are
-    /// dropped first so a re-call replaces (rather than appends to)
-    /// the prior recording.
+    /// active-power envelope (the ones a control app commands), plus
+    /// an effective-reactive-bounds file for each component that
+    /// reports a Q envelope (`reactive_bounds().is_some()` — a
+    /// different set: an inverter has one, the battery behind it
+    /// doesn't). Returns the total file count opened. Existing sinks
+    /// are dropped first so a re-call replaces (rather than appends
+    /// to) the prior recording.
     pub(crate) fn scenario_open_csv(&self, dir: &Path) -> std::io::Result<usize> {
         std::fs::create_dir_all(dir)?;
         let components = self.inner.components.read().clone();
         let mut telemetry = CsvSinks::new();
         let mut setpoints = CsvSinks::new();
         let mut bounds = CsvSinks::new();
+        let mut reactive_bounds = CsvSinks::new();
         for c in components.iter() {
             telemetry.insert(c.id(), CsvSink::open(dir, c.id(), c.category())?);
             if c.effective_active_bounds().is_some() {
                 setpoints.insert(c.id(), CsvSink::open_setpoints(dir, c.id())?);
                 bounds.insert(c.id(), CsvSink::open_bounds(dir, c.id())?);
             }
+            if c.reactive_bounds().is_some() {
+                reactive_bounds.insert(c.id(), CsvSink::open_reactive_bounds(dir, c.id())?);
+            }
         }
-        let count = telemetry.len() + setpoints.len() + bounds.len();
+        let count = telemetry.len() + setpoints.len() + bounds.len() + reactive_bounds.len();
         *self.inner.scenario_csv.write() = telemetry;
         *self.inner.scenario_setpoints_csv.write() = setpoints;
         *self.inner.scenario_bounds_csv.write() = bounds;
+        *self.inner.scenario_reactive_bounds_csv.write() = reactive_bounds;
         *self.inner.scenario_csv_dir.write() = Some(dir.to_path_buf());
         Ok(count)
     }
@@ -192,6 +209,7 @@ impl MicrogridSite {
             &self.inner.scenario_csv,
             &self.inner.scenario_setpoints_csv,
             &self.inner.scenario_bounds_csv,
+            &self.inner.scenario_reactive_bounds_csv,
         ] {
             let mut g = sinks.write();
             count += g.len();
@@ -318,7 +336,16 @@ impl MicrogridSite {
         let name = g.name.clone();
         let scenario_elapsed_s = g.elapsed_s(now);
         let peak_main_meter_w = g.peak_main_meter_active_w();
+        // The peak-|Q| pair also carries the P at that instant, so PF
+        // is derived from ONE sample rather than independently-peaked
+        // P and Q (which could pair values from different instants).
+        let peak_pq = g.peak_main_meter_pq();
         drop(g);
+        let peak_main_meter_var = peak_pq.map(|(_, q)| q.abs()).unwrap_or(0.0);
+        let site_pf_at_peak_var = peak_pq.and_then(|(p, q)| {
+            let apparent = (p * p + q * q).sqrt();
+            (apparent != 0.0).then(|| p.abs() / apparent)
+        });
 
         // SoC stats: walk every registered battery, read its
         // current SoC. Out-of-band of the journal because it's
@@ -337,6 +364,8 @@ impl MicrogridSite {
             name,
             scenario_elapsed_s,
             peak_main_meter_w,
+            peak_main_meter_var,
+            site_pf_at_peak_var,
             main_meter_id: self.main_meter_id(),
             total_battery_charged_wh: total_charged,
             total_battery_discharged_wh: total_discharged,
