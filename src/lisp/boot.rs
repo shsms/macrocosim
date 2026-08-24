@@ -1014,9 +1014,9 @@ impl Config {
     }
 
     /// `reload` body against an already-held interpreter guard — for
-    /// callers (e.g. a scoped overrides-file replace) that must hold
-    /// the lock across surrounding work; re-borrowing inside would
-    /// deadlock.
+    /// callers that must hold the lock across surrounding work
+    /// (re-borrowing inside would deadlock), and for tests that drive
+    /// a reload with the guard in hand.
     pub(super) fn reload_locked(&self, ctx: &mut TulispContext) -> Result<(), String> {
         use std::sync::atomic::Ordering;
         let start = std::time::Instant::now();
@@ -1329,9 +1329,9 @@ fn collect_modified(event: &notify::Event, touched: &mut HashSet<PathBuf>) {
 }
 
 /// `chp-defaults` was folded into `marker-defaults` when CHP became
-/// a marker category. A persisted overrides file (or a hand-written
-/// config) that still sets it evals fine, but `make-chp` no longer
-/// reads it — warn instead of silently dropping the customization.
+/// a marker category. An `enterprise.lisp` (or a hand-written script)
+/// that still sets it evals fine, but `make-chp` no longer reads it
+/// — warn instead of silently dropping the customization.
 fn warn_orphaned_chp_defaults(ctx: &mut TulispContext) {
     if let Ok(v) = ctx.eval_string("(and (boundp 'chp-defaults) chp-defaults)")
         && !v.null()

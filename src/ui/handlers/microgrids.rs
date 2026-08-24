@@ -342,6 +342,14 @@ pub(in crate::ui) struct LoadBody {
 /// POST /api/load — evaluate a microgrid file and register whatever
 /// microgrids it declares.
 ///
+/// `loaded` lists the microgrids the file BACKS once it has run, not
+/// just the ones it newly minted: re-loading a live file reuses its
+/// entries in place, and reporting `[]` for that would read as "the
+/// file did nothing". An genuinely empty list means the file ran and
+/// registered nothing at all — legal (a driver-only script) but
+/// worth saying out loud, since the load picker's job is to put
+/// microgrids on screen.
+///
 /// The interesting failure is a collision: the file declares an id
 /// some other file already loaded. That gets a 409 carrying the id,
 /// whether the file is a managed one (only those can be re-idded
@@ -356,7 +364,16 @@ pub(in crate::ui) async fn load_file(
     let path = std::path::PathBuf::from(&body.path);
     let loaded = super::blocking(move || cfg.load_file(&path)).await?;
     match loaded {
-        Ok(ids) => Ok(Json(serde_json::json!({ "loaded": ids }))),
+        Ok(_) => {
+            let ids = config.microgrids_backed_by(std::path::Path::new(&body.path));
+            if ids.is_empty() {
+                log::warn!(
+                    "load {}: the file ran but registered no microgrid",
+                    body.path
+                );
+            }
+            Ok(Json(serde_json::json!({ "loaded": ids })))
+        }
         Err(crate::lisp::LoadError::Collision { id }) => {
             let suggested = crate::sim::microgrids::next_free_id(&config.microgrids());
             Err(collision_response(&config, &body.path, id, suggested))

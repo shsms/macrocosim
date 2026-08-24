@@ -474,6 +474,25 @@ impl Config {
         self.source_files.lock().clone()
     }
 
+    /// The ids of the microgrids `path` backs, ascending. Resolved
+    /// and canonicalized the way the loader resolves it, so a
+    /// state-dir-relative spelling (what the load endpoint receives)
+    /// matches the absolute one the registry stores.
+    pub fn microgrids_backed_by(&self, path: &Path) -> Vec<u64> {
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.state_dir.join(path)
+        };
+        let canonical = resolved.canonicalize().unwrap_or(resolved);
+        self.microgrids
+            .lock()
+            .iter()
+            .filter(|(_, e)| e.source.as_deref() == Some(canonical.as_path()))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     /// Every file that backs at least one registered microgrid, each
     /// listed once, in the order the files first arrived.
     ///

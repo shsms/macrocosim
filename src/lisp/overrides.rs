@@ -500,29 +500,31 @@ mod tests {
         );
     }
 
-    /// A `(make-microgrid …)` typed into the REPL has no backing
-    /// file, so journaling it into the ambient microgrid's overrides
-    /// would poison every later reload: the owning file's
-    /// `(load-overrides)` would replay the form under that file's
-    /// name, the source-less entry would refuse the foreign claim,
-    /// and the reload would abort with every site already reset —
-    /// leaving the world empty. The unbacked microgrid is transient;
-    /// the FILE-backed world must survive.
+    /// A `(make-microgrid …)` typed into the REPL is backed by no
+    /// file, so a whole-world reload has nothing to replay it from.
+    /// It must therefore drop out of the rebuild quietly: its entry
+    /// survives with a reset, empty site (the runtimes that hold the
+    /// site handle can't be torn down), and — the part that used to
+    /// break — it must not turn up in the replay claiming an id, or
+    /// the reload would abort with every site already reset and leave
+    /// the world empty. The unbacked microgrid is transient; the
+    /// FILE-backed world must survive.
     #[test]
     fn repl_created_microgrid_does_not_break_reload() {
-        // A config shaped like the real ones: its topology replays
-        // its own overrides journal. That replay is what turns a
-        // journaled REPL microgrid into a reload-breaking form.
         let (cfg, _dir) = config_with(
             "(make-microgrid :id 9 :grpc-port 8800
-               :topology (lambda ()
-                           (%make-grid-connection-point :id 1)
-                           (load-overrides)))",
+               :topology (lambda () (%make-grid-connection-point :id 1)))",
         );
         cfg.eval(
             "(make-microgrid :id 10 :grpc-port 8899 :topology (lambda () (%make-meter :id 2)))",
         )
         .unwrap();
+        // A REPL microgrid backs no file, so it is not in the replay
+        // list — which is exactly why the reload must tolerate it.
+        assert!(
+            cfg.microgrids().lock()[&10].source.is_none(),
+            "a REPL microgrid backs no file",
+        );
         // The boot script's world comes back intact.
         cfg.reload()
             .expect("reload must survive a REPL-created microgrid");
@@ -531,6 +533,10 @@ mod tests {
         assert!(
             r.get(&9).unwrap().site.get(1).is_some(),
             "the file-backed microgrid's topology must be rebuilt",
+        );
+        assert!(
+            r.get(&10).is_some_and(|e| e.site.get(2).is_none()),
+            "the REPL microgrid keeps its entry but nothing rebuilds it",
         );
     }
 

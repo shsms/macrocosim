@@ -937,6 +937,11 @@ async fn microgrids_import_creates_entry_and_managed_file() {
 /// from the UI, populated through the per-mg eval path, comes back
 /// with the same ids and values in a brand-new `Config` booted on
 /// the same state directory — no journal, no manual save.
+///
+/// Auto-allocated ids are part of that contract: a component created
+/// without an explicit `:id` must come back under the id it was
+/// given, not under a freshly minted one. The generated block pins
+/// every id explicitly for exactly this reason.
 #[tokio::test]
 async fn ui_created_microgrid_survives_a_restart() {
     let (config, dir) =
@@ -959,6 +964,22 @@ async fn ui_created_microgrid_survives_a_restart() {
     )
     .await;
     assert_eq!(st, StatusCode::OK);
+    // One more component, this time with NO explicit :id — the
+    // allocator picks one, and that pick has to survive the restart.
+    let (st, _) = call(
+        config.clone(),
+        post(&format!("/api/mg/{id}/eval"), "(%make-meter :power 75.0)"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let auto_id = {
+        let reg = config.microgrids();
+        let r = reg.lock();
+        let mut ids: Vec<u64> = r[&id].site.components().iter().map(|c| c.id()).collect();
+        ids.retain(|i| *i != 300 && *i != 301);
+        assert_eq!(ids.len(), 1, "exactly one auto-allocated component");
+        ids[0]
+    };
 
     // "Restart": a brand-new Config on the same state dir, loading the file.
     let file = dir.join(format!("microgrids/{id}.lisp"));
@@ -972,6 +993,10 @@ async fn ui_created_microgrid_survives_a_restart() {
         "identical component ids"
     );
     assert!((e.site.get(301).unwrap().aggregate_power_w(&e.site) - 250.0).abs() < 1e-3);
+    assert!(
+        e.site.get(auto_id).is_some(),
+        "the auto-allocated id {auto_id} must not be re-minted on replay",
+    );
 }
 
 #[tokio::test]

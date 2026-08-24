@@ -4,7 +4,12 @@
 use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
-use crate::lisp::Config;
+// `DEFAULT_CATEGORIES` names the `*-defaults` alists this endpoint
+// walks out of the running interpreter. Shared with the
+// `enterprise.lisp` renderer, so both see the same set. An unbound
+// category is skipped — `eval_silent` on an unbound symbol fails and
+// the entry is dropped.
+use crate::lisp::{Config, DEFAULT_CATEGORIES};
 
 /// One per `*-defaults` alist defined in `sim/defaults.lisp`. The
 /// `var_name` is the actual Lisp variable; `value` is its current
@@ -21,13 +26,6 @@ pub(in crate::ui) struct DefaultsEntry {
 pub(in crate::ui) struct DefaultsResponse {
     entries: Vec<DefaultsEntry>,
 }
-
-// Category names the defaults endpoint walks to fetch each
-// `*-defaults` alist out of the running interpreter. Shared with the
-// `enterprise.lisp` renderer, so both see the same set. An unbound
-// category is skipped — `eval_silent` on an unbound symbol fails and
-// the entry is dropped.
-use crate::lisp::DEFAULT_CATEGORIES;
 
 pub(in crate::ui) async fn defaults(
     State(config): State<Config>,

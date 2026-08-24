@@ -262,8 +262,11 @@ inside `at`, e.g. (at \"60s\" (event 'clouds \"rolling in\"))."
   "Schedule THUNK to run once at scenario time SECS (seconds).
 The timer goes on `active-timers' — paired with the file that
 started the scenario, like every other tracked timer — so a reload
-cancels it: a config reload mid-scenario must not let stale cues
-and checks fire into the rebuilt world."
+of THAT file cancels it: rebuilding a file mid-scenario must not
+let its stale cues and checks fire into the rebuilt world. A
+scenario started from the UI or the REPL has no source file, so no
+per-file reload cancels it; only a whole-world reload's central
+`cancel-timers' does."
   (setq active-timers
         (cons (cons (current-source-file) (run-with-timer secs nil thunk))
               active-timers)))

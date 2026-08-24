@@ -316,9 +316,13 @@ impl SimulatedComponent for SolarInverter {
     }
 
     fn has_unrenderable_source(&self) -> bool {
-        // Same reason `constructor_kwargs` omits `:sunlight%` here:
-        // a dynamic sunlight source has no static number to write.
-        self.cfg.sunlight_dynamic
+        // A dynamic sunlight source has no static number to write.
+        // Both spellings count: constructed dynamic (which
+        // `constructor_kwargs` already omits `:sunlight%` for) and a
+        // runtime `(set-solar-sunlight ID (lambda …))` poke, whose
+        // expression the generated block cannot carry either — the
+        // same case Meter reports for `set-meter-power`.
+        self.cfg.sunlight_dynamic || self.sunlight_source.read().is_dynamic()
     }
 
     fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
@@ -475,5 +479,22 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(!s.contains(":sunlight%"));
+        assert!(inv.has_unrenderable_source());
+    }
+
+    /// A sunlight source installed at RUNTIME — a scenario or an
+    /// `every` block calling `(set-solar-sunlight ID (lambda …))` —
+    /// is just as unwritable as a constructed one, so the component
+    /// has to report it. The construction-time flag alone missed it,
+    /// which is the same gap Meter closes by consulting its live
+    /// power source.
+    #[test]
+    fn a_runtime_lambda_sunlight_poke_reports_unrenderable() {
+        let inv = SolarInverter::new(6, Duration::from_secs(1), cfg_with_sun(80.0));
+        assert!(!inv.has_unrenderable_source(), "a static one is fine");
+        let mut ctx = tulisp::TulispContext::new();
+        let lambda = ctx.eval_string("(lambda () 40.0)").unwrap();
+        inv.set_sunlight_source(DynamicScalar::from_lisp(&lambda, 80.0).unwrap());
+        assert!(inv.has_unrenderable_source());
     }
 }

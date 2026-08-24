@@ -112,6 +112,17 @@ export const microgridsPanel = (() => {
       return false;
     }
     if (res.ok) {
+      // A file is allowed to register nothing — a driver-only script
+      // is exactly that — but from the Load picker it looks like a
+      // no-op, so say what happened rather than leaving a silently
+      // unchanged grid.
+      let loaded = null;
+      try {
+        loaded = (await res.json()).loaded;
+      } catch (_) {}
+      if (Array.isArray(loaded) && loaded.length === 0) {
+        notify("Loaded no microgrids — the file ran but registered nothing");
+      }
       await refresh();
       return true;
     }

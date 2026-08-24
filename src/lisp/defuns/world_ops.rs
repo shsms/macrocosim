@@ -23,9 +23,10 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             let child = arg_to_component_id(&child)?;
             let w = r.site();
             // Reject unknown endpoints. A dangling edge would
-            // "succeed", bump the structural fingerprint, persist to
-            // the overrides file, and come back on every reload with
-            // only a graph-validator warning as the symptom.
+            // "succeed", bump the structural version, get written
+            // into the microgrid's managed file, and come back on
+            // every reload with only a graph-validator warning as the
+            // symptom.
             for id in [parent, child] {
                 if w.get(id).is_none() {
                     return Err(Error::invalid_argument(format!(

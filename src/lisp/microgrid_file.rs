@@ -6,9 +6,14 @@
 //! generated block without disturbing anything else in the file.
 //!
 //! `render_block` / `render_empty_block` render the generated block
-//! from live state, the inverse of `parse`. Nothing outside this
-//! module depends on it yet — a later task adds the loader that
-//! reads these files back in.
+//! from live state, the inverse of `parse`. Between them these are
+//! the whole read/write surface of the format: the loader
+//! (`lisp::boot`) parses a file to decide how to evaluate it and
+//! reads its head id back, the persist pass (`lisp::overrides`)
+//! re-renders the block on every structural edit, undo / snapshots
+//! swap blocks in and out, and the create / import / load-as
+//! endpoints (`ui::handlers::microgrids`) compose and re-id whole
+//! files.
 
 use std::fs;
 use std::io::Write;

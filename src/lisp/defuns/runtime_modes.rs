@@ -67,7 +67,8 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // CONFIG parameter — the declared capability of the component.
     // Setting it re-derives the runtime knobs (no telemetry means a
     // silent stream, no control means an erroring command channel)
-    // and persists through the overrides gate.
+    // and, being structural, is written back into the microgrid's
+    // managed file (`:operational-mode` in the generated block).
     let r = router.clone();
     ctx.defun(
         "set-component-operational-mode",
