@@ -5,6 +5,8 @@
 
 mod common;
 
+use std::time::Duration;
+
 use common::TestServer;
 use serde_json::Value;
 
@@ -236,4 +238,72 @@ async fn site_import_creates_microgrid_with_working_formulas() {
         .unwrap();
     assert!(saved.contains(":capacity 40000.0"), "{saved}");
     assert!(saved.contains(":rated-fuse-current 125"), "{saved}");
+}
+
+/// SP1's final review deferred the formula-convergence E2E to SP3
+/// (this task) because it needs the loopback stream Task 1 added:
+/// `grid_reactive_power`, fed by the upstream grid `AcPowerReactive`
+/// formula. That formula spans every AC component under the grid —
+/// including the EV charger, whose `reactive_power_var: Some(0.0)`
+/// telemetry (src/sim/ev_charger.rs) is what lets it converge at
+/// all: an *absent* Q sample reads as "unknown" upstream, not
+/// "zero", and the aggregation never resolves. This test proves the
+/// mechanism end to end rather than just asserting the constant.
+#[tokio::test(flavor = "multi_thread")]
+async fn grid_reactive_formula_converges_over_a_site_with_an_ev_charger() {
+    let topology = r#"
+(%make-grid-connection-point :id 1
+    :successors
+    (list (%make-meter :id 2
+                        :successors
+                        (list (%make-battery-inverter :id 3
+                                                        :successors
+                                                        (list (%make-battery :id 4)))))
+          (%make-meter :id 5
+                       :successors
+                       (list (%make-ev-charger :id 6)))))
+"#;
+    let s = TestServer::start(topology).await;
+    let client = reqwest::Client::new();
+
+    let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
+    let id = mgs
+        .as_array()
+        .expect("microgrids array")
+        .first()
+        .expect("one microgrid")["id"]
+        .as_u64()
+        .expect("microgrid id");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let snapshot = loop {
+        let body = json(
+            &client,
+            format!("{}/api/mg/{id}/microgrid/latest", s.ui_url),
+        )
+        .await;
+        let converged = body["grid_reactive_power"]["value"]
+            .as_f64()
+            .is_some_and(|v| v.is_finite());
+        if converged || tokio::time::Instant::now() >= deadline {
+            break body;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    let entry = &snapshot["grid_reactive_power"];
+    let value = entry["value"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("grid_reactive_power never converged: {snapshot}"));
+    assert!(value.is_finite(), "value not finite: {snapshot}");
+    assert_eq!(entry["quantity"], "ReactivePower", "{snapshot}");
+    assert_eq!(entry["unit"], "var", "{snapshot}");
+
+    // Reactive energy (varh) integration is out of scope for this
+    // stream — energy_stream_for never maps grid_reactive_power to a
+    // companion, so no such key should ever appear.
+    assert!(
+        snapshot.get("grid_reactive_energy").is_none(),
+        "unexpected grid_reactive_energy stream: {snapshot}"
+    );
 }
