@@ -97,9 +97,14 @@ impl Config {
             )));
         }
         if let Some(new_id) = as_id {
+            // A committed partial reaches the caller as a failure
+            // here, carrying the "the copy loaded but its script
+            // section failed" wording — the snapshot endpoint has no
+            // warning channel of its own, so the message is where
+            // the nuance lives.
             let id = self
                 .load_as(&snapshot, new_id)
-                .map_err(SnapshotError::Failed)?;
+                .map_err(|e| SnapshotError::Failed(e.to_string()))?;
             return Ok(Some(id));
         }
         let dest = self.managed_file_of(mg_id)?;

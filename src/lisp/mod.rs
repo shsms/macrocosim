@@ -43,7 +43,7 @@ use tulisp::{SharedMut, TulispContext};
 use crate::sim::MicrogridSite;
 use crate::sim::microgrids::{CurrentMicrogrid, SharedSiteRouter};
 
-pub use boot::LoadError;
+pub use boot::{LoadAsError, LoadError};
 pub use snapshots::SnapshotError;
 pub use undo::UndoDepths;
 
@@ -453,16 +453,31 @@ impl Config {
     }
 
     /// Remember that the loader evaluated `path`, keeping the order
-    /// in which files first arrived. Called by the loader after a
-    /// successful eval, whether or not the file registered a
-    /// microgrid — a driver script that only arms timers is a file
-    /// worth watching and worth re-evaluating on its own.
+    /// in which files first arrived. Called by the loader once it has
+    /// STARTED evaluating a file — on success, and on a failure too,
+    /// since a partly-evaluated file may have registered a microgrid
+    /// or armed timers and is then part of the world. Whether the
+    /// file registered a microgrid doesn't matter either: a driver
+    /// script that only arms timers is worth watching and worth
+    /// re-evaluating on its own. A file that never evaluated (missing,
+    /// unreadable) is not recorded.
     /// See [`Config::source_files`].
     pub(crate) fn note_source_file(&self, path: &Path) {
         let mut files = self.source_files.lock();
         if !files.iter().any(|p| p == path) {
             files.push(path.to_path_buf());
         }
+    }
+
+    /// Drop `path` from the loader's record — for a file that is
+    /// being deleted, so the watch set and the reload list stop
+    /// naming a path that no longer exists.
+    pub(crate) fn forget_source_file(&self, path: &Path) {
+        // Canonicalized the way `note_source_file`'s caller recorded
+        // it, which is why this runs while the file still exists.
+        let canonical = path.canonicalize();
+        let canonical = canonical.as_deref().unwrap_or(path);
+        self.source_files.lock().retain(|p| p != canonical);
     }
 
     /// Every file the loader has evaluated, in first-load order.

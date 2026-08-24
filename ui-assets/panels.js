@@ -166,13 +166,23 @@ export const microgridsPanel = (() => {
     btn.textContent = `Load as ${info.suggested_id}`;
     btn.addEventListener("click", async () => {
       btn.disabled = true;
+      let resp = null;
       try {
-        await mutate("POST", "/api/load-as", { path, id: info.suggested_id });
+        const res = await mutate("POST", "/api/load-as", {
+          path,
+          id: info.suggested_id,
+        });
+        resp = await res.json();
       } catch (e) {
         notify(`Load failed: ${e.message}`);
         btn.disabled = false;
         return;
       }
+      // The copy can load and still be half-built: its generated
+      // block registered, its script section then failed. That comes
+      // back as a success carrying a warning, because the microgrid
+      // IS live — say so rather than dropping it.
+      if (resp?.warning) notify(resp.warning);
       bar.hidden = true;
       await refresh();
       document.getElementById("load-script-dialog").close();

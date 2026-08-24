@@ -63,6 +63,51 @@ impl std::fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
+/// Why a [`Config::load_as`] call failed.
+///
+/// One case is singled out for the same reason as
+/// [`LoadError::Collision`]: callers act on it rather than just
+/// reporting it. A copy whose generated block registered and whose
+/// script section then failed leaves a LIVE microgrid and a file on
+/// disk — the caller got what it asked for plus a problem, and must
+/// not retry. Only `load_as` can tell that apart from a call that
+/// copied nothing, because only it knows whether it got as far as
+/// writing and loading the target; the several early refusals
+/// ("already registered", "already exists") return before anything
+/// is copied, and a caller inspecting the registry afterwards would
+/// see the file the PREVIOUS, successful call left and mistake one
+/// for the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadAsError {
+    /// The copy was written and its microgrid `id` registered, but
+    /// the load then failed — `cause` says how. The file is kept.
+    CommittedPartial { id: u64, cause: String },
+    /// Anything else. Nothing from this call is live: either nothing
+    /// was copied, or the copy was cleaned up again.
+    Other(String),
+}
+
+impl std::fmt::Display for LoadAsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadAsError::CommittedPartial { cause, .. } => {
+                write!(f, "{cause} — the copy loaded but its script section failed")
+            }
+            LoadAsError::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for LoadAsError {}
+
+/// Every refusal that isn't the committed partial arrives as a plain
+/// message, so `?` can carry one straight out of `load_as`.
+impl From<String> for LoadAsError {
+    fn from(msg: String) -> Self {
+        LoadAsError::Other(msg)
+    }
+}
+
 /// The microgrid id named by a "microgrid N is already loaded (…)"
 /// message anywhere inside `msg` — the number immediately before the
 /// phrase. `None` when the message says something else.
@@ -576,13 +621,27 @@ impl Config {
         if let Err(e) = result {
             let formatted = e.format(ctx);
             log::error!("Tulisp error in {}:\n{formatted}", resolved.display());
+            // Evaluation STARTED, so the file is part of the world
+            // whatever went wrong — whether the failure was in a
+            // generated block (whose `make-microgrid` may already have
+            // registered before a later form died), in the script
+            // section after the block registered, or partway through
+            // an unmanaged script that had armed its timers. Record it
+            // even though the load reports an error: that routes every
+            // retry through the reload path, which cancels this file's
+            // timers first instead of double-arming them, and puts the
+            // file under the watcher so saving a fix reloads it.
+            //
+            // A file that never got this far — unreadable, unparseable
+            // path — ran no form and is recorded nowhere; those return
+            // before this point.
+            self.note_source_file(canonical);
             return Err(LoadError::classify(formatted));
         }
-        // Only on success: a file that failed to evaluate contributed
-        // nothing and is not part of the world. A file that DID
-        // evaluate is worth watching and worth re-evaluating on its
-        // own even if it registered no microgrid — a driver script
-        // that only arms `every` blocks is exactly that case.
+        // A file that evaluated is worth watching and worth
+        // re-evaluating on its own even if it registered no
+        // microgrid — a driver script that only arms `every` blocks
+        // is exactly that case.
         self.note_source_file(canonical);
 
         let new_ids: Vec<u64> = self
@@ -645,7 +704,7 @@ impl Config {
     /// already registered in microgrid Y") — which is the whole point
     /// of the copy failing for the one case it exists to serve:
     /// duplicating a file that is already loaded.
-    pub fn load_as(&self, path: &Path, new_id: u64) -> Result<u64, String> {
+    pub fn load_as(&self, path: &Path, new_id: u64) -> Result<u64, LoadAsError> {
         let resolved = self.resolve_in_state_dir(path);
         let text = std::fs::read_to_string(&resolved)
             .map_err(|e| format!("cannot read {}: {e}", resolved.display()))?;
@@ -656,7 +715,9 @@ impl Config {
         let free_port = {
             let reg = self.microgrids.lock();
             if reg.contains_key(&new_id) {
-                return Err(format!("microgrid {new_id} is already registered"));
+                return Err(LoadAsError::Other(format!(
+                    "microgrid {new_id} is already registered"
+                )));
             }
             crate::sim::microgrids::next_free_port_in(&reg)
         };
@@ -676,20 +737,44 @@ impl Config {
         .map_err(|e| format!("{}: {e}", resolved.display()))?;
         let target = self.microgrids_dir().join(format!("{new_id}.lisp"));
         if target.exists() {
-            return Err(format!(
+            return Err(LoadAsError::Other(format!(
                 "{} already exists; refusing to clobber",
                 target.display()
-            ));
+            )));
         }
         super::microgrid_file::write_atomic(&target, &rewritten)
             .map_err(|e| format!("write {}: {e}", target.display()))?;
         self.record_self_write(&target, &rewritten);
-        // A failed load leaves no live microgrid, so the copy on disk
-        // would be an orphan the next reload would trip over — drop it
-        // and report the load error.
+        // Past this point the copy exists, so this is the only place
+        // that can tell a committed partial from a call that left
+        // nothing — we know we just wrote and loaded THIS target, and
+        // the registry answer is about our own load rather than some
+        // earlier one's leftovers.
         if let Err(e) = self.load_file(&target) {
-            let _ = std::fs::remove_file(&target);
-            return Err(e.to_string());
+            let registered = self.microgrids_backed_by(&target);
+            return Err(match registered.first() {
+                // The generated block DID register; only the script
+                // section failed. The file is where that live
+                // microgrid persists, undoes and snapshots to, so
+                // removing it would strand it — keep both, and hand
+                // the caller a live id alongside the complaint.
+                Some(&id) => LoadAsError::CommittedPartial {
+                    id,
+                    cause: e.to_string(),
+                },
+                // Nothing registered, so the copy is an orphan the
+                // next reload would trip over. Drop it — and take it
+                // back out of the visited set, which the failed load
+                // just put it in, or the watcher would follow a path
+                // that no longer exists. Forget before unlink, while
+                // the path can still be canonicalized the same way
+                // the loader recorded it.
+                None => {
+                    self.forget_source_file(&target);
+                    let _ = std::fs::remove_file(&target);
+                    LoadAsError::Other(e.to_string())
+                }
+            });
         }
         Ok(new_id)
     }
@@ -1932,6 +2017,182 @@ mod tests {
         cfg.reload_file(&driver).unwrap();
         assert_eq!(cfg.eval_silent("driver-mark").unwrap(), "2");
         assert_eq!(count(), 1, "reload must not double-arm the driver's timer");
+    }
+
+    /// A managed file whose generated block succeeded and whose
+    /// SCRIPT section then failed is a half-loaded file: the
+    /// microgrid is registered and the script's timers are armed, so
+    /// the loader has to record it even though the load reports an
+    /// error. Otherwise the file is unwatched, and a retry misses the
+    /// visited check and evaluates on top of itself — double-arming
+    /// every `every` block it managed to run.
+    #[test]
+    fn a_failed_script_section_still_records_the_file_it_half_loaded() {
+        use crate::lisp::microgrid_file::{compose, write_atomic};
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let path = dir.join("microgrids/50.lisp");
+        write_atomic(
+            &path,
+            &compose(
+                "(make-microgrid :id 50 :name \"s\" :grpc-port 8850\n  :topology\n  \
+                 (lambda ()\n    (%make-meter :id 500)))",
+                "(every :milliseconds 1000 :call (lambda () nil))\n\
+                 (set-meter-power 999999 1.0)\n",
+            ),
+        )
+        .unwrap();
+        let count = || -> i64 {
+            cfg.eval_silent("(length active-timers)")
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+
+        let err = cfg.load_file(&path).expect_err("the script section fails");
+        assert!(err.to_string().contains("999999"), "{err}");
+        assert!(
+            cfg.microgrids().lock().contains_key(&50),
+            "the generated block ran: its microgrid is live"
+        );
+        let canonical = path.canonicalize().unwrap();
+        assert!(
+            cfg.loader_visited_files().contains(&canonical),
+            "a half-loaded file is watched and reloadable"
+        );
+        assert_eq!(count(), 1, "the script armed one timer before failing");
+
+        // The retry takes the reload path, which cancels this file's
+        // timers before re-evaluating it.
+        assert!(cfg.load_file(&path).is_err(), "it still fails");
+        assert_eq!(count(), 1, "and it must not double-arm the timer");
+    }
+
+    /// The same rule for an UNMANAGED file, which has no generated
+    /// block to succeed: a driver script that arms an `every` and
+    /// then errors has already changed the world, so it is recorded
+    /// too. Otherwise it is unwatched — saving a fix would not reload
+    /// it — and a retry misses the visited check and arms the timer a
+    /// second time.
+    #[test]
+    fn a_failed_unmanaged_file_that_armed_a_timer_is_still_recorded() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let driver = dir.join("driver.lisp");
+        std::fs::write(
+            &driver,
+            "(every :milliseconds 1000 :call (lambda () nil))\n\
+             (this-defun-does-not-exist 1)\n",
+        )
+        .unwrap();
+        let count = || -> i64 {
+            cfg.eval_silent("(length active-timers)")
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+
+        let err = cfg.load_file(&driver).expect_err("the script errors");
+        assert!(
+            err.to_string().contains("this-defun-does-not-exist"),
+            "{err}"
+        );
+        assert_eq!(count(), 1, "it armed a timer before failing");
+        assert!(
+            cfg.loader_visited_files()
+                .iter()
+                .any(|p| p.ends_with("driver.lisp")),
+            "a partially-evaluated file is watched and reloadable"
+        );
+
+        assert!(cfg.load_file(&driver).is_err(), "it still fails");
+        assert_eq!(count(), 1, "and it must not double-arm the timer");
+    }
+
+    /// Nothing evaluated, nothing recorded: a file the loader could
+    /// not even read never ran a form, so it armed nothing and
+    /// registered nothing.
+    #[test]
+    fn a_file_that_never_evaluated_is_not_recorded() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let missing = dir.join("no-such-file.lisp");
+        assert!(cfg.load_file(&missing).is_err());
+        assert!(
+            !cfg.loader_visited_files()
+                .iter()
+                .any(|p| p.ends_with("no-such-file.lisp")),
+            "a file that never ran is not part of the world"
+        );
+    }
+
+    /// `load_as` deletes its copy when the load leaves nothing behind
+    /// — an orphan file the next reload would trip over. But a load
+    /// that registered a microgrid and then failed its script section
+    /// OWNS that file: removing it would strand a live microgrid with
+    /// no file to persist to, undo against, or snapshot.
+    #[test]
+    fn load_as_keeps_a_copy_whose_microgrid_registered() {
+        use crate::lisp::microgrid_file::{compose, write_atomic};
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let src = dir.join("mg51.lisp");
+        write_atomic(
+            &src,
+            &compose(
+                "(make-microgrid :id 51 :name \"s\" :grpc-port 8851\n  :topology\n  \
+                 (lambda ()\n    (%make-meter :id 510)))",
+                "(set-meter-power 999999 1.0)\n",
+            ),
+        )
+        .unwrap();
+
+        let err = cfg.load_as(&src, 52).expect_err("the script section fails");
+        // Typed, not sniffed: only load_as can tell a committed
+        // partial from a call that copied nothing, so it says which.
+        let crate::lisp::LoadAsError::CommittedPartial { id, cause } = &err else {
+            panic!("expected a committed partial, got {err}");
+        };
+        assert_eq!(*id, 52, "and names the microgrid that DID come up");
+        assert!(cause.contains("999999"), "{cause}");
+        assert!(
+            cfg.microgrids().lock().contains_key(&52),
+            "the copy's generated block ran"
+        );
+        assert!(
+            dir.join("microgrids/52.lisp").exists(),
+            "so the copy stays on disk"
+        );
+
+        // The mirror: a copy whose block itself fails registers
+        // nothing, so the file IS an orphan — deleted, and taken back
+        // out of the loader's record, which the failed load put it in.
+        // A leftover entry would leave the watcher and the reload list
+        // naming a path that no longer exists.
+        let broken = dir.join("mg53.lisp");
+        write_atomic(
+            &broken,
+            &compose(
+                "(make-microgrid :id 53 :name \"b\" :grpc-port 8853\n  :topology\n  \
+                 (lambda ()\n    (this-defun-does-not-exist 1)))",
+                "",
+            ),
+        )
+        .unwrap();
+        let target = dir.join("microgrids/54.lisp");
+        let err = cfg.load_as(&broken, 54).expect_err("the block fails");
+        assert!(
+            matches!(err, crate::lisp::LoadAsError::Other(_)),
+            "nothing registered, so nothing is committed: {err}"
+        );
+        assert!(!target.exists(), "the orphan copy is deleted");
+        assert!(
+            !cfg.loader_visited_files()
+                .iter()
+                .any(|p| p.ends_with("54.lisp")),
+            "and the loader forgets it: {:?}",
+            cfg.loader_visited_files()
+        );
     }
 
     /// A broken `enterprise.lisp` aborts a whole-world reload BEFORE

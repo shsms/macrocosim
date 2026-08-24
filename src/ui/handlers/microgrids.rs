@@ -415,15 +415,36 @@ pub(in crate::ui) struct LoadAsBody {
 /// POST /api/load-as — copy a managed microgrid file under a free id
 /// and load the copy, so one file can back two live microgrids. The
 /// answer to the collision 409 above.
+///
+/// Three outcomes, not two. A clean load is `200 {id}`. A load that
+/// left nothing behind (the copy was cleaned up) is the 409 the
+/// caller can retry under a different id. In between sits the
+/// COMMITTED PARTIAL: the copy's generated block registered and its
+/// script section then failed, so the microgrid is live and its file
+/// is kept. That one is `200 {id, warning}` — reporting it as a 409
+/// would read as the collision code and invite a retry that then
+/// hits "target exists", or mints a second copy of a microgrid that
+/// already loaded.
 pub(in crate::ui) async fn load_file_as(
     State(config): State<Config>,
     Json(body): Json<LoadAsBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let path = std::path::PathBuf::from(&body.path);
-    let id = super::blocking(move || config.load_as(&path, body.id))
-        .await?
-        .map_err(|e| (StatusCode::CONFLICT, e))?;
-    Ok(Json(serde_json::json!({ "id": id })))
+    let id = body.id;
+    match super::blocking(move || config.load_as(&path, id)).await? {
+        Ok(id) => Ok(Json(serde_json::json!({ "id": id }))),
+        // `load_as` typed this for us — it is the only thing that
+        // knows whether the copy got as far as registering, so the
+        // handler never has to ask the registry and never has to
+        // guess which of several refusals it is looking at.
+        Err(e) => match &e {
+            crate::lisp::LoadAsError::CommittedPartial { id, .. } => Ok(Json(serde_json::json!({
+                "id": id,
+                "warning": e.to_string(),
+            }))),
+            crate::lisp::LoadAsError::Other(_) => Err((StatusCode::CONFLICT, e.to_string())),
+        },
+    }
 }
 
 /// POST /api/mg/{mg_id}/adopt — take a hand-written microgrid file

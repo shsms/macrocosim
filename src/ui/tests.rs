@@ -1148,6 +1148,76 @@ async fn load_endpoint_offers_load_as_on_collision() {
     assert!(config.microgrids().lock().contains_key(&suggested));
 }
 
+/// A load-as whose generated block registered but whose script
+/// section then failed is a COMMITTED partial: the copy is live and
+/// its file is kept. Reporting that as a 409 would read as the
+/// collision code the caller just answered and invite a retry, which
+/// then hits "target exists" or mints a second copy. It is a 200
+/// carrying the id and a warning instead.
+#[tokio::test]
+async fn load_as_reports_a_committed_partial_as_a_warning_not_a_conflict() {
+    let (config, dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    let text = crate::lisp::microgrid_file::compose(
+        "(make-microgrid :id 40 :name \"p\" :grpc-port 8840\n  :topology\n  \
+         (lambda ()\n    (%make-meter :id 410)))",
+        "(set-meter-power 999999 1.0)\n",
+    );
+    std::fs::write(dir.join("partial.lisp"), &text).unwrap();
+    let (st, body) = call(
+        config.clone(),
+        post_json("/api/load-as", r#"{"path":"partial.lisp","id":41}"#),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["id"], 41, "the caller still learns the id");
+    let warning = v["warning"].as_str().expect("a warning is carried");
+    assert!(warning.contains("999999"), "{warning}");
+    assert!(
+        warning.contains("script section"),
+        "the warning says what half failed: {warning}"
+    );
+    assert!(config.microgrids().lock().contains_key(&41));
+    assert!(dir.join("microgrids/41.lisp").exists(), "the copy is kept");
+}
+
+/// The committed-partial 200 must come from load_as KNOWING it
+/// copied and registered, not from asking the registry afterwards
+/// who backs the target. Retrying a load-as that already succeeded
+/// fails early — before anything is copied — and the target file it
+/// would have written is exactly the one the previous, successful
+/// call left backing a live microgrid. A registry query cannot tell
+/// those apart and would answer a copied-nothing call with
+/// "the copy loaded but its script section failed".
+#[tokio::test]
+async fn a_repeated_load_as_is_an_error_not_a_fabricated_warning() {
+    let (config, dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    let text = crate::lisp::microgrid_file::compose(
+        "(make-microgrid :id 42 :name \"ok\" :grpc-port 8842\n  :topology\n  \
+         (lambda ()\n    (%make-meter :id 420)))",
+        "",
+    );
+    std::fs::write(dir.join("good.lisp"), &text).unwrap();
+    let body = r#"{"path":"good.lisp","id":43}"#;
+    let (st, _) = call(config.clone(), post_json("/api/load-as", body)).await;
+    assert_eq!(st, StatusCode::OK, "the first copy lands cleanly");
+
+    // Same id again: nothing is copied, so this is a plain refusal.
+    let (st, body) = call(config.clone(), post_json("/api/load-as", body)).await;
+    assert!(
+        st.is_client_error(),
+        "a call that copied nothing must not report success: {st} {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(
+        !String::from_utf8_lossy(&body).contains("script section"),
+        "and must not claim a script section failed: {}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
 /// Undo walks back one structural edit of a managed microgrid — the
 /// file is rewritten from the previous generated block and reloaded —
 /// and redo walks forward again.
