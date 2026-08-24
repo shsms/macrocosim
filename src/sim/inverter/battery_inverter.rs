@@ -194,7 +194,6 @@ impl SimulatedComponent for BatteryInverter {
         } else {
             let n = healthy.len() as f32;
             let p_share = commanded_p / n;
-            let q_share = commanded_q / n;
             // Publish what the children accepted of our push, by each
             // child's clip ratio. The battery ticks before us (children
             // register first), so the ratio it holds came from the
@@ -202,12 +201,13 @@ impl SimulatedComponent for BatteryInverter {
             // several inverters on one bus every inverter is scaled
             // alike, so in steady state the shares sum to what the
             // battery took; on the tick a sibling changes its push the
-            // sum is off by that change until the next ratio. Q passes
-            // through a battery unclipped.
+            // sum is off by that change until the next ratio. Q never
+            // reaches the battery at all — it terminates here, on the
+            // AC side, so a battery under this inverter never sees it.
             let mut accepted_p = 0.0;
             for id in &healthy {
                 if let Some(child) = site.get(*id) {
-                    child.set_dc_active_reactive(p_share, q_share);
+                    child.set_dc_power(p_share);
                     accepted_p += p_share * child.dc_accept_ratio();
                 }
             }

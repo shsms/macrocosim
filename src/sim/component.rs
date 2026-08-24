@@ -260,7 +260,8 @@ impl Telemetry {
 ///     reactive_bounds, rated_fuse_current.
 ///   - **Aggregation** (parent → child): aggregate_power_w,
 ///     aggregate_reactive_var.
-///   - **Inverter ↔ child wiring**: set_dc_power, set_dc_active_reactive.
+///   - **Inverter → child wiring**: set_dc_power (active only — Q
+///     terminates at the inverter and never reaches a DC-side child).
 ///   - **Runtime knobs**: set_reactive_pf_limit, set_reactive_apparent_va.
 ///
 /// Every method except the six required ones (`id`, `category`,
@@ -501,13 +502,6 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// Push DC active power onto a child. Inverters call this on each
     /// of their batteries every tick. Default no-op.
     fn set_dc_power(&self, _p: f32) {}
-
-    /// Like `set_dc_power`, but conveys both active and reactive so
-    /// the child can model apparent-power loading on its DC side.
-    /// Default forwards `p` to `set_dc_power` and drops `q`.
-    fn set_dc_active_reactive(&self, p: f32, _q: f32) {
-        self.set_dc_power(p);
-    }
 
     /// Share of last tick's pushed DC power this child accepted, in
     /// [0, 1]: `accepted / pushed`. A parent multiplies its own push

@@ -57,20 +57,14 @@ pub struct Battery {
 #[derive(Debug, Clone)]
 struct BatteryState {
     /// Settled active DC power in W (last-tick's clamped accumulator).
-    /// Drives SoC integration — reactive doesn't move net energy.
+    /// The only power the battery knows about — a battery has no AC
+    /// side, so there is nothing here for reactive power to be.
     power_w: f32,
-    /// Settled reactive component (last-tick's accumulated Q).
-    /// Doesn't change SoC, but inflates dc_current / dc_power in
-    /// telemetry to reflect the conductor / IGBT loading a real DC
-    /// ammeter would read.
-    reactive_var: f32,
-    /// Per-tick accumulator for inverter pushes. `set_dc_*` adds
-    /// here; `tick()` drains it, clamps the active sum, and sets
-    /// `power_w` / `reactive_var`. This is what makes N inverters
-    /// pushing the same battery sum correctly instead of having the
-    /// last writer win.
+    /// Per-tick accumulator for inverter pushes. `set_dc_power` adds
+    /// here; `tick()` drains it and clamps the sum. This is what makes
+    /// N inverters pushing the same battery sum correctly instead of
+    /// having the last writer win.
     pending_p: f32,
-    pending_q: f32,
     /// `power_w / pushed total` from the last tick — how much of what
     /// the inverters pushed the SoC envelope let through. 1.0 when
     /// nothing was pushed. Read back by the inverters for their own
@@ -100,10 +94,8 @@ impl Battery {
             cfg,
             state: Mutex::new(BatteryState {
                 power_w: 0.0,
-                reactive_var: 0.0,
                 pending_p: 0.0,
                 accept_ratio: 1.0,
-                pending_q: 0.0,
                 soc_pct: init_soc,
                 effective_lower_w: l,
                 effective_upper_w: u,
@@ -174,16 +166,13 @@ impl SimulatedComponent for Battery {
         //    sharing the bus, the clamp applies to the *total* push,
         //    not just the last writer.
         let total_p = s.pending_p;
-        let total_q = s.pending_q;
         s.pending_p = 0.0;
-        s.pending_q = 0.0;
         // NaN-safe clamp: std `f32::clamp` panics on a NaN bound, and
         // the bounds derive from config-supplied rated values with no
         // finiteness guarantee — a panic here kills this microgrid's
         // physics task permanently while gRPC keeps serving stale
         // telemetry. min/max propagate the finite side instead.
         s.power_w = total_p.min(s.effective_upper_w).max(s.effective_lower_w);
-        s.reactive_var = total_q;
         // Inside a sane envelope (lower ≤ 0 ≤ upper) the clip keeps the
         // sign and never grows the magnitude, so the ratio is already in
         // [0, 1]; the clamp only guards a config whose envelope excludes
@@ -206,13 +195,10 @@ impl SimulatedComponent for Battery {
 
     fn telemetry(&self, _world: &MicrogridSite) -> Telemetry {
         let s = self.state.lock().clone();
-        // Apparent DC magnitude with sign of P. Reactive load
-        // doesn't move net energy (so SoC integrates on `power_w`
-        // alone, see tick()) but it does flow through the conductors,
-        // so dc_power and dc_current here reflect the apparent
-        // loading a real instrument would read.
-        let apparent = (s.power_w * s.power_w + s.reactive_var * s.reactive_var).sqrt();
-        let signed_apparent = apparent * if s.power_w >= 0.0 { 1.0 } else { -1.0 };
+        // DC side, plain and simple: a battery only ever sees active
+        // power (there is no reactive component on a DC bus), so
+        // dc_power_w is just the settled `power_w` and dc_current_a
+        // is Ohm's-law from that and the pack voltage.
         Telemetry {
             id: self.id,
             category: Some(Category::Battery),
@@ -221,9 +207,9 @@ impl SimulatedComponent for Battery {
             soc_upper_pct: Some(self.cfg.soc_upper_pct),
             capacity_wh: Some(self.cfg.capacity_wh),
             dc_voltage_v: Some(self.cfg.voltage_v),
-            dc_power_w: Some(signed_apparent),
+            dc_power_w: Some(s.power_w),
             dc_current_a: Some(if self.cfg.voltage_v != 0.0 {
-                signed_apparent / self.cfg.voltage_v
+                s.power_w / self.cfg.voltage_v
             } else {
                 0.0
             }),
@@ -234,14 +220,11 @@ impl SimulatedComponent for Battery {
         }
     }
 
-    /// Battery's contribution to its parent meter — *active* DC
-    /// power only. `telemetry().dc_power_w` is the *signed apparent*
-    /// magnitude (√(P²+Q²) with the sign of P) so a SCADA-style
-    /// instrument reads the actual conductor loading, but parent
-    /// meters integrate energy and a reactive flow doesn't move
-    /// joules. The split is deliberate; a control app comparing
-    /// the two values via /api/telemetry vs /api/topology will see
-    /// the gap whenever Q ≠ 0.
+    /// Battery's contribution to its parent meter — a battery only
+    /// ever moves active power (a DC bus has no reactive axis), so
+    /// this is the same `power_w` that `telemetry().dc_power_w`
+    /// reports. Q is entirely the inverter's business: it terminates
+    /// there and never reaches the battery.
     fn aggregate_power_w(&self, _world: &MicrogridSite) -> f32 {
         self.state.lock().power_w
     }
@@ -253,23 +236,8 @@ impl SimulatedComponent for Battery {
         self.state.lock().pending_p += p;
     }
 
-    /// Active+reactive variant. Both are accumulated additively so an
-    /// MxN topology (multiple inverters sharing a battery) settles to
-    /// the *total* push, not last-writer-wins. The active sum is
-    /// clamped to the SoC envelope at `tick()` time; reactive flows
-    /// through unchanged (the battery doesn't refuse Q).
-    fn set_dc_active_reactive(&self, p: f32, q: f32) {
-        let mut s = self.state.lock();
-        s.pending_p += p;
-        s.pending_q += q;
-    }
-
     fn dc_accept_ratio(&self) -> f32 {
         self.state.lock().accept_ratio
-    }
-
-    fn aggregate_reactive_var(&self, _world: &MicrogridSite) -> f32 {
-        self.state.lock().reactive_var
     }
 
     fn rated_active_bounds(&self) -> Option<(f32, f32)> {
@@ -310,6 +278,79 @@ impl SimulatedComponent for Battery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Task 4 pin: a Q setpoint at the inverter must never reach the
+    /// battery's DC telemetry. Before this change the battery folded
+    /// any pushed Q into a signed-apparent `dc_power_w` (sqrt(P^2+Q^2)
+    /// with the sign of P); after this change the inverter keeps Q on
+    /// its own AC-side axis and only ever pushes active power, so
+    /// `dc_power_w` is exactly the accepted P share and `dc_current_a`
+    /// is derived from that alone.
+    #[test]
+    fn dc_power_is_pure_active_even_when_the_inverter_runs_q() {
+        use crate::sim::inverter::battery_inverter::{BatteryInverter, BatteryInverterConfig};
+
+        let w = MicrogridSite::new();
+        let bat = Battery::new(
+            1,
+            Duration::from_secs(1),
+            BatteryConfig {
+                rated_lower_w: -10_000.0,
+                rated_upper_w: 10_000.0,
+                capacity_wh: 100_000.0,
+                soc_protect_margin_pct: 0.0,
+                ..Default::default()
+            },
+        );
+        w.register(bat);
+        let inv = BatteryInverter::new(
+            2,
+            Duration::from_secs(1),
+            BatteryInverterConfig {
+                rated_lower_w: -10_000.0,
+                rated_upper_w: 10_000.0,
+                command_delay: Duration::ZERO,
+                ramp_rate_w_per_s: f32::INFINITY,
+                // kVA cap instead of the default PF cap: a PF-capped
+                // envelope is 0 at P=0, so the Q setpoint below would
+                // be rejected before the active setpoint has a chance
+                // to ramp in. This test cares about the P/Q split, not
+                // the envelope shape.
+                reactive: crate::sim::reactive::ReactiveCapability {
+                    pf_limit: None,
+                    apparent_va: Some(10_000.0),
+                },
+                reactive_command_delay: Duration::ZERO,
+                reactive_ramp_rate_var_per_s: f32::INFINITY,
+                ..Default::default()
+            },
+        );
+        w.register(inv);
+        w.connect(2, 1);
+
+        let inv_ref = w.get(2).unwrap();
+        inv_ref.set_active_setpoint(4_000.0).unwrap();
+        inv_ref.set_reactive_setpoint(1_000.0).unwrap();
+
+        let dt = Duration::from_millis(100);
+        w.tick_once(Utc::now(), dt);
+        w.tick_once(Utc::now(), dt);
+
+        let bat_ref = w.get(1).unwrap();
+        let t = bat_ref.telemetry(&w);
+        let dc_power_w = t.dc_power_w.expect("battery publishes dc_power_w");
+        let dc_current_a = t.dc_current_a.expect("battery publishes dc_current_a");
+        let accepted_p = bat_ref.aggregate_power_w(&w);
+
+        assert!(
+            (dc_power_w - accepted_p).abs() < 1.0,
+            "dc_power_w must equal the accepted P share exactly, got {dc_power_w} vs accepted {accepted_p}"
+        );
+        assert!(
+            (dc_current_a - dc_power_w / 800.0).abs() < 0.01,
+            "dc_current_a must be dc_power_w / voltage, got {dc_current_a}"
+        );
+    }
 
     /// Every construction kwarg round-trips into the rendered form,
     /// and `:interval` renders only when it departs from the 1000 ms
