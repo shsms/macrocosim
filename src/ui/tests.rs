@@ -15,6 +15,13 @@ use tower::ServiceExt;
 /// so concurrent test runs don't stomp each other's config.lisp
 /// (cargo runs the lib test suite multi-threaded by default).
 async fn config_with(body: &str) -> Config {
+    config_with_dir(body).await.0
+}
+
+/// [`config_with`] plus the state directory it booted in — for tests
+/// that read the files switchyard writes (managed microgrid files,
+/// `enterprise.lisp`) or boot a second `Config` on the same dir.
+async fn config_with_dir(body: &str) -> (Config, std::path::PathBuf) {
     // tulisp-async's executor needs a tokio runtime in scope; we
     // already have one via #[tokio::test], so Config::new works.
     let mut p = std::env::temp_dir();
@@ -29,7 +36,8 @@ async fn config_with(body: &str) -> Config {
     let path = p.join("config.lisp");
     let wrapped = wrap_test_body(body);
     write!(std::fs::File::create(&path).unwrap(), "{wrapped}").unwrap();
-    Config::new(path.to_str().unwrap()).expect("config eval")
+    let cfg = Config::new(path.to_str().unwrap()).expect("config eval");
+    (cfg, p)
 }
 
 /// Wrap a test body in `(make-microgrid …)` if the body doesn't already
@@ -286,15 +294,13 @@ async fn history_endpoint_returns_empty_for_unknown_component() {
     assert!(parsed["samples"].as_array().unwrap().is_empty());
 }
 
+/// The overrides dialog reads whatever a pre-managed-files
+/// switchyard journaled for this microgrid. Nothing writes a journal
+/// any more, so the test seeds one the way an older version left it.
 #[tokio::test]
-async fn overrides_endpoint_lists_appended_evals() {
+async fn overrides_endpoint_lists_a_legacy_journal() {
     let cfg = config_with("(set-microgrid-id 7) (%make-grid-connection-point :id 1)").await;
-    // One structural eval (persists), one error (doesn't), one
-    // non-structural poke (runs, but the d6 persist gate keeps it out
-    // of the overrides file so it can't replay as config on reload).
-    call(cfg.clone(), post("/api/eval", "(rename-component 1 \"a\")")).await;
-    call(cfg.clone(), post("/api/eval", "(undefined-fn 1)")).await;
-    call(cfg.clone(), post("/api/eval", "(set-enterprise-id 42)")).await;
+    seed_legacy_journal(&cfg, &["(rename-component 1 \"a\")"]);
     let (status, body) = call(cfg, get("/api/overrides")).await;
     assert_eq!(status, StatusCode::OK);
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -305,35 +311,43 @@ async fn overrides_endpoint_lists_appended_evals() {
             .iter()
             .any(|e| e["source"].as_str().unwrap().contains("rename"))
     );
-    assert!(
-        !entries
-            .iter()
-            .any(|e| e["source"].as_str().unwrap().contains("set-enterprise-id")),
-        "non-structural pokes must not persist",
-    );
     assert_eq!(parsed["count"], 1);
 }
 
-/// Minimal local `load-overrides` defun for tests — real configs
-/// get this from `sim/common.lisp`, but `config_with` writes a
-/// bare-bones config that doesn't pull in the helper file.
+/// Minimal local `load-overrides` defun for tests — the real one in
+/// `sim/common.lisp` is a deprecation no-op now, and these tests
+/// cover the dialog that still reads a legacy journal.
 const LOAD_OVERRIDES_HELPER: &str = "(defun load-overrides ()
        (when (file-exists-p \"microgrids/config.7.overrides.lisp\")
          (load \"microgrids/config.7.overrides.lisp\")))
      (load-overrides)";
 
+/// Write `forms` into microgrid 7's legacy overrides journal, one
+/// per line — the shape an older switchyard's per-eval append left
+/// behind.
+fn seed_legacy_journal(cfg: &Config, forms: &[&str]) {
+    let path = cfg
+        .state_dir()
+        .join("microgrids")
+        .join("config.7.overrides.lisp");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, format!("{}\n", forms.join("\n\n"))).unwrap();
+}
+
 #[tokio::test]
 async fn persisted_remove_drops_form_immediately() {
-    // Two evals append two forms to the override file. DELETE
-    // /api/persisted/0 rewrites the file without that form and
-    // reloads; the site reflects only the second rename, and
-    // the file no longer contains the first.
+    // A legacy journal holds two forms. DELETE /api/persisted/0
+    // rewrites the file without the first and reloads; only the
+    // second form survives in the file. (The forms no longer replay
+    // into the site — `load-overrides` is a deprecation no-op.)
     let body = format!(
         "(set-microgrid-id 7) (%make-grid-connection-point :id 1) {LOAD_OVERRIDES_HELPER}",
     );
     let cfg = config_with(&body).await;
-    call(cfg.clone(), post("/api/eval", "(rename-component 1 \"a\")")).await;
-    call(cfg.clone(), post("/api/eval", "(rename-component 1 \"b\")")).await;
+    seed_legacy_journal(
+        &cfg,
+        &["(rename-component 1 \"a\")", "(rename-component 1 \"b\")"],
+    );
 
     let (_, body) = call(cfg.clone(), get("/api/overrides")).await;
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -353,16 +367,6 @@ async fn persisted_remove_drops_form_immediately() {
     assert_eq!(persisted.len(), 1);
     assert!(persisted[0]["source"].as_str().unwrap().contains("\"b\""));
 
-    let (_, body) = call(cfg.clone(), get("/api/topology")).await;
-    let topo: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let grid = topo["components"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["id"] == 1)
-        .unwrap();
-    assert_eq!(grid["name"], "b");
-
     // 404 on out-of-range idx.
     let req = axum::http::Request::builder()
         .method(axum::http::Method::DELETE)
@@ -379,11 +383,16 @@ async fn persisted_bulk_remove_drops_indices_in_one_reload() {
         "(set-microgrid-id 7) (%make-grid-connection-point :id 1) {LOAD_OVERRIDES_HELPER}",
     );
     let cfg = config_with(&body).await;
-    call(cfg.clone(), post("/api/eval", "(rename-component 1 \"a\")")).await;
-    call(cfg.clone(), post("/api/eval", "(rename-component 1 \"b\")")).await;
-    call(cfg.clone(), post("/api/eval", "(rename-component 1 \"c\")")).await;
+    seed_legacy_journal(
+        &cfg,
+        &[
+            "(rename-component 1 \"a\")",
+            "(rename-component 1 \"b\")",
+            "(rename-component 1 \"c\")",
+        ],
+    );
 
-    // Drop idx 0 + 2 → only "b" survives, site reflects "b".
+    // Drop idx 0 + 2 in one round trip → only "b" survives.
     let req = axum::http::Request::builder()
         .method(axum::http::Method::POST)
         .uri("/api/persisted/delete")
@@ -400,16 +409,6 @@ async fn persisted_bulk_remove_drops_indices_in_one_reload() {
     let persisted = parsed["persisted"].as_array().unwrap();
     assert_eq!(persisted.len(), 1);
     assert!(persisted[0]["source"].as_str().unwrap().contains("\"b\""));
-
-    let (_, body) = call(cfg, get("/api/topology")).await;
-    let topo: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let grid = topo["components"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["id"] == 1)
-        .unwrap();
-    assert_eq!(grid["name"], "b");
 }
 
 #[tokio::test]
@@ -1022,7 +1021,7 @@ async fn formula_endpoint_404s_unknown_microgrid() {
 }
 
 #[tokio::test]
-async fn microgrids_import_creates_entry_with_overrides() {
+async fn microgrids_import_creates_entry_and_managed_file() {
     let cfg = config_with("(%make-grid-connection-point :id 1)").await;
     let body = r#"{
       "name": "imported site",
@@ -1057,16 +1056,13 @@ async fn microgrids_import_creates_entry_with_overrides() {
     let topo: serde_json::Value = serde_json::from_slice(&topo).unwrap();
     assert_eq!(topo["components"].as_array().unwrap().len(), 4);
     assert_eq!(topo["connections"].as_array().unwrap().len(), 3);
-    // …and the persistence gate appended the form to the overrides
-    // file, with the export's physical parameters, for boot replay.
-    let overrides = std::fs::read_to_string(
-        cfg.microgrids_dir()
-            .join(format!("config.{id}.overrides.lisp")),
-    )
-    .unwrap();
-    assert!(overrides.contains(":rated-fuse-current 125"));
-    assert!(overrides.contains("(make-battery :id 13 :capacity 40000.0)"));
-    assert!(overrides.contains("(connect 12 13)"));
+    // …and the eval regenerated the managed file, with the export's
+    // physical parameters, so the next boot loads them back.
+    let saved = std::fs::read_to_string(cfg.microgrids_dir().join(format!("{id}.lisp"))).unwrap();
+    assert!(saved.contains(":rated-fuse-current 125"), "{saved}");
+    assert!(saved.contains("(%make-battery :id 13"), "{saved}");
+    assert!(saved.contains(":capacity 40000.0"), "{saved}");
+    assert!(saved.contains("(connect 12 13)"), "{saved}");
 
     // The registry lists it.
     let (_, list) = call(cfg, get("/api/microgrids")).await;
@@ -1077,6 +1073,47 @@ async fn microgrids_import_creates_entry_with_overrides() {
             .iter()
             .any(|m| m["id"].as_u64() == Some(id) && m["name"] == "imported site")
     );
+}
+
+/// The whole persistence contract end to end: a microgrid created
+/// from the UI, populated through the per-mg eval path, comes back
+/// with the same ids and values in a brand-new `Config` booted on
+/// the same state directory — no journal, no manual save.
+#[tokio::test]
+async fn ui_created_microgrid_survives_a_restart() {
+    let (config, dir) =
+        config_with_dir("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    // Create via the endpoint, add components via scoped eval.
+    let (st, body) = call(
+        config.clone(),
+        post_json("/api/microgrids/create", r#"{"name":"persist me"}"#),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let id = created["id"].as_u64().unwrap();
+    let (st, _) = call(
+        config.clone(),
+        post(
+            &format!("/api/mg/{id}/eval"),
+            "(%make-grid-connection-point :id 300 :successors (list (%make-meter :id 301 :power 250.0)))",
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    // "Restart": a brand-new Config on the same state dir, loading the file.
+    let file = dir.join(format!("microgrids/{id}.lisp"));
+    let cfg2 = Config::new_with(&[file.to_string_lossy().into_owned()], Some(dir.clone())).unwrap();
+    let reg = cfg2.microgrids();
+    let r = reg.lock();
+    let e = r.get(&id).expect("microgrid survives the restart");
+    assert_eq!(e.def.name, "persist me");
+    assert!(
+        e.site.get(300).is_some() && e.site.get(301).is_some(),
+        "identical component ids"
+    );
+    assert!((e.site.get(301).unwrap().aggregate_power_w(&e.site) - 250.0).abs() < 1e-3);
 }
 
 #[tokio::test]
@@ -1148,11 +1185,10 @@ async fn microgrids_import_rejects_unsupported_category() {
     assert!(String::from_utf8_lossy(&resp).contains("cannot simulate"));
 }
 
-/// set-component-operational-mode is a CONFIG change: it persists
-/// through the overrides gate (unlike the runtime pokes), and the
-/// runtime knobs derive from it.
+/// set-component-operational-mode is a CONFIG change: the runtime
+/// knobs derive from it and the site enforces them.
 #[tokio::test]
-async fn operational_mode_eval_persists_and_derives() {
+async fn operational_mode_eval_derives_and_is_enforced() {
     let cfg = config_with("(%make-grid-connection-point :id 1)").await;
     let (status, body) = call(
         cfg.clone(),
@@ -1165,17 +1201,6 @@ async fn operational_mode_eval_persists_and_derives() {
     assert_eq!(status, StatusCode::OK);
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(parsed["ok"], true, "body: {parsed}");
-
-    // Persisted: the overrides list carries the eval.
-    let (_, body) = call(cfg.clone(), get("/api/overrides")).await;
-    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let persisted = parsed["persisted"].as_array().unwrap();
-    assert!(
-        persisted
-            .iter()
-            .any(|e| e["source"].as_str().unwrap().contains("operational-mode")),
-        "expected the mode eval in the overrides list: {parsed}"
-    );
 
     // Derived: the topology snapshot shows the mode and the silenced
     // stream.

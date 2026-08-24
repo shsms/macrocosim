@@ -29,7 +29,7 @@ struct Args {
     scripts: Vec<PathBuf>,
 
     /// Anchor directory for persistent state (overrides journals,
-    /// snapshots/, runtime-created microgrid stubs) and for relative
+    /// snapshots/, runtime-created microgrid files) and for relative
     /// `(load …)` paths. Defaults to the current directory.
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,

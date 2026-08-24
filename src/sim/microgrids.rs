@@ -65,10 +65,10 @@ pub struct MicrogridEntry {
     /// rewrite. A hand-written script is unmanaged: switchyard loads
     /// it and never writes to it.
     pub managed: bool,
-    /// Live edits have been applied that the managed file on disk
-    /// doesn't carry yet. Always `false` today — the
-    /// persistence-on-edit path that sets it lands with the save
-    /// pipeline.
+    /// Live edits have been applied that no file on disk carries: a
+    /// save failed, the microgrid's file is unmanaged (switchyard
+    /// never writes to it), or it was declared straight from the
+    /// REPL. Cleared by the next successful save.
     pub unsaved: bool,
 }
 

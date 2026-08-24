@@ -22,25 +22,12 @@ pub(in crate::ui) struct DefaultsResponse {
     entries: Vec<DefaultsEntry>,
 }
 
-/// Category names the defaults endpoint walks to fetch each
-/// `*-defaults` alist out of the running interpreter. Order is
-/// stable so the UI's defaults editor renders the same sections
-/// every time. New component categories need to be added here AND
-/// to the corresponding `(setq foo-defaults '((...)))` block in
-/// `sim/defaults.lisp` (otherwise the endpoint silently drops the
-/// new category — `eval_silent` on an unbound symbol fails and
-/// the entry is skipped).
-const DEFAULT_CATEGORIES: &[&str] = &[
-    "grid",
-    "meter",
-    "battery",
-    "battery-inverter",
-    "solar-inverter",
-    "ev-charger",
-    // One shared plist for all marker categories (chp, wind turbine,
-    // steam boiler, power transformer, breaker).
-    "marker",
-];
+// Category names the defaults endpoint walks to fetch each
+// `*-defaults` alist out of the running interpreter. Shared with the
+// `enterprise.lisp` renderer, so both see the same set. An unbound
+// category is skipped — `eval_silent` on an unbound symbol fails and
+// the entry is dropped.
+use crate::lisp::DEFAULT_CATEGORIES;
 
 pub(in crate::ui) async fn defaults(
     State(config): State<Config>,

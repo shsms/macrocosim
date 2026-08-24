@@ -26,7 +26,7 @@ impl Config {
     /// Build a config from one script file — the single-script
     /// convenience for embedders and tests. The state dir is the
     /// script's directory, which keeps journals / snapshots /
-    /// runtime-created stubs next to the script — the entry-config
+    /// runtime-created microgrid files next to the script — the entry-config
     /// contract this constructor has always had. (The binary's CLI
     /// goes through [`Config::new_with`], whose default is the cwd.)
     /// Returns the formatted lisp error on parse / eval failure —
@@ -47,7 +47,7 @@ impl Config {
     /// `(load …)` / the REPL / the HTTP create + import endpoints.
     ///
     /// `state_dir` anchors everything persistent (overrides journals,
-    /// `snapshots/`, runtime-created microgrid stubs) and the
+    /// `snapshots/`, runtime-created microgrid files) and the
     /// relative-path resolution of `(load …)` / `(file-exists-p …)`.
     /// `None` falls back to the process cwd — one anchor regardless
     /// of where the scripts live, so a `(load …)` typed into the
@@ -247,10 +247,17 @@ impl Config {
             enterprise_id_allocator,
             import_lock: Arc::new(tokio::sync::Mutex::new(())),
             microgrid_registered,
+            written_hashes: Arc::new(Mutex::new(std::collections::HashMap::new())),
             timer_handle: timer_handle.clone(),
             now,
             sim_clock,
         };
+
+        // Enterprise-wide state (enterprise id, timezone, socket
+        // addresses, the `*-defaults` plists) before any microgrid
+        // file: a microgrid loaded next builds its components with
+        // these defaults in place.
+        cfg.load_enterprise()?;
 
         for script in &scripts {
             // argv paths are relative to the process cwd, not to the
@@ -335,6 +342,37 @@ impl Config {
         // introspectable but not yet runnable from the registry.
 
         Ok(cfg)
+    }
+
+    /// Evaluate `enterprise.lisp`, creating an empty one first when
+    /// the state dir doesn't have it yet. Enterprise-wide state is
+    /// not a microgrid file: it registers nothing, so it goes
+    /// straight through the interpreter rather than through
+    /// `load_file`.
+    ///
+    /// A file that cannot be read, written or evaluated is a boot
+    /// error — every microgrid loaded afterwards would silently get
+    /// the built-in defaults instead of the operator's.
+    pub(super) fn load_enterprise(&self) -> Result<(), String> {
+        let path = self.enterprise_path();
+        if !path.exists() {
+            let text = super::microgrid_file::compose(
+                "",
+                super::microgrid_file::FRESH_ENTERPRISE_SCRIPT_HEADER,
+            );
+            super::microgrid_file::write_atomic(&path, &text)
+                .map_err(|e| format!("cannot create {}: {e}", path.display()))?;
+            self.record_self_write(&path, &text);
+        }
+        let mut ctx = self.ctx.borrow_mut();
+        match ctx.eval_file(&path.to_string_lossy()) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let formatted = e.format(&ctx);
+                log::error!("Tulisp error in {}:\n{formatted}", path.display());
+                Err(formatted)
+            }
+        }
     }
 
     /// Load one microgrid file: parse it (managed files carry a
@@ -451,6 +489,7 @@ impl Config {
         }
         super::microgrid_file::write_atomic(&target, &rewritten)
             .map_err(|e| format!("write {}: {e}", target.display()))?;
+        self.record_self_write(&target, &rewritten);
         // A failed load leaves no live microgrid, so the copy on disk
         // would be an orphan the next reload would trip over — drop it
         // and report the load error.
@@ -728,7 +767,7 @@ impl Config {
         }
         // Replay every loaded file in load order: the boot scripts
         // plus everything that arrived at runtime — `(load …)` evals
-        // and the stubs the create/import endpoints wrote. The world
+        // and the files the create/import endpoints wrote. The world
         // is the sum of loaded files, not of one entry config, so the
         // replay list is the source of truth here. A file that
         // vanished since it was loaded is skipped with a warning (its
@@ -988,7 +1027,7 @@ mod tests {
     }
 
     /// Reload replays the loaded-file list, so a file recorded after
-    /// boot (a runtime `(load …)` or a create-endpoint stub) brings
+    /// boot (a runtime `(load …)` or a created microgrid's file) brings
     /// its microgrid back instead of being forgotten.
     #[test]
     fn reload_replays_recorded_files() {

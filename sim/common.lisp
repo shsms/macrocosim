@@ -107,25 +107,15 @@ is safe (it never starves the device), it just wastes commands."
     (every :milliseconds ms :call on-tick)))
 
 ;; -----------------------------------------------------------------------------
-;; UI override file loader
+;; Removed: the UI override journal
 ;; -----------------------------------------------------------------------------
 
-(defun overrides-path ()
-  "Path of the per-microgrid UI overrides file, relative to the
-config's load directory. Mirrors where every successful /api/eval
-form is appended. Reads `(current-microgrid-id)`, which inside a
-make-microgrid `:topology` lambda resolves to the entry being built.
-The file sits next to the per-mg config under microgrids/."
-  (format "microgrids/config.%d.overrides.lisp" (current-microgrid-id)))
-
 (defun load-overrides ()
-  "Load the persisted UI overrides for this microgrid if they exist.
-No-op on a fresh checkout. Call from inside a make-microgrid
-:topology lambda so the load happens with the per-mg current-microgrid
-context active."
-  (let ((path (overrides-path)))
-    (when (file-exists-p path)
-      (load path))))
+  "Deprecated no-op. UI edits used to be journaled into
+microgrids/config.<id>.overrides.lisp and replayed by this call;
+switchyard now saves a microgrid's structure into the microgrid's
+own file. Kept so an older config still loads."
+  (log.warn "load-overrides is gone; this microgrid predates managed files — use Adopt in the UI"))
 
 ;; -----------------------------------------------------------------------------
 ;; Scenario helpers

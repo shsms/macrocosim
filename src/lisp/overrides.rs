@@ -1,12 +1,17 @@
-//! Per-microgrid override file plumbing on `Config`.
+//! `Config::eval` and the persistence it triggers.
 //!
-//! Every successful `Config::eval` appends its source to
-//! `microgrids/config.<id>.overrides.lisp` so the edit survives
-//! a reload. The UI's overrides dialog reads the file via
-//! `persisted_overrides`, prunes entries with
-//! `remove_persisted_overrides`, and the canvas undo stack
-//! snapshots the whole file via `overrides_text` /
-//! `replace_overrides_text`.
+//! A successful eval that moved a microgrid's structure regenerates
+//! that microgrid's managed file from live state
+//! (`Config::persist`); one that touched enterprise-wide state — a
+//! `*-defaults` plist or a metadata setter — regenerates
+//! `enterprise.lisp` (`Config::persist_enterprise`). Runtime pokes
+//! (`set-meter-power`, health flips, scenario steps) change no file:
+//! the script section is where a hand-written poke belongs.
+//!
+//! The `persisted_overrides*` / `overrides_text*` functions below
+//! serve the legacy overrides journal dialog. Nothing writes a
+//! journal any more; they are read/prune paths over files an older
+//! switchyard wrote, and go away with their routes.
 
 use std::collections::HashSet;
 use std::fs;
@@ -16,7 +21,8 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde::Serialize;
 
-use super::Config;
+use super::microgrid_file;
+use super::{Config, DEFAULT_CATEGORIES};
 
 /// One top-level form found in the per-microgrid override file. The
 /// `idx` is the form's 0-based position; stable until the next
@@ -31,40 +37,30 @@ pub struct PersistedOverride {
 }
 
 impl Config {
-    /// Evaluate `src` in the interpreter and, on success, append it
-    /// to the persisted override file. `eval_string` returns the
-    /// final form's value; we stringify it via `Display` and
-    /// return the result formatted via `Display`. Errors are
-    /// formatted with full trace context the same way the reload
-    /// path's logger formats them.
+    /// Evaluate `src` in the interpreter and, on success, save
+    /// whatever it changed. `eval_string` returns the final form's
+    /// value; we stringify it via `Display` and return the result
+    /// formatted via `Display`. Errors are formatted with full trace
+    /// context the same way the reload path's logger formats them.
     ///
     /// Synchronous — acquires the interpreter write lock for the
     /// duration of the eval. Callers in async contexts must wrap in
     /// `tokio::task::spawn_blocking` to keep the executor free.
     ///
-    /// On success the source is appended to the per-microgrid
-    /// override file (`config.<id>.overrides.lisp`) so the
-    /// edit survives a reload. Errored evals are skipped — a
-    /// half-applied topology change shouldn't leave a re-erroring
-    /// expression on disk. Either way the MicrogridSite version bumps so
-    /// UI subscribers refetch.
-    ///
-    /// Append uses the source verbatim — no formatter pass — to
-    /// keep the per-eval cost predictable. `remove_persisted_overrides`
-    /// already runs `tulisp-fmt` over the file's surviving forms
-    /// when it rewrites, so the file gets re-tidied whenever the
-    /// user prunes the list from the UI.
+    /// Errored evals save nothing — a half-applied topology change
+    /// shouldn't be written out as the microgrid's new structure.
+    /// Either way the MicrogridSite version bumps so UI subscribers
+    /// refetch.
     pub fn eval(&self, src: &str) -> Result<String, String> {
         let mut ctx = self.ctx.borrow_mut();
         self.eval_locked(&mut ctx, src)
     }
 
     /// Per-microgrid scoped eval — `/api/mg/{id}/eval`'s backend.
-    /// Scope-set, eval, overrides append, and the version bump all
-    /// happen under one interpreter-lock acquisition, so two
-    /// concurrent scoped evals can't cross microgrids (the scope
-    /// pointer is ambient global state every scoped defun and
-    /// `overrides_path` read).
+    /// Scope-set, eval, save, and the version bump all happen under
+    /// one interpreter-lock acquisition, so two concurrent scoped
+    /// evals can't cross microgrids (the scope pointer is ambient
+    /// global state every scoped defun reads).
     pub fn eval_in_mg(&self, mg_id: u64, src: &str) -> Result<String, String> {
         self.scoped(mg_id, |cfg, ctx| cfg.eval_locked(ctx, src))
     }
@@ -84,30 +80,19 @@ impl Config {
     }
 
     /// `eval` body against an already-held interpreter guard. The
-    /// overrides append and the version bump stay inside the locked
-    /// section because both resolve the ambient scope pointer — after
-    /// the lock is released a concurrent scoped call may flip it.
+    /// save pass and the version bump stay inside the locked section
+    /// because both resolve the ambient scope pointer — after the
+    /// lock is released a concurrent scoped call may flip it.
     ///
-    /// Persistence is GATED: only evals that changed the topology
-    /// (register / connect / disconnect / remove / rename, observed
-    /// via the structural fingerprint) or that edit a `*-defaults`
-    /// plist land in the overrides file. Everything else — transient
-    /// pokes like `set-meter-power`, health flips, timers, queries —
-    /// runs but is not replayed by `load-overrides` on the next
-    /// reload; pre-gate, a REPL poke silently resurrected as config.
-    ///
-    /// An eval consisting only of `(load "file")` forms bypasses that
-    /// gate entirely: it is a load, not an edit, so it is routed
-    /// through [`Config::load_file`] instead of a bare `eval_string`.
-    /// The FILE is the persistent artifact — its resolved path goes
-    /// onto the reload-replay list, and the microgrids it registers
-    /// are attributed to it — rather than the `(load …)` form landing
-    /// in an overrides journal, which would tie the file's world to
-    /// whichever microgrid scope happened to be ambient.
+    /// An eval consisting only of `(load "file")` forms is a load,
+    /// not an edit, so it is routed through [`Config::load_file`]
+    /// instead of a bare `eval_string`: the microgrids the file
+    /// registers are attributed to it, and its path joins the
+    /// reload-replay list.
     ///
     /// A load MIXED with other top-level forms still runs through the
-    /// plain eval path (the other forms need it) and keeps the old
-    /// gate + "not journaled" warning.
+    /// plain eval path (the other forms need it); the loaded files
+    /// are recorded for reload just the same.
     fn eval_locked(&self, ctx: &mut tulisp::TulispContext, src: &str) -> Result<String, String> {
         let (loads, has_other_forms) = top_level_load_paths(src);
         // A pure-load eval IS a load: route it through the loader so
@@ -127,92 +112,38 @@ impl Config {
             // elisp and report success rather than a file's last form.
             return Ok("t".to_string());
         }
-        let before = self.structural_fingerprint();
-        let known_microgrids: HashSet<u64> = self.microgrids.lock().keys().copied().collect();
+        let before = self.structural_versions();
         let result = match ctx.eval_string(src) {
             Ok(v) => Ok(v.to_string()),
             Err(e) => Err(e.format(ctx)),
         };
-        if result.is_ok() && !loads.is_empty() {
-            let structural = self.structural_fingerprint() != before;
-            if structural {
-                for path in loads {
-                    let resolved = if path.is_absolute() {
-                        path
-                    } else {
-                        self.state_dir.join(path)
-                    };
-                    // Canonicalized so a relative and an absolute
-                    // spelling of the same file dedup to one replay
-                    // entry (tulisp canonicalizes its load path the
-                    // same way).
-                    match resolved.canonicalize() {
-                        Ok(canonical) => self.record_loaded_file(canonical),
-                        Err(_) => {
-                            // (load) resolved it some other way or the
-                            // file moved mid-eval; reload just won't
-                            // replay it.
-                            log::warn!(
-                                "eval loaded {} but the path does not resolve under {}; \
-                                 it will not survive a reload",
-                                resolved.display(),
-                                self.state_dir.display()
-                            );
-                        }
+        if result.is_ok() {
+            for path in loads {
+                let resolved = if path.is_absolute() {
+                    path
+                } else {
+                    self.state_dir.join(path)
+                };
+                // Canonicalized so a relative and an absolute
+                // spelling of the same file dedup to one replay
+                // entry (tulisp canonicalizes its load path the
+                // same way).
+                match resolved.canonicalize() {
+                    Ok(canonical) => self.record_loaded_file(canonical),
+                    Err(_) => {
+                        // (load) resolved it some other way or the
+                        // file moved mid-eval; reload just won't
+                        // replay it.
+                        log::warn!(
+                            "eval loaded {} but the path does not resolve under {}; \
+                             it will not survive a reload",
+                            resolved.display(),
+                            self.state_dir.display()
+                        );
                     }
                 }
             }
-            if has_other_forms && (structural || contains_defaults_setq(src)) {
-                // Same "applied but won't survive a reload" condition
-                // the journal-append failure below banners — a
-                // server-side log alone would leave the REPL user
-                // with ok:true and silent data loss.
-                let msg = "eval mixed (load …) with other top-level forms; only the \
-                           loaded files are recorded for reload — the other forms \
-                           are not journaled and will not survive a reload";
-                log::warn!("{msg}");
-                self.router.site().broadcast_config_error(msg.to_string());
-            }
-            self.router.site().bump_version();
-            return result;
-        }
-        if result.is_ok()
-            && (self.structural_fingerprint() != before || contains_defaults_setq(src))
-        {
-            // An eval that registered a microgrid with no backing
-            // file must NOT be journaled. The journal belongs to
-            // whichever microgrid is ambient, and that microgrid's
-            // file replays it via `(load-overrides)` on every reload
-            // — so the form would come back claiming its id on behalf
-            // of a file that never declared it, the source-less entry
-            // would refuse the foreign claim, and the reload would
-            // abort with every site already reset. One un-persisted
-            // REPL microgrid is a far better outcome than a world
-            // that cannot be reloaded at all.
-            let unbacked = self.unbacked_microgrids_since(&known_microgrids);
-            if !unbacked.is_empty() {
-                for id in unbacked {
-                    log::warn!(
-                        "microgrid {id} was created from the REPL with no backing \
-                         file; it is not journaled and will not survive a reload \
-                         or restart — load it from a file to keep it"
-                    );
-                }
-            } else if let Err(e) = self.append_to_overrides_file(src) {
-                let label = self
-                    .overrides_path()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "<no resolvable microgrid>".to_string());
-                log::error!("Failed to append override to {label}: {e}");
-                // The eval succeeded but won't survive a reload —
-                // surface that on the site event bus (the UI shows it
-                // as a config error banner) instead of only burying
-                // it in the log.
-                self.router.site().broadcast_config_error(format!(
-                    "eval applied but could not be persisted to {label}: {e} — \
-                     the edit will not survive a reload"
-                ));
-            }
+            self.persist_changed(ctx, src, &before);
         }
         // Bump the version on the microgrid the eval actually
         // mutated (the one current_microgrid points at, or — if no
@@ -237,60 +168,226 @@ impl Config {
         }
     }
 
-    /// Enterprise-wide structural fingerprint: the sum of every
-    /// site's structural version (bootstrap + registry) plus the
-    /// registry's entry count — the count term makes a registry
-    /// insert observable even while the new site is still empty
-    /// (an empty-topology `(make-microgrid …)` must persist).
-    fn structural_fingerprint(&self) -> (usize, u64) {
-        let reg = self.microgrids.lock();
-        let sum = reg
-            .values()
-            .map(|e| e.site.structural_version())
-            .sum::<u64>()
-            + self.site.structural_version();
-        (reg.len(), sum)
-    }
-
-    /// Microgrids registered since `known` was snapshotted that have
-    /// no source file — i.e. ones this eval just minted from the
-    /// REPL. See the call site in `eval_locked` for why the journal
-    /// must skip an eval that produced any.
-    fn unbacked_microgrids_since(&self, known: &HashSet<u64>) -> Vec<u64> {
+    /// Every registered microgrid's structural version, snapshotted
+    /// before an eval so the save pass can tell which microgrids the
+    /// eval actually moved. Pokes (power, health, modes) don't touch
+    /// the structural version, so they cost no file write.
+    fn structural_versions(&self) -> Vec<(u64, u64)> {
         self.microgrids
             .lock()
             .iter()
-            .filter(|(id, e)| !known.contains(id) && e.source.is_none())
-            .map(|(id, _)| *id)
+            .map(|(id, e)| (*id, e.site.structural_version()))
             .collect()
     }
 
-    fn append_to_overrides_file(&self, src: &str) -> std::io::Result<()> {
-        let Some(path) = self.overrides_path() else {
-            // No resolvable microgrid scope — nothing to persist
-            // against. Boot path can't reach this; a future
-            // `(reset-microgrid)`-then-eval flow would.
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "no resolvable microgrid scope; can't persist override",
-            ));
-        };
-        // Per-mg overrides live under `microgrids/`; the dir might not
-        // exist yet on a fresh checkout. Create lazily on the first
-        // write so the user doesn't have to seed it manually.
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
+    /// Save what an eval changed: every microgrid whose structure
+    /// moved since `before`, plus `enterprise.lisp` when the source
+    /// carries an enterprise-wide edit.
+    ///
+    /// Suppressed while a file is loading — a load must not rewrite
+    /// the file it is reading (the file's own forms are exactly what
+    /// moved the structure, so every load would otherwise rewrite
+    /// itself, and a reload would rewrite everything).
+    fn persist_changed(&self, ctx: &mut tulisp::TulispContext, src: &str, before: &[(u64, u64)]) {
+        if self.loading.lock().is_some() {
+            return;
         }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        // Trailing blank line keeps multi-line `let*` paste shapes
-        // visually separable from the next form a future eval
-        // appends.
-        writeln!(file, "{src}")?;
-        writeln!(file)?;
-        file.flush()
+        let changed: Vec<(u64, bool, bool)> = {
+            let reg = self.microgrids.lock();
+            reg.iter()
+                .filter(|(id, e)| {
+                    let was = before.iter().find(|(bid, _)| bid == *id).map(|(_, v)| *v);
+                    // A microgrid registered by this eval has no
+                    // `before` entry — that counts as changed.
+                    was != Some(e.site.structural_version())
+                })
+                .map(|(id, e)| (*id, e.managed, e.source.is_some()))
+                .collect()
+        };
+        for (id, managed, has_source) in changed {
+            if managed && has_source {
+                // `persist` logs + banners its own failures.
+                let _ = self.persist(id);
+                continue;
+            }
+            if !has_source {
+                log::warn!(
+                    "microgrid {id} changed but is not backed by a file; \
+                     the edit will not survive a restart"
+                );
+            }
+            // Live state the file on disk doesn't carry: an unmanaged
+            // file is the author's to edit (Adopt makes it managed),
+            // and a REPL microgrid has no file at all.
+            self.set_unsaved(id, true);
+        }
+        if (contains_defaults_setq(src) || enterprise_setter_in(src))
+            && let Err(e) = self.persist_enterprise_locked(ctx)
+        {
+            let path = self.enterprise_path();
+            log::error!("failed to save {}: {e}", path.display());
+            self.router.site().broadcast_config_error(format!(
+                "enterprise settings applied but could not be saved to {}: {e} — \
+                 the edit will not survive a restart",
+                path.display()
+            ));
+        }
+    }
+
+    /// Regenerate microgrid `id`'s managed file from its live state:
+    /// the generated block is rewritten, the hand-written script
+    /// section is copied through byte for byte. A no-op for a
+    /// microgrid that is unmanaged or has no file.
+    ///
+    /// On failure the in-memory edit stands, the microgrid is flagged
+    /// *unsaved*, and the UI gets a config-error banner — the write
+    /// is retried by the next structural edit.
+    pub fn persist(&self, id: u64) -> std::io::Result<()> {
+        let Some((def, site, path)) = ({
+            let reg = self.microgrids.lock();
+            reg.get(&id).filter(|e| e.managed).and_then(|e| {
+                let path = e.source.clone()?;
+                Some((e.def.clone(), e.site.clone(), path))
+            })
+        }) else {
+            return Ok(());
+        };
+        let block = microgrid_file::render_block(&def, &site);
+        match self.write_two_section(&path, &block, microgrid_file::FRESH_SCRIPT_HEADER) {
+            Ok(()) => {
+                self.set_unsaved(id, false);
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("failed to save microgrid {id} to {}: {e}", path.display());
+                site.broadcast_config_error(format!(
+                    "microgrid {id} could not be saved to {}: {e} — the edit is \
+                     live but will not survive a restart",
+                    path.display()
+                ));
+                self.set_unsaved(id, true);
+                Err(e)
+            }
+        }
+    }
+
+    /// Regenerate `enterprise.lisp` from live enterprise-wide state.
+    pub fn persist_enterprise(&self) -> std::io::Result<()> {
+        let mut ctx = self.ctx.borrow_mut();
+        self.persist_enterprise_locked(&mut ctx)
+    }
+
+    /// [`persist_enterprise`](Self::persist_enterprise) against an
+    /// already-held interpreter guard — reading the `*-defaults`
+    /// plists needs the interpreter the caller already holds.
+    pub(super) fn persist_enterprise_locked(
+        &self,
+        ctx: &mut tulisp::TulispContext,
+    ) -> std::io::Result<()> {
+        let block = self.render_enterprise_block(ctx);
+        self.write_two_section(
+            &self.enterprise_path(),
+            &block,
+            microgrid_file::FRESH_ENTERPRISE_SCRIPT_HEADER,
+        )
+    }
+
+    /// The generated block of `enterprise.lisp`: the enterprise
+    /// metadata setters in a fixed order, then every bound
+    /// `*-defaults` plist. Fixed order so two saves of the same state
+    /// produce the same bytes (the watcher's self-write check and
+    /// `git diff` both care).
+    fn render_enterprise_block(&self, ctx: &mut tulisp::TulispContext) -> String {
+        use crate::lisp::escape_lisp_string as esc;
+        use std::fmt::Write as _;
+
+        let md = self.metadata();
+        let mut out = String::new();
+        writeln!(out, "(set-enterprise-id {})", md.enterprise_id).unwrap();
+        writeln!(out, "(set-timezone \"{}\")", esc(self.tz_name())).unwrap();
+        writeln!(
+            out,
+            "(set-default-request-lifetime-ms {})",
+            md.default_request_lifetime.as_millis()
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "(set-assets-socket-addr \"{}\")",
+            esc(&md.assets_socket_addr)
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "(set-dispatch-socket-addr \"{}\")",
+            esc(&md.dispatch_socket_addr)
+        )
+        .unwrap();
+        for cat in DEFAULT_CATEGORIES {
+            let var = format!("{cat}-defaults");
+            // The guard keeps an unbound (or makunbound) category
+            // from erroring the whole render.
+            let Ok(value) = ctx.eval_string(&format!("(and (boundp '{var}) {var})")) else {
+                continue;
+            };
+            if value.null() {
+                continue;
+            }
+            let text = value.to_string();
+            // format_with_width returns the source unchanged on
+            // failure; either way the text re-reads as the same
+            // value. Continuation lines are indented to sit under
+            // the quote.
+            let pretty = tulisp_fmt::format_with_width(&text, 72).unwrap_or_else(|_| text.clone());
+            let body = pretty.trim_end().replace('\n', "\n       ");
+            writeln!(out, "(setq {var}\n      '{body})").unwrap();
+        }
+        out
+    }
+
+    /// Write a two-section file: `block` between the markers, the
+    /// existing file's script section (or `fresh_script` when the
+    /// file is new) after them. Atomic, and the written bytes are
+    /// recorded so the watcher can recognise our own save.
+    ///
+    /// Refuses a file that lost its markers — composing over it would
+    /// bury the whole hand-written text under a generated block.
+    fn write_two_section(
+        &self,
+        path: &Path,
+        block: &str,
+        fresh_script: &str,
+    ) -> std::io::Result<()> {
+        let script = match fs::read_to_string(path) {
+            Ok(text) if text.trim().is_empty() => fresh_script.to_string(),
+            Ok(text) => {
+                let parsed = microgrid_file::parse(&text).map_err(std::io::Error::other)?;
+                match parsed.generated {
+                    Some(_) => parsed.script,
+                    None => {
+                        return Err(std::io::Error::other(format!(
+                            "{} carries no switchyard-generated block",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => fresh_script.to_string(),
+            Err(e) => return Err(e),
+        };
+        let text = microgrid_file::compose(block, &script);
+        microgrid_file::write_atomic(path, &text)?;
+        self.record_self_write(path, &text);
+        Ok(())
+    }
+
+    /// Flag (or clear) "live edits this microgrid's file doesn't
+    /// carry" — the UI renders it as an unsaved marker on the
+    /// microgrid card.
+    fn set_unsaved(&self, id: u64, unsaved: bool) {
+        if let Some(entry) = self.microgrids.lock().get_mut(&id) {
+            entry.unsaved = unsaved;
+        }
     }
 
     /// One entry per top-level form in the per-microgrid override
@@ -579,10 +676,42 @@ fn top_level_load_paths(src: &str) -> (Vec<PathBuf>, bool) {
     (loads, other)
 }
 
+/// Enterprise-wide setters: a call to one of these changes state
+/// that lives in `enterprise.lisp`, not in any microgrid file.
+const ENTERPRISE_SETTERS: &[&str] = &[
+    "set-enterprise-id",
+    "set-timezone",
+    "set-default-request-lifetime-ms",
+    "set-assets-socket-addr",
+    "set-dispatch-socket-addr",
+];
+
+/// Does `src` call one of the [`ENTERPRISE_SETTERS`] at top level?
+/// None of them touches a microgrid's structure, so the structural
+/// check alone would never save them.
+fn enterprise_setter_in(src: &str) -> bool {
+    use tulisp_fmt::cst::CstNode;
+    let Ok(cst) = tulisp_fmt::parse(src) else {
+        return false;
+    };
+    cst.nodes.iter().any(|n| {
+        let CstNode::List { children, .. } = n else {
+            return false;
+        };
+        children
+            .iter()
+            .find_map(|c| match c {
+                CstNode::Atom { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .is_some_and(|head| ENTERPRISE_SETTERS.contains(&head))
+    })
+}
+
 /// Does `src` contain a top-level defaults edit — `(setq <sym>-defaults …)`?
 /// The Defaults panel saves through eval; those shape FUTURE `make-*`
-/// calls rather than the live graph, so the structural gate alone would
-/// drop them — they're config worth keeping (todo d6's allowlist).
+/// calls rather than the live graph, so the structural check alone
+/// would drop them — they belong in `enterprise.lisp`.
 fn contains_defaults_setq(src: &str) -> bool {
     use tulisp_fmt::cst::CstNode;
     let Ok(cst) = tulisp_fmt::parse(src) else {
@@ -691,118 +820,136 @@ mod tests {
         );
     }
 
-    /// Every successful eval appends to the override file
-    /// immediately — that's how an edit survives a reload (the
-    /// override file is the source of truth, not an in-memory log).
+    /// A structural eval rewrites the managed file it belongs to,
+    /// keeping the hand-written script section; a transient poke
+    /// rewrites nothing, and an unmanaged microgrid is never written
+    /// to at all.
     #[test]
-    fn eval_appends_each_successful_form_to_override_file() {
-        let (cfg, dir) = config_with("(set-microgrid-id 9) (%make-grid-connection-point :id 1)");
+    fn structural_evals_regenerate_the_managed_file() {
+        let (cfg, dir) = config_with(
+            "(make-microgrid :id 9 :grpc-port 8800 :topology \
+                                  (lambda () (%make-grid-connection-point :id 1)))",
+        );
+        // config.lisp is unmanaged → a structural eval flags, but writes nothing.
         cfg.eval("(rename-component 1 \"a\")").unwrap();
-        cfg.eval("(rename-component 1 \"b\")").unwrap();
-        let path = dir.join("microgrids/config.9.overrides.lisp");
-        let body = std::fs::read_to_string(&path).unwrap();
-        assert!(body.contains("(rename-component 1 \"a\")"));
-        assert!(body.contains("(rename-component 1 \"b\")"));
-        // Errored eval doesn't land in the file.
-        assert!(cfg.eval("(undefined-fn 1)").is_err());
-        let body = std::fs::read_to_string(&path).unwrap();
-        assert!(!body.contains("undefined-fn"));
+        assert!(!dir.join("microgrids").exists());
+
+        // A managed microgrid: created like the UI does it.
+        let def = crate::sim::microgrids::MicrogridDef {
+            id: 20,
+            name: "m".into(),
+            grpc_port: 8890,
+            tso: None,
+        };
+        let path = dir.join("microgrids/20.lisp");
+        crate::lisp::microgrid_file::write_atomic(
+            &path,
+            &crate::lisp::microgrid_file::compose(
+                &crate::lisp::microgrid_file::render_empty_block(&def),
+                crate::lisp::microgrid_file::FRESH_SCRIPT_HEADER,
+            ),
+        )
+        .unwrap();
+        cfg.load_file(&path).unwrap();
+        cfg.eval_in_mg(20, "(%make-meter :id 100 :power 500.0)")
+            .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("(%make-meter :id 100"), "{text}");
+        assert!(text.contains(":power 500.0"), "{text}");
+        assert!(
+            text.contains("Anything below is yours"),
+            "script section preserved"
+        );
+        // A poke does not rewrite the file.
+        let before = std::fs::read_to_string(&path).unwrap();
+        cfg.eval_in_mg(20, "(set-meter-power 100 4321.0)").unwrap();
+        assert_eq!(before, std::fs::read_to_string(&path).unwrap());
     }
 
-    /// Transient pokes run but do NOT persist: pre-gate, a REPL
-    /// `set-meter-power` landed in the overrides file and was
-    /// replayed by load-overrides on every reload, resurrecting a
-    /// one-off poke as permanent config. Structural edits and
-    /// `*-defaults` setqs (the d6 allowlist) still persist.
+    /// Enterprise-wide state — the `*-defaults` plists and the
+    /// metadata setters — regenerates `enterprise.lisp`, never a
+    /// microgrid file.
     #[test]
-    fn persist_gate_keeps_config_drops_pokes() {
-        let (cfg, dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-meter :id 1)",
-        );
-        let path = dir.join("microgrids/config.9.overrides.lisp");
-
-        // A poke: applies (verifiable via the meter) but not persisted.
-        cfg.eval("(set-meter-power 1 4321.0)").unwrap();
-        let m = cfg.site().get(1).unwrap();
-        assert!((m.aggregate_power_w(&cfg.site()) - 4321.0).abs() < 1e-3);
-        assert!(
-            !path.exists()
-                || !std::fs::read_to_string(&path)
-                    .unwrap()
-                    .contains("set-meter-power")
-        );
-
-        // A query: not persisted either.
-        cfg.eval("(+ 2 3)").unwrap();
-
-        // Structural edits persist: make, connect, rename.
-        cfg.eval("(setq m2 (%make-meter :id 2))").unwrap();
-        cfg.eval("(connect 1 2)").unwrap();
-        cfg.eval("(rename-component 2 \"sub\")").unwrap();
-
-        // A defaults edit persists via the allowlist (no graph change).
+    fn defaults_edits_regenerate_enterprise_lisp() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
         cfg.eval("(setq battery-defaults '(:capacity 1000.0))")
             .unwrap();
-
-        let body = std::fs::read_to_string(&path).unwrap();
-        assert!(body.contains("%make-meter :id 2"), "{body}");
-        assert!(body.contains("(connect 1 2)"), "{body}");
-        assert!(body.contains("rename-component 2"), "{body}");
-        assert!(body.contains("battery-defaults"), "{body}");
-        assert!(!body.contains("set-meter-power"), "{body}");
-        assert!(!body.contains("(+ 2 3)"), "{body}");
+        let text = std::fs::read_to_string(dir.join("enterprise.lisp")).unwrap();
+        assert!(text.contains("battery-defaults"), "{text}");
+        assert!(text.contains(":capacity 1000.0"), "{text}");
+        cfg.eval("(set-enterprise-id 77)").unwrap();
+        let text = std::fs::read_to_string(dir.join("enterprise.lisp")).unwrap();
+        assert!(text.contains("(set-enterprise-id 77)"), "{text}");
     }
 
     /// Concurrent per-mg evals must not cross microgrids: the scope
     /// pointer only flips under the interpreter lock, so each eval's
-    /// mutations AND its overrides append land on its own microgrid.
-    /// Pre-fix, scope-set happened before the lock and the append
-    /// after release — two racing `/api/mg/{id}/eval` calls could
-    /// write into each other's override files.
+    /// mutations AND the file it regenerates belong to its own
+    /// microgrid. Pre-fix, scope-set happened before the lock and the
+    /// persistence after release — two racing `/api/mg/{id}/eval`
+    /// calls could write into each other's files.
     #[test]
     fn concurrent_scoped_evals_do_not_cross_microgrids() {
-        let (cfg, dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-grid-connection-point :id 1)",
-        );
-        cfg.eval(
-            r#"(make-microgrid :id 10 :grpc-port 8899
-                 :topology (lambda () (%make-grid-connection-point :id 2)))"#,
-        )
-        .unwrap();
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let managed = |id: u64, port: u16, component: u64| {
+            let def = crate::sim::microgrids::MicrogridDef {
+                id,
+                name: format!("m{id}"),
+                grpc_port: port,
+                tso: None,
+            };
+            let path = dir.join(format!("microgrids/{id}.lisp"));
+            let block = crate::lisp::microgrid_file::render_empty_block(&def).replace(
+                "    nil",
+                &format!("    (%make-grid-connection-point :id {component})"),
+            );
+            crate::lisp::microgrid_file::write_atomic(
+                &path,
+                &crate::lisp::microgrid_file::compose(
+                    &block,
+                    crate::lisp::microgrid_file::FRESH_SCRIPT_HEADER,
+                ),
+            )
+            .unwrap();
+            cfg.load_file(&path).unwrap();
+            path
+        };
+        let nine_path = managed(21, 8891, 1);
+        let ten_path = managed(22, 8892, 2);
 
         std::thread::scope(|s| {
             let a = cfg.clone();
             let b = cfg.clone();
             s.spawn(move || {
                 for i in 0..40 {
-                    a.eval_in_mg(9, &format!("(rename-component 1 \"a{i}\")"))
+                    a.eval_in_mg(21, &format!("(rename-component 1 \"a{i}\")"))
                         .unwrap();
                 }
             });
             s.spawn(move || {
                 for i in 0..40 {
-                    b.eval_in_mg(10, &format!("(rename-component 2 \"b{i}\")"))
+                    b.eval_in_mg(22, &format!("(rename-component 2 \"b{i}\")"))
                         .unwrap();
                 }
             });
         });
 
-        let nine = std::fs::read_to_string(dir.join("microgrids/config.9.overrides.lisp")).unwrap();
-        let ten = std::fs::read_to_string(dir.join("microgrids/config.10.overrides.lisp")).unwrap();
+        let nine = std::fs::read_to_string(&nine_path).unwrap();
+        let ten = std::fs::read_to_string(&ten_path).unwrap();
         assert!(
-            !nine.contains("rename-component 2") && nine.contains("rename-component 1"),
-            "mg 9's file must hold only mg 9's forms:\n{nine}"
+            !nine.contains(":id 2 ") && nine.contains("\"a39\""),
+            "mg 21's file must hold only mg 21's state:\n{nine}"
         );
         assert!(
-            !ten.contains("rename-component 1") && ten.contains("rename-component 2"),
-            "mg 10's file must hold only mg 10's forms:\n{ten}"
+            !ten.contains(":id 1 ") && ten.contains("\"b39\""),
+            "mg 22's file must hold only mg 22's state:\n{ten}"
         );
         // The mutations landed on the right sites too.
         let reg = cfg.microgrids();
         let r = reg.lock();
-        assert_eq!(r[&9].site.display_name(1).as_deref(), Some("a39"));
-        assert_eq!(r[&10].site.display_name(2).as_deref(), Some("b39"));
+        assert_eq!(r[&21].site.display_name(1).as_deref(), Some("a39"));
+        assert_eq!(r[&22].site.display_name(2).as_deref(), Some("b39"));
     }
 }

@@ -29,15 +29,16 @@ pub(in crate::ui) struct CreateMicrogridResp {
 }
 
 /// POST /api/microgrids/create — auto-allocates id + grpc_port,
-/// inserts a fresh entry in the registry, and broadcasts a
-/// registered-microgrid notification. The binary's listener (see
-/// `bin/switchyard.rs`) reacts by booting the runtime — physics +
-/// history + Microgrid gRPC server + loopback client — so there is
-/// exactly one spawn path shared with runtime `(make-microgrid …)`
-/// evals, and no path can double-boot a runtime.
+/// writes and loads a managed microgrid file with an empty topology,
+/// and broadcasts a registered-microgrid notification. The binary's
+/// listener (see `bin/switchyard.rs`) reacts by booting the runtime
+/// — physics + history + Microgrid gRPC server + loopback client —
+/// so there is exactly one spawn path shared with runtime
+/// `(make-microgrid …)` evals, and no path can double-boot a
+/// runtime.
 ///
-/// Empty-name requests are rejected. The new microgrid's site is
-/// constructed with the shared enterprise id allocator so its
+/// Empty-name requests are rejected. `(make-microgrid …)` builds the
+/// new site on the shared enterprise id allocator, so its
 /// auto-allocated component ids stay globally unique.
 pub(in crate::ui) async fn microgrids_create(
     State(config): State<Config>,
@@ -47,87 +48,71 @@ pub(in crate::ui) async fn microgrids_create(
     // Notify enterprise-wide subscribers: the binary's listener boots
     // the runtime (physics + history + gRPC server + loopback), and
     // the WS event pump starts forwarding topology_changed / sample
-    // events to live UI sessions. The registry insert + stub write
-    // both happen before this, so the listener's lookup finds the
-    // entry. Test fixtures run no listener — the entry simply gets
-    // no runtime, same as the old no-op spawner.
+    // events to live UI sessions. The file write + load both happen
+    // before this, so the listener's lookup finds the entry. Test
+    // fixtures run no listener — the entry simply gets no runtime,
+    // same as the old no-op spawner.
     config.notify_microgrid_registered(created.id);
     Ok(Json(created))
 }
 
-/// The shared create path: allocates id + port, inserts the registry
-/// entry, and writes the per-mg config stub. Does NOT notify the
-/// runtime spawner — the caller does, after any extra persistence of
-/// its own (the import writes the overrides file in between).
+/// The shared create path: allocates id + port, writes the managed
+/// microgrid file, and loads it. The registry entry, its source and
+/// its managed flag all come from the load — the file is the
+/// microgrid's declaration, and nothing else may insert one. Does
+/// NOT notify the runtime spawner — the caller does, after any extra
+/// work of its own (the import evals its components in between).
 fn create_core(
     config: &Config,
     name: &str,
     tso: Option<&str>,
 ) -> Result<CreateMicrogridResp, (StatusCode, String)> {
-    use crate::sim::microgrids::{
-        MicrogridDef, MicrogridEntry, next_free_id_in, next_free_port_in,
-    };
+    use crate::lisp::microgrid_file as file;
+    use crate::sim::microgrids::{MicrogridDef, next_free_id_in, next_free_port_in};
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name must be non-empty".into()));
     }
+    // Id + port from one look at the registry. Two creates racing
+    // for the same id are caught below — either the file is already
+    // there, or the load reports the id as taken — so a race costs
+    // one request an error, never a clobbered microgrid.
     let registry = config.microgrids();
-    let site = crate::sim::MicrogridSite::with_id_allocator(config.enterprise_id_allocator());
-    // Allocate id + port AND insert the entry under one lock so
-    // concurrent creates can't pick the same port (the earlier
-    // shape probed both before locking; two simultaneous calls
-    // could land on the same grpc_port and the second tonic
-    // listener would fail to bind silently inside its tokio task).
-    let (id, grpc_port, def) = {
-        let mut r = registry.lock();
-        let id = next_free_id_in(&r);
-        let grpc_port = next_free_port_in(&r);
-        let def = MicrogridDef {
-            id,
+    let def = {
+        let r = registry.lock();
+        MicrogridDef {
+            id: next_free_id_in(&r),
             name: name.clone(),
-            grpc_port,
+            grpc_port: next_free_port_in(&r),
             tso: tso.map(str::to_string),
-        };
-        r.insert(
-            id,
-            MicrogridEntry {
-                def: def.clone(),
-                site: site.clone(),
-                // Backfilled to the stub path right after the stub is
-                // written below — the entry has to exist first (the
-                // allocate + insert is one critical section), and the
-                // path has to exist before it can be canonicalized.
-                source: None,
-                managed: false,
-                unsaved: false,
-            },
-        );
-        (id, grpc_port, def)
-    };
-    // Persist the per-mg config stub BEFORE spawning the runtime.
-    // If the write fails the next boot would orphan the live tasks
-    // (gRPC server, loopback, physics, history sampler) since the
-    // stub is what re-creates the microgrid at load-time. Rolling
-    // back the registry insert + bailing out keeps the failure
-    // mode clean: nothing started, nothing leaked.
-    let stub = match write_microgrid_stub(config, id, &name, grpc_port, tso) {
-        Ok(path) => path,
-        Err(e) => {
-            registry.lock().remove(&id);
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
         }
     };
-    // The stub is this microgrid's source file: reload replays it,
-    // and its `(make-microgrid …)` form must be recognised as this
-    // entry's OWN declaration rather than a stranger claiming a
-    // registered id.
-    if let Some(entry) = registry.lock().get_mut(&id) {
-        entry.source = Some(stub);
+    let path = config.microgrids_dir().join(format!("{}.lisp", def.id));
+    if path.exists() {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("{} already exists; refusing to clobber", path.display()),
+        ));
+    }
+    let text = file::compose(&file::render_empty_block(&def), file::FRESH_SCRIPT_HEADER);
+    file::write_atomic(&path, &text).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("write {}: {e}", path.display()),
+        )
+    })?;
+    config.record_self_write(&path, &text);
+    // A file that fails to load leaves no live microgrid, so the copy
+    // on disk would be an orphan the next reload trips over — drop it
+    // and report the error.
+    if let Err(e) = config.load_file(&path) {
+        let _ = std::fs::remove_file(&path);
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
     }
     Ok(CreateMicrogridResp {
-        id,
+        id: def.id,
         name: def.name,
-        grpc_port,
+        grpc_port: def.grpc_port,
         tso: def.tso,
     })
 }
@@ -155,14 +140,13 @@ pub(in crate::ui) struct ImportMicrogridResp {
 }
 
 /// POST /api/microgrids/import — creates a REAL microgrid from a
-/// site export: same allocate + stub + boot path as create, then the
+/// site export: same allocate + file + boot path as create, then the
 /// export's components rendered as one `(progn (make-* …) …
 /// (connect …) …)` form evaluated against the new microgrid — the
-/// same path a UI edit takes, so the persistence gate appends the
-/// form to the microgrid's overrides file and the stub's
-/// `(load-overrides)` replays it at every later boot. Capacity, SoC
-/// bounds, rated power bounds and the grid's rated fuse current all
-/// survive into the simulation.
+/// same path a UI edit takes, so the eval regenerates the managed
+/// file with the imported topology in it and every later boot loads
+/// it back. Capacity, SoC bounds, rated power bounds and the grid's
+/// rated fuse current all survive into the simulation.
 ///
 /// Imported component ids are kept verbatim. Component ids are
 /// enterprise-unique in switchyard, so an id that any registered
@@ -260,59 +244,4 @@ pub(in crate::ui) async fn microgrids_import(
         components: import.components.len(),
         connections: import.connections.len(),
     }))
-}
-
-/// Write `microgrids/config.<id>.lisp` for a runtime-created entry.
-/// The stub carries a `(make-microgrid …)` form pinned to this id /
-/// port / tso, plus an empty `:topology` lambda that just
-/// `(load-overrides)`s — the UI populates the topology over time by
-/// appending to the per-mg overrides file next to this stub. Errors
-/// out instead of clobbering an existing file (concurrent creates
-/// shouldn't fight over the same path, but the registry already
-/// dedups by id so this is just paranoia).
-fn write_microgrid_stub(
-    config: &Config,
-    id: u64,
-    name: &str,
-    grpc_port: u16,
-    tso: Option<&str>,
-) -> Result<std::path::PathBuf, String> {
-    let dir = config.microgrids_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    let path = dir.join(format!("config.{id}.lisp"));
-    if path.exists() {
-        return Err(format!(
-            "stub file {} already exists; refusing to clobber",
-            path.display()
-        ));
-    }
-    // The TSO is one of the four short codes ("TN" / "AM" / "HZ" /
-    // "BW") or unset, so the same escaping rule covers name and TSO.
-    use crate::lisp::escape_lisp_string as esc;
-    let tso_form = match tso {
-        Some(t) if !t.is_empty() => format!(" :tso \"{}\"", esc(t)),
-        _ => String::new(),
-    };
-    let content = format!(
-        ";; Runtime-created microgrid (id {id}). Edit by hand or via\n\
-         ;; the UI — UI edits land in config.{id}.overrides.lisp next\n\
-         ;; to this file.\n\
-         \n\
-         (make-microgrid\n\
-        \x20:id {id}\n\
-        \x20:name \"{name_esc}\"\n\
-        \x20:grpc-port {grpc_port}{tso_form}\n\
-        \x20:topology\n\
-        \x20(lambda ()\n\
-        \x20  (load-overrides)))\n",
-        name_esc = esc(name),
-    );
-    std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
-    // Reload replays the loaded-file list; without this the created
-    // microgrid would come back EMPTY from the next reload (its stub
-    // is only read at load time, and nothing scans the stub dir).
-    // Canonicalized to match how the loader spells it.
-    let path = path.canonicalize().unwrap_or(path);
-    config.record_loaded_file(path.clone());
-    Ok(path)
 }

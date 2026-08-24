@@ -113,14 +113,35 @@ async fn scenario_endpoints_round_trip_via_eval() {
     assert_eq!(report["main_meter_id"], 2);
 }
 
+/// A microgrid created over HTTP gets a managed file, and every
+/// structural eval against it rewrites that file — the whole
+/// save-on-edit path through the live server.
 #[tokio::test(flavor = "multi_thread")]
-async fn overrides_endpoint_lists_each_successful_eval() {
+async fn structural_evals_rewrite_the_managed_microgrid_file() {
     let s = TestServer::start(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
-    for body in ["(rename-component 2 \"a\")", "(rename-component 2 \"b\")"] {
+    let created: Value = client
+        .post(format!("{}/api/microgrids/create", s.ui_url))
+        .json(&serde_json::json!({"name": "saved"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_u64().unwrap();
+    let path = s.config.state_dir().join(format!("microgrids/{id}.lisp"));
+    assert!(path.exists(), "create writes {}", path.display());
+
+    for body in [
+        "(%make-grid-connection-point :id 4001)",
+        "(rename-component 4001 \"main\")",
+    ] {
         client
-            .post(format!("{}/api/eval", s.ui_url))
+            .post(format!("{}/api/mg/{id}/eval", s.ui_url))
             .body(body)
             .send()
             .await
@@ -129,11 +150,23 @@ async fn overrides_endpoint_lists_each_successful_eval() {
             .unwrap();
     }
 
-    let overrides = json(&client, format!("{}/api/overrides", s.ui_url)).await;
-    let persisted = overrides["persisted"].as_array().unwrap();
-    assert_eq!(persisted.len(), 2);
-    assert!(persisted[0]["source"].as_str().unwrap().contains("\"a\""));
-    assert!(persisted[1]["source"].as_str().unwrap().contains("\"b\""));
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        saved.contains("(%make-grid-connection-point :id 4001"),
+        "{saved}"
+    );
+    assert!(saved.contains(":name \"main\""), "{saved}");
+    // A poke is not structure: it leaves the file alone.
+    let before = std::fs::read_to_string(&path).unwrap();
+    client
+        .post(format!("{}/api/mg/{id}/eval", s.ui_url))
+        .body("(set-component-health 4001 'error)")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(before, std::fs::read_to_string(&path).unwrap());
 }
 
 /// The whole imported-site flow over HTTP: import a site export,
@@ -198,16 +231,10 @@ async fn site_import_creates_microgrid_with_working_formulas() {
     assert!(formula["formula"].as_str().unwrap().contains("#9103"));
     assert!(formula["explanation"].is_object());
 
-    // The persisted overrides carry the export's physical
-    // parameters, so they replay at every boot.
-    let overrides = client
-        .get(format!("{}/api/mg/{id}/overrides/text", s.ui_url))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
+    // The microgrid's file carries the export's physical
+    // parameters, so they come back at every boot.
+    let saved = std::fs::read_to_string(s.config.state_dir().join(format!("microgrids/{id}.lisp")))
         .unwrap();
-    assert!(overrides.contains(":capacity 40000.0"));
-    assert!(overrides.contains(":rated-fuse-current 125"));
+    assert!(saved.contains(":capacity 40000.0"), "{saved}");
+    assert!(saved.contains(":rated-fuse-current 125"), "{saved}");
 }

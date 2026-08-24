@@ -37,6 +37,16 @@ pub const FRESH_SCRIPT_HEADER: &str = "\
 ;; microgrid's scope, on every load.
 ";
 
+/// The ownership comment written at the top of the script section
+/// of a freshly created `enterprise.lisp`. Same two-section shape as
+/// a microgrid file, but the tail runs once at boot for the whole
+/// enterprise rather than per microgrid.
+pub const FRESH_ENTERPRISE_SCRIPT_HEADER: &str = "\
+;; Anything below is yours. It runs once at boot, before any
+;; microgrid file — grid-frequency knobs and other enterprise-wide
+;; settings live here.
+";
+
 /// A microgrid file split into its two sections.
 pub struct ParsedFile {
     /// The generated block's contents, markers stripped, when the
