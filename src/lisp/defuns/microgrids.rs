@@ -207,7 +207,7 @@ pub(in crate::lisp) fn register(
                     // Reject negative ids instead of silently
                     // auto-allocating: a typo like :id -2200 would
                     // otherwise boot under an auto id with the wrong
-                    // overrides file and gRPC port, no diagnostic.
+                    // managed file and gRPC port, no diagnostic.
                     // (:id 0 stays the documented auto sentinel.)
                     Some(v) if v < 0 => {
                         return Err(tulisp::Error::invalid_argument(format!(

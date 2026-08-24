@@ -98,10 +98,10 @@ struct MicrogridSiteInner {
     /// `MicrogridSite::with_id_allocator`.
     next_id: Arc<AtomicU64>,
     /// Bumped by every STRUCTURAL mutation — register, connect,
-    /// disconnect, remove, rename — and read by `Config::eval`'s
-    /// persist gate: an eval that didn't move this counter (a
-    /// transient poke like `set-meter-power`, a query) is not
-    /// appended to the overrides file, so it can't resurrect as
+    /// disconnect, remove, rename — and read by `Config::eval`, which
+    /// regenerates the microgrid's managed file only when this
+    /// counter moved; a transient poke like `set-meter-power` leaves
+    /// it untouched and writes nothing, so it can't resurrect as
     /// config on the next reload. Distinct from `version`, which
     /// bumps on every eval as the UI's refetch signal.
     structural_version: AtomicU64,

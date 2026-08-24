@@ -8,8 +8,9 @@
 //! The import does not build components directly. It emits one
 //! `(progn (make-* …) … (connect …) …)` form that the import
 //! handler evals against the new microgrid — the exact same path a
-//! UI edit takes, so the persistence gate appends the form to the
-//! microgrid's overrides file and it replays at every boot.
+//! UI edit takes, so the persist pass regenerates the microgrid's
+//! managed file from the site the form just built. That rewritten
+//! file is what makes the import durable.
 //!
 //! Field sources, per the `frequenz-api-common` protos vendored in
 //! `submodules/`:
@@ -432,10 +433,10 @@ impl SiteImport {
     }
 
     /// Renders one atomic form: `(progn (make-* …) … (connect …) …)`.
-    /// Evaluated against the new microgrid through the same eval
-    /// path UI edits take, so the persistence gate appends it to the
-    /// overrides file and the stub's `(load-overrides)` replays it
-    /// at every later boot.
+    /// Evaluated against the new microgrid through the same eval path
+    /// UI edits take, so the persist pass regenerates that
+    /// microgrid's managed file around the components this form built
+    /// — the form itself is never stored, the resulting structure is.
     pub fn forms(&self) -> String {
         let mut out = String::from("(progn\n");
         for c in &self.components {
