@@ -492,7 +492,12 @@ impl Config {
     /// paths pass through, relative ones join `state_dir` — the same
     /// anchor `(load …)` and `(file-exists-p …)` use, so a path typed
     /// into the REPL means what one written in a config means.
-    fn resolve_in_state_dir(&self, path: &Path) -> PathBuf {
+    ///
+    /// One place for the rule, because every entry point that takes a
+    /// path from a person (load, load-as, the registry lookup behind
+    /// the load endpoint, the collision 409's managed-file probe) has
+    /// to agree on what a relative path means.
+    pub(crate) fn resolve_in_state_dir(&self, path: &Path) -> PathBuf {
         if path.is_absolute() {
             path.to_path_buf()
         } else {
@@ -639,11 +644,7 @@ impl Config {
     /// for the one case it exists to serve: duplicating a file that
     /// is already loaded.
     pub fn load_as(&self, path: &Path, new_id: u64) -> Result<u64, String> {
-        let resolved = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.state_dir.join(path)
-        };
+        let resolved = self.resolve_in_state_dir(path);
         let text = std::fs::read_to_string(&resolved)
             .map_err(|e| format!("cannot read {}: {e}", resolved.display()))?;
         let rewritten = super::microgrid_file::rewrite_id(&text, new_id)

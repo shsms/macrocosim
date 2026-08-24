@@ -479,11 +479,7 @@ impl Config {
     /// state-dir-relative spelling (what the load endpoint receives)
     /// matches the absolute one the registry stores.
     pub fn microgrids_backed_by(&self, path: &Path) -> Vec<u64> {
-        let resolved = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.state_dir.join(path)
-        };
+        let resolved = self.resolve_in_state_dir(path);
         let canonical = resolved.canonicalize().unwrap_or(resolved);
         self.microgrids
             .lock()

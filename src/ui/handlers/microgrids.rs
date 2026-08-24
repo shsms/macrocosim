@@ -391,7 +391,7 @@ fn collision_response(
     collision_id: u64,
     suggested_id: u64,
 ) -> (StatusCode, String) {
-    let resolved = config.state_dir().join(path);
+    let resolved = config.resolve_in_state_dir(std::path::Path::new(path));
     let managed = std::fs::read_to_string(&resolved)
         .ok()
         .and_then(|text| crate::lisp::microgrid_file::parse(&text).ok())
