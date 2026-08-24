@@ -378,6 +378,35 @@ library↔binary version-compat check; typed wrappers for the dispatch / assets
 APIs and a =timeline(hold/ramp)= drive helper; and deterministic
 app-in-the-loop (a clock-step RPC, ties to D8).
 
+** TODO Microgrid-file generated block: readable, nested, formatted :microgrid-files:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-24 Mo 15:16]
+:END:
+
+Follow-ups to the microgrid-files core branch (generated-block quality):
+
+1. Generate the non-% wrappers (make-meter etc.) instead of the %make-*
+   primitives, so the files read like hand-written config. Needs a story
+   for defaults-independence: the block must still pin every effective
+   construction value explicitly so *-defaults at load time cannot
+   change a saved microgrid (the reason %make-* was chosen first).
+2. Add (make-parallel-meters :n 2 :successors ...) for diamond
+   configurations, and teach the renderer to emit it where the topology
+   matches (N sibling meters sharing parent and successors).
+3. Emit the topology NESTED via :successors (components containing
+   their children) instead of the current flat list of %make-* forms
+   followed by (connect ...) lines. Diamond configurations render
+   through make-parallel-meters (item 2), so the nested form needs no
+   explicit (connect ...) remainder for the common configs; only weird
+   topologies fall back to explicit (connect ...) calls or (let (..))
+   bindings so successor lists can be reused.
+4. Run the generated block through the formatter (tulisp-fmt) before
+   writing the file, so long component forms wrap instead of landing
+   as single ~200-char lines.
+
+Then: improving reactive power support is the next roadmap item after
+this branch merges.
+
 * Review backlog — 2026-06-01
 
 Whole-codebase review (8-agent subsystem fan-out + clippy/fmt; clippy
