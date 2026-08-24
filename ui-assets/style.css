@@ -1623,6 +1623,29 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #inspect .knob-input:focus { outline: 1px solid var(--accent); }
 
+/* A knob's optional boolean flag (power factor's `leading`) sits on
+   the same line as its input instead of wrapping under it — the
+   input is width:100 %, so the row becomes a flex line and the input
+   gives up whatever the label needs. */
+#inspect dd:has(.knob-flag) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* flex-basis 0 (not the input's own width) so the row never widens
+   the shared `1fr` dd column past the panel. */
+#inspect dd:has(.knob-flag) .knob-input { flex: 1 1 0; min-width: 0; }
+#inspect .knob-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+#inspect .knob-flag-input { margin: 0; }
+
 .conns {
   display: grid;
   grid-template-columns: 1fr 1fr;
