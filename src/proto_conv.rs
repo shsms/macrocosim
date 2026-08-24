@@ -374,3 +374,37 @@ fn parse_state(s: &str) -> Option<ElectricalComponentStateCode> {
     use std::str::FromStr;
     ElectricalComponentStateCode::from_str(s).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::{
+        proto_conv::telemetry_to_proto,
+        sim::{EvCharger, MicrogridSite, SimulatedComponent, ev_charger::EvChargerConfig},
+    };
+
+    /// A P-only AC component (the EV charger) must still emit an
+    /// `AcPowerReactive` sample of 0 on the streaming path, not omit
+    /// it — the formula engine's convergence pass needs a present
+    /// zero, not an absent field, to treat the component as settled
+    /// on Q.
+    #[test]
+    fn ev_streaming_telemetry_emits_zero_reactive_sample() {
+        let w = MicrogridSite::new();
+        let ev = EvCharger::new(1, Duration::from_secs(1), EvChargerConfig::default());
+        let t = ev.telemetry(&w);
+        let resp = telemetry_to_proto(&ev, &t, None, 0);
+        let telemetry = resp.telemetry.expect("telemetry present");
+        let q_sample = telemetry
+            .metric_samples
+            .iter()
+            .find(|s| s.metric == crate::proto::common::metrics::Metric::AcPowerReactive as i32)
+            .expect("AcPowerReactive sample must be present for a P-only AC component");
+        let value = match &q_sample.value.as_ref().unwrap().metric_value_variant {
+            Some(crate::proto::common::metrics::metric_value_variant::MetricValueVariant::SimpleMetric(v)) => v.value,
+            other => panic!("expected a simple metric value, got {other:?}"),
+        };
+        assert_eq!(value, 0.0);
+    }
+}

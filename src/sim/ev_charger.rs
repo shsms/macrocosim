@@ -10,9 +10,9 @@ use parking_lot::Mutex;
 
 use crate::sim::{
     Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
-    bounds::{ComponentBounds, VecBounds},
+    axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
+    bounds::VecBounds,
     decay::{SocProtect, integrate_soc_pct, sanitize_soc_pct, soc_protected_bounds},
-    ramp::{CommandDelay, Ramp},
 };
 
 #[derive(Clone, Debug)]
@@ -52,12 +52,11 @@ pub struct EvCharger {
     interval: Duration,
     cfg: EvChargerConfig,
     state: Mutex<EvState>,
-    delay: CommandDelay,
-    ramp: Ramp,
-    /// Rated bounds + a queue of time-limited augmentations applied
-    /// via `AugmentElectricalComponentBounds`. The SoC-protective
-    /// derate is composed on top at tick time — see `tick`.
-    bounds: Mutex<ComponentBounds>,
+    /// Active (P) control path: rated band + TTL augmentations,
+    /// command delay, slew ramp. The SoC-protective derate is passed
+    /// in as the per-tick dynamic hook — see `tick`. `published` is
+    /// unused: `aggregate_power_w` / telemetry read `actual()`.
+    active: PowerAxis,
 }
 
 #[derive(Debug, Clone)]
@@ -78,9 +77,13 @@ impl EvCharger {
             init_soc,
             Self::protect(&cfg),
         );
-        let delay = CommandDelay::new(cfg.command_delay);
-        let ramp = Ramp::new(cfg.ramp_rate_w_per_s, 0.0);
-        let bounds = ComponentBounds::rated(cfg.rated_lower_w, cfg.rated_upper_w);
+        let active = PowerAxis::new(AxisConfig {
+            rated: Some((cfg.rated_lower_w, cfg.rated_upper_w)),
+            caps: None,
+            command_delay: cfg.command_delay,
+            ramp_rate_per_s: cfg.ramp_rate_w_per_s,
+            unit: "W",
+        });
         Self {
             id,
             name: format!("ev-charger-{id}"),
@@ -91,9 +94,7 @@ impl EvCharger {
                 effective_lower_w: l,
                 effective_upper_w: u,
             }),
-            delay,
-            ramp,
-            bounds: Mutex::new(bounds),
+            active,
         }
     }
 
@@ -152,12 +153,7 @@ impl SimulatedComponent for EvCharger {
     }
 
     fn tick(&self, _world: &MicrogridSite, now: DateTime<Utc>, dt: Duration) {
-        // 1. Drop any expired augmentations before recomputing
-        //    bounds — otherwise a just-elapsed narrowing would clip
-        //    the ramp for one extra tick.
-        self.bounds.lock().drop_expired(now);
-
-        // 2. Refresh SoC-derated bounds and snapshot them for the rest
+        // 1. Refresh SoC-derated bounds and snapshot them for the rest
         //    of the tick under a single lock acquisition. Splitting
         //    `(self.state.lock().lo, self.state.lock().up)` would
         //    re-enter the same parking_lot::Mutex and deadlock.
@@ -169,55 +165,46 @@ impl SimulatedComponent for EvCharger {
             (l, u)
         };
 
-        // 3. Compose the effective envelope: SoC-protected ∩ rated ∩
-        //    augmentations. A multi-band augmentation makes the
-        //    intersection multi-band. If augmentations don't overlap
-        //    SoC-protected at all (rare — a client narrowed the rated
-        //    range tighter than the derate), refuse to charge or
-        //    discharge.
-        // effective_at(now), not effective(): the tick clock may be
-        // the stepped sim clock, and TTL liveness must be judged on
-        // the same time base the reap above used.
-        let aug_eff = self.bounds.lock().effective_at(now);
-        let envelope = VecBounds::single(soc_lo, soc_hi).intersect(&aug_eff);
+        // 2. The axis composes rated ∩ live augmentations ∩ this
+        //    per-tick SoC derate into the tracking envelope, drops
+        //    expired augmentations, promotes any pending command
+        //    clamped into that envelope (band-aware — a multi-band
+        //    augmentation clamps into the band the setpoint sits in),
+        //    and parks at 0 when the composed envelope is empty. With
+        //    no command armed, `IdleTarget::Hold` leaves the ramp
+        //    target untouched — 0 stays 0 even when an augmentation
+        //    excludes it (e.g. a [5 kW, 22 kW] floor).
+        let derate = VecBounds::single(soc_lo, soc_hi);
+        let p = self.active.step(
+            now,
+            dt,
+            StepCtx {
+                other_axis: 0.0,
+                dynamic: Some(&derate),
+                idle: IdleTarget::Hold,
+            },
+        );
 
-        // 4. Promote pending command + clamp into the composed
-        //    envelope. Band-aware: a multi-band augmentation must
-        //    clamp into the band the setpoint sits in, not have every
-        //    band after the first silently dropped. An empty
-        //    intersection means no permitted power at all — park at 0
-        //    (VecBounds::clamp is identity on an empty envelope, so
-        //    it can't express that case itself).
-        if let Some(target) = self.delay.poll(now) {
-            if envelope.0.is_empty() {
-                self.ramp.set_target(0.0);
-            } else {
-                self.ramp.set_target(envelope.clamp(target));
-            }
-        }
-        // No else: with no armed command the target is the 0 W park
-        // value, and 0 must stay 0. Clamping it into the envelope
-        // made an idle charger start charging on its own when an
-        // augmentation excluded 0 (e.g. a [5 kW, 22 kW] floor).
-        // Armed setpoints need no pull-back here either: poll()
-        // re-returns the armed value every tick, so the clamp above
-        // already tracks a narrowing envelope.
-
-        // 5. Slew + integrate SoC (shared rectangular step, same as
-        //    Battery).
-        let p = self.ramp.advance(dt);
+        // 3. Integrate SoC (shared rectangular step, same as Battery).
         let mut s = self.state.lock();
         s.soc_pct = integrate_soc_pct(s.soc_pct, p, dt, self.cfg.capacity_wh);
     }
 
     fn telemetry(&self, site: &MicrogridSite) -> Telemetry {
         let grid = site.grid_state();
-        let p = self.ramp.actual();
+        let p = self.active.actual();
         let s = self.state.lock().clone();
         Telemetry {
             id: self.id,
             category: Some(Category::EvCharger),
             active_power_w: Some(p),
+            // The EV is a P-only AC component — it never takes a Q
+            // setpoint — but the formula engine's convergence pass
+            // treats an absent reactive sample as "unknown", not
+            // "zero". Advertising Some(0.0) here (and, via the
+            // streaming path in proto_conv.rs, an AcPowerReactive
+            // sample of 0) tells it honestly that Q is settled at 0.
+            reactive_power_var: Some(0.0),
             soc_pct: Some(s.soc_pct),
             soc_lower_pct: Some(self.cfg.soc_lower_pct),
             soc_upper_pct: Some(self.cfg.soc_upper_pct),
@@ -235,27 +222,31 @@ impl SimulatedComponent for EvCharger {
         // the SoC clamp stays silent (avoids bouncing accept / reject
         // as the cell tops up). Augmentations are an explicit
         // narrowing the client just asked for and expects to take
-        // effect, so they belong in the validation envelope.
-        self.bounds.lock().validate_active_setpoint(power_w)?;
-        self.delay.set_target(power_w);
-        Ok(())
+        // effect, so they belong in the validation envelope. That is
+        // exactly the axis's validation/tracking split: `accept`
+        // validates against rated ∩ augmentations only, never the
+        // dynamic hook.
+        self.active.accept(power_w, Utc::now(), 0.0)
     }
 
     fn augment_active_bounds(&self, ts: DateTime<Utc>, bounds: VecBounds, lifetime: Duration) {
-        self.bounds.lock().add_augmentation(ts, bounds, lifetime);
+        self.active.augment(ts, bounds, lifetime);
     }
 
     fn reset_setpoint(&self) {
-        self.delay.reset();
-        self.ramp.snap_to(0.0);
+        // Today's reset is delay.reset + ramp.snap_to(0) — exactly
+        // `PowerAxis::trip()` minus the published write. The EV never
+        // reads `active.published()` (telemetry and aggregate_power_w
+        // both read `actual()`), so that unused write is harmless.
+        self.active.trip();
     }
 
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
-        Some(self.ramp.actual())
+        Some(self.active.actual())
     }
 
     fn aggregate_power_w(&self, _world: &MicrogridSite) -> f32 {
-        self.ramp.actual()
+        self.active.actual()
     }
 
     fn rated_active_bounds(&self) -> Option<(f32, f32)> {
@@ -266,8 +257,7 @@ impl SimulatedComponent for EvCharger {
         let s = self.state.lock();
         let soc = VecBounds::single(s.effective_lower_w, s.effective_upper_w);
         drop(s);
-        let aug = self.bounds.lock().effective();
-        Some(soc.intersect(&aug))
+        Some(soc.intersect(&self.active.effective_static()))
     }
 
     fn make_fn(&self) -> &'static str {
@@ -414,6 +404,18 @@ mod tests {
 
         let eff = ev.effective_active_bounds().unwrap();
         assert_eq!(eff.0[0].upper, Some(22_000.0));
+    }
+
+    /// A P-only AC component must still EMIT a zero Q sample, not stay
+    /// silent on it — the formula engine's convergence pass reads
+    /// `reactive_power_var` for every AC component and an absent
+    /// field there reads as "unknown", not "zero".
+    #[test]
+    fn ev_telemetry_advertises_zero_reactive() {
+        let w = MicrogridSite::new();
+        let ev = charger();
+        let t = ev.telemetry(&w);
+        assert_eq!(t.reactive_power_var, Some(0.0));
     }
 
     /// Every construction kwarg round-trips; `:ramp-rate` renders
