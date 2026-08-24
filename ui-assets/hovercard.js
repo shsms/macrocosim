@@ -109,13 +109,13 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
 }
 
-function envelopeBar(section) {
+function envelopeBar(section, unit = "W") {
   if (!section) return "";
   let marker = "";
   if (section.lo != null && section.hi != null && section.hi > section.lo) {
     const pct = Math.max(0, Math.min(100, ((section.value - section.lo) / (section.hi - section.lo)) * 100));
     marker = `<div class="hc-bar"><div class="hc-bar-marker" style="left:${pct.toFixed(1)}%;background:${section.color}"></div></div>
-      <div class="hc-bar-ends"><span>${esc(formatScaled(section.lo, "W"))}</span><span>${esc(formatScaled(section.hi, "W"))}</span></div>`;
+      <div class="hc-bar-ends"><span>${esc(formatScaled(section.lo, unit))}</span><span>${esc(formatScaled(section.hi, unit))}</span></div>`;
   }
   return `<div class="hc-row"><span class="hc-label">${esc(section.label)}</span><span class="hc-value" style="color:${section.color}">${esc(section.text)}</span></div>${marker}`;
 }
@@ -152,7 +152,7 @@ function render(m) {
     <div class="hc-id">${esc(m.idLine)}</div>
     ${sparkSvg(m.spark)}
     ${envelopeBar(m.power)}${envelopeBar(m.dc)}
-    ${m.reactive ? `<div class="hc-row"><span class="hc-label">${esc(m.reactive.label)}</span><span class="hc-value" style="color:${m.reactive.color}">${esc(m.reactive.text)}</span></div>` : ""}
+    ${envelopeBar(m.reactive, "VAr")}
     ${m.pf ? `<div class="hc-row hc-pf">${esc(m.pf.text)}</div>` : ""}
     ${soc}
     ${m.energy ? row("Energy", m.energy.text) : ""}
