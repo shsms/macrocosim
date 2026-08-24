@@ -294,6 +294,15 @@ impl SimulatedComponent for BatteryInverter {
         self.active.augment(ts, bounds, lifetime);
     }
 
+    fn augment_reactive_bounds(
+        &self,
+        ts: DateTime<Utc>,
+        bounds: crate::sim::bounds::VecBounds,
+        lifetime: Duration,
+    ) {
+        self.reactive.augment(ts, bounds, lifetime);
+    }
+
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
         Some(*self.measured_w.lock())
     }

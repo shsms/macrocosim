@@ -265,7 +265,8 @@ impl Telemetry {
 ///   - **Identity**: id, category, name, subtype, is_hidden.
 ///   - **Lifecycle**: stream_interval, stream_jitter_pct, tick, telemetry.
 ///   - **Setpoints**: set_active_setpoint, set_reactive_setpoint,
-///     reset_setpoint, augment_active_bounds, set_active_power_override.
+///     reset_setpoint, augment_active_bounds, augment_reactive_bounds,
+///     set_active_power_override.
 ///   - **Bounds**: rated_active_bounds, effective_active_bounds,
 ///     reactive_bounds, rated_fuse_current.
 ///   - **Aggregation** (parent → child): aggregate_power_w,
@@ -390,6 +391,24 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// the rated envelope. Backs the `AugmentElectricalComponentBounds`
     /// gRPC method.
     fn augment_active_bounds(
+        &self,
+        _create_ts: DateTime<Utc>,
+        _bounds: VecBounds,
+        _lifetime: Duration,
+    ) {
+    }
+
+    /// Add a time-limited reactive-power bounds augmentation — the Q
+    /// twin of [`Self::augment_active_bounds`], backing
+    /// `AugmentElectricalComponentBounds` with an `AC_POWER_REACTIVE`
+    /// target metric.
+    ///
+    /// Parity with the active side includes the default: a component
+    /// with no reactive axis (a meter, a battery) silently accepts
+    /// the call and does nothing, so the gateway ACKs the request
+    /// instead of erroring. Malformed bounds never get this far — the
+    /// gateway's `validate_augmentation` bounces them first.
+    fn augment_reactive_bounds(
         &self,
         _create_ts: DateTime<Utc>,
         _bounds: VecBounds,

@@ -714,6 +714,70 @@ impl MicrogridSite {
         }
     }
 
+    /// Sum the `reactive_bounds()` of every direct child of `parent`
+    /// — the reactive twin of [`Self::aggregate_child_bounds`].
+    /// Returns `None` when `parent` has no children that expose
+    /// reactive bounds.
+    ///
+    /// In today's topologies that is always the answer: the only
+    /// components reporting Q bounds are inverters, and an inverter's
+    /// children are batteries, which carry no reactive axis at all
+    /// (reactive power terminates at the inverter). The mirror exists
+    /// so the gateway has the same shape on both axes, and it starts
+    /// gating for real the moment a child type does report a Q
+    /// envelope.
+    pub fn aggregate_child_reactive_bounds(
+        &self,
+        parent: u64,
+    ) -> Option<crate::sim::bounds::VecBounds> {
+        use crate::sim::bounds::VecBounds;
+        let child_ids: Vec<u64> = self
+            .inner
+            .connections
+            .read()
+            .iter()
+            .filter(|(p, _)| *p == parent)
+            .map(|(_, c)| *c)
+            .collect();
+        if child_ids.is_empty() {
+            return None;
+        }
+        let bounds: Vec<VecBounds> = child_ids
+            .iter()
+            .filter_map(|id| self.get(*id))
+            .filter_map(|c| c.reactive_bounds())
+            .collect();
+        if bounds.is_empty() {
+            None
+        } else {
+            Some(VecBounds::sum_single(bounds))
+        }
+    }
+
+    /// The reactive-power envelope a setpoint for `id` must fall
+    /// within: the component's own Q band intersected with the summed
+    /// Q bands of its children. `None` when no child exposes reactive
+    /// bounds — then only the component's own band applies (enforced
+    /// by the component's `set_reactive_setpoint`). See
+    /// [`Self::aggregate_child_reactive_bounds`] for why `None` is the
+    /// normal answer today.
+    ///
+    /// Both reactive setpoint entry points gate against this, mirroring
+    /// [`Self::active_setpoint_envelope`]: the gRPC
+    /// `SetElectricalComponentPower` gateway ([`crate::server`]) and
+    /// the `(set-reactive-power)` DSL (`lisp::defuns::setpoints`).
+    pub fn reactive_setpoint_envelope(&self, id: u64) -> Option<crate::sim::bounds::VecBounds> {
+        let child_env = self.aggregate_child_reactive_bounds(id)?;
+        // Same carve-out as the active side: a component with
+        // children bounds but no Q band of its own gates on the
+        // children alone rather than intersecting with an empty
+        // default, which would reject every setpoint.
+        match self.get(id)?.reactive_bounds() {
+            Some(own) => Some(own.intersect(&child_env)),
+            None => Some(child_env),
+        }
+    }
+
     /// Wipe every registered component. Called from `(reset-state)` in
     /// the config DSL on hot-reload. Also resets the id allocator so a
     /// reloaded config sees the same ids the previous load saw,

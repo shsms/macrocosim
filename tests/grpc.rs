@@ -29,6 +29,48 @@ fn active_power_w(resp: &ReceiveElectricalComponentTelemetryStreamResponse) -> O
     })
 }
 
+/// Pull the `AC_POWER_REACTIVE` sample's bounds out of a telemetry
+/// response. `None` when the component published no reactive sample.
+fn reactive_sample_bounds(
+    resp: &ReceiveElectricalComponentTelemetryStreamResponse,
+) -> Option<Vec<Bounds>> {
+    let t = resp.telemetry.as_ref()?;
+    t.metric_samples
+        .iter()
+        .find(|s| s.metric == Metric::AcPowerReactive as i32)
+        .map(|s| s.bounds.clone())
+}
+
+/// Subscribe to `id` and return the first reactive sample that
+/// carries bounds. Panics if none arrives within 5 s.
+async fn first_reactive_bounds(
+    c: &mut MicrogridClient<tonic::transport::Channel>,
+    id: u64,
+) -> Vec<Bounds> {
+    let mut stream = c
+        .receive_electrical_component_telemetry_stream(
+            ReceiveElectricalComponentTelemetryStreamRequest {
+                electrical_component_id: id,
+                filter: None,
+            },
+        )
+        .await
+        .expect("subscribe")
+        .into_inner();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Ok(Some(msg)) = stream.message().await {
+            match reactive_sample_bounds(&msg) {
+                Some(b) if !b.is_empty() => return Some(b),
+                _ => continue,
+            }
+        }
+        None
+    })
+    .await
+    .expect("telemetry stream timed out")
+    .expect("a reactive sample carrying bounds")
+}
+
 const TINY_TOPOLOGY: &str = r#"
 (%make-grid-connection-point :id 1
             :successors
@@ -388,6 +430,298 @@ async fn malformed_augmentation_is_rejected() {
     })
     .await
     .expect("valid augmentation must be accepted");
+}
+
+/// Same shape as `TINY_TOPOLOGY`, but the inverter carries a real
+/// reactive envelope: no PF limit (the inherited default would pin Q
+/// to 0 at idle) and a 5 kVA apparent-power cap, so its Q band at
+/// P = 0 is ±5 kVAr.
+const REACTIVE_TOPOLOGY: &str = r#"
+(%make-grid-connection-point :id 1
+            :successors
+            (list (%make-meter :id 2
+                               :successors
+                               (list (%make-battery-inverter
+                                      :id 4
+                                      :rated-lower -5000.0
+                                      :rated-upper  5000.0
+                                      :reactive-pf-limit 0
+                                      :reactive-apparent-va 5000.0
+                                      :successors
+                                      (list (%make-battery
+                                             :id 3
+                                             :rated-lower -5000.0
+                                             :rated-upper  5000.0)))))))
+"#;
+
+/// An `AC_POWER_REACTIVE` augmentation is accepted end-to-end: the
+/// response carries the expiry the augmentation was armed with, and
+/// the live telemetry stream reports the narrowed Q band.
+#[tokio::test(flavor = "multi_thread")]
+async fn reactive_augmentation_is_accepted_and_narrows_the_stream() {
+    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+
+    // Baseline: the un-augmented band is the ±5 kVAr apparent cap.
+    let wide = first_reactive_bounds(&mut c, 4).await;
+    assert_eq!(wide.len(), 1, "expected one band, got {wide:?}");
+    assert_eq!(wide[0].lower, Some(-5000.0));
+    assert_eq!(wide[0].upper, Some(5000.0));
+
+    let resp = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 4,
+            target_metric: Metric::AcPowerReactive as i32,
+            bounds: vec![Bounds {
+                lower: Some(-1000.0),
+                upper: Some(1000.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect("a reactive augmentation must be accepted")
+        .into_inner();
+    assert!(
+        resp.valid_until_time.is_some(),
+        "an accepted augmentation reports when it expires",
+    );
+
+    // The journal keeps the axis: a Q augmentation is logged under
+    // its own kind, not the active route's `augment_bounds`.
+    let logged = s
+        .config
+        .site()
+        .setpoints_window(4, chrono::Utc::now() - chrono::Duration::minutes(1));
+    let kinds: Vec<&str> = logged.iter().map(|e| e.kind.as_str()).collect();
+    assert!(
+        kinds.contains(&"augment_reactive_bounds"),
+        "expected the reactive augment kind in the journal, got {kinds:?}",
+    );
+    assert!(
+        !kinds.contains(&"augment_bounds"),
+        "the active augment kind must not be used for a Q request, got {kinds:?}",
+    );
+
+    let narrowed = first_reactive_bounds(&mut c, 4).await;
+    assert_eq!(narrowed.len(), 1, "expected one band, got {narrowed:?}");
+    assert_eq!(narrowed[0].lower, Some(-1000.0));
+    assert_eq!(narrowed[0].upper, Some(1000.0));
+
+    // The gateway now rejects a setpoint the caps band alone allowed.
+    let err = c
+        .set_electrical_component_power(SetElectricalComponentPowerRequest {
+            electrical_component_id: 4,
+            power: 3000.0,
+            power_type: PowerType::Reactive as i32,
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("3 kVAr is outside the augmented ±1 kVAr band");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+}
+
+/// Same as `REACTIVE_TOPOLOGY`, but the battery inverter's child is a
+/// solar inverter, which *does* report a Q band (1 kVA cap -> ±1
+/// kVAr). No production topology nests a Q-reporting child under an
+/// inverter yet; this is how the reactive gateway's intersect branch
+/// gets reached end-to-end.
+const NESTED_REACTIVE_TOPOLOGY: &str = r#"
+(%make-grid-connection-point :id 1
+            :successors
+            (list (%make-meter :id 2
+                               :successors
+                               (list (%make-battery-inverter
+                                      :id 4
+                                      :rated-lower -5000.0
+                                      :rated-upper  5000.0
+                                      :reactive-pf-limit 0
+                                      :reactive-apparent-va 5000.0
+                                      :successors
+                                      (list (%make-solar-inverter
+                                             :id 3
+                                             :sunlight% 0
+                                             :rated-lower -1000.0
+                                             :rated-upper  0.0
+                                             :reactive-pf-limit 0
+                                             :reactive-apparent-va 1000.0)))))))
+"#;
+
+/// The SetPower gateway gates the reactive axis against the combined
+/// Q envelope, mirroring the active axis — right down to the message,
+/// which reports VAr rather than W.
+#[tokio::test(flavor = "multi_thread")]
+async fn set_reactive_power_outside_the_combined_envelope_is_rejected() {
+    let s = TestServer::start(NESTED_REACTIVE_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+    // 3 kVAr is inside the inverter's own ±5 kVAr but outside the
+    // ±1 kVAr intersection with its Q-reporting child.
+    let err = c
+        .set_electrical_component_power(SetElectricalComponentPowerRequest {
+            electrical_component_id: 4,
+            power: 3000.0,
+            power_type: PowerType::Reactive as i32,
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("expected rejection against the ±1 kVAr intersection");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("combined envelope") && err.message().contains("VAr"),
+        "expected the combined-envelope / VAr wording, got {:?}",
+        err.message(),
+    );
+    // Inside the intersection is accepted, and so is the 0 VAr park.
+    for power in [800.0, 0.0] {
+        let resp = c
+            .set_electrical_component_power(SetElectricalComponentPowerRequest {
+                electrical_component_id: 4,
+                power,
+                power_type: PowerType::Reactive as i32,
+                request_lifetime: Some(30),
+            })
+            .await
+            .unwrap_or_else(|e| panic!("{power} VAr must be accepted, got {e:?}"));
+        assert_eq!(
+            resp.into_inner().message().await.unwrap().unwrap().status,
+            SetElectricalComponentPowerRequestStatus::Success as i32,
+        );
+    }
+}
+
+/// Only the two AC power axes are augmentable. Anything else keeps
+/// the invalid-argument rejection, and the message names the metric
+/// that was asked for so a client can see what it got wrong.
+#[tokio::test(flavor = "multi_thread")]
+async fn augment_rejects_an_unsupported_metric_by_name() {
+    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+    let err = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 4,
+            target_metric: Metric::DcPower as i32,
+            bounds: vec![Bounds {
+                lower: Some(-1000.0),
+                upper: Some(1000.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("DC_POWER bounds are not augmentable");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("DC_POWER"),
+        "expected the metric named in the message, got {:?}",
+        err.message(),
+    );
+}
+
+/// A reactive augmentation on a component with no Q axis is ACKed as
+/// a no-op — the same gateway behavior the active side has for
+/// axis-less components (todo #1007), chosen deliberately in the
+/// design spec rather than inherited by accident. The ACK carries an
+/// expiry, and the component's telemetry never grows a Q band.
+#[tokio::test(flavor = "multi_thread")]
+async fn reactive_augmentation_on_a_q_less_component_is_acked_as_a_no_op() {
+    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+    let resp = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 3, // the battery: no reactive axis
+            target_metric: Metric::AcPowerReactive as i32,
+            bounds: vec![Bounds {
+                lower: Some(-1000.0),
+                upper: Some(1000.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect("a Q augmentation on a Q-less component is ACKed")
+        .into_inner();
+    assert!(resp.valid_until_time.is_some());
+
+    // Nothing was stored: the battery's stream stays free of reactive
+    // bounds. Read a handful of samples rather than waiting out a
+    // negative timeout.
+    let mut stream = c
+        .receive_electrical_component_telemetry_stream(
+            ReceiveElectricalComponentTelemetryStreamRequest {
+                electrical_component_id: 3,
+                filter: None,
+            },
+        )
+        .await
+        .expect("subscribe")
+        .into_inner();
+    for _ in 0..3 {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), stream.message())
+            .await
+            .expect("telemetry stream timed out")
+            .expect("stream open")
+            .expect("a sample");
+        assert!(
+            reactive_sample_bounds(&msg).is_none_or(|b| b.is_empty()),
+            "a Q-less component must not grow reactive bounds from an ACKed no-op",
+        );
+    }
+}
+
+/// The reactive route feeds client input into `PowerAxis::augment`
+/// just like the active one, so it must inherit the same shape
+/// checks. A NaN edge is rejected rather than stored as a de-facto
+/// no-op — and the Q band stays exactly where it was.
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_reactive_augmentation_is_rejected() {
+    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+
+    let nan = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 4,
+            target_metric: Metric::AcPowerReactive as i32,
+            bounds: vec![Bounds {
+                lower: Some(f32::NAN),
+                upper: Some(1000.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("a non-finite edge must be rejected");
+    assert_eq!(nan.code(), tonic::Code::InvalidArgument);
+    assert!(
+        nan.message().contains("non-finite"),
+        "expected 'non-finite' in message, got {:?}",
+        nan.message(),
+    );
+
+    // Inverted, and disjoint from the ±5 kVAr caps band.
+    for bounds in [
+        Bounds {
+            lower: Some(1000.0),
+            upper: Some(-1000.0),
+        },
+        Bounds {
+            lower: Some(20_000.0),
+            upper: Some(30_000.0),
+        },
+    ] {
+        let err = c
+            .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+                electrical_component_id: 4,
+                target_metric: Metric::AcPowerReactive as i32,
+                bounds: vec![bounds],
+                request_lifetime: Some(30),
+            })
+            .await
+            .expect_err("malformed reactive bounds must be rejected");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // Nothing was stored: the band is still the full ±5 kVAr cap, not
+    // a silently unconstrained or bricked axis.
+    let band = first_reactive_bounds(&mut c, 4).await;
+    assert_eq!(band.len(), 1, "expected one band, got {band:?}");
+    assert_eq!(band[0].lower, Some(-5000.0));
+    assert_eq!(band[0].upper, Some(5000.0));
 }
 
 #[tokio::test(flavor = "multi_thread")]

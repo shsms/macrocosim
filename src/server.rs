@@ -256,20 +256,33 @@ impl MicrogridServer {
 
         // Gateway-level envelope check: a real microgrid API gateway
         // intersects the inverter's reported AC bounds with the sum of
-        // its children's reported DC bounds and rejects setpoints that
+        // its children's reported bounds and rejects setpoints that
         // exceed the result. Switchyard does the same here so client
         // code sees the production behaviour even though the inverter
-        // and battery don't share a data link in our model. 0 W (the
-        // fail-safe park) is always allowed, whatever the envelope.
-        if matches!(power_type, PowerType::Active)
-            && req.power != 0.0
-            && let Some(envelope) = site.active_setpoint_envelope(req.electrical_component_id)
-            && !envelope.contains(req.power)
-        {
-            return Err(tonic::Status::failed_precondition(format!(
-                "set-point {} W exceeds combined envelope {}",
-                req.power, envelope
-            )));
+        // and battery don't share a data link in our model. The check
+        // is per axis — each power type gates against its own
+        // envelope. 0 (the fail-safe park) is always allowed, whatever
+        // the envelope, and short-circuits before the lookup.
+        if req.power != 0.0 {
+            let (gateway_envelope, unit) = match power_type {
+                PowerType::Active => (
+                    site.active_setpoint_envelope(req.electrical_component_id),
+                    "W",
+                ),
+                PowerType::Reactive => (
+                    site.reactive_setpoint_envelope(req.electrical_component_id),
+                    "VAr",
+                ),
+                PowerType::Unspecified => unreachable!("rejected above"),
+            };
+            if let Some(envelope) = gateway_envelope
+                && !envelope.contains(req.power)
+            {
+                return Err(tonic::Status::failed_precondition(format!(
+                    "set-point {} {unit} exceeds combined envelope {}",
+                    req.power, envelope
+                )));
+            }
         }
 
         // Resolve the request lifetime *before* actuating: an out-of-range
@@ -669,12 +682,28 @@ impl microgrid_server::Microgrid for MicrogridServer {
         let target_metric = Metric::try_from(req.target_metric).map_err(|_| {
             tonic::Status::invalid_argument(format!("invalid metric type: {}", req.target_metric))
         })?;
-        if target_metric != Metric::AcPowerActive {
+        // Only the two AC power axes carry augmentable bounds. Every
+        // other metric is a protocol error, and the message names the
+        // metric that was asked for.
+        if !matches!(
+            target_metric,
+            Metric::AcPowerActive | Metric::AcPowerReactive
+        ) {
             return Err(tonic::Status::invalid_argument(format!(
-                "Unsupported metric type: {}. Only AC_POWER_ACTIVE is supported.",
-                req.target_metric
+                "Unsupported metric type: {}. Only AC_POWER_ACTIVE and \
+                 AC_POWER_REACTIVE are supported.",
+                target_metric.as_str_name()
             )));
         }
+        let reactive = target_metric == Metric::AcPowerReactive;
+        // Journal the axis: the two routes log distinct kinds so
+        // /api/setpoints, the event bus and the setpoints CSV can tell
+        // a P augmentation from a Q one.
+        let journal_kind = if reactive {
+            SetpointKind::AugmentReactiveBounds
+        } else {
+            SetpointKind::AugmentBounds
+        };
 
         let lifetime = resolve_lifetime(
             req.request_lifetime,
@@ -696,7 +725,7 @@ impl microgrid_server::Microgrid for MicrogridServer {
                 id,
                 SetpointEvent {
                     ts: now,
-                    kind: SetpointKind::AugmentBounds,
+                    kind: journal_kind,
                     value: 0.0,
                     ttl_s: Some(lifetime.as_secs()),
                     outcome: SetpointOutcome::Rejected {
@@ -713,9 +742,31 @@ impl microgrid_server::Microgrid for MicrogridServer {
             Some(component) => match self.gate_runtime_faults(id).await {
                 Ok(_) => {
                     let proposed = VecBounds::new(req.bounds);
-                    match validate_augmentation(&proposed, component.effective_active_bounds()) {
+                    // Each axis is checked against its own live
+                    // envelope and routed to its own trait method.
+                    // `validate_augmentation`'s three shape checks
+                    // (empty, non-finite edge, inverted) are
+                    // axis-agnostic and apply to both. Its fourth,
+                    // the disjoint check, is not: it runs against the
+                    // reference envelope passed here, and on the Q
+                    // route that envelope is the caps band at the
+                    // component's CURRENT P — so an augmentation
+                    // excluding zero can be accepted at idle and
+                    // rejected at full P, where the band has shrunk
+                    // away from it. A client that gets bounced should
+                    // retry when the operating point permits.
+                    let current = if reactive {
+                        component.reactive_bounds()
+                    } else {
+                        component.effective_active_bounds()
+                    };
+                    match validate_augmentation(&proposed, current) {
                         Ok(()) => {
-                            component.augment_active_bounds(now, proposed, lifetime);
+                            if reactive {
+                                component.augment_reactive_bounds(now, proposed, lifetime);
+                            } else {
+                                component.augment_active_bounds(now, proposed, lifetime);
+                            }
                             let expiry = now + chrono::Duration::seconds(lifetime_s);
                             Ok(tonic::Response::new(
                                 AugmentElectricalComponentBoundsResponse {
@@ -751,7 +802,7 @@ impl microgrid_server::Microgrid for MicrogridServer {
                 id,
                 SetpointEvent {
                     ts: now,
-                    kind: SetpointKind::AugmentBounds,
+                    kind: journal_kind,
                     value: 0.0,
                     ttl_s: Some(lifetime.as_secs()),
                     outcome,

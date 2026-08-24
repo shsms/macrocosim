@@ -71,11 +71,13 @@ fn lifetime_from_arg(lifetime_ms: Option<i64>, metadata: &RwLock<Metadata>) -> D
 /// (omitted → `default-request-lifetime-ms`, `0` → expire at once,
 /// otherwise floored at 150 ms).
 ///
-/// There is no gateway envelope on this axis (gRPC has none
-/// either): the inverter accepts or rejects against its live band,
-/// the PF / apparent-power caps at its current active power. With
-/// `CLAMP` non-nil an out-of-band request is pulled to the band
-/// edge and applied instead. 0 VAr always passes, like the 0 W park.
+/// `CLAMP` works exactly as it does on the active axis, over the
+/// reactive gateway envelope: the component's live Q band (the PF /
+/// apparent-power caps at its current active power, intersected with
+/// any live augmentation) narrowed by whatever Q bounds its children
+/// report. With `CLAMP` nil an out-of-envelope request is rejected;
+/// with it non-nil the request is pulled to the nearest edge and
+/// applied. 0 VAr always passes, like the 0 W park.
 pub(super) fn register(
     ctx: &mut TulispContext,
     router: SharedSiteRouter,
@@ -150,15 +152,34 @@ pub(super) fn register(
                 Error::invalid_argument(format!("set-reactive-power: component {id} not found"))
             })?;
             let mut vars = vars as f32;
-            if vars != 0.0
-                && clamp.unwrap_or(false)
-                && let Some(bounds) = component.reactive_bounds()
-            {
-                // Full multi-band clamp, mirroring how
-                // `set-active-power`'s CLAMP arm uses the whole
-                // envelope's own `.clamp()` rather than a single
-                // (lo, hi) pair.
-                vars = bounds.clamp(vars);
+            // Same two arms as `set-active-power`, over the reactive
+            // envelope: the component's own live Q band intersected
+            // with any Q bounds its children report (None when no
+            // child reports any — then only its own band applies).
+            // 0 VAr (the fail-safe park) bypasses both arms.
+            if vars != 0.0 {
+                if clamp.unwrap_or(false) {
+                    // Clamp into the live envelope instead of
+                    // rejecting, so an in-sim controller can command
+                    // "max Q within the current cap" each tick
+                    // without tracking augmentations itself. Falls
+                    // back to the component's own band when it has no
+                    // Q-reporting children. Full multi-band clamp,
+                    // like the active arm's.
+                    if let Some(envelope) = w
+                        .reactive_setpoint_envelope(id as u64)
+                        .or_else(|| component.reactive_bounds())
+                    {
+                        vars = envelope.clamp(vars);
+                    }
+                } else if let Some(envelope) = w.reactive_setpoint_envelope(id as u64)
+                    && !envelope.contains(vars)
+                {
+                    // Mirrors the gRPC SetPower gateway on the Q axis.
+                    return Err(Error::invalid_argument(format!(
+                        "set-reactive-power: set-point {vars} VAr exceeds combined envelope {envelope}"
+                    )));
+                }
             }
             component
                 .set_reactive_setpoint(vars)
@@ -351,6 +372,183 @@ mod tests {
             cfg.eval("(set-reactive-power 2 (/ 0.0 0.0) 30000 t)")
                 .is_err()
         );
+    }
+
+    /// A live Q augmentation narrows what `set-reactive-power`
+    /// accepts, CLAMP pulls a too-big request down to the narrowed
+    /// edge, and once the augmentation expires the wide band is back.
+    /// The DSL-visible half of the `AugmentElectricalComponentBounds`
+    /// round trip on the reactive axis.
+    #[test]
+    fn reactive_augmentation_narrows_accepts_and_expires() {
+        use crate::sim::bounds::VecBounds;
+        use std::time::Duration;
+        let (cfg, _dir) = config_with(REACTIVE_SITE);
+        // Wide band to start with: ±5 kVAr at P = 0.
+        cfg.eval("(set-reactive-power 2 3000.0 30000)").unwrap();
+
+        let site = cfg.site();
+        let inv = site.get(2).unwrap();
+        // Narrow Q to ±1 kVAr. The two-second lifetime is the window
+        // the three evals + tick + telemetry read below have to land
+        // in; they take microseconds each, but a parallel `cargo
+        // test` can steal this thread for a long while, so leave real
+        // slack. The expiry leg sleeps only what is *left* of the
+        // lifetime, so a wide window costs no extra wall time.
+        const LIFETIME: Duration = Duration::from_secs(2);
+        let armed_at = chrono::Utc::now();
+        inv.augment_reactive_bounds(armed_at, VecBounds::single(-1000.0, 1000.0), LIFETIME);
+
+        // 3 kVAr no longer fits the live band.
+        let res = cfg.eval("(set-reactive-power 2 3000.0 30000)");
+        assert!(
+            res.is_err(),
+            "expected rejection under the augmentation, got {res:?}"
+        );
+        // With CLAMP it is pulled to the +1 kVAr edge and applied.
+        cfg.eval("(set-reactive-power 2 3000.0 30000 t)").unwrap();
+        inv.tick(&site, chrono::Utc::now(), Duration::from_millis(100));
+        let q = inv.telemetry(&site).reactive_power_var.unwrap();
+        assert!(
+            (q - 1000.0).abs() < 1.0,
+            "expected clamp to the augmented +1 kVAr edge, got {q}"
+        );
+
+        // Past the augmentation's lifetime the caps band alone
+        // applies. Sleep to the expiry instant plus a small margin,
+        // not a flat interval — whatever the assertions above already
+        // consumed comes off this wait.
+        let spent = (chrono::Utc::now() - armed_at)
+            .to_std()
+            .unwrap_or(Duration::ZERO);
+        std::thread::sleep(LIFETIME.saturating_sub(spent) + Duration::from_millis(100));
+        cfg.eval("(set-reactive-power 2 3000.0 30000)")
+            .expect("3 kVAr fits the rated band again once the augmentation expires");
+    }
+
+    /// The reactive axis carries the same gateway shape as the active
+    /// one. An inverter's battery child exposes no Q bounds (reactive
+    /// power terminates at the inverter), so
+    /// `reactive_setpoint_envelope` is `None` and the gateway falls
+    /// through to the component's own band — which still rejects an
+    /// out-of-band request, with the same wording the active arm uses.
+    #[test]
+    fn reactive_gateway_mirrors_active() {
+        let (cfg, _dir) = config_with(REACTIVE_SITE);
+        let site = cfg.site();
+        // The active side has a combined envelope: the battery child
+        // reports DC bounds and they get summed in.
+        assert!(
+            site.active_setpoint_envelope(2).is_some(),
+            "the battery child reports active bounds, so P has a combined envelope"
+        );
+        // The reactive side has none: no child reports Q bounds.
+        assert!(
+            site.aggregate_child_reactive_bounds(2).is_none(),
+            "a battery exposes no reactive bounds"
+        );
+        assert!(
+            site.reactive_setpoint_envelope(2).is_none(),
+            "with no Q-reporting child there is no combined Q envelope"
+        );
+        // With no gateway envelope, the component's own band decides,
+        // and the error reads like the active arm's.
+        let res = cfg.eval("(set-reactive-power 2 9000.0 30000)");
+        assert!(res.is_err(), "expected rejection, got {res:?}");
+        let msg = res.unwrap_err();
+        assert!(
+            msg.contains("set-reactive-power") && msg.contains("VAr"),
+            "expected the set-reactive-power / VAr wording, got {msg:?}"
+        );
+    }
+
+    /// The moment a child *does* report Q bounds, the reactive
+    /// gateway gates on the intersection — exactly like the active
+    /// one, down to the "exceeds combined envelope" wording. No
+    /// production topology nests a Q-reporting child under an
+    /// inverter yet, so this hangs a solar inverter (which does
+    /// report a Q band) off the battery inverter to reach the branch.
+    #[test]
+    fn reactive_gateway_rejects_outside_the_child_intersection() {
+        use std::time::Duration;
+        let (cfg, _dir) = config_with(
+            // Battery inverter: ±5 kVAr at P = 0. Its child solar
+            // inverter carries a 1 kVA cap -> ±1 kVAr, so the
+            // combined Q envelope is ±1 kVAr.
+            "(setq pv (%make-solar-inverter :id 3 :sunlight% 0
+                                            :rated-lower -1000.0 :rated-upper 0.0
+                                            :reactive-pf-limit 0
+                                            :reactive-apparent-va 1000.0))
+             (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
+                                       :reactive-pf-limit 0
+                                       :reactive-apparent-va 5000.0
+                                       :reactive-command-delay-ms 0
+                                       :reactive-ramp-rate 1e9
+                                       :successors (list pv))",
+        );
+        let site = cfg.site();
+        let envelope = site
+            .reactive_setpoint_envelope(2)
+            .expect("the solar child reports Q bounds, so there is a combined envelope");
+        assert_eq!(envelope.0.len(), 1, "expected one band, got {envelope}");
+        assert_eq!(envelope.0[0].lower, Some(-1000.0));
+        assert_eq!(envelope.0[0].upper, Some(1000.0));
+
+        // 3 kVAr fits the inverter's own ±5 kVAr but not the
+        // intersection — rejected at the gateway, same wording as
+        // `set-active-power`'s.
+        let res = cfg.eval("(set-reactive-power 2 3000.0 30000)");
+        assert!(res.is_err(), "expected rejection, got {res:?}");
+        let msg = res.unwrap_err();
+        assert!(
+            msg.contains("exceeds combined envelope"),
+            "expected the active arm's envelope wording, got {msg:?}"
+        );
+        // 0 VAr (the fail-safe park) still passes.
+        cfg.eval("(set-reactive-power 2 0.0 30000)").unwrap();
+        // CLAMP pulls it into the combined envelope instead.
+        cfg.eval("(set-reactive-power 2 3000.0 30000 t)").unwrap();
+        let inv = site.get(2).unwrap();
+        inv.tick(&site, chrono::Utc::now(), Duration::from_millis(100));
+        let q = inv.telemetry(&site).reactive_power_var.unwrap();
+        assert!(
+            (q - 1000.0).abs() < 1.0,
+            "expected clamp to the combined +1 kVAr edge, got {q}"
+        );
+    }
+
+    /// A Q augmentation disjoint from the caps band leaves zero
+    /// headroom: the live envelope normalizes to the single (0, 0)
+    /// band. CLAMP then pulls any request to 0, which the park rule
+    /// always accepts; without CLAMP the request is rejected outright.
+    #[test]
+    fn set_reactive_power_clamps_to_zero_at_zero_headroom() {
+        use crate::sim::bounds::VecBounds;
+        use std::time::Duration;
+        let (cfg, _dir) = config_with(REACTIVE_SITE);
+        let site = cfg.site();
+        let inv = site.get(2).unwrap();
+        // ±5 kVAr caps band ∩ [20 kVAr, 30 kVAr] is empty, which
+        // `or_zero_band` reports as "zero headroom", not "absent".
+        inv.augment_reactive_bounds(
+            chrono::Utc::now(),
+            VecBounds::single(20_000.0, 30_000.0),
+            Duration::from_secs(30),
+        );
+        let band = inv
+            .reactive_bounds()
+            .expect("the inverter publishes Q bounds");
+        assert_eq!(band.0.len(), 1, "expected one normalized band, got {band}");
+        assert_eq!(band.0[0].lower, Some(0.0));
+        assert_eq!(band.0[0].upper, Some(0.0));
+
+        // Without CLAMP nothing non-zero fits.
+        assert!(cfg.eval("(set-reactive-power 2 3000.0 30000)").is_err());
+        // With CLAMP the request is pulled to 0 and applied.
+        cfg.eval("(set-reactive-power 2 3000.0 nil t)").unwrap();
+        inv.tick(&site, chrono::Utc::now(), Duration::from_millis(100));
+        let q = inv.telemetry(&site).reactive_power_var.unwrap();
+        assert!(q.abs() < 1.0, "expected clamp to 0 VAr, got {q}");
     }
 
     /// Unknown ids and components without a reactive axis (a meter)

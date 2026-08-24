@@ -40,10 +40,14 @@ function powerFactor(p, q, deadBand) {
 // A setpoint's value on the same scaled ladder as every other number
 // on the card. `value` is a JSON number on the wire, but a future
 // kind may carry a word, so anything non-numeric is shown raw.
-// augment_bounds carries no meaningful value (the server ignores it
-// and sends 0), so the kind stands alone.
+// Neither augment kind carries a meaningful value (the server ignores
+// it and sends 0), so for those the kind stands alone. Matched by
+// prefix so the active (augment_bounds) and reactive
+// (augment_reactive_bounds) routes are covered by the one rule —
+// note augment_reactive_bounds does NOT match the "reactive" prefix
+// used for the unit below, so without this it would render "0 W".
 function commandValueText(kind, value) {
-  if (kind === "augment_bounds") return "";
+  if (kind.startsWith("augment")) return "";
   if (value == null || String(value).trim() === "") return String(value);
   const n = Number(value);
   if (!Number.isFinite(n)) return String(value);

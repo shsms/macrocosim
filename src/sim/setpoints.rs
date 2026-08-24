@@ -19,7 +19,15 @@ use serde::Serialize;
 pub enum SetpointKind {
     ActivePower,
     ReactivePower,
+    /// An *active*-power bounds augmentation. Keeps its original
+    /// `augment_bounds` wire value — the reactive route got a new
+    /// variant rather than a shared one, so nothing an existing
+    /// consumer already reads changes meaning.
     AugmentBounds,
+    /// A *reactive*-power bounds augmentation. The two augment routes
+    /// journal distinct kinds so `/api/setpoints`, the event bus and
+    /// the setpoints CSV keep the axis the request was aimed at.
+    AugmentReactiveBounds,
 }
 
 impl SetpointKind {
@@ -30,6 +38,7 @@ impl SetpointKind {
             SetpointKind::ActivePower => "active_power",
             SetpointKind::ReactivePower => "reactive_power",
             SetpointKind::AugmentBounds => "augment_bounds",
+            SetpointKind::AugmentReactiveBounds => "augment_reactive_bounds",
         }
     }
 }

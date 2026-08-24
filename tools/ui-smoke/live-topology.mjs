@@ -200,6 +200,7 @@ const unit = await page.evaluate(async () => {
   eq("every underscore in the kind is a space", cmdText({ kind: "active_power_w", value: 0, ts: now - 1000, accepted: true, reason: "" }), "active power w 0.0 W · 1 s ago · accepted");
   eq("non-numeric command value stays raw", cmdText({ kind: "mode", value: "idle", ts: now - 1000, accepted: true, reason: "" }), "mode idle · 1 s ago · accepted");
   eq("augment_bounds shows no value", cmdText({ kind: "augment_bounds", value: 0, ts: now - 3000, accepted: true, reason: "" }), "augment bounds · 3 s ago · accepted");
+  eq("augment_reactive_bounds shows no value either", cmdText({ kind: "augment_reactive_bounds", value: 0, ts: now - 3000, accepted: true, reason: "" }), "augment reactive bounds · 3 s ago · accepted");
   // palette comes from :root tokens; values unchanged
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   eq("token --pill-surface", css("--pill-surface"), "#242a33");

@@ -44,7 +44,7 @@ pub enum SiteEvent {
         id: u64,
         ts_ms: i64,
         /// Lowercase token: "active_power" / "reactive_power" /
-        /// "augment_bounds".
+        /// "augment_bounds" (active axis) / "augment_reactive_bounds".
         setpoint_kind: &'static str,
         value: f32,
         accepted: bool,
