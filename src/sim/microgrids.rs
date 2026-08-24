@@ -16,6 +16,7 @@
 //! layer up.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -51,6 +52,24 @@ pub struct MicrogridDef {
 pub struct MicrogridEntry {
     pub def: MicrogridDef,
     pub site: MicrogridSite,
+    /// The file this microgrid was loaded from, canonicalized —
+    /// `None` for one declared straight from the REPL (`/api/eval`),
+    /// which has no file to persist back into. Two different files
+    /// declaring the same id is a hard error; the SAME file
+    /// re-declaring it is the reload path and reuses the entry in
+    /// place. See `(make-microgrid …)` in `lisp::defuns::microgrids`.
+    pub source: Option<PathBuf>,
+    /// Whether [`source`](Self::source) is a *managed* microgrid file
+    /// — one whose structure lives in a switchyard-generated block
+    /// (see [`crate::lisp::microgrid_file`]) that switchyard may
+    /// rewrite. A hand-written script is unmanaged: switchyard loads
+    /// it and never writes to it.
+    pub managed: bool,
+    /// Live edits have been applied that the managed file on disk
+    /// doesn't carry yet. Always `false` today — the
+    /// persistence-on-edit path that sets it lands with the save
+    /// pipeline.
+    pub unsaved: bool,
 }
 
 pub type SharedMicrogrids = Arc<Mutex<BTreeMap<u64, MicrogridEntry>>>;
@@ -70,6 +89,13 @@ pub struct MicrogridView {
     pub grpc_port: u16,
     pub tso: Option<String>,
     pub component_count: usize,
+    /// Mirrors [`MicrogridEntry::managed`].
+    pub managed: bool,
+    /// Mirrors [`MicrogridEntry::source`], rendered for display
+    /// (`PathBuf` has no stable JSON form across platforms).
+    pub source: Option<String>,
+    /// Mirrors [`MicrogridEntry::unsaved`].
+    pub unsaved: bool,
 }
 
 impl From<&MicrogridEntry> for MicrogridView {
@@ -80,6 +106,9 @@ impl From<&MicrogridEntry> for MicrogridView {
             grpc_port: e.def.grpc_port,
             tso: e.def.tso.clone(),
             component_count: e.site.component_count(),
+            managed: e.managed,
+            source: e.source.as_ref().map(|p| p.display().to_string()),
+            unsaved: e.unsaved,
         }
     }
 }
@@ -158,6 +187,23 @@ impl SiteRouter {
         })
     }
 
+    /// Which registered microgrid — if any — already carries the
+    /// component id `id`. Component ids are enterprise-unique, so the
+    /// `make-*` defuns consult this before accepting an explicit
+    /// `:id`: a duplicate across microgrids would make gRPC lookups
+    /// and the UI's cross-microgrid views ambiguous.
+    ///
+    /// The caller's own site is registered too, but it is checked for
+    /// the id first (and errors there with a site-local message), so
+    /// by the time this runs a hit can only be a *foreign* microgrid.
+    pub fn owner_of_component(&self, id: u64) -> Option<u64> {
+        self.registry
+            .lock()
+            .iter()
+            .find(|(_, e)| e.site.get(id).is_some())
+            .map(|(mg, _)| *mg)
+    }
+
     /// Resolve the active site under the rules above. Cheap clone
     /// of the underlying `MicrogridSite` (`Arc<MicrogridSiteInner>`
     /// inside).
@@ -211,6 +257,53 @@ pub fn with_microgrid<R>(current: &CurrentMicrogrid, id: u64, f: impl FnOnce() -
     f()
 }
 
+/// The file currently being loaded, as seen by every
+/// `(make-microgrid …)` form that runs during that load. Ambient
+/// state in the same sense as [`CurrentMicrogrid`] — the loader sets
+/// it, the defun reads it at invocation time — so the same rule
+/// applies: only flip it while the interpreter lock is held.
+#[derive(Clone)]
+pub struct LoadingFile {
+    /// Canonicalized path of the file being loaded. Compared against
+    /// [`MicrogridEntry::source`] to tell a same-file reload (reuse
+    /// in place) from a second file claiming a taken id (an error).
+    pub path: PathBuf,
+    /// Whether that file is a managed microgrid file — see
+    /// [`MicrogridEntry::managed`].
+    pub managed: bool,
+}
+
+pub type LoadingSlot = Arc<Mutex<Option<LoadingFile>>>;
+
+pub fn new_loading_slot() -> LoadingSlot {
+    Arc::new(Mutex::new(None))
+}
+
+/// Run `f` with the loading-file slot set to `file`, restoring the
+/// prior value on the way out — panics included (a Drop guard does
+/// the restore, mirroring [`with_microgrid`]).
+///
+/// Save-and-restore rather than set-and-clear so a load triggered
+/// from inside another load attributes its microgrids to itself and
+/// hands the outer file back afterwards. A nested `(load …)` form
+/// goes through tulisp's own loader rather than this one, so it
+/// simply keeps the outer file ambient — its microgrids belong to
+/// the file the operator actually loaded.
+pub fn with_loading<R>(slot: &LoadingSlot, file: LoadingFile, f: impl FnOnce() -> R) -> R {
+    struct Restore<'a> {
+        slot: &'a LoadingSlot,
+        prior: Option<LoadingFile>,
+    }
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            *self.slot.lock() = self.prior.take();
+        }
+    }
+    let prior = slot.lock().replace(file);
+    let _restore = Restore { slot, prior };
+    f()
+}
+
 /// Smallest microgrid id not currently registered, starting at
 /// `DEFAULT_MICROGRID_ID`. Mirrors `next_free_port`'s shape.
 pub fn next_free_id(registry: &SharedMicrogrids) -> u64 {
@@ -248,6 +341,9 @@ mod tests {
                 tso: None,
             },
             site: MicrogridSite::new(),
+            source: None,
+            managed: false,
+            unsaved: false,
         }
     }
 

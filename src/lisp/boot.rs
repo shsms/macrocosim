@@ -97,6 +97,7 @@ impl Config {
         let microgrids = crate::sim::microgrids::new_registry();
         let dispatches = crate::sim::dispatch::new_store();
         let current_microgrid = crate::sim::microgrids::new_current_microgrid();
+        let loading = crate::sim::microgrids::new_loading_slot();
         let router = SiteRouter::new(microgrids.clone(), current_microgrid.clone(), site.clone());
         // Capacity = 1024 to absorb a mass-create burst (e.g. a
         // script POST'ing /api/microgrids/create a few hundred times
@@ -164,6 +165,7 @@ impl Config {
             enterprise_id_allocator.clone(),
             microgrid_registered.clone(),
             grid_frequency.clone(),
+            loading.clone(),
         );
         defuns::register_frequency(&mut ctx, grid_frequency.clone());
 
@@ -214,14 +216,52 @@ impl Config {
             }
         }
 
+        let ctx = SharedMut::new(ctx);
+
+        // The Config exists BEFORE the boot scripts run: each script
+        // is evaluated through `Config::load_file`, which needs a
+        // built `self` to set the ambient loading-file slot, record
+        // the file for reload replay, and attribute every
+        // `(make-microgrid …)` form to the file it came from. The
+        // background loops are still spawned only further down, after
+        // a fully successful eval — an error path returns here with
+        // nothing ticking, exactly as before.
+        let cfg = Self {
+            // Filled in by `load_file` below, one canonicalized entry
+            // per script, so the same file spelled differently
+            // (relative argv vs an absolute runtime `(load …)`) dedups
+            // to one replay entry.
+            loaded_files: Arc::new(Mutex::new(Vec::new())),
+            state_dir,
+            ctx,
+            site,
+            metadata,
+            extra_watches,
+            clock,
+            scenarios,
+            microgrids: microgrids.clone(),
+            dispatches,
+            router,
+            loading,
+            current_microgrid,
+            enterprise_id_allocator,
+            import_lock: Arc::new(tokio::sync::Mutex::new(())),
+            microgrid_registered,
+            timer_handle: timer_handle.clone(),
+            now,
+            sim_clock,
+        };
+
         for script in &scripts {
-            if let Err(e) = ctx.eval_file(script) {
-                let formatted = e.format(&ctx);
-                log::error!("Tulisp error in {script}:\n{formatted}");
-                return Err(formatted);
-            }
+            // argv paths are relative to the process cwd, not to the
+            // state dir (which `load_file` resolves against), so
+            // absolutize here — `load_file` reports a clean read error
+            // for a script that doesn't exist.
+            let path = PathBuf::from(script);
+            let path = path.canonicalize().unwrap_or(path);
+            cfg.load_file(&path)?;
         }
-        warn_orphaned_chp_defaults(&mut ctx);
+        warn_orphaned_chp_defaults(&mut cfg.ctx.borrow_mut());
 
         // An empty registry is a legitimate live state: a bare boot
         // (no scripts) serves the UI + REPL and topologies arrive on
@@ -268,8 +308,6 @@ impl Config {
             Self::start_timeout_loop(microgrids.clone());
         }
 
-        let ctx = SharedMut::new(ctx);
-
         // Lisp refresh loop. One tokio task at 100 ms cadence holds
         // the interpreter lock once per pass, walks every registered
         // microgrid's components calling `refresh_inputs` (which
@@ -290,44 +328,137 @@ impl Config {
         //    synchronously for tests that drive `tick_once` and
         //    expect the lambda result to be visible immediately.
         if !headless {
-            Self::spawn_lisp_refresh_loop(microgrids.clone(), ctx.clone(), timer_handle.clone());
+            Self::spawn_lisp_refresh_loop(microgrids, cfg.ctx.clone(), timer_handle);
         }
         // The scenario runners (todo §J2) replace the old day-stage
         // auto-advance task; until they land, registered scenarios are
         // introspectable but not yet runnable from the registry.
 
-        Ok(Self {
-            // Canonicalized so the same file spelled differently
-            // (relative argv vs an absolute runtime (load …)) dedups
-            // to one replay entry; the scripts eval'd above, so they
-            // exist and canonicalize cleanly.
-            loaded_files: Arc::new(Mutex::new(
-                scripts
-                    .iter()
-                    .map(|s| {
-                        let p = PathBuf::from(s);
-                        p.canonicalize().unwrap_or(p)
-                    })
-                    .collect(),
-            )),
-            state_dir,
-            ctx,
-            site,
-            metadata,
-            extra_watches,
-            clock,
-            scenarios,
-            microgrids,
-            dispatches,
-            router,
-            current_microgrid,
-            enterprise_id_allocator,
-            import_lock: Arc::new(tokio::sync::Mutex::new(())),
-            microgrid_registered,
-            timer_handle,
-            now,
-            sim_clock,
-        })
+        Ok(cfg)
+    }
+
+    /// Load one microgrid file: parse it (managed files carry a
+    /// switchyard-generated block; hand-written ones don't), evaluate
+    /// it with the file recorded as the ambient loading file, and
+    /// return the ids of the microgrids it newly registered.
+    ///
+    /// Relative paths resolve against `state_dir` — the same anchor
+    /// `(load …)` and `(file-exists-p …)` use — so a path typed into
+    /// the REPL means the same thing as one written in a config.
+    ///
+    /// Loading a file that is already loaded is the reload path: its
+    /// own `(make-microgrid …)` forms reuse their entries in place
+    /// (so live runtimes keep their site handles) and the returned id
+    /// list is empty, since nothing is *new*.
+    pub fn load_file(&self, path: &Path) -> Result<Vec<u64>, String> {
+        let mut ctx = self.ctx.borrow_mut();
+        self.load_file_locked(&mut ctx, path)
+    }
+
+    /// [`load_file`](Self::load_file) against an already-held
+    /// interpreter guard — for callers that must not re-borrow (a
+    /// `(load …)` routed out of `eval_locked`, the reload replay).
+    pub(super) fn load_file_locked(
+        &self,
+        ctx: &mut TulispContext,
+        path: &Path,
+    ) -> Result<Vec<u64>, String> {
+        use crate::sim::microgrids::{LoadingFile, with_loading};
+
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.state_dir.join(path)
+        };
+        let text = std::fs::read_to_string(&resolved)
+            .map_err(|e| format!("cannot read {}: {e}", resolved.display()))?;
+        // Parse only to classify the file: a managed file's structure
+        // is switchyard's to rewrite, an unmanaged one's is the
+        // author's. Either way the WHOLE file is what we evaluate —
+        // the generated block and the script section are both live
+        // lisp.
+        let managed = super::microgrid_file::parse(&text)
+            .map_err(|e| format!("{}: {e}", resolved.display()))?
+            .generated
+            .is_some();
+        // Canonicalized so every spelling of one file compares equal
+        // — that comparison is what distinguishes a reload of this
+        // file from a second file claiming its ids.
+        let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+
+        let before: HashSet<u64> = self.microgrids.lock().keys().copied().collect();
+        let file = LoadingFile {
+            path: canonical.clone(),
+            managed,
+        };
+        let result = with_loading(&self.loading, file, || {
+            ctx.eval_file(&resolved.to_string_lossy())
+        });
+        if let Err(e) = result {
+            let formatted = e.format(ctx);
+            log::error!("Tulisp error in {}:\n{formatted}", resolved.display());
+            return Err(formatted);
+        }
+        // Only on success: a file that failed to evaluate is not part
+        // of the world and must not be replayed by `reload`.
+        self.record_loaded_file(canonical);
+
+        let new_ids: Vec<u64> = self
+            .microgrids
+            .lock()
+            .iter()
+            .filter(|(id, _)| !before.contains(id))
+            .map(|(id, entry)| {
+                // Tell UI subscribers the site is populated — the
+                // topology arrived after the WS pump's snapshot.
+                entry.site.bump_version();
+                *id
+            })
+            .collect();
+        Ok(new_ids)
+    }
+
+    /// Copy a managed microgrid file to `microgrids/{new_id}.lisp`
+    /// under the state dir with its microgrid id rewritten to
+    /// `new_id`, then load the copy. Returns `new_id`.
+    ///
+    /// This is how one file becomes two live microgrids ("load
+    /// another copy of this site"). Unmanaged files are refused:
+    /// without a generated block there is no id to rewrite
+    /// mechanically, and guessing at hand-written source would be a
+    /// silent mangle. Refuses an id that is already registered or
+    /// whose target file already exists, so a copy can never clobber
+    /// a microgrid that exists.
+    pub fn load_as(&self, path: &Path, new_id: u64) -> Result<u64, String> {
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.state_dir.join(path)
+        };
+        let text = std::fs::read_to_string(&resolved)
+            .map_err(|e| format!("cannot read {}: {e}", resolved.display()))?;
+        let rewritten = super::microgrid_file::rewrite_id(&text, new_id)
+            .map_err(|e| format!("{}: {e}", resolved.display()))?;
+        if self.microgrids.lock().contains_key(&new_id) {
+            return Err(format!("microgrid {new_id} is already registered"));
+        }
+        let target = self.microgrids_dir().join(format!("{new_id}.lisp"));
+        if target.exists() {
+            return Err(format!(
+                "{} already exists; refusing to clobber",
+                target.display()
+            ));
+        }
+        super::microgrid_file::write_atomic(&target, &rewritten)
+            .map_err(|e| format!("write {}: {e}", target.display()))?;
+        // A failed load leaves no live microgrid, so the copy on disk
+        // would be an orphan the next reload would trip over — drop it
+        // and report the load error.
+        if let Err(e) = self.load_file(&target) {
+            let _ = std::fs::remove_file(&target);
+            return Err(e);
+        }
+        Ok(new_id)
     }
 
     /// Trigger one refresh + timer-drain pass synchronously. Mirrors
@@ -612,11 +743,11 @@ impl Config {
                 );
                 continue;
             }
-            if let Err(e) = ctx.eval_file(&file.to_string_lossy()) {
-                let formatted = e.format(ctx);
-                log::error!("Tulisp error in {}:\n{formatted}", file.display());
-                return Err(formatted);
-            }
+            // Through the loader, not a bare eval_file: each file must
+            // be replayed with itself as the ambient loading file, or
+            // its own `(make-microgrid …)` forms would look like a
+            // stranger re-claiming ids the file already owns.
+            self.load_file_locked(ctx, file)?;
         }
         warn_orphaned_chp_defaults(ctx);
         if self.microgrids.lock().is_empty() {

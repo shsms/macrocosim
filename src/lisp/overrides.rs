@@ -96,24 +96,43 @@ impl Config {
     /// runs but is not replayed by `load-overrides` on the next
     /// reload; pre-gate, a REPL poke silently resurrected as config.
     ///
-    /// A `(load "file")` eval is the exception on the structural
-    /// side: the FILE is the persistent artifact, so its resolved
-    /// path goes onto the reload-replay list instead of the `(load
-    /// …)` form landing in an overrides journal (which would tie the
-    /// file's world to whichever microgrid scope happened to be
-    /// ambient). The same gate applies as for inline forms — only a
-    /// load that moved the structural fingerprint is recorded. A
-    /// purely imperative script (a scenario driver, a batch of
-    /// pokes) stays transient, exactly as the same forms typed into
-    /// the REPL would: replaying one on every reload would restart
-    /// its scenario / re-arm its timers forever.
+    /// An eval consisting only of `(load "file")` forms bypasses that
+    /// gate entirely: it is a load, not an edit, so it is routed
+    /// through [`Config::load_file`] instead of a bare `eval_string`.
+    /// The FILE is the persistent artifact — its resolved path goes
+    /// onto the reload-replay list, and the microgrids it registers
+    /// are attributed to it — rather than the `(load …)` form landing
+    /// in an overrides journal, which would tie the file's world to
+    /// whichever microgrid scope happened to be ambient.
+    ///
+    /// A load MIXED with other top-level forms still runs through the
+    /// plain eval path (the other forms need it) and keeps the old
+    /// gate + "not journaled" warning.
     fn eval_locked(&self, ctx: &mut tulisp::TulispContext, src: &str) -> Result<String, String> {
+        let (loads, has_other_forms) = top_level_load_paths(src);
+        // A pure-load eval IS a load: route it through the loader so
+        // the file becomes the ambient source of whatever microgrids
+        // it registers, and joins the reload-replay list. Every such
+        // load is recorded — the file is the artifact, and a file the
+        // operator asked for is part of the world whether or not it
+        // happened to move the topology.
+        if !loads.is_empty() && !has_other_forms {
+            for path in &loads {
+                // `load_file_locked` already bumped exactly the sites
+                // the load created or rebuilt; the ambient site the
+                // other paths bump is not necessarily one of them.
+                self.load_file_locked(ctx, path)?;
+            }
+            // `(load …)` is a statement, not an expression; mirror
+            // elisp and report success rather than a file's last form.
+            return Ok("t".to_string());
+        }
         let before = self.structural_fingerprint();
+        let known_microgrids: HashSet<u64> = self.microgrids.lock().keys().copied().collect();
         let result = match ctx.eval_string(src) {
             Ok(v) => Ok(v.to_string()),
             Err(e) => Err(e.format(ctx)),
         };
-        let (loads, has_other_forms) = top_level_load_paths(src);
         if result.is_ok() && !loads.is_empty() {
             let structural = self.structural_fingerprint() != before;
             if structural {
@@ -159,20 +178,41 @@ impl Config {
         }
         if result.is_ok()
             && (self.structural_fingerprint() != before || contains_defaults_setq(src))
-            && let Err(e) = self.append_to_overrides_file(src)
         {
-            let label = self
-                .overrides_path()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "<no resolvable microgrid>".to_string());
-            log::error!("Failed to append override to {label}: {e}");
-            // The eval succeeded but won't survive a reload — surface
-            // that on the site event bus (the UI shows it as a config
-            // error banner) instead of only burying it in the log.
-            self.router.site().broadcast_config_error(format!(
-                "eval applied but could not be persisted to {label}: {e} — \
-                 the edit will not survive a reload"
-            ));
+            // An eval that registered a microgrid with no backing
+            // file must NOT be journaled. The journal belongs to
+            // whichever microgrid is ambient, and that microgrid's
+            // file replays it via `(load-overrides)` on every reload
+            // — so the form would come back claiming its id on behalf
+            // of a file that never declared it, the source-less entry
+            // would refuse the foreign claim, and the reload would
+            // abort with every site already reset. One un-persisted
+            // REPL microgrid is a far better outcome than a world
+            // that cannot be reloaded at all.
+            let unbacked = self.unbacked_microgrids_since(&known_microgrids);
+            if !unbacked.is_empty() {
+                for id in unbacked {
+                    log::warn!(
+                        "microgrid {id} was created from the REPL with no backing \
+                         file; it is not journaled and will not survive a reload \
+                         or restart — load it from a file to keep it"
+                    );
+                }
+            } else if let Err(e) = self.append_to_overrides_file(src) {
+                let label = self
+                    .overrides_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<no resolvable microgrid>".to_string());
+                log::error!("Failed to append override to {label}: {e}");
+                // The eval succeeded but won't survive a reload —
+                // surface that on the site event bus (the UI shows it
+                // as a config error banner) instead of only burying
+                // it in the log.
+                self.router.site().broadcast_config_error(format!(
+                    "eval applied but could not be persisted to {label}: {e} — \
+                     the edit will not survive a reload"
+                ));
+            }
         }
         // Bump the version on the microgrid the eval actually
         // mutated (the one current_microgrid points at, or — if no
@@ -210,6 +250,19 @@ impl Config {
             .sum::<u64>()
             + self.site.structural_version();
         (reg.len(), sum)
+    }
+
+    /// Microgrids registered since `known` was snapshotted that have
+    /// no source file — i.e. ones this eval just minted from the
+    /// REPL. See the call site in `eval_locked` for why the journal
+    /// must skip an eval that produced any.
+    fn unbacked_microgrids_since(&self, known: &HashSet<u64>) -> Vec<u64> {
+        self.microgrids
+            .lock()
+            .iter()
+            .filter(|(id, e)| !known.contains(id) && e.source.is_none())
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     fn append_to_overrides_file(&self, src: &str) -> std::io::Result<()> {
@@ -582,22 +635,59 @@ mod tests {
         assert!(cfg.microgrids().lock().contains_key(&55));
     }
 
-    /// A load that registered nothing structural — a scenario driver,
-    /// a batch of pokes — stays transient: recording it would restart
-    /// its side effects on every reload, the exact resurrection the
-    /// persist gate exists to prevent.
+    /// A pure-load eval goes through the loader, so the file joins
+    /// the reload-replay list whether or not it moved the topology.
+    /// A load is not an edit to be gated: the operator asked for that
+    /// FILE, and a file that is part of the world stays part of it
+    /// across a reload. (A purely imperative script's forms simply
+    /// run again on reload — same as re-typing them.)
     #[test]
-    fn transient_loads_are_not_recorded() {
+    fn pure_loads_are_recorded_whatever_they_registered() {
         let (cfg, dir) = config_with("nil");
         let script = dir.join("poke.lisp");
         std::fs::write(&script, "(setq some-transient-var 42)").unwrap();
         cfg.eval("(load \"poke.lisp\")").unwrap();
+        assert_eq!(cfg.eval_silent("some-transient-var").unwrap(), "42");
         assert!(
-            !cfg.loaded_files
+            cfg.loaded_files
                 .lock()
                 .iter()
                 .any(|p| p.ends_with("poke.lisp")),
-            "non-structural load must not join the reload-replay list"
+            "a loaded file joins the reload-replay list"
+        );
+    }
+
+    /// A `(make-microgrid …)` typed into the REPL has no backing
+    /// file, so journaling it into the ambient microgrid's overrides
+    /// would poison every later reload: the owning file's
+    /// `(load-overrides)` would replay the form under that file's
+    /// name, the source-less entry would refuse the foreign claim,
+    /// and the reload would abort with every site already reset —
+    /// leaving the world empty. The unbacked microgrid is transient;
+    /// the FILE-backed world must survive.
+    #[test]
+    fn repl_created_microgrid_does_not_break_reload() {
+        // A config shaped like the real ones: its topology replays
+        // its own overrides journal. That replay is what turns a
+        // journaled REPL microgrid into a reload-breaking form.
+        let (cfg, _dir) = config_with(
+            "(make-microgrid :id 9 :grpc-port 8800
+               :topology (lambda ()
+                           (%make-grid-connection-point :id 1)
+                           (load-overrides)))",
+        );
+        cfg.eval(
+            "(make-microgrid :id 10 :grpc-port 8899 :topology (lambda () (%make-meter :id 2)))",
+        )
+        .unwrap();
+        // The boot script's world comes back intact.
+        cfg.reload()
+            .expect("reload must survive a REPL-created microgrid");
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        assert!(
+            r.get(&9).unwrap().site.get(1).is_some(),
+            "the file-backed microgrid's topology must be rebuilt",
         );
     }
 

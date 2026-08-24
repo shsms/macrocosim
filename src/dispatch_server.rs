@@ -563,6 +563,9 @@ mod tests {
                         tso: None,
                     },
                     site: crate::sim::MicrogridSite::new(),
+                    source: None,
+                    managed: false,
+                    unsaved: false,
                 },
             );
         }

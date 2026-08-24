@@ -214,7 +214,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         move |_ctx: &mut TulispContext, args: Plist<GridArgs>| {
             let w = r.site();
             let a = args.into_inner();
-            let id = id_or_next(&w, a.id)?;
+            let id = id_or_next(&r, &w, a.id)?;
             let rated_active_bounds = match (a.rated_lower, a.rated_upper) {
                 (Some(l), Some(u)) => Some((l as f32, u as f32)),
                 (None, None) => None,
@@ -267,7 +267,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         move |_ctx: &mut TulispContext, args: Plist<MeterArgs>| {
             let w = r.site();
             let a = args.into_inner();
-            let id = id_or_next(&w, a.id)?;
+            let id = id_or_next(&r, &w, a.id)?;
             let interval = ms_to_duration(a.interval, 1000);
             let hidden = a.hidden.unwrap_or(false);
             // :power may be a number, a lambda, or a symbol. The
@@ -307,7 +307,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         move |_ctx: &mut TulispContext, args: Plist<BatteryArgs>| {
             let w = r.site();
             let a = args.into_inner();
-            let id = id_or_next(&w, a.id)?;
+            let id = id_or_next(&r, &w, a.id)?;
             let interval = ms_to_duration(a.interval, 1000);
             let mut cfg = BatteryConfig::default();
             if let Some(v) = a.capacity_wh {
@@ -356,7 +356,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         move |_ctx: &mut TulispContext, args: Plist<BatteryInverterArgs>| {
             let w = r.site();
             let a = args.into_inner();
-            let id = id_or_next(&w, a.id)?;
+            let id = id_or_next(&r, &w, a.id)?;
             let interval = ms_to_duration(a.interval, 1000);
             let mut cfg = BatteryInverterConfig::default();
             if let Some(v) = a.rated_lower {
@@ -405,7 +405,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         move |_ctx: &mut TulispContext, args: Plist<SolarInverterArgs>| {
             let w = r.site();
             let a = args.into_inner();
-            let id = id_or_next(&w, a.id)?;
+            let id = id_or_next(&r, &w, a.id)?;
             let interval = ms_to_duration(a.interval, 1000);
             let mut cfg = SolarInverterConfig::default();
             // :sunlight% accepts a number, lambda, or symbol. Number
@@ -475,7 +475,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         move |_ctx: &mut TulispContext, args: Plist<EvChargerArgs>| {
             let w = r.site();
             let a = args.into_inner();
-            let id = id_or_next(&w, a.id)?;
+            let id = id_or_next(&r, &w, a.id)?;
             let interval = ms_to_duration(a.interval, 1000);
             let mut cfg = EvChargerConfig::default();
             if let Some(v) = a.rated_lower {
@@ -538,7 +538,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             move |_ctx: &mut TulispContext, args: Plist<MarkerArgs>| {
                 let w = r.site();
                 let a = args.into_inner();
-                let id = id_or_next(&w, a.id)?;
+                let id = id_or_next(&r, &w, a.id)?;
                 let jitter = a.stream_jitter_pct.unwrap_or(0.0) as f32;
                 let h = register_with_modes(
                     &w,
@@ -645,7 +645,17 @@ fn checked_ramp_rate(kw: &str, v: f64) -> Result<f32, Error> {
 /// second ticking component while only one stays addressable, and
 /// parent meters would double-count). The auto path skips allocator
 /// values an explicit `:id` already pinned for the same reason.
-fn id_or_next(site: &MicrogridSite, explicit: Option<i64>) -> Result<u64, Error> {
+///
+/// Component ids are enterprise-unique, so an explicit `:id` is also
+/// checked against every OTHER registered microgrid — a duplicate
+/// across microgrids makes gRPC lookups and the cross-microgrid UI
+/// views ambiguous. The auto path needs no such check: every site
+/// draws from the one enterprise-wide allocator.
+fn id_or_next(
+    router: &crate::sim::microgrids::SharedSiteRouter,
+    site: &MicrogridSite,
+    explicit: Option<i64>,
+) -> Result<u64, Error> {
     match explicit {
         Some(x) => {
             if x <= 0 {
@@ -657,6 +667,13 @@ fn id_or_next(site: &MicrogridSite, explicit: Option<i64>) -> Result<u64, Error>
             if site.get(id).is_some() {
                 return Err(Error::invalid_argument(format!(
                     "component id {id} is already registered"
+                )));
+            }
+            // This site doesn't have the id (checked just above), so
+            // any owner the registry reports is a foreign microgrid.
+            if let Some(mg) = router.owner_of_component(id) {
+                return Err(Error::invalid_argument(format!(
+                    "component id {id} is already registered in microgrid {mg}"
                 )));
             }
             site.reserve_id(id);

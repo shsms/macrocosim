@@ -93,6 +93,13 @@ fn create_core(
             MicrogridEntry {
                 def: def.clone(),
                 site: site.clone(),
+                // Backfilled to the stub path right after the stub is
+                // written below — the entry has to exist first (the
+                // allocate + insert is one critical section), and the
+                // path has to exist before it can be canonicalized.
+                source: None,
+                managed: false,
+                unsaved: false,
             },
         );
         (id, grpc_port, def)
@@ -103,9 +110,19 @@ fn create_core(
     // stub is what re-creates the microgrid at load-time. Rolling
     // back the registry insert + bailing out keeps the failure
     // mode clean: nothing started, nothing leaked.
-    if let Err(e) = write_microgrid_stub(config, id, &name, grpc_port, tso) {
-        registry.lock().remove(&id);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
+    let stub = match write_microgrid_stub(config, id, &name, grpc_port, tso) {
+        Ok(path) => path,
+        Err(e) => {
+            registry.lock().remove(&id);
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, e));
+        }
+    };
+    // The stub is this microgrid's source file: reload replays it,
+    // and its `(make-microgrid …)` form must be recognised as this
+    // entry's OWN declaration rather than a stranger claiming a
+    // registered id.
+    if let Some(entry) = registry.lock().get_mut(&id) {
+        entry.source = Some(stub);
     }
     Ok(CreateMicrogridResp {
         id,
@@ -259,7 +276,7 @@ fn write_microgrid_stub(
     name: &str,
     grpc_port: u16,
     tso: Option<&str>,
-) -> Result<(), String> {
+) -> Result<std::path::PathBuf, String> {
     let dir = config.microgrids_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let path = dir.join(format!("config.{id}.lisp"));
@@ -294,6 +311,8 @@ fn write_microgrid_stub(
     // Reload replays the loaded-file list; without this the created
     // microgrid would come back EMPTY from the next reload (its stub
     // is only read at load time, and nothing scans the stub dir).
-    config.record_loaded_file(path);
-    Ok(())
+    // Canonicalized to match how the loader spells it.
+    let path = path.canonicalize().unwrap_or(path);
+    config.record_loaded_file(path.clone());
+    Ok(path)
 }

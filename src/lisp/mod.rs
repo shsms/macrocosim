@@ -168,6 +168,14 @@ pub struct Config {
     /// site allocated in `Config::new`. See
     /// [`crate::sim::microgrids::SiteRouter`].
     pub(crate) router: SharedSiteRouter,
+    /// The microgrid file whose load is in flight, or `None` outside
+    /// a load. `load_file` sets it for the duration of the eval so
+    /// every `(make-microgrid …)` form the file runs knows which file
+    /// it belongs to (and so a second file claiming a taken id is
+    /// detectable). Ambient state like `current_microgrid` — only
+    /// flipped under the interpreter lock. See
+    /// [`crate::sim::microgrids::with_loading`].
+    pub(crate) loading: crate::sim::microgrids::LoadingSlot,
     /// Active microgrid id, written by /api/mg/{id}/eval and the
     /// scenario per-microgrid replay. `None` defers to the
     /// router's fallback (first registry entry).
