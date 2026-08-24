@@ -252,9 +252,18 @@ impl ComponentHistory {
                 }
             }
         }
-        if let Some((l, u)) = snapshot.reactive_power_bounds {
-            record(self, Metric::ReactivePowerLowerBoundVar, l);
-            record(self, Metric::ReactivePowerUpperBoundVar, u);
+        if let Some(b) = &snapshot.reactive_power_bounds {
+            // Same first-segment collapse as the active-bounds block
+            // above — a multi-band Q envelope (split by a live Q
+            // augmentation) charts only its first band.
+            if let Some(first) = b.0.first() {
+                if let Some(v) = first.lower {
+                    record(self, Metric::ReactivePowerLowerBoundVar, v);
+                }
+                if let Some(v) = first.upper {
+                    record(self, Metric::ReactivePowerUpperBoundVar, v);
+                }
+            }
         }
         pushed
     }
@@ -348,5 +357,56 @@ mod tests {
         let hi = ch.get(Metric::ActivePowerUpperBoundW).unwrap();
         assert_eq!(lo.iter().next().unwrap().value, -5000.0);
         assert_eq!(hi.iter().next().unwrap().value, 5000.0);
+    }
+
+    /// A two-band Q envelope (a live Q augmentation splitting the
+    /// caps band) collapses to its FIRST band in the chart history —
+    /// same collapse rule as active bounds, applied to reactive.
+    #[test]
+    fn component_history_reactive_bounds_collapse_to_first_band() {
+        use crate::proto::common::metrics::Bounds;
+        use crate::sim::bounds::VecBounds;
+        let mut ch = ComponentHistory::new(10);
+        let snap = Telemetry {
+            reactive_power_var: Some(0.0),
+            reactive_power_bounds: Some(VecBounds(vec![
+                Bounds {
+                    lower: Some(-2000.0),
+                    upper: Some(-500.0),
+                },
+                Bounds {
+                    lower: Some(500.0),
+                    upper: Some(2000.0),
+                },
+            ])),
+            ..Default::default()
+        };
+        ch.push_snapshot(t(1), &snap);
+        let lo = ch.get(Metric::ReactivePowerLowerBoundVar).unwrap();
+        let hi = ch.get(Metric::ReactivePowerUpperBoundVar).unwrap();
+        assert_eq!(lo.iter().next().unwrap().value, -2000.0);
+        assert_eq!(hi.iter().next().unwrap().value, -500.0);
+    }
+
+    /// A zero-headroom Q envelope normalizes to a PRESENT single
+    /// `(0.0, 0.0)` band at the `Telemetry` boundary (see
+    /// `VecBounds::or_zero_band`), so the chart history still gets a
+    /// scalar push for both edges — an absent band would otherwise
+    /// leave the chart on its last (stale, non-zero) reading exactly
+    /// when the operator should see "no headroom".
+    #[test]
+    fn component_history_zero_headroom_band_still_emits_scalars() {
+        use crate::sim::bounds::VecBounds;
+        let mut ch = ComponentHistory::new(10);
+        let snap = Telemetry {
+            reactive_power_var: Some(0.0),
+            reactive_power_bounds: Some(VecBounds::single(0.0, 0.0)),
+            ..Default::default()
+        };
+        ch.push_snapshot(t(1), &snap);
+        let lo = ch.get(Metric::ReactivePowerLowerBoundVar).unwrap();
+        let hi = ch.get(Metric::ReactivePowerUpperBoundVar).unwrap();
+        assert_eq!(lo.iter().next().unwrap().value, 0.0);
+        assert_eq!(hi.iter().next().unwrap().value, 0.0);
     }
 }

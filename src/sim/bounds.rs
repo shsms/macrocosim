@@ -66,6 +66,27 @@ impl VecBounds {
         self.0.iter().any(|b| bounds_contains(b, value))
     }
 
+    /// Normalize an empty band list to the single band `(0.0, 0.0)`.
+    /// An empty `VecBounds` usually means "no information" (see
+    /// `sum_single`'s doc), but a live Q envelope with no legal band
+    /// left — e.g. a live Q augmentation entirely disjoint from the
+    /// caps band at the current P (the caps band alone never goes
+    /// empty; `ReactiveCapability::q_bounds_at` always returns a
+    /// well-formed `lo <= hi` pair, `(0, 0)` at worst) — means
+    /// something different: zero headroom, a real answer every
+    /// telemetry consumer (proto stream, WS scalar, history chart)
+    /// needs to see as a present `(0, 0)` band, not an absent one
+    /// that leaves stale bounds on screen. Callers with an actually-
+    /// empty "no information" case must NOT reach for this — it's
+    /// for the Q envelope boundary only.
+    pub fn or_zero_band(self) -> Self {
+        if self.0.is_empty() {
+            Self::single(0.0, 0.0)
+        } else {
+            self
+        }
+    }
+
     /// Pull `value` to the closest edge of any bound when it is outside
     /// the union; identity if it is already inside.
     pub fn clamp(&self, value: f32) -> f32 {
@@ -127,8 +148,7 @@ impl VecBounds {
         let mut result = Vec::new();
         for b1 in &self.0 {
             for b2 in &other.0 {
-                let int = bounds_intersect(b1, b2);
-                if int.lower.is_some() || int.upper.is_some() {
+                if let Some(int) = bounds_intersect(b1, b2) {
                     result.push(int);
                 }
             }
@@ -151,7 +171,11 @@ fn bounds_contains(b: &Bounds, value: f32) -> bool {
     true
 }
 
-fn bounds_intersect(a: &Bounds, b: &Bounds) -> Bounds {
+/// `None` means the two bands are disjoint. A `Some` with an absent
+/// edge keeps that side unbounded — an edgeless proto band means "no
+/// bound on this side", so the intersection of two fully-unbounded
+/// bands is a fully-unbounded band, not an empty one.
+fn bounds_intersect(a: &Bounds, b: &Bounds) -> Option<Bounds> {
     fn pick(a: Option<f32>, b: Option<f32>, op: impl FnOnce(f32, f32) -> f32) -> Option<f32> {
         match (a, b) {
             (Some(a), Some(b)) => Some(op(a, b)),
@@ -164,17 +188,13 @@ fn bounds_intersect(a: &Bounds, b: &Bounds) -> Bounds {
     if let (Some(l), Some(u)) = (lower, upper)
         && l > u
     {
-        return Bounds {
-            lower: None,
-            upper: None,
-        };
+        return None;
     }
-    Bounds { lower, upper }
+    Some(Bounds { lower, upper })
 }
 
 fn merge_if_overlapping(a: &Bounds, b: &Bounds) -> Option<Bounds> {
-    let intersection = bounds_intersect(a, b);
-    if intersection.lower.is_some() || intersection.upper.is_some() {
+    if bounds_intersect(a, b).is_some() {
         Some(Bounds {
             lower: a.lower.and_then(|x| b.lower.map(|y| x.min(y))),
             upper: a.upper.and_then(|x| b.upper.map(|y| x.max(y))),
@@ -355,6 +375,58 @@ impl ComponentBounds {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `or_zero_band` normalizes an empty band list to a single
+    /// `(0.0, 0.0)` band, and leaves a non-empty `VecBounds`
+    /// (including a genuinely empty-content single band, like a
+    /// caps-only kVA rim, which already has one entry) untouched.
+    #[test]
+    fn or_zero_band_normalizes_empty_and_leaves_non_empty_alone() {
+        let normalized_empty = VecBounds::default().or_zero_band();
+        assert_eq!(normalized_empty.0.len(), 1);
+        assert_eq!(
+            (normalized_empty.0[0].lower, normalized_empty.0[0].upper),
+            (Some(0.0), Some(0.0))
+        );
+
+        let two_band = VecBounds(vec![
+            Bounds {
+                lower: Some(-30.0),
+                upper: Some(-10.0),
+            },
+            Bounds {
+                lower: Some(10.0),
+                upper: Some(30.0),
+            },
+        ]);
+        let normalized = two_band.clone().or_zero_band();
+        assert_eq!(normalized.0.len(), 2, "non-empty input passes through");
+        assert_eq!(normalized.0[0].lower, two_band.0[0].lower);
+    }
+
+    /// A band with neither edge set means "no bound on either side"
+    /// (the proto documents absent floats exactly that way), so
+    /// intersecting two of them keeps an unbounded band. Only a
+    /// genuinely disjoint pair produces an empty result — the two
+    /// used to share the `{None, None}` sentinel, and a pair of
+    /// fully-unbounded augmentations emptied a Q axis's envelope.
+    #[test]
+    fn intersect_keeps_unbounded_bands_and_drops_only_disjoint_ones() {
+        let unbounded = VecBounds::new(vec![Bounds {
+            lower: None,
+            upper: None,
+        }]);
+        let both = unbounded.intersect(&unbounded);
+        assert_eq!(both.0.len(), 1, "unbounded ∩ unbounded is unbounded");
+        assert_eq!((both.0[0].lower, both.0[0].upper), (None, None));
+
+        let low = VecBounds::single(-4000.0, -3000.0);
+        let high = VecBounds::single(500.0, 2000.0);
+        assert!(
+            low.intersect(&high).0.is_empty(),
+            "a disjoint pair still empties the intersection"
+        );
+    }
 
     #[test]
     fn contains_and_clamp() {

@@ -24,7 +24,7 @@ pub(crate) fn inverter_telemetry(
     p: f32,
     q: f32,
     active_power_bounds: VecBounds,
-    reactive_power_bounds: (f32, f32),
+    reactive_power_bounds: VecBounds,
 ) -> Telemetry {
     let grid = site.grid_state();
     let pp = split_per_phase(p, grid.voltage_per_phase);
@@ -43,21 +43,6 @@ pub(crate) fn inverter_telemetry(
         reactive_power_bounds: Some(reactive_power_bounds),
         component_state: Some(power_state(p)),
         ..Default::default()
-    }
-}
-
-/// Squeeze a reactive envelope down to the single `(lower, upper)`
-/// pair the telemetry field still carries. An empty envelope — nothing
-/// the Q axis may legally sit at — reads as `(0.0, 0.0)`, the same
-/// "no headroom" answer `ReactiveCapability::q_bounds_at` gives when
-/// P is past the apparent-power rim. An open-ended edge (only
-/// reachable via a one-sided Q augmentation, which nothing submits
-/// today) reads as 0 rather than an infinity, because the proto
-/// bounds field must stay finite.
-pub(crate) fn first_band(envelope: &VecBounds) -> (f32, f32) {
-    match envelope.0.first() {
-        Some(b) => (b.lower.unwrap_or(0.0), b.upper.unwrap_or(0.0)),
-        None => (0.0, 0.0),
     }
 }
 

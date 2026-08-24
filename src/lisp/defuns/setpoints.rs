@@ -152,9 +152,13 @@ pub(super) fn register(
             let mut vars = vars as f32;
             if vars != 0.0
                 && clamp.unwrap_or(false)
-                && let Some((lo, hi)) = component.reactive_bounds()
+                && let Some(bounds) = component.reactive_bounds()
             {
-                vars = vars.clamp(lo, hi);
+                // Full multi-band clamp, mirroring how
+                // `set-active-power`'s CLAMP arm uses the whole
+                // envelope's own `.clamp()` rather than a single
+                // (lo, hi) pair.
+                vars = bounds.clamp(vars);
             }
             component
                 .set_reactive_setpoint(vars)

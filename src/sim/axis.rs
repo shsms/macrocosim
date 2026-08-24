@@ -470,6 +470,38 @@ mod tests {
         ax.accept(0.0, t0, 3_000.0).unwrap();
     }
 
+    /// A fully-unbounded augmentation band (both proto edges absent =
+    /// "no bound") must read as no extra constraint — even stacked.
+    /// Two of them used to intersect into the disjoint sentinel and
+    /// empty the Q envelope, parking the axis at 0 and bouncing every
+    /// later augmentation for their whole lifetime.
+    #[test]
+    fn q_axis_survives_stacked_unbounded_augmentations() {
+        let ax = q_axis(
+            ReactiveCapability {
+                pf_limit: None,
+                apparent_va: Some(5_000.0),
+            },
+            Duration::ZERO,
+            f32::INFINITY,
+        );
+        let t0 = Utc::now();
+        let unbounded = VecBounds::new(vec![crate::proto::common::metrics::Bounds {
+            lower: None,
+            upper: None,
+        }]);
+        ax.augment(t0, unbounded.clone(), Duration::from_secs(60));
+        ax.augment(t0, unbounded, Duration::from_secs(60));
+        // The envelope is still the caps band: |Q| ≤ 4000 at P=3000.
+        ax.accept(3_500.0, t0 + chrono::Duration::seconds(1), 3_000.0)
+            .unwrap();
+        assert!(
+            ax.accept(4_500.0, t0 + chrono::Duration::seconds(1), 3_000.0)
+                .is_err(),
+            "caps still bind — unbounded augmentations widen nothing"
+        );
+    }
+
     #[test]
     fn idle_value_tracks_and_clamps() {
         // Solar-shaped: unarmed axis tracks the provided idle value,

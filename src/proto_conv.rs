@@ -145,7 +145,14 @@ pub fn make_component_proto(
         // that don't implement reactive_bounds yet.
         if cat != ElectricalComponentCategory::Battery {
             let p_max = lower.abs().max(upper.abs());
-            let (rlo, rhi) = c.reactive_bounds().unwrap_or((-p_max, p_max));
+            // Config bounds carry one Bounds pair, so a multi-band Q
+            // envelope collapses to its FIRST band here — same
+            // first-band collapse as the WS/history scalar.
+            let (rlo, rhi) = c
+                .reactive_bounds()
+                .and_then(|b| b.0.first().cloned())
+                .map(|b| (b.lower.unwrap_or(-p_max), b.upper.unwrap_or(p_max)))
+                .unwrap_or((-p_max, p_max));
             bounds.push(MetricConfigBounds {
                 metric: Metric::AcPowerReactive as i32,
                 config_bounds: Some(Bounds {
@@ -250,11 +257,10 @@ pub fn telemetry_to_proto(
         && allowed(filter, Metric::AcPowerReactive)
     {
         let mut sample = simple_sample(now, Metric::AcPowerReactive, q);
-        if let Some((lo, hi)) = t.reactive_power_bounds {
-            sample.bounds = vec![Bounds {
-                lower: Some(lo),
-                upper: Some(hi),
-            }];
+        // Live stream does not collapse — every band goes out, same
+        // as the active arm above.
+        if let Some(b) = &t.reactive_power_bounds {
+            sample.bounds = b.0.clone();
         }
         samples.push(sample);
     }
@@ -406,5 +412,74 @@ mod tests {
             other => panic!("expected a simple metric value, got {other:?}"),
         };
         assert_eq!(value, 0.0);
+    }
+
+    /// A component whose reactive bounds carry two disjoint bands (a
+    /// live Q augmentation splitting the caps band) streams BOTH
+    /// bands in its `AcPowerReactive` sample — the gRPC live stream
+    /// does not collapse, unlike the WS/history scalar (first band's
+    /// edges) and `Telemetry::metric_value` (envelope extremes —
+    /// first band's lower, last band's upper).
+    #[test]
+    fn two_band_reactive_bounds_stream_every_band() {
+        let w = MicrogridSite::new();
+        let ev = EvCharger::new(1, Duration::from_secs(1), EvChargerConfig::default());
+        let mut t = ev.telemetry(&w);
+        t.reactive_power_var = Some(0.0);
+        t.reactive_power_bounds = Some(crate::sim::bounds::VecBounds(vec![
+            crate::proto::common::metrics::Bounds {
+                lower: Some(-2000.0),
+                upper: Some(-500.0),
+            },
+            crate::proto::common::metrics::Bounds {
+                lower: Some(500.0),
+                upper: Some(2000.0),
+            },
+        ]));
+        let resp = telemetry_to_proto(&ev, &t, None, 0);
+        let telemetry = resp.telemetry.expect("telemetry present");
+        let q_sample = telemetry
+            .metric_samples
+            .iter()
+            .find(|s| s.metric == crate::proto::common::metrics::Metric::AcPowerReactive as i32)
+            .expect("AcPowerReactive sample must be present");
+        assert_eq!(
+            q_sample.bounds.len(),
+            2,
+            "both bands must stream, got {:?}",
+            q_sample.bounds
+        );
+        assert_eq!(q_sample.bounds[0].lower, Some(-2000.0));
+        assert_eq!(q_sample.bounds[0].upper, Some(-500.0));
+        assert_eq!(q_sample.bounds[1].lower, Some(500.0));
+        assert_eq!(q_sample.bounds[1].upper, Some(2000.0));
+    }
+
+    /// A zero-headroom Q envelope normalizes to a PRESENT single
+    /// `(0.0, 0.0)` band (see `VecBounds::or_zero_band`), so the live
+    /// gRPC stream carries exactly one zero band rather than omitting
+    /// `sample.bounds` entirely.
+    #[test]
+    fn zero_headroom_reactive_bounds_stream_a_single_zero_band() {
+        let w = MicrogridSite::new();
+        let ev = EvCharger::new(1, Duration::from_secs(1), EvChargerConfig::default());
+        let mut t = ev.telemetry(&w);
+        t.reactive_power_var = Some(0.0);
+        t.reactive_power_bounds = Some(crate::sim::bounds::VecBounds::single(0.0, 0.0));
+        let resp = telemetry_to_proto(&ev, &t, None, 0);
+        let telemetry = resp.telemetry.expect("telemetry present");
+        let q_sample = telemetry
+            .metric_samples
+            .iter()
+            .find(|s| s.metric == crate::proto::common::metrics::Metric::AcPowerReactive as i32)
+            .expect("AcPowerReactive sample must be present");
+        assert_eq!(
+            q_sample.bounds.len(),
+            1,
+            "zero headroom must still stream one band, got {:?}",
+            q_sample.bounds
+        );
+        assert_eq!(q_sample.bounds[0].lower, Some(0.0));
+        assert_eq!(q_sample.bounds[0].upper, Some(0.0));
     }
 }

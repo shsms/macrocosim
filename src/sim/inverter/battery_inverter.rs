@@ -231,7 +231,16 @@ impl SimulatedComponent for BatteryInverter {
             p,
             self.reactive.published(),
             self.active.effective_static(),
-            super::first_band(&self.reactive.tracking_envelope_at(Utc::now(), p, None)),
+            // A genuinely empty envelope (a live Q augmentation
+            // disjoint from the caps band — the caps band alone is
+            // always a well-formed, present band even at the
+            // apparent-power rim) normalizes to a present (0, 0)
+            // band — otherwise every telemetry consumer sees an
+            // absent bound instead of the real "zero headroom"
+            // answer.
+            self.reactive
+                .tracking_envelope_at(Utc::now(), p, None)
+                .or_zero_band(),
         )
     }
 
@@ -313,13 +322,13 @@ impl SimulatedComponent for BatteryInverter {
         Some(self.active.effective_static())
     }
 
-    fn reactive_bounds(&self) -> Option<(f32, f32)> {
+    fn reactive_bounds(&self) -> Option<crate::sim::bounds::VecBounds> {
         let p = *self.measured_w.lock();
-        Some(super::first_band(&self.reactive.tracking_envelope_at(
-            Utc::now(),
-            p,
-            None,
-        )))
+        Some(
+            self.reactive
+                .tracking_envelope_at(Utc::now(), p, None)
+                .or_zero_band(),
+        )
     }
 
     fn set_reactive_pf_limit(&self, pf: Option<f32>) {
@@ -772,5 +781,102 @@ mod tests {
             .join(" ");
         assert!(s.contains(":reactive-pf-limit 0.35"), "{s}");
         assert!(!s.contains("0.3499"), "no widened-f64 tail: {s}");
+    }
+
+    /// P pinned at the apparent-power rim alone is NOT the empty-
+    /// envelope case: `ReactiveCapability::q_bounds_at` always
+    /// returns a well-formed `lo <= hi` pair (explicitly `(0.0, 0.0)`
+    /// at the rim), so the caps band is always one present band. This
+    /// pins that baseline so it isn't confused with the real empty
+    /// case below.
+    #[test]
+    fn apparent_power_rim_alone_is_a_present_zero_band_not_an_empty_one() {
+        let inv = BatteryInverter::new(
+            1,
+            Duration::from_secs(1),
+            BatteryInverterConfig {
+                reactive: ReactiveCapability {
+                    pf_limit: None,
+                    apparent_va: Some(10_000.0),
+                },
+                reactive_command_delay: Duration::ZERO,
+                reactive_ramp_rate_var_per_s: f32::INFINITY,
+                ..Default::default()
+            },
+        );
+        // P == S: q_bounds_at returns (0.0, 0.0) directly — already a
+        // present band, no augmentation involved.
+        let env = inv
+            .reactive
+            .tracking_envelope_at(Utc::now(), 10_000.0, None);
+        assert_eq!(env.0.len(), 1, "caps alone never produce an empty band");
+        assert_eq!((env.0[0].lower, env.0[0].upper), (Some(0.0), Some(0.0)));
+    }
+
+    /// The GENUINE empty-envelope case: a live Q augmentation whose
+    /// band is entirely disjoint from the caps band at the current P
+    /// intersects to nothing (`VecBounds::intersect` drops every
+    /// non-overlapping pair), so `tracking_envelope_at` returns a
+    /// truly empty `VecBounds` — unlike the apparent-power-rim case
+    /// above. `telemetry()`'s `reactive_power_bounds` and the
+    /// `reactive_bounds()` trait method (read by the config-bounds
+    /// proto and the CLAMP arm) must both normalize that empty
+    /// envelope to a PRESENT `(0.0, 0.0)` band — an absent band would
+    /// leave the WS/history/hovercard surfaces on stale non-zero
+    /// bounds exactly when the operator should see "no headroom".
+    ///
+    /// Constructs `BatteryInverter` directly (not through
+    /// `MicrogridSite::register`) so the test can reach the private
+    /// `reactive` axis and install the augmentation — there is no
+    /// trait-level `augment_reactive_bounds` today, only
+    /// `augment_active_bounds`.
+    #[test]
+    fn zero_headroom_from_a_disjoint_q_augmentation_publishes_a_present_zero_band() {
+        let inv = BatteryInverter::new(
+            1,
+            Duration::from_secs(1),
+            BatteryInverterConfig {
+                reactive: ReactiveCapability {
+                    pf_limit: None,
+                    apparent_va: Some(1_000.0),
+                },
+                reactive_command_delay: Duration::ZERO,
+                reactive_ramp_rate_var_per_s: f32::INFINITY,
+                ..Default::default()
+            },
+        );
+        let t0 = Utc::now();
+        // At P=0 the caps band is [-1000, 1000]; a live augmentation
+        // at [2000, 3000] shares nothing with it.
+        inv.reactive.augment(
+            t0,
+            VecBounds::single(2000.0, 3000.0),
+            Duration::from_secs(60),
+        );
+
+        // Sanity: confirm this really is the empty case the caps-only
+        // test above is NOT.
+        let env = inv.reactive.tracking_envelope_at(t0, 0.0, None);
+        assert!(
+            env.0.is_empty(),
+            "test setup must reach a genuinely empty envelope, got {env}"
+        );
+
+        let w = MicrogridSite::new();
+        let t = inv.telemetry(&w);
+        let bounds = t
+            .reactive_power_bounds
+            .expect("empty envelope normalizes to a present band");
+        assert_eq!(bounds.0.len(), 1, "must normalize to exactly one band");
+        assert_eq!(
+            (bounds.0[0].lower, bounds.0[0].upper),
+            (Some(0.0), Some(0.0))
+        );
+
+        let rb = inv
+            .reactive_bounds()
+            .expect("reactive_bounds() present even at zero headroom");
+        assert_eq!(rb.0.len(), 1);
+        assert_eq!((rb.0[0].lower, rb.0[0].upper), (Some(0.0), Some(0.0)));
     }
 }

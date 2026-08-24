@@ -195,7 +195,11 @@ impl SimulatedComponent for SolarInverter {
         // into the static bounds, since it changes every tick and must
         // not leak into telemetry's advertised envelope.
         let avail = self.min_avail_w();
-        let sun = VecBounds::single(avail, 0.0);
+        // The band's upper edge is the rated upper — `0.0` for a
+        // pure-generation config, but a `:rated-upper > 0` solar
+        // config (e.g. one that can also sink power) needs its real
+        // upper edge here, not a hard-coded 0.
+        let sun = VecBounds::single(avail, self.cfg.rated_upper_w);
         // The axis intersects that with rated ∩ live augmentations: an
         // augmented cap actually reduces generation, and generation
         // recovers toward available when the cap relaxes. (microsim
@@ -234,7 +238,16 @@ impl SimulatedComponent for SolarInverter {
             p,
             self.reactive.published(),
             self.active.effective_static(),
-            super::first_band(&self.reactive.tracking_envelope_at(Utc::now(), p, None)),
+            // A genuinely empty envelope (a live Q augmentation
+            // disjoint from the caps band — the caps band alone is
+            // always a well-formed, present band even at the
+            // apparent-power rim) normalizes to a present (0, 0)
+            // band — otherwise every telemetry consumer sees an
+            // absent bound instead of the real "zero headroom"
+            // answer.
+            self.reactive
+                .tracking_envelope_at(Utc::now(), p, None)
+                .or_zero_band(),
         )
     }
 
@@ -302,13 +315,13 @@ impl SimulatedComponent for SolarInverter {
         Some((self.cfg.rated_lower_w, self.cfg.rated_upper_w))
     }
 
-    fn reactive_bounds(&self) -> Option<(f32, f32)> {
+    fn reactive_bounds(&self) -> Option<VecBounds> {
         let p = self.active.actual();
-        Some(super::first_band(&self.reactive.tracking_envelope_at(
-            Utc::now(),
-            p,
-            None,
-        )))
+        Some(
+            self.reactive
+                .tracking_envelope_at(Utc::now(), p, None)
+                .or_zero_band(),
+        )
     }
 
     fn set_reactive_pf_limit(&self, pf: Option<f32>) {

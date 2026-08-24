@@ -201,11 +201,11 @@ pub struct Telemetry {
     pub dc_power_w: Option<f32>,
 
     pub active_power_bounds: Option<VecBounds>,
-    /// Live reactive-power envelope at the current P. Single-bucket
-    /// `(lower, upper)`, expressed in VAR. Set on inverters that
-    /// implement `reactive_bounds()`; left None for batteries / meters
-    /// / EV chargers / CHP.
-    pub reactive_power_bounds: Option<(f32, f32)>,
+    /// Live reactive-power envelope at the current P — caps band ∩
+    /// live Q augmentations, possibly multi-band. Set on inverters
+    /// that implement `reactive_bounds()`; left None for batteries /
+    /// meters / EV chargers / CHP.
+    pub reactive_power_bounds: Option<VecBounds>,
 
     pub component_state: Option<&'static str>,
     pub relay_state: Option<&'static str>,
@@ -220,6 +220,8 @@ impl Telemetry {
     /// multi-segment `VecBounds` to its first segment: an assertion
     /// against "the upper bound" means the outermost reachable
     /// value, not the edge of an arbitrary inner segment.
+    ///
+    /// The reactive-bounds metrics follow the same rule.
     pub fn metric_value(&self, metric: crate::sim::history::Metric) -> Option<f32> {
         use crate::sim::history::Metric;
         match metric {
@@ -243,8 +245,16 @@ impl Telemetry {
                 .as_ref()
                 .and_then(|b| b.0.last())
                 .and_then(|b| b.upper),
-            Metric::ReactivePowerLowerBoundVar => self.reactive_power_bounds.map(|(l, _)| l),
-            Metric::ReactivePowerUpperBoundVar => self.reactive_power_bounds.map(|(_, u)| u),
+            Metric::ReactivePowerLowerBoundVar => self
+                .reactive_power_bounds
+                .as_ref()
+                .and_then(|b| b.0.first())
+                .and_then(|b| b.lower),
+            Metric::ReactivePowerUpperBoundVar => self
+                .reactive_power_bounds
+                .as_ref()
+                .and_then(|b| b.0.last())
+                .and_then(|b| b.upper),
         }
     }
 }
@@ -470,10 +480,10 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
             .map(|(l, u)| VecBounds::single(l, u))
     }
 
-    /// Current `(lower, upper)` reactive-power envelope at the
+    /// Current reactive-power envelope (possibly multi-band) at the
     /// component's current P. `None` for components that don't model
     /// reactive power.
-    fn reactive_bounds(&self) -> Option<(f32, f32)> {
+    fn reactive_bounds(&self) -> Option<VecBounds> {
         None
     }
 
@@ -625,5 +635,35 @@ mod tests {
         // Unpublished metrics read None.
         assert_eq!(snap.metric_value(Metric::SocPct), None);
         assert_eq!(snap.metric_value(Metric::ReactivePowerLowerBoundVar), None);
+    }
+
+    /// Like the active-bounds arms, the reactive-bounds arms report
+    /// the envelope extremes — a two-band Q envelope (split by a live
+    /// Q augmentation) reports the outermost reachable edges, not one
+    /// inner band's.
+    #[test]
+    fn metric_value_reactive_bounds_report_envelope_extremes() {
+        let snap = Telemetry {
+            reactive_power_var: Some(500.0),
+            reactive_power_bounds: Some(VecBounds(vec![
+                Bounds {
+                    lower: Some(-2000.0),
+                    upper: Some(-500.0),
+                },
+                Bounds {
+                    lower: Some(500.0),
+                    upper: Some(2000.0),
+                },
+            ])),
+            ..Default::default()
+        };
+        assert_eq!(
+            snap.metric_value(Metric::ReactivePowerLowerBoundVar),
+            Some(-2000.0)
+        );
+        assert_eq!(
+            snap.metric_value(Metric::ReactivePowerUpperBoundVar),
+            Some(2000.0)
+        );
     }
 }
