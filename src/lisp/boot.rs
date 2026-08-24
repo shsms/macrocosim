@@ -542,6 +542,13 @@ impl Config {
     /// silent mangle. Refuses an id that is already registered or
     /// whose target file already exists, so a copy can never clobber
     /// a microgrid that exists.
+    ///
+    /// The copy also gets its own `:grpc-port`. A microgrid's port is
+    /// held by a listening gRPC server, so a second copy carrying the
+    /// original's port would be refused at load ("already bound by
+    /// microgrid N") — which is the whole point of the copy failing
+    /// for the one case it exists to serve: duplicating a file that
+    /// is already loaded.
     pub fn load_as(&self, path: &Path, new_id: u64) -> Result<u64, String> {
         let resolved = if path.is_absolute() {
             path.to_path_buf()
@@ -552,9 +559,19 @@ impl Config {
             .map_err(|e| format!("cannot read {}: {e}", resolved.display()))?;
         let rewritten = super::microgrid_file::rewrite_id(&text, new_id)
             .map_err(|e| format!("{}: {e}", resolved.display()))?;
-        if self.microgrids.lock().contains_key(&new_id) {
-            return Err(format!("microgrid {new_id} is already registered"));
-        }
+        // Id check and port pick under one registry lock, so the port
+        // we write is free as of the same instant the id was.
+        let free_port = {
+            let reg = self.microgrids.lock();
+            if reg.contains_key(&new_id) {
+                return Err(format!("microgrid {new_id} is already registered"));
+            }
+            crate::sim::microgrids::next_free_port_in(&reg)
+        };
+        // A head with no `:grpc-port` comes back unchanged — the
+        // loader allocates one for it anyway.
+        let rewritten = super::microgrid_file::rewrite_grpc_port(&rewritten, free_port)
+            .map_err(|e| format!("{}: {e}", resolved.display()))?;
         let target = self.microgrids_dir().join(format!("{new_id}.lisp"));
         if target.exists() {
             return Err(format!(

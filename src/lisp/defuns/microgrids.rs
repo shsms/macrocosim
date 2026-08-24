@@ -387,6 +387,41 @@ mod tests {
         assert!(cfg.load_as(&raw, 12).is_err());
     }
 
+    /// The case load-as exists for: copying a file that is ALREADY
+    /// loaded. Its port is held by the original's gRPC server, so the
+    /// copy has to get its own — otherwise every "load as N" from the
+    /// UI's collision offer dies on ":grpc-port … is already bound".
+    #[test]
+    fn load_as_gives_the_copy_its_own_port() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        // A managed file for the LIVE microgrid 9, port and all —
+        // what the create endpoint writes and what the load picker
+        // hands back.
+        let src = dir.join("mg9.lisp");
+        std::fs::write(
+            &src,
+            crate::lisp::microgrid_file::compose(
+                "(make-microgrid :id 9 :name \"m\" :grpc-port 8800\n  :topology\n  \
+                 (lambda ()\n    (%make-meter :id 77)))",
+                "",
+            ),
+        )
+        .unwrap();
+        let id = cfg.load_as(&src, 11).expect("copy loads under a free id");
+        assert_eq!(id, 11);
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        let original = r.get(&9).expect("original still registered");
+        let copy = r.get(&11).expect("copy registered");
+        assert_eq!(original.def.grpc_port, 8800, "the original keeps its port");
+        assert_ne!(
+            copy.def.grpc_port, original.def.grpc_port,
+            "the copy binds a port of its own"
+        );
+        assert!(copy.site.get(77).is_some(), "the copy carries the topology");
+    }
+
     /// A loaded microgrid remembers the file it came from; a REPL one
     /// does not.
     #[test]

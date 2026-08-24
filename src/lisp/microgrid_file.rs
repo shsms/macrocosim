@@ -184,9 +184,40 @@ pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
 /// Errors on unmanaged text (nothing to rewrite) or a generated
 /// block that doesn't parse as a `(make-microgrid :id … …)` form.
 pub fn rewrite_id(text: &str, new_id: u64) -> Result<String, String> {
+    rewrite_head_kwarg(text, ":id", &new_id.to_string())?
+        .ok_or_else(|| "no :id argument found in the (make-microgrid …) form".to_string())
+}
+
+/// Rewrite the `:grpc-port` argument of the `(make-microgrid …)`
+/// form inside `text`'s generated block to `new_port`, leaving
+/// everything else untouched.
+///
+/// A head with NO `:grpc-port` is returned unchanged: the loader
+/// auto-allocates a free port for it already, so there is nothing to
+/// fix. This pairs with [`rewrite_id`] on the copy path — a second
+/// live microgrid needs its own port as much as its own id, because
+/// the original's is held by a listening gRPC server.
+pub fn rewrite_grpc_port(text: &str, new_port: u16) -> Result<String, String> {
+    Ok(
+        rewrite_head_kwarg(text, ":grpc-port", &new_port.to_string())?
+            .unwrap_or_else(|| text.to_string()),
+    )
+}
+
+/// Replace the value of `kwarg` in the `(make-microgrid …)` form of
+/// `text`'s generated block with `value`, and return the whole file
+/// text. `Ok(None)` means the form carries no such kwarg — the
+/// caller decides whether that is an error or a no-op.
+///
+/// A byte splice over the original text rather than a re-render, so
+/// every other kwarg, the component forms, the comments and the
+/// hand-written script section come through exactly as they were.
+fn rewrite_head_kwarg(text: &str, kwarg: &str, value: &str) -> Result<Option<String>, String> {
     let parsed = parse(text)?;
     let Some(block) = parsed.generated else {
-        return Err("cannot rewrite the id of an unmanaged file — edit it by hand".to_string());
+        return Err(format!(
+            "cannot rewrite {kwarg} in an unmanaged file — edit it by hand"
+        ));
     };
 
     let cst = tulisp_fmt::parse(&block).map_err(|e| format!("failed to parse block: {e:?}"))?;
@@ -205,29 +236,32 @@ pub fn rewrite_id(text: &str, new_id: u64) -> Result<String, String> {
         })
         .ok_or_else(|| "no (make-microgrid …) form found in the generated block".to_string())?;
 
-    let mut found_id_kw = false;
-    let id_span = form
-        .iter()
-        .find_map(|c| {
-            if found_id_kw {
-                return match c {
-                    CstNode::Atom { span, .. } => Some(span.clone()),
-                    _ => None,
-                };
-            }
-            if matches!(c, CstNode::Atom { text, .. } if text == ":id") {
-                found_id_kw = true;
-            }
-            None
-        })
-        .ok_or_else(|| "no :id argument found in the (make-microgrid …) form".to_string())?;
+    // The atom right after the keyword is its value. Only the head's
+    // own atoms are walked — a nested `(%make-* :id …)` lives inside
+    // a child List, so component ids can never be hit.
+    let mut found_kw = false;
+    let value_span = form.iter().find_map(|c| {
+        if found_kw {
+            return match c {
+                CstNode::Atom { span, .. } => Some(span.clone()),
+                _ => None,
+            };
+        }
+        if matches!(c, CstNode::Atom { text, .. } if text == kwarg) {
+            found_kw = true;
+        }
+        None
+    });
+    let Some(value_span) = value_span else {
+        return Ok(None);
+    };
 
     let mut new_block = String::with_capacity(block.len());
-    new_block.push_str(&block[..id_span.start]);
-    new_block.push_str(&new_id.to_string());
-    new_block.push_str(&block[id_span.end..]);
+    new_block.push_str(&block[..value_span.start]);
+    new_block.push_str(value);
+    new_block.push_str(&block[value_span.end..]);
 
-    Ok(compose(&new_block, &parsed.script))
+    Ok(Some(compose(&new_block, &parsed.script)))
 }
 
 /// Render the generated block for a live microgrid: a
@@ -364,6 +398,37 @@ mod tests {
         assert!(out.contains("(setq x 1)"), "script untouched");
         // Unmanaged text is refused.
         assert!(rewrite_id("(make-microgrid :id 1)", 2).is_err());
+    }
+
+    #[test]
+    fn rewrite_grpc_port_replaces_only_the_port() {
+        let out = rewrite_grpc_port(MANAGED, 8899).unwrap();
+        assert!(out.contains(":grpc-port 8899"), "{out}");
+        assert!(
+            out.contains("(make-microgrid :id 2201"),
+            "the id is untouched"
+        );
+        assert!(
+            out.contains("(%make-meter :id 5)"),
+            "component forms untouched"
+        );
+        assert!(out.contains("(setq x 1)"), "script untouched");
+        // Still one well-formed managed file.
+        let parsed = parse(&out).unwrap();
+        assert!(parsed.generated.is_some());
+    }
+
+    #[test]
+    fn rewrite_grpc_port_leaves_a_portless_head_alone() {
+        // No `:grpc-port` kwarg: the loader auto-allocates a free
+        // port, so there is nothing to rewrite and nothing to fail.
+        let text = compose(
+            "(make-microgrid :id 3 :name \"p\"\n  :topology (lambda () nil))",
+            ";; mine\n",
+        );
+        assert_eq!(rewrite_grpc_port(&text, 8899).unwrap(), text);
+        // Unmanaged text is refused, same as rewrite_id.
+        assert!(rewrite_grpc_port("(make-microgrid :id 1 :grpc-port 8800)", 8899).is_err());
     }
 
     #[test]
