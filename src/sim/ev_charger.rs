@@ -410,10 +410,11 @@ mod tests {
         assert_eq!(eff.0[0].upper, Some(22_000.0));
     }
 
-    /// A P-only AC component must still EMIT a zero Q sample, not stay
-    /// silent on it — the formula engine's convergence pass reads
-    /// `reactive_power_var` for every AC component and an absent
-    /// field there reads as "unknown", not "zero".
+    /// A P-only AC component still advertises an explicit zero Q, so
+    /// per-component telemetry says "settled at 0" instead of going
+    /// silent on the metric. Convergence upstream does not depend on
+    /// it — the aggregation COALESCEs a missing slot to 0.0 — see the
+    /// note on the telemetry field above.
     #[test]
     fn ev_telemetry_advertises_zero_reactive() {
         let w = MicrogridSite::new();

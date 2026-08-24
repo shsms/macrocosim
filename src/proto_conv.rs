@@ -539,11 +539,12 @@ mod tests {
         assert!(!metrics.contains(&(Metric::AcPowerReactive as i32)));
     }
 
-    /// A P-only AC component (the EV charger) must still emit an
-    /// `AcPowerReactive` sample of 0 on the streaming path, not omit
-    /// it — the formula engine's convergence pass needs a present
-    /// zero, not an absent field, to treat the component as settled
-    /// on Q.
+    /// A P-only AC component (the EV charger) streams its explicit
+    /// zero Q as an `AcPowerReactive` sample rather than omitting the
+    /// metric, so the WS feed and the UI read "settled at 0" instead
+    /// of "no data". This pins the streaming half of that honesty;
+    /// upstream convergence does not depend on it (the aggregation
+    /// COALESCEs a missing slot to 0.0).
     #[test]
     fn ev_streaming_telemetry_emits_zero_reactive_sample() {
         let w = MicrogridSite::new();

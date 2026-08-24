@@ -91,7 +91,7 @@ Test name: `grid_reactive_formula_converges_over_a_site_with_an_ev_charger`.
 
 - [ ] **Step 3: Gate.** `cargo test --lib` + the new test + clippy + fmt clean.
 
-- [ ] **Step 4: Commit** (stage `tests/ui_http.rs`): `Prove the grid reactive formula converges with an EV charger` — body: the EV's telemetry zero is load-bearing (absent Q reads as unknown upstream and the aggregation never resolves); this was deferred from the core sub-project because it needs the loopback stream.
+- [ ] **Step 4: Commit** (stage `tests/ui_http.rs`): `Prove the grid reactive formula converges with an EV charger` — body: the EV's telemetry zero is load-bearing (absent Q reads as unknown upstream and the aggregation never resolves); this was deferred from the core sub-project because it needs the loopback stream. (Corrected during execution: the SP3 mutation-check disproved this — see the spec's 2026-08-24 correction; the test stands as end-to-end stream coverage.)
 
 ---
 
