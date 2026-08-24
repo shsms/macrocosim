@@ -70,6 +70,38 @@ export const dashboardTiles = (() => {
     b.values[b.cursor] = value == null ? NaN : value;
     b.cursor = (b.cursor + 1) % SPARK_LEN;
   }
+  // Latest value pushed for a stream, read straight off the spark
+  // ring buffer — the store paint() already keeps per stream — so
+  // the site-PF derivation below doesn't need a second snapshot map.
+  // The most-recently-written slot sits one behind the write cursor
+  // (pushSample() advances the cursor after writing); backfill()
+  // leaves the cursor at 0 with the newest historical sample in the
+  // last slot, which the same formula resolves to.
+  function latestValue(stream) {
+    const b = sparkBuf.get(stream);
+    if (!b) return null;
+    const v = b.values[(b.cursor - 1 + SPARK_LEN) % SPARK_LEN];
+    return Number.isNaN(v) ? null : v;
+  }
+  // Grid power and grid reactive power are separate microgrid_sample
+  // streams; PF only makes sense once both have landed. Opposite
+  // signs on P and Q read as leading, same signs as lagging (matches
+  // the topology hover-card convention), and the qualifier drops off
+  // once PF rounds to unity so a clean unity reading doesn't flicker
+  // between leading/lagging on noise.
+  function updateSitePf() {
+    const el = document.getElementById("site-pf");
+    if (!el) return;
+    const p = latestValue("grid_power");
+    const q = latestValue("grid_reactive_power");
+    if (!Number.isFinite(p) || !Number.isFinite(q) || (p === 0 && q === 0)) {
+      el.textContent = "site PF —";
+      return;
+    }
+    const pf = Math.abs(p) / Math.hypot(p, q);
+    const tag = pf >= 0.995 ? "" : p * q < 0 ? " leading" : " lagging";
+    el.textContent = `site PF ${pf.toFixed(2)}${tag}`;
+  }
   // The tile elements are static markup in index.html, so the
   // per-stream lookups are resolved once and cached — paint() runs
   // per stream per 1 Hz WS sample, and two whole-document
@@ -180,6 +212,9 @@ export const dashboardTiles = (() => {
       // WS frame shape matches the snapshot shape, minus the kind
       // discriminator. Pass straight through.
       paint(ev.stream, ev);
+      if (ev.stream === "grid_power" || ev.stream === "grid_reactive_power") {
+        updateSitePf();
+      }
     },
     // Safety net against dropped WS frames: re-seed the tile values
     // on a slow timer, and immediately whenever the tab returns to
@@ -254,6 +289,7 @@ export const dashboardTiles = (() => {
         // Best-effort. WS frames will fill the ring forward from here.
       }
       await reseedLatest();
+      updateSitePf();
       // Same path picks up the rendered formula strings for each
       // tile's hover tooltip. Static across samples (the formula
       // doesn't change per tick), so one fetch per mode-enter is
@@ -319,6 +355,7 @@ export const batteryPairs = (() => {
     "active_power_w",
     "active_power_lower_bound_w",
     "active_power_upper_bound_w",
+    "reactive_power_var",
   ]);
 
   function sortKey(id) {
@@ -366,6 +403,7 @@ export const batteryPairs = (() => {
           <span class="tier3-subtype muted">${inv.subtype || "—"}</span>
           <span class="tier3-health ${ihCls}">${inv.health}</span>
           ${envelopeBar(inv.lower, inv.measured, inv.upper, fmtRowPower)}
+          <span class="tier3-reactive muted">${inv.reactive == null ? "—" : formatScaled(inv.reactive, "var")}</span>
         `;
         invCell.addEventListener("click", () => jumpToTopology(inverterId));
       } else {
@@ -388,16 +426,18 @@ export const batteryPairs = (() => {
   }
   async function seedInverter(id) {
     try {
-      const [m, lo, hi] = await latestMetrics(id, [
+      const [m, lo, hi, q] = await latestMetrics(id, [
         "active_power_w",
         "active_power_lower_bound_w",
         "active_power_upper_bound_w",
+        "reactive_power_var",
       ]);
       const inv = inverters.get(id);
       if (!inv) return;
       inv.measured = m;
       inv.lower = lo;
       inv.upper = hi;
+      inv.reactive = q;
     } catch (_) {}
   }
   async function seedAll() {
@@ -460,6 +500,7 @@ export const batteryPairs = (() => {
             measured: prevInv?.measured ?? null,
             lower: prevInv?.lower ?? null,
             upper: prevInv?.upper ?? null,
+            reactive: prevInv?.reactive ?? null,
           });
           nextInvByBattery.set(b.id, inverterId);
         }
@@ -489,6 +530,7 @@ export const batteryPairs = (() => {
         if (ev.metric === "active_power_w") inv.measured = ev.value;
         else if (ev.metric === "active_power_lower_bound_w") inv.lower = ev.value;
         else if (ev.metric === "active_power_upper_bound_w") inv.upper = ev.value;
+        else if (ev.metric === "reactive_power_var") inv.reactive = ev.value;
         scheduleRender();
       }
     },

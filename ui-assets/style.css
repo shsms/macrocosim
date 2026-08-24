@@ -837,9 +837,11 @@ body.compact .tier2-soc-text { font-size: 10px; }
   /* Same template as tier2 / tier5 so the health pill aligns
      vertically across the dashboard. The envelope fills cols 4-5
      since the row has no separate power readout — see the
-     .tier3-row .envelope rule below. */
+     .tier3-row .envelope rule below. Col 6 holds the reactive-power
+     readout via .tier3-reactive; only the battery-pair inverter cell
+     renders it today, so PV/CHP tier3 rows just leave it blank. */
   grid-template-columns:
-    minmax(140px, 1.5fr) 80px 80px minmax(160px, 3fr) minmax(100px, 1fr);
+    minmax(140px, 1.5fr) 80px 80px minmax(160px, 3fr) minmax(100px, 1fr) minmax(90px, 1fr);
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
@@ -850,8 +852,9 @@ body.compact .tier2-soc-text { font-size: 10px; }
   font-variant-numeric: tabular-nums;
 }
 .tier3-row .envelope {
-  grid-column: 4 / -1;
+  grid-column: 4 / span 2;
 }
+.tier3-reactive { text-align: right; white-space: nowrap; }
 .tier3-row:hover { border-color: var(--accent); }
 .tier3-name { font-weight: 500; }
 .tier3-subtype { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }

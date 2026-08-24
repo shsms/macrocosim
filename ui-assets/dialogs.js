@@ -202,6 +202,8 @@ function renderScenarioCard(r) {
     <dl class="sc-report-dl">
       <dt>elapsed</dt><dd>${r.scenario_elapsed_s.toFixed(1)} s</dd>
       <dt>main-meter peak</dt><dd>${fmt(r.peak_main_meter_w)}</dd>
+      <dt>main-meter Q peak</dt><dd>${fmt(r.peak_main_meter_var, "VAr")}</dd>
+      <dt>site PF at Q peak</dt><dd>${r.site_pf_at_peak_var == null ? "—" : r.site_pf_at_peak_var.toFixed(2)}</dd>
       <dt>battery charge</dt><dd>${fmt(r.total_battery_charged_wh, "Wh")}</dd>
       <dt>battery discharge</dt><dd>${fmt(r.total_battery_discharged_wh, "Wh")}</dd>
       <dt>PV produced</dt><dd>${fmt(r.total_pv_produced_wh, "Wh")}</dd>
