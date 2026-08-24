@@ -1572,8 +1572,7 @@ mod tests {
     #[test]
     fn refresh_once_drains_pending_timers() {
         let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (setq fired 0)
+            "(setq fired 0)
              (run-with-timer 0 nil (lambda () (setq fired 1)))",
         );
         cfg.refresh_once();
@@ -1587,8 +1586,8 @@ mod tests {
     #[test]
     fn reload_rebuilds_topology_on_the_same_site() {
         let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-grid-connection-point :id 1)",
+            "(make-microgrid :id 9 :grpc-port 8800 :topology \
+             (lambda () (%make-grid-connection-point :id 1)))",
         );
         // The handle a boot-spawned physics task / gRPC server holds.
         let live_site = cfg.microgrids().lock().get(&9).unwrap().site.clone();
@@ -1726,8 +1725,8 @@ mod tests {
     #[test]
     fn reload_leaves_the_world_alone_when_enterprise_is_broken() {
         let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-grid-connection-point :id 1)",
+            "(make-microgrid :id 9 :grpc-port 8800 :topology \
+             (lambda () (%make-grid-connection-point :id 1)))",
         );
         let live_site = cfg.microgrids().lock().get(&9).unwrap().site.clone();
         std::fs::write(cfg.enterprise_path(), "(this-defun-does-not-exist 1)").unwrap();

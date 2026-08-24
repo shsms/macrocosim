@@ -462,17 +462,16 @@ mod tests {
     }
 
     /// `config_with` auto-wraps a body lacking `(make-microgrid …)`
-    /// into a single-entry registration. The id is sourced from any
-    /// inline `(set-microgrid-id N)` (a leftover from the pre-
-    /// migration test fixture shape), keeping the body's intended
-    /// microgrid id stable.
+    /// into a single-entry registration under the fixed default id
+    /// 2200 — tests that care about a different id supply their own
+    /// `(make-microgrid …)` form instead.
     #[test]
-    fn auto_wrapper_registers_single_microgrid_from_set_microgrid_id() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 4242)");
+    fn auto_wrapper_registers_single_microgrid_under_the_default_id() {
+        let (cfg, _dir) = config_with("nil");
         let reg = cfg.microgrids();
         let r = reg.lock();
         assert_eq!(r.len(), 1);
-        let e = r.get(&4242).expect("auto-wrapped under set-microgrid-id");
+        let e = r.get(&2200).expect("auto-wrapped under the default id");
         assert_eq!(e.def.name, "default");
         assert_eq!(e.def.grpc_port, 8800);
     }
@@ -484,7 +483,7 @@ mod tests {
     /// microgrid's site.
     #[test]
     fn make_microgrid_registers_entry_and_topology() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 0)");
+        let (cfg, _dir) = config_with("nil");
         cfg.eval(
             r#"
             (make-microgrid
@@ -564,7 +563,7 @@ mod tests {
     /// receives the component.
     #[test]
     fn auto_ids_are_globally_unique_across_microgrids() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 0)");
+        let (cfg, _dir) = config_with("nil");
         let ids: String = cfg
             .eval(
                 r#"
@@ -599,7 +598,7 @@ mod tests {
     /// to one doesn't leak into the other.
     #[test]
     fn two_microgrids_have_isolated_sites() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 0)");
+        let (cfg, _dir) = config_with("nil");
         cfg.eval(
             r#"
             (make-microgrid :name "alpha" :id 1001
@@ -628,7 +627,7 @@ mod tests {
     /// floors.
     #[test]
     fn make_microgrid_auto_allocates_id_and_port() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 0)");
+        let (cfg, _dir) = config_with("nil");
         let first: i64 = cfg
             .eval("(make-microgrid :name \"alpha\")")
             .unwrap()

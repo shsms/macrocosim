@@ -41,43 +41,19 @@ async fn config_with_dir(body: &str) -> (Config, std::path::PathBuf) {
 }
 
 /// Wrap a test body in `(make-microgrid …)` if the body doesn't already
-/// register one. Any inline `(set-microgrid-id N)` from the pre-
-/// migration shape gets stripped and its N seeds the wrapper's :id so
-/// per-mg id assertions keep their original targets.
+/// register one. Tests that care about the microgrid's id supply
+/// their own `(make-microgrid …)` form; everything else gets the
+/// fixed default id 2200.
 fn wrap_test_body(body: &str) -> String {
     if body.contains("make-microgrid") {
         return body.to_string();
     }
-    let (stripped, mg_id) = strip_set_microgrid_id(body);
-    let inner = if stripped.trim().is_empty() {
+    let inner = if body.trim().is_empty() {
         "nil".to_string()
     } else {
-        stripped
+        body.to_string()
     };
-    format!("(make-microgrid :id {mg_id} :grpc-port 8800 :topology (lambda () {inner}))")
-}
-
-fn strip_set_microgrid_id(body: &str) -> (String, u64) {
-    let needle = "(set-microgrid-id ";
-    let mut out = String::with_capacity(body.len());
-    let mut rest = body;
-    let mut mg_id: u64 = 2200;
-    while let Some(idx) = rest.find(needle) {
-        out.push_str(&rest[..idx]);
-        let tail = &rest[idx + needle.len()..];
-        if let Some(close) = tail.find(')') {
-            let n_str = tail[..close].trim();
-            if let Ok(v) = n_str.parse::<u64>() {
-                mg_id = v;
-            }
-            rest = &tail[close + 1..];
-        } else {
-            out.push_str(&rest[idx..]);
-            return (out, mg_id);
-        }
-    }
-    out.push_str(rest);
-    (out, mg_id)
+    format!("(make-microgrid :id 2200 :grpc-port 8800 :topology (lambda () {inner}))")
 }
 
 static UNIQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -369,8 +345,7 @@ async fn scenario_endpoints_round_trip_lifecycle_and_events() {
 #[tokio::test]
 async fn scenario_report_endpoint_returns_main_meter_peak() {
     let cfg = config_with(
-        "(set-microgrid-id 9)
-         (%make-grid-connection-point
+        "(%make-grid-connection-point
            :id 1
            :successors (list (%make-meter :id 2)))
          (scenario-start \"smoke\")

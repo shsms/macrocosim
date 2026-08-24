@@ -12,7 +12,7 @@ use switchyard::proto::assets::{
 };
 
 const TINY_TOPOLOGY: &str = r#"
-(set-microgrid-id 7)
+(make-microgrid :id 7 :grpc-port 8800 :topology (lambda ()
 (%make-grid-connection-point :id 1
             :successors
             (list (%make-meter :id 2
@@ -26,6 +26,7 @@ const TINY_TOPOLOGY: &str = r#"
                                              :id 3
                                              :rated-lower -5000.0
                                              :rated-upper  5000.0)))))))
+))
 "#;
 
 async fn connect(s: &TestServer) -> PlatformAssetsClient<tonic::transport::Channel> {

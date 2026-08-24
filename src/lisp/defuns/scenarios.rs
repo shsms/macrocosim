@@ -441,8 +441,7 @@ mod tests {
     fn scenario_csv_records_per_component_files() {
         use chrono::Utc;
         let (cfg, dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-meter :id 1)
+            "(%make-meter :id 1)
              (%make-battery :id 2)",
         );
         let csv_dir = dir.join("csvs");
@@ -492,8 +491,7 @@ mod tests {
         use crate::sim::setpoints::{SetpointEvent, SetpointKind, SetpointOutcome};
         use chrono::Utc;
         let (cfg, dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-battery :id 2
+            "(%make-battery :id 2
                             :capacity 100000.0
                             :rated-lower -10000.0
                             :rated-upper 10000.0)",
@@ -574,8 +572,7 @@ mod tests {
     #[test]
     fn scenario_expect_records_checks_in_report() {
         let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-battery :id 2
+            "(%make-battery :id 2
                             :capacity 100000.0
                             :rated-lower -10000.0
                             :rated-upper 10000.0)",
@@ -637,10 +634,7 @@ mod tests {
     /// :min/:max, and :tol without :approx.
     #[test]
     fn scenario_expect_rejects_malformed_calls() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-battery :id 2 :capacity 1000.0)",
-        );
+        let (cfg, _dir) = config_with("(%make-battery :id 2 :capacity 1000.0)");
         for bad in [
             "(scenario-expect :component 2 :metric 'warp-factor :min 1.0)",
             "(scenario-expect :component 2 :metric 'soc)",
@@ -659,7 +653,7 @@ mod tests {
     /// produce values in their stated range.
     #[test]
     fn scenarios_helpers_load_and_run() {
-        let (cfg, dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, dir) = config_with("");
         // Copy sim/scenarios.lisp into the test's load dir so
         // (load "sim/scenarios.lisp") finds it.
         let src = std::path::Path::new("sim/scenarios.lisp");
@@ -693,7 +687,7 @@ mod tests {
     /// clock-time forms both); event yields a callable that journals.
     #[test]
     fn section_wrappers_build_introspectable_data() {
-        let (cfg, dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, dir) = config_with("");
         let src = std::path::Path::new("sim/scenarios.lisp");
         let dst_dir = dir.join("sim");
         std::fs::create_dir_all(&dst_dir).unwrap();
@@ -758,7 +752,7 @@ mod tests {
     #[test]
     fn define_scenario_extracts_timeline() {
         use crate::sim::scenarios::TimelineKind;
-        let (cfg, dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, dir) = config_with("");
         let src = std::path::Path::new("sim/scenarios.lisp");
         let dst_dir = dir.join("sim");
         std::fs::create_dir_all(&dst_dir).unwrap();
@@ -793,7 +787,7 @@ mod tests {
     /// (fired) handle instead of consing forever.
     #[test]
     fn random_outage_track_keeps_one_handle_per_chain() {
-        let (cfg, dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, dir) = config_with("");
         let src = std::path::Path::new("sim/scenarios.lisp");
         let dst_dir = dir.join("sim");
         std::fs::create_dir_all(&dst_dir).unwrap();
@@ -825,7 +819,7 @@ mod tests {
     /// clock seconds since start, `(scenario-stop)` freezes it.
     #[test]
     fn scenario_lifecycle_round_trips_through_lisp() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, _dir) = config_with("");
         cfg.eval("(scenario-start \"warmup\")").unwrap();
         let summary = cfg.site().scenario_summary(chrono::Utc::now());
         assert_eq!(summary.name.as_deref(), Some("warmup"));
@@ -863,7 +857,7 @@ mod tests {
     #[test]
     fn define_scenario_registers_unified_model() {
         use crate::sim::scenarios::{ClockDriver, Schedule};
-        let (cfg, _dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, _dir) = config_with("");
         cfg.eval(
             r#"
             (define-scenario
@@ -902,7 +896,7 @@ mod tests {
     #[test]
     fn define_scenario_defaults_and_validation() {
         use crate::sim::scenarios::{ClockDriver, Schedule};
-        let (cfg, _dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, _dir) = config_with("");
         cfg.eval(r#"(define-scenario :name "bare")"#).unwrap();
         cfg.eval(r#"(define-scenario :name "day" :schedule 'absolute :date "2026-06-15")"#)
             .unwrap();
@@ -938,8 +932,7 @@ mod tests {
     fn battery_charge_discharge_integrates_through_snapshot() {
         use chrono::{Duration as ChronoDuration, Utc};
         let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (setq b (%make-battery :id 100
+            "(setq b (%make-battery :id 100
                                     :capacity 100000.0
                                     :rated-lower -10000.0
                                     :rated-upper 10000.0))
@@ -999,8 +992,7 @@ mod tests {
     fn main_meter_peak_tracks_active_power() {
         use chrono::Utc;
         let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-grid-connection-point
+            "(%make-grid-connection-point
                :id 1
                :successors (list (%make-meter :id 2 :power 1000.0)))",
         );
@@ -1040,7 +1032,7 @@ mod tests {
     /// rewinding through stale ids.
     #[test]
     fn scenario_restart_clears_events_keeps_ids_monotonic() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, _dir) = config_with("");
         cfg.eval("(scenario-start \"first\")").unwrap();
         cfg.eval("(scenario-event 'a \"\")").unwrap();
         cfg.eval("(scenario-event 'b \"\")").unwrap();

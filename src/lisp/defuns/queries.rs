@@ -79,8 +79,7 @@ mod tests {
 
     fn rig() -> (crate::lisp::Config, std::path::PathBuf) {
         config_with(
-            "(set-microgrid-id 9)
-             (setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
+            "(setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
              (%make-battery-inverter :id 2 :rated-lower -4000.0 :rated-upper 4000.0
                                        :successors (list b1))",
         )

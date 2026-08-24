@@ -107,10 +107,7 @@ mod tests {
     /// `aggregate_power_w` reflects it on the next read.
     #[test]
     fn set_meter_power_accepts_a_lambda() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-meter :id 7)",
-        );
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
         cfg.eval("(set-meter-power 7 (lambda () 1234.5))").unwrap();
         cfg.refresh_once();
         let m = cfg.site().get(7).unwrap();
@@ -123,8 +120,7 @@ mod tests {
     #[test]
     fn set_meter_power_accepts_a_symbol() {
         let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (setq consumer-power 1500.0)
+            "(setq consumer-power 1500.0)
              (%make-meter :id 7)",
         );
         cfg.eval("(set-meter-power 7 'consumer-power)").unwrap();
@@ -142,10 +138,8 @@ mod tests {
     /// next setpoint clip surfaces the new floor.
     #[test]
     fn set_solar_sunlight_accepts_a_lambda() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-solar-inverter :id 8 :rated-lower -8000.0 :rated-upper 0.0)",
-        );
+        let (cfg, _dir) =
+            config_with("(%make-solar-inverter :id 8 :rated-lower -8000.0 :rated-upper 0.0)");
         cfg.eval("(set-solar-sunlight 8 (lambda () 25.0))").unwrap();
         cfg.refresh_once();
         let inv = cfg.site().get(8).unwrap();
@@ -170,10 +164,7 @@ mod tests {
     /// the non-numeric refresh fallback every tick.
     #[test]
     fn set_meter_power_rejects_bare_string() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-meter :id 7)",
-        );
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
         // A bare string is from_eval-eligible (returns Some) and
         // would never resolve to a number — but it doesn't roundtrip
         // through a useful curve, so users should reach for a lambda
@@ -190,10 +181,7 @@ mod tests {
     /// telemetry read reflects it. An unknown id errors.
     #[test]
     fn set_battery_soc_teleports_state() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-battery :id 4 :initial-soc 60.0)",
-        );
+        let (cfg, _dir) = config_with("(%make-battery :id 4 :initial-soc 60.0)");
         cfg.eval("(set-battery-soc 4 12.5)").unwrap();
         let site = cfg.site();
         let soc = site.get(4).unwrap().telemetry(&site).soc_pct.unwrap();

@@ -9,7 +9,6 @@ use std::time::Duration;
 use common::TestServer;
 
 const INVERTER_AND_BATTERY: &str = r#"
-(set-microgrid-id 9)
 (setq b (%make-battery :id 100
                        :capacity 100000.0
                        :rated-lower -10000.0

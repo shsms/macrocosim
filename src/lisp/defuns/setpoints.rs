@@ -180,8 +180,7 @@ mod tests {
     #[test]
     fn set_active_power_applies_setpoint_and_arms_timeout() {
         let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
+            "(setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
              (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
                                        :successors (list b1))",
         );
@@ -207,8 +206,7 @@ mod tests {
         let (cfg, _dir) = config_with(
             // Inverter rated ±5 kW, but its battery only ±1 kW -> the
             // combined envelope is ±1 kW.
-            "(set-microgrid-id 9)
-             (setq b1 (%make-battery :id 1 :rated-lower -1000.0 :rated-upper 1000.0))
+            "(setq b1 (%make-battery :id 1 :rated-lower -1000.0 :rated-upper 1000.0))
              (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
                                        :successors (list b1))",
         );
@@ -236,8 +234,7 @@ mod tests {
         use std::time::Duration;
         let (cfg, _dir) = config_with(
             // Inverter ±5 kW, battery ±1 kW -> combined envelope ±1 kW.
-            "(set-microgrid-id 9)
-             (setq b1 (%make-battery :id 1 :rated-lower -1000.0 :rated-upper 1000.0))
+            "(setq b1 (%make-battery :id 1 :rated-lower -1000.0 :rated-upper 1000.0))
              (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
                                        :successors (list b1))",
         );
@@ -264,10 +261,7 @@ mod tests {
     /// also propagates rather than silently no-op'ing.
     #[test]
     fn set_active_power_rejects_unknown_or_unsupported() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-meter :id 1)",
-        );
+        let (cfg, _dir) = config_with("(%make-meter :id 1)");
         let res = cfg.eval("(set-active-power 999 1500.0)");
         assert!(res.is_err(), "expected error, got {res:?}");
         assert!(res.unwrap_err().contains("999"));
@@ -280,8 +274,8 @@ mod tests {
     /// A battery-inverter with a 5 kVA apparent-power cap and no PF
     /// limit (the inherited default would pin Q to 0 at idle) has a
     /// ±5 kVAr reactive band at idle. Used by the reactive tests below.
-    const REACTIVE_SITE: &str = "(set-microgrid-id 9)
-         (setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
+    const REACTIVE_SITE: &str =
+        "(setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
          (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
                                    :reactive-pf-limit 0
                                    :reactive-apparent-va 5000.0
@@ -359,10 +353,7 @@ mod tests {
     /// error out instead of silently no-op'ing.
     #[test]
     fn set_reactive_power_rejects_unknown_or_unsupported() {
-        let (cfg, _dir) = config_with(
-            "(set-microgrid-id 9)
-             (%make-meter :id 1)",
-        );
+        let (cfg, _dir) = config_with("(%make-meter :id 1)");
         let res = cfg.eval("(set-reactive-power 999 100.0)");
         assert!(res.is_err(), "expected error, got {res:?}");
         assert!(res.unwrap_err().contains("999"));

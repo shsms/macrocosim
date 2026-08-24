@@ -30,7 +30,6 @@ fn active_power_w(resp: &ReceiveElectricalComponentTelemetryStreamResponse) -> O
 }
 
 const TINY_TOPOLOGY: &str = r#"
-(set-microgrid-id 7)
 (%make-grid-connection-point :id 1
             :successors
             (list (%make-meter :id 2
@@ -107,7 +106,6 @@ async fn set_power_happy_path_returns_success() {
 }
 
 const ERRORED_INVERTER_TOPOLOGY: &str = r#"
-(set-microgrid-id 7)
 (%make-grid-connection-point :id 1
             :successors
             (list (%make-meter :id 2
@@ -127,7 +125,6 @@ const ERRORED_INVERTER_TOPOLOGY: &str = r#"
 /// envelope the gateway must enforce is ±1 kW — narrower than the
 /// inverter's own bounds.
 const NARROW_BATTERY_TOPOLOGY: &str = r#"
-(set-microgrid-id 7)
 (%make-grid-connection-point :id 1
             :successors
             (list (%make-meter :id 2

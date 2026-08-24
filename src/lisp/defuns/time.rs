@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn parse_offset_defun_handles_strings_and_numbers() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, _dir) = config_with("");
         assert_eq!(secs(&cfg, "(parse-offset \"500ms\")"), 0.5);
         assert_eq!(secs(&cfg, "(parse-offset \"3min\")"), 180.0);
         // A bare number rides through as seconds.
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn parse_time_of_day_defun_resolves_hhmm() {
-        let (cfg, _dir) = config_with("(set-microgrid-id 9)");
+        let (cfg, _dir) = config_with("");
         assert_eq!(secs(&cfg, "(parse-time-of-day \"00:00\")"), 0.0);
         assert_eq!(secs(&cfg, "(parse-time-of-day \"14:30\")"), 52200.0);
         assert!(cfg.eval("(parse-time-of-day \"24:00\")").is_err());
