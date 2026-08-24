@@ -315,6 +315,12 @@ impl SimulatedComponent for SolarInverter {
         "%make-solar-inverter"
     }
 
+    fn has_unrenderable_source(&self) -> bool {
+        // Same reason `constructor_kwargs` omits `:sunlight%` here:
+        // a dynamic sunlight source has no static number to write.
+        self.cfg.sunlight_dynamic
+    }
+
     fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
         let mut kw = super::common_inverter_kwargs(super::CommonInverterCfg {
             rated_lower_w: self.cfg.rated_lower_w,

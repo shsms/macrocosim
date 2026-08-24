@@ -195,6 +195,12 @@ impl SimulatedComponent for Meter {
         "%make-meter"
     }
 
+    fn has_unrenderable_source(&self) -> bool {
+        // A dynamic `:power` leaves `constructed_power` unset, so
+        // there is a live source but no constant to render.
+        self.constructed_power.is_none() && self.power_source.read().is_some()
+    }
+
     fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
         let mut kw = Vec::new();
         if self.interval != Duration::from_millis(1000) {

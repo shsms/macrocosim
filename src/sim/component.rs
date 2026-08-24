@@ -538,6 +538,15 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// The `%make-*` primitive that rebuilds this component on load.
     fn make_fn(&self) -> &'static str;
 
+    /// Does this component carry an input the generated block cannot
+    /// write down — a `:power` / `:sunlight%` bound to a lambda or a
+    /// symbol, which only means something while the interpreter is
+    /// running? Adopt warns about these: rendering drops them, and
+    /// they have to be re-applied from the file's script section.
+    fn has_unrenderable_source(&self) -> bool {
+        false
+    }
+
     /// Construction kwargs as lisp-syntax (key, value) pairs, excluding
     /// `:id`, `:name`, `:successors` and runtime-mode kwargs — the
     /// microgrid-file renderer supplies those. Values follow the file
