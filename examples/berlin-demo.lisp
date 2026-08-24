@@ -1,3 +1,31 @@
+;;; switchyard:generated — rewritten by switchyard, do not edit
+(make-microgrid :id 2200 :name "Berlin demo" :grpc-port 8800 :tso "TN"
+  :topology
+  (lambda ()
+    (%make-battery :id 1000 :capacity 92000.0 :initial-soc 85.0 :soc-lower 10.0 :soc-upper 90.0 :voltage 800.0 :rated-lower -30000.0 :rated-upper 30000.0 :soc-protect-margin 10.0 :stream-jitter-pct 8.0)
+    (%make-battery-inverter :id 1001 :rated-lower -30000.0 :rated-upper 30000.0 :command-delay-ms 1500 :ramp-rate 5000.0 :stream-jitter-pct 8.0 :reactive-pf-limit 0 :reactive-apparent-va 32000.0 :reactive-command-delay-ms 100 :reactive-ramp-rate 2000.0)
+    (%make-meter :id 1002 :interval 200 :stream-jitter-pct 4.0)
+    (%make-solar-inverter :id 200 :rated-lower -30000.0 :rated-upper 0.0 :command-delay-ms 0 :ramp-rate 2000.0 :stream-jitter-pct 5.0 :reactive-pf-limit 0.3499999940395355 :reactive-apparent-va 0 :reactive-command-delay-ms 100 :reactive-ramp-rate 2000.0)
+    (%make-meter :id 1003 :interval 200 :stream-jitter-pct 4.0)
+    (%make-ev-charger :id 1004 :rated-lower 0.0 :rated-upper 22000.0 :initial-soc 92.0 :soc-lower 0.0 :soc-upper 100.0 :soc-protect-margin 10.0 :capacity 30000.0 :command-delay-ms 500 :ramp-rate 3000.0 :stream-jitter-pct 10.0)
+    (%make-meter :id 1005 :interval 200 :stream-jitter-pct 4.0)
+    (%make-chp :id 1006)
+    (%make-meter :id 1007 :interval 200 :power -2000.0 :stream-jitter-pct 4.0)
+    (%make-meter :id 100 :name "consumer" :hidden t)
+    (%make-meter :id 2 :interval 200 :stream-jitter-pct 4.0)
+    (%make-grid-connection-point :id 1 :rated-fuse-current 100 :rated-lower -90000.0 :rated-upper 100000.0 :stream-jitter-pct 1.0)
+    (connect 1001 1000)
+    (connect 1002 1001)
+    (connect 1003 200)
+    (connect 1005 1004)
+    (connect 1007 1006)
+    (connect 2 1002)
+    (connect 2 1003)
+    (connect 2 1005)
+    (connect 2 1007)
+    (connect 2 100)
+    (connect 1 2)))
+;;; switchyard:end
 ;; Berlin demo — a self-contained switchyard world: one microgrid
 ;; (id 2200) with battery, solar, EV-charger, CHP and consumer
 ;; branches, its environment animation, and the seven starter
@@ -14,6 +42,12 @@
 ;;
 ;; A relative path resolves against the state dir (--state-dir,
 ;; default: the directory the server was started from).
+;;
+;; Anything below is yours. It runs after the structure above, in
+;; this microgrid's scope, on every load. Drive meters, define
+;; scenarios, set setpoints here — do not construct components (the
+;; generated block above owns the structure; constructing more here
+;; collides on the next load).
 ;;
 ;; Component ids are pinned throughout. Auto ids come from an
 ;; enterprise-wide allocator, so they depend on what else loaded
@@ -61,87 +95,28 @@
 ;; PV cloud-cover schedule over a 10-minute window, driving the solar
 ;; inverter (id 200). Sunny first 3 min (80%), 2-min ramp into clouds
 ;; (→ 20%), 2 min cloudy, 2-min ramp back to clear. Installed as the
-;; inverter's :sunlight% lambda SOURCE below rather than an
-;; imperative timer: a timer would overwrite a scenario's numeric
-;; sunlight set within a second, while a scenario's numeric set
-;; cleanly collapses a source and takes over.
+;; inverter's :sunlight% source below via `set-solar-sunlight` rather
+;; than an imperative timer: a timer would overwrite a scenario's
+;; numeric sunlight set within a second, while a scenario's numeric
+;; set cleanly collapses a source and takes over. A lambda source
+;; can't live in the generated block above, so it's wired here.
 (defun cloud-curve (t-window)
   (cond ((< t-window 180.0) 80.0)
         ((< t-window 300.0) (- 80.0 (* 0.5 (- t-window 180.0))))
         ((< t-window 420.0) 20.0)
         (t (min 80.0 (+ 20.0 (* 0.5 (- t-window 420.0)))))))
 
-;; -----------------------------------------------------------------------------
-;; Topology
-;; -----------------------------------------------------------------------------
+(set-solar-sunlight 200 (lambda () (cloud-curve (window-elapsed 600.0))))
 
-(make-microgrid
- :id 2200
- :name "Berlin demo"
- :grpc-port 8800
- :tso "TN"
- :topology
- (lambda ()
-   (make-grid-connection-point
-    :id 1
-    :rated-lower -90000.0
-    :rated-upper  100000.0
-    :successors
-    (list
-     (make-meter
-      :id 2                          ;; grid's sole child → derived as the main/PCC meter
-      :successors
-      (list
-       ;; Battery branch — every knob (SCADA delay, ramp, jitter,
-       ;; kVA-circle reactive envelope) comes from battery-inverter-
-       ;; defaults / battery-defaults.
-       (make-meter
-        :id 1002
-        :successors
-        (list (make-battery-inverter
-               :id 1001
-               :successors
-               (list (make-battery :id 1000 :initial-soc 85.0)))))
-
-       ;; Solar branch — sunlight driven by the cloud curve as a
-       ;; lambda source (see the comment on cloud-curve above).
-       (make-meter
-        :id 1003
-        :successors
-        (list (make-solar-inverter
-               :id 200
-               :sunlight% (lambda () (cloud-curve (window-elapsed 600.0))))))
-
-       ;; EV branch — near-full so the SoC-protect taper is observable.
-       (make-meter
-        :id 1005
-        :successors
-        (list (make-ev-charger
-               :id 1004
-               :initial-soc  92.0
-               :soc-upper   100.0
-               :rated-upper 22000.0)))
-
-       ;; CHP modeled as a constant -2 kW generator on its meter.
-       (make-meter :id 1007 :power -2000.0 :successors (list (make-chp :id 1006)))
-
-       ;; Hidden consumer meter — invisible in ListComponents / tree
-       ;; but aggregated into the main meter. `%make-meter` bypasses
-       ;; meter-defaults so the explicit :power isn't combined with
-       ;; a default :stream-jitter-pct on a hidden component. Power
-       ;; follows a sine wave: peak 30 kW, trough 5 kW, one cycle
-       ;; every 15 min, plus ±500 W jitter.
-       (%make-meter
-        :id 100 :name "consumer" :hidden t
-        :power (lambda ()
-                 (+ 17500.0
-                    (* 12500.0 (sin (* 6.2831853 (/ (window-elapsed 900.0) 900.0))))
-                    (- (random 1000) 500))))))))
-   ;; Apply UI-driven edits the user has clicked Persist on. Loaded
-   ;; from inside the :topology lambda so (current-microgrid-id)
-   ;; resolves to 2200 and the overrides land in *this* microgrid's
-   ;; site. The journal lives under <state-dir>/microgrids/.
-   (load-overrides)))
+;; Hidden consumer meter (id 100) — invisible in ListComponents / tree
+;; but aggregated into the main meter. Power follows a sine wave: peak
+;; 30 kW, trough 5 kW, one cycle every 15 min, plus ±500 W jitter.
+;; Wired here for the same reason as the sunlight source above.
+(set-meter-power 100
+                  (lambda ()
+                    (+ 17500.0
+                       (* 12500.0 (sin (* 6.2831853 (/ (window-elapsed 900.0) 900.0))))
+                       (- (random 1000) 500))))
 
 ;; -----------------------------------------------------------------------------
 ;; Scenarios — appear in the Scenarios mode dropdown; run one with
