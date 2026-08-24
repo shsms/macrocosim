@@ -44,11 +44,13 @@ fn bound_edge(router: &SharedSiteRouter, id: i64, edge: Edge) -> Result<f64, Err
     })
 }
 
-/// The outermost edge of a component's live reactive-power envelope
-/// (`reactive_bounds()`'s FIRST band) on the requested side, in VAr.
-/// A component with no Q axis at all (`reactive_bounds()` is `None`)
-/// errors — mirrors `bound_edge`'s not-found-style shape, but names
-/// the missing axis instead of missing bounds.
+/// The outermost finite edge of a component's live reactive-power
+/// envelope on the requested side, in VAr. Collapses a multi-band
+/// envelope exactly as `bound_edge` collapses P — min over the lowers,
+/// max over the uppers. A component with no Q axis at all
+/// (`reactive_bounds()` is `None`) errors — mirrors `bound_edge`'s
+/// not-found-style shape, but names the missing axis instead of
+/// missing bounds.
 fn reactive_bound_edge(router: &SharedSiteRouter, id: i64, edge: Edge) -> Result<f64, Error> {
     let w = router.site();
     let c = w.get(id as u64).ok_or_else(|| {
@@ -61,10 +63,9 @@ fn reactive_bound_edge(router: &SharedSiteRouter, id: i64, edge: Edge) -> Result
             "component-reactive-bound: component {id} has no reactive envelope"
         ))
     })?;
-    let band = bounds.0.first();
     let value = match edge {
-        Edge::Lower => band.and_then(|b| b.lower),
-        Edge::Upper => band.and_then(|b| b.upper),
+        Edge::Lower => bounds.0.iter().filter_map(|b| b.lower).reduce(f32::min),
+        Edge::Upper => bounds.0.iter().filter_map(|b| b.upper).reduce(f32::max),
     };
     value.map(|v| v as f64).ok_or_else(|| {
         Error::invalid_argument(format!(
@@ -181,9 +182,9 @@ mod tests {
 
     /// `component-reactive-power` mirrors `component-active-power` over
     /// the Q axis; the bound queries mirror the active-bound queries
-    /// over `reactive_bounds()`'s first band. A component with no Q
-    /// axis (a battery — `reactive_bounds()` is `None`) errors on the
-    /// bound query instead of returning a bogus edge.
+    /// over `reactive_bounds()`. A component with no Q axis (a battery
+    /// — `reactive_bounds()` is `None`) errors on the bound query
+    /// instead of returning a bogus edge.
     #[test]
     fn reactive_queries_mirror_active() {
         let (cfg, _dir) = config_with(
@@ -229,6 +230,54 @@ mod tests {
         assert!(
             err.contains("no reactive envelope"),
             "expected 'no reactive envelope' error, got {err}"
+        );
+    }
+
+    /// A multi-band Q envelope (a live `AC_POWER_REACTIVE` augmentation
+    /// splitting the caps band in two) collapses to ONE pair of edges
+    /// exactly as the active twin does: min over every band's lower,
+    /// max over every band's upper — not the first band's edges.
+    #[test]
+    fn reactive_bound_queries_collapse_every_band() {
+        let (cfg, _dir) = config_with(
+            "(setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
+             (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
+                                       :reactive-pf-limit 0
+                                       :reactive-apparent-va 5000.0
+                                       :reactive-command-delay-ms 0
+                                       :reactive-ramp-rate 1e9
+                                       :successors (list b1))",
+        );
+        let inv = cfg.site().get(2).unwrap();
+        // ±5 kVAr caps ∩ {[-2 kVAr, -0.5 kVAr], [0.5 kVAr, 2 kVAr]}
+        // leaves two disjoint bands around a dead zone at zero.
+        inv.augment_reactive_bounds(
+            Utc::now(),
+            VecBounds(vec![
+                crate::proto::common::metrics::Bounds {
+                    lower: Some(-2000.0),
+                    upper: Some(-500.0),
+                },
+                crate::proto::common::metrics::Bounds {
+                    lower: Some(500.0),
+                    upper: Some(2000.0),
+                },
+            ]),
+            Duration::from_secs(60),
+        );
+        let bands = inv.reactive_bounds().expect("the inverter publishes Q");
+        assert_eq!(bands.0.len(), 2, "expected two bands, got {bands}");
+
+        let edge = |expr: &str| -> f64 { cfg.eval(expr).unwrap().parse().unwrap() };
+        let lower = edge("(component-reactive-bound-lower 2)");
+        let upper = edge("(component-reactive-bound-upper 2)");
+        assert!(
+            (lower + 2000.0).abs() < 1.0,
+            "lower = min of lowers: {lower}"
+        );
+        assert!(
+            (upper - 2000.0).abs() < 1.0,
+            "upper = max of uppers: {upper}"
         );
     }
 

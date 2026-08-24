@@ -701,6 +701,40 @@ async fn drive_op_accepts_reactive_var_and_power_factor() {
     assert!(parsed["error"].as_str().unwrap().contains("leading"));
 }
 
+/// `reactive_var` and `power_factor` drive the same Q slot, so sending
+/// both is a 400 — not a 200 where the second silently overwrites the
+/// first. Validate-first: the meter's existing Q override is untouched.
+#[tokio::test]
+async fn drive_op_rejects_reactive_var_with_power_factor() {
+    let cfg = config_with("(%make-meter :id 7 :power 8000.0)").await;
+
+    // Land a Q override first, so a silent overwrite would be visible.
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/7/drive", r#"{"reactive_var": 500.0}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = call(
+        cfg.clone(),
+        post_json(
+            "/api/component/7/drive",
+            r#"{"reactive_var": 100.0, "power_factor": 0.8}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let err = parsed["error"].as_str().unwrap();
+    assert!(err.contains("reactive_var"), "{err}");
+    assert!(err.contains("power_factor"), "{err}");
+
+    // Nothing applied: the earlier override still stands.
+    let m = cfg.site().get(7).unwrap();
+    assert!((m.aggregate_reactive_var(&cfg.site()) - 500.0).abs() < 1e-3);
+}
+
 /// Status changes parse-then-apply: a valid health lands on the
 /// component's runtime, a bad value is a 400 and changes nothing.
 #[tokio::test]

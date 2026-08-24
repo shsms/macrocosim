@@ -207,6 +207,18 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
             format!("component {id} does not take power_factor (not a meter)"),
         ));
     }
+    // `reactive_var` and `power_factor` set the same slot, so a request
+    // carrying both would apply one and then overwrite it — a silent
+    // no-op for the loser. Same mutual exclusion `%make-meter` enforces.
+    if req.reactive_var.is_some() && req.power_factor.is_some() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "component {id}: reactive_var and power_factor are mutually \
+                 exclusive; send one or the other"
+            ),
+        ));
+    }
     // `leading` only means something alongside `power_factor` — same
     // shape as the health/command_mode cross-field check above.
     if req.leading.is_some() && req.power_factor.is_none() {

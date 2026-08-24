@@ -481,6 +481,11 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// derivation that tracks the meter's own live active power.
     /// Returns whether the component supports the stimulus; the
     /// default is an unsupported no-op.
+    ///
+    /// This trait door does NOT validate `pf`: every caller must
+    /// enforce `pf ∈ (0.0, 1.0]` itself before calling (both
+    /// `set-meter-power-factor` in Lisp and the HTTP drive op already
+    /// do), because an out-of-range factor lands silently otherwise.
     fn set_power_factor(&self, _pf: f32, _leading: bool) -> bool {
         false
     }
