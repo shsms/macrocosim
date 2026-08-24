@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use frequenz_microgrid::{
     LogicalMeterConfig, LogicalMeterHandle, Microgrid, MicrogridClientHandle, Sample, metric,
-    quantity::Power,
+    quantity::{Power, ReactivePower},
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
@@ -252,6 +252,18 @@ async fn subscribe_power_forwarders(
             handles.push(h);
         }
     }
+    // Only the grid formula — no consumer/producer/pv reactive streams
+    // (spec: one site tile).
+    if let Some(h) = subscribe_reactive_forwarder(
+        "grid_reactive_power",
+        lm.grid::<metric::AcPowerReactive>(),
+        site,
+        state.clone(),
+    )
+    .await
+    {
+        handles.push(h);
+    }
     // Grid frequency via `lm.grid::<metric::AcFrequency>()` would
     // be the natural way to feed a "Grid frequency" tile, but the
     // LogicalMeterActor's `TypedFormulaResponseSender` branches only
@@ -412,6 +424,68 @@ fn publish_power(
         accumulate_energy(energy_stream, value, ts_ms, site, state);
     }
     publish_scalar(stream, "Power", "W", value, ts_ms, site, state);
+}
+
+/// Subscribe to one ReactivePower-valued formula and spawn a forwarder that
+/// pushes each `Sample<ReactivePower>` onto the MicrogridSite event bus as a
+/// `MicrogridSample { stream, quantity: "ReactivePower", unit: "var", ... }`
+/// event. Kept as a parallel pair with `subscribe_power_forwarder` /
+/// `publish_power` rather than a generic-over-quantity helper: that keeps
+/// the (far more heavily used) Power path monomorphic and easy to read,
+/// at the cost of a little duplication for this one Q stream. The
+/// `formula.subscribe().await` runs on the caller's task so the LM has
+/// actually registered for the component samples by the time we return —
+/// see `build_microgrid` for why that ordering matters across rebuilds.
+/// Returns `None` (no spawn) if the formula errored at construction
+/// (typical for absent categories) or the initial subscribe failed.
+async fn subscribe_reactive_forwarder(
+    stream: &'static str,
+    formula: Result<frequenz_microgrid::Formula<ReactivePower>, frequenz_microgrid::Error>,
+    site: &MicrogridSite,
+    state: SharedMicrogrid,
+) -> Option<JoinHandle<()>> {
+    let formula = match formula {
+        Ok(f) => f,
+        Err(e) => {
+            log::info!("microgrid loopback: skip {stream} ({e})");
+            return None;
+        }
+    };
+    let mut rx = match formula.subscribe().await {
+        Ok(rx) => rx,
+        Err(e) => {
+            log::warn!("microgrid loopback: subscribe {stream} failed: {e}");
+            return None;
+        }
+    };
+    let site = site.clone();
+    Some(tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(sample) => publish_reactive(stream, sample, &site, &state),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("microgrid loopback: {stream} lagged {n} samples");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    log::info!("microgrid loopback: {stream} closed; forwarder exiting");
+                    return;
+                }
+            }
+        }
+    }))
+}
+
+fn publish_reactive(
+    stream: &'static str,
+    sample: Sample<ReactivePower>,
+    site: &MicrogridSite,
+    state: &SharedMicrogrid,
+) {
+    let value = sample.value().map(|q| q.as_volt_amperes_reactive());
+    let ts_ms = sample.timestamp().timestamp_millis();
+    // No energy hook on purpose: reactive energy (varh) accumulation is
+    // out of scope; energy_stream_for never maps this stream.
+    publish_scalar(stream, "ReactivePower", "var", value, ts_ms, site, state);
 }
 
 /// The cumulative-energy companion stream for a metered power stream, or
@@ -668,5 +742,10 @@ mod tests {
         site.reset();
         clear_energy_on_new_run(&state, &site);
         assert!(state.energy.read().is_empty());
+    }
+
+    #[test]
+    fn grid_reactive_power_has_no_energy_stream() {
+        assert_eq!(energy_stream_for("grid_reactive_power"), None);
     }
 }
