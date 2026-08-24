@@ -154,8 +154,19 @@ export const ACCEPTS_SETPOINTS = new Set(["battery", "inverter", "ev-charger", "
 const KNOBS_BY_CATEGORY = {
   meter: [
     { label: "power (W or expr)", defun: "set-meter-power", dynamic: true },
+    {
+      label: "reactive power (VAr or expr)",
+      defun: "set-meter-reactive-power",
+      dynamic: true,
+    },
+    {
+      label: "power factor (0–1]",
+      defun: "set-meter-power-factor",
+      flag: "leading",
+    },
   ],
   inverter: [
+    { label: "reactive power (VAr)", defun: "set-reactive-power" },
     { label: "reactive PF limit", defun: "set-reactive-pf-limit" },
     { label: "reactive apparent (VA)", defun: "set-reactive-apparent-va" },
   ],
@@ -221,9 +232,18 @@ function renderInspect(d, parentIds, childIds) {
           const inputAttrs = k.dynamic
             ? `type="text" placeholder="value or (lambda () ...)"`
             : `type="number" step="any" placeholder="value"`;
+          // `k.flag`, when set, renders a checkbox alongside the
+          // input for an optional boolean arg (e.g. power factor's
+          // LEADING). The checkbox by itself never submits anything
+          // — it only qualifies whatever value is next entered into
+          // the input, at which point the change handler below reads
+          // it and appends it to the eval'd expression.
+          const flagHtml = k.flag
+            ? `<label class="knob-flag"><input type="checkbox" class="knob-flag-input" /> ${escapeHtml(k.flag)}</label>`
+            : "";
           return `<dt>${escapeHtml(k.label)}</dt><dd>
             <input ${inputAttrs} class="knob-input"
-                   data-defun="${k.defun}" />
+                   data-defun="${k.defun}" />${flagHtml}
           </dd>`;
         })
         .join("")}</dl>`;
@@ -265,7 +285,14 @@ function renderInspect(d, parentIds, childIds) {
     inp.addEventListener("change", (e) => {
       const v = e.target.value.trim();
       if (v === "") return;
-      evalQuoted(`(${e.target.dataset.defun} ${d.id} ${v})`);
+      // A sibling `.knob-flag-input`, if this knob has one, qualifies
+      // the value as an optional trailing `t` arg (e.g. power
+      // factor's LEADING) — the checkbox itself never triggers an
+      // eval on its own; it only takes effect once a value is typed.
+      const flag = e.target.closest("dd")?.querySelector(".knob-flag-input");
+      evalQuoted(
+        `(${e.target.dataset.defun} ${d.id} ${v}${flag?.checked ? " t" : ""})`,
+      );
       e.target.value = "";
     });
   }
