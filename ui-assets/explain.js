@@ -67,8 +67,8 @@ const TELEMETRY_ON = {
 // the components' OPERATIONAL MODE (config, not a runtime poke): a
 // component without telemetry has no reading, so formulas route
 // around it through the fallbacks — the very thing the explanations
-// describe. The edit persists via the overrides gate and is
-// undoable like any other config edit.
+// describe. The edit is written into the microgrid's managed file
+// and is undoable like any other structural edit.
 export async function toggleTelemetry() {
   const ids = formulaCanvas().selectedIds();
   if (!ids.length) {

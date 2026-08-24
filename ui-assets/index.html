@@ -23,10 +23,7 @@
       <button id="help-btn" class="hdr-btn" title="Keyboard + mouse shortcuts">?</button>
       <button id="scenario-report-btn" class="hdr-btn">Report</button>
       <button id="defaults-btn" class="hdr-btn">Defaults</button>
-      <button id="snapshots-btn" class="hdr-btn" title="Save / load the microgrid's persisted edits">Snapshots</button>
-      <span id="pending-pill" class="pending-pill" hidden>
-        <span id="pending-count">0</span> overrides
-      </span>
+      <button id="snapshots-btn" class="hdr-btn" title="Save / load a copy of the selected microgrid's file">Snapshots</button>
     </header>
     <section id="pulse" aria-label="system pulse">
       <span class="pulse-group">
@@ -64,6 +61,10 @@
         <button type="button" id="mg-back" class="hdr-btn" title="Back to microgrid list">← Microgrids</button>
         <span id="mg-breadcrumb-name" class="mg-name"></span>
         <span id="mg-breadcrumb-tso" class="muted"></span>
+        <span id="mg-file-chips"></span>
+        <button type="button" id="mg-adopt-btn" class="hdr-btn"
+                title="Write the live structure into this file so switchyard may rewrite it from now on"
+                hidden>Adopt</button>
         <nav id="mg-subtoggle" aria-label="microgrid view">
           <button class="mode-btn" data-subview="dashboard">Dashboard</button>
           <button class="mode-btn" data-subview="topology">Topology</button>
@@ -351,12 +352,37 @@
     <noscript>This UI requires JavaScript.</noscript>
     <div id="ctx-menu" hidden></div>
     <div id="formula-tip" hidden></div>
-    <dialog id="pending-dialog">
+    <dialog id="create-mg-dialog">
       <header>
-        <h3>Active overrides</h3>
-        <button id="pending-dialog-close" type="button">×</button>
+        <h3>New microgrid</h3>
+        <button id="create-mg-close" type="button">×</button>
       </header>
-      <div id="pending-dialog-content"></div>
+      <div id="create-mg-content">
+        <form id="create-mg-form">
+          <label class="dlg-field">
+            <span>name</span>
+            <input class="dlg-input" type="text" id="create-mg-name"
+                   placeholder="Berlin site" autocomplete="off" required />
+          </label>
+          <label class="dlg-field">
+            <span>microgrid id</span>
+            <input class="dlg-input" type="number" id="create-mg-id" min="1" step="1"
+                   autocomplete="off" />
+          </label>
+          <label class="dlg-field">
+            <span>gRPC port</span>
+            <input class="dlg-input" type="number" id="create-mg-port" min="1" max="65535"
+                   step="1" placeholder="next free" autocomplete="off" />
+          </label>
+          <p id="create-mg-error" class="dialog-error" hidden></p>
+          <button type="submit" class="hdr-btn primary">Create</button>
+        </form>
+        <p class="hint">
+          Writes <code>microgrids/&lt;id&gt;.lisp</code> — a managed
+          file switchyard owns and rewrites as you edit the topology
+          — and loads it. Leave the port blank for the next free one.
+        </p>
+      </div>
     </dialog>
     <dialog id="snapshots-dialog">
       <header>
@@ -364,9 +390,10 @@
         <button id="snapshots-dialog-close" type="button">×</button>
       </header>
       <div id="snapshots-dialog-content">
+        <p id="snapshots-blocked" class="hint" hidden></p>
         <form id="snapshot-save-form">
           <label>
-            <span>Save current overrides as</span>
+            <span>Save this microgrid's file as</span>
             <input type="text" id="snapshot-name-input" placeholder="snapshot name"
                    pattern="[A-Za-z0-9_\-]+" autocomplete="off" required />
           </label>
@@ -376,9 +403,9 @@
           <li class="hint">No snapshots yet.</li>
         </ul>
         <p class="hint">
-          Saving copies the current persisted-overrides file to
-          <code>snapshots/&lt;name&gt;.lisp</code>. Loading replaces
-          the overrides file with that snapshot and reloads the
+          Saving copies the selected microgrid's managed file to
+          <code>snapshots/&lt;microgrid-id&gt;/&lt;name&gt;.lisp</code>.
+          Loading replaces that file with the snapshot and reloads the
           microgrid (live ramp / SoC state is not captured).
         </p>
       </div>
@@ -390,6 +417,7 @@
       </header>
       <div id="load-script-content">
         <div id="load-script-breadcrumb" class="hint"></div>
+        <div id="load-script-collision" class="collision-bar" hidden></div>
         <ul id="load-script-list"></ul>
         <form id="load-script-form">
           <label>
@@ -559,11 +587,11 @@
         </ul>
         <h4>Snapshots</h4>
         <ul class="help-list">
-          <li><strong>Snapshots</strong> button (top right) — saves the current microgrid's overrides file under <code>snapshots/&lt;name&gt;.lisp</code>; load to replay that state. Headless: <code>swctl snapshot save / load / list [--microgrid-id N]</code>.</li>
+          <li><strong>Snapshots</strong> button (top right) — saves the selected microgrid's managed file under <code>snapshots/&lt;microgrid-id&gt;/&lt;name&gt;.lisp</code>; load to replay that state. Needs a selected, managed microgrid. Headless: <code>swctl snapshot save / load / list [--microgrid-id N]</code>.</li>
         </ul>
         <h4>Topology canvas</h4>
         <ul class="help-list">
-          <li><kbd>Click</kbd> a node — inspect it (charts + overrides + knobs in the floating inspector; click empty canvas or <kbd>Esc</kbd> to dismiss).</li>
+          <li><kbd>Click</kbd> a node — inspect it (charts + config + knobs in the floating inspector; click empty canvas or <kbd>Esc</kbd> to dismiss).</li>
           <li><kbd>Shift</kbd>+<kbd>Drag</kbd> on empty canvas — rubber-band a selection rectangle; nodes inside the box are selected.</li>
           <li><kbd>Shift</kbd>+<kbd>Click</kbd> a node — toggle that node into / out of the current selection (after a rubber-band, or to build one a node at a time).</li>
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+hold + drag from one node to another — create an edge between them.</li>
@@ -572,7 +600,7 @@
           <li><strong>Layout picker</strong> (top-right of the canvas) — lanes (default), columns, top-down, radial. Dragging a node by hand keeps your arrangement; picking a layout resets it. The <em>snap</em> toggle makes dragged nodes snap to a grid; hold <kbd>Alt</kbd> while dragging to move along one axis only.</li>
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>C</kbd> — copy selection. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>V</kbd> — paste. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>X</kbd> — cut. Each paste re-uses the last copy; clipboard captures structure only (categories + internal edges), so clones use category defaults.</li>
           <li><kbd>Del</kbd> / <kbd>Backspace</kbd> — delete selection. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>A</kbd> — select all visible. <kbd>Esc</kbd> — deselect.</li>
-          <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> — undo the last canvas edit. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Y</kbd>) — redo. Stack is per microgrid and survives switching between dashboard and topology, but not page reloads.</li>
+          <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> — undo the last canvas edit. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Y</kbd>) — redo. The history lives on the server, one step per structural edit of the microgrid's managed file, so it survives page reloads and is shared by every open tab.</li>
         </ul>
         <h4>Formulas</h4>
         <ul class="help-list">
@@ -586,11 +614,11 @@
         </ul>
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
-          <li><strong>Inspector</strong> — a floating panel on the right. It appears when you click a node (charts + overrides + knobs) or a Dashboard tile (formula tree), and closes when you click empty canvas, press <kbd>Esc</kbd>, hit its <em>×</em>, or switch tab.</li>
+          <li><strong>Inspector</strong> — a floating panel on the right. It appears when you click a node (charts + config + knobs) or a Dashboard tile (formula tree), and closes when you click empty canvas, press <kbd>Esc</kbd>, hit its <em>×</em>, or switch tab.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
-          <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in the inspector; edits write to the override file.</li>
-          <li><strong>Overrides pill</strong> — count of forms in <code>microgrids/config.&lt;microgrid-id&gt;.overrides.lisp</code>. Every successful canvas / REPL edit appends to that file immediately. Click the pill to open the dialog: tick the rows you want gone, hit <em>Delete selected</em>; the file rewrites and the microgrid reloads in one round trip.</li>
+          <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in the inspector; edits write to <code>enterprise.lisp</code>.</li>
+          <li><strong>Managed files</strong> — every microgrid is a file. A <em>managed</em> one (created here, or adopted) carries a switchyard-generated block that is rewritten on each structural edit; an <em>unmanaged</em> one is hand-written, so its structure is read-only in the UI and its card carries an <em>unmanaged</em> chip. Hit <em>Adopt</em> in the microgrid header to take it over. An <em>unsaved</em> chip means a live edit the file could not record.</li>
         </ul>
         <h4>REPL</h4>
         <ul class="help-list">

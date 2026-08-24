@@ -1,6 +1,4 @@
 // Top-bar dialogs and side-panel toggles:
-// - overrideState (single-source-of-truth for /api/overrides),
-//   the Overrides dialog, and the chrome's overrides pill.
 // - Help, Snapshots dialogs.
 // - Side-panel toggles for Defaults and the live Scenario report.
 
@@ -13,134 +11,7 @@ import {
   openInspector,
 } from "./app.js";
 import { clearSide, evalQuoted, startScenarioReportLoop } from "./inspect.js";
-import { mgPath } from "./routing.js";
-
-// Single-source-of-truth for /api/overrides. Two consumers want
-// this data (the chrome's count pill and the overrides dialog),
-// both refresh on the same triggers (WS TopologyChanged, the
-// dialog's delete actions). Centralising avoids fan-out fetches
-// per WS tick and keeps everyone reading off one snapshot.
-export const overrideState = (() => {
-  let snapshot = { persisted: [], count: 0 };
-  const subs = new Set();
-  let inflight = null;
-  let inflightUrl = null;
-  let generation = 0;
-  async function refresh() {
-    // Per-mg route: the ambient-scope /api/overrides answers for
-    // whatever microgrid the last eval touched, not the one selected
-    // in the chrome. The in-flight dedup is keyed by URL: switching
-    // microgrids mid-fetch must start a fresh fetch. Publication is
-    // gated on a generation counter, so an older fetch that resolves
-    // late — even for the same URL — can never publish over a newer
-    // one's snapshot.
-    const url = mgPath("overrides");
-    if (inflight && inflightUrl === url) return inflight;
-    inflightUrl = url;
-    generation += 1;
-    const gen = generation;
-    const run = (async () => {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) return;
-        const body = await res.json();
-        if (gen === generation) {
-          snapshot = body;
-          for (const fn of subs) fn(snapshot);
-        }
-      } catch (_) {
-        // Best-effort — server unreachable just leaves the last
-        // known snapshot in place so the chrome doesn't blank out.
-      } finally {
-        if (inflight === run) inflight = null;
-      }
-    })();
-    inflight = run;
-    return run;
-  }
-  return {
-    get: () => snapshot,
-    refresh,
-    subscribe(fn) {
-      subs.add(fn);
-      fn(snapshot);
-      return () => subs.delete(fn);
-    },
-  };
-})();
-
-async function showOverridesDialog() {
-  const dlg = document.getElementById("pending-dialog");
-  const content = document.getElementById("pending-dialog-content");
-  // Subscribe to live updates so a bulk-delete from the toolbar
-  // re-renders the list without each handler having to explicitly
-  // call renderOverridesDialog. Unsubscribe on close to stop
-  // pinging the host element after it's hidden.
-  const unsubscribe = overrideState.subscribe((data) =>
-    renderOverridesDialog(content, data),
-  );
-  dlg.addEventListener("close", () => unsubscribe(), { once: true });
-  dlg.showModal();
-  overrideState.refresh();
-}
-
-function renderOverridesDialog(content, data) {
-  const persisted = data.persisted || [];
-  if (!persisted.length) {
-    content.innerHTML = '<p class="hint">no active overrides</p>';
-    return;
-  }
-  const rows = persisted
-    .map(
-      (o) =>
-        `<label class="pending-entry persisted">
-          <input type="checkbox" class="ovr-check" data-idx="${o.idx}" />
-          <div class="pending-num">#${o.idx + 1}</div>
-          <pre>${escapeHtml(o.source)}</pre>
-        </label>`,
-    )
-    .join("");
-  content.innerHTML = `
-    <div class="ovr-toolbar">
-      <button class="hdr-btn" data-action="all">Select all</button>
-      <button class="hdr-btn" data-action="none">Deselect all</button>
-      <button class="hdr-btn" data-action="invert">Invert</button>
-      <span class="spacer"></span>
-      <button class="hdr-btn primary" data-action="delete" disabled>Delete selected</button>
-    </div>
-    <div class="ovr-rows">${rows}</div>
-  `;
-  const checks = () => content.querySelectorAll(".ovr-check");
-  const deleteBtn = content.querySelector('[data-action="delete"]');
-  function refreshDeleteState() {
-    deleteBtn.disabled = ![...checks()].some((c) => c.checked);
-  }
-  for (const btn of content.querySelectorAll(".ovr-toolbar [data-action]")) {
-    btn.addEventListener("click", async () => {
-      const action = btn.dataset.action;
-      if (action === "all") {
-        for (const c of checks()) c.checked = true;
-      } else if (action === "none") {
-        for (const c of checks()) c.checked = false;
-      } else if (action === "invert") {
-        for (const c of checks()) c.checked = !c.checked;
-      } else if (action === "delete") {
-        const indices = [...checks()]
-          .filter((c) => c.checked)
-          .map((c) => Number(c.dataset.idx));
-        if (!indices.length) return;
-        try {
-          await mutate("POST", mgPath("persisted/delete"), { indices });
-          overrideState.refresh();
-        } catch (err) {
-          notify(`Delete failed: ${err.message}`);
-        }
-      }
-      refreshDeleteState();
-    });
-  }
-  for (const c of checks()) c.addEventListener("change", refreshDeleteState);
-}
+import { currentMgEntry, readSelectedMg } from "./routing.js";
 
 export function setupHelpButton() {
   const dlg = document.getElementById("help-dialog");
@@ -150,12 +21,16 @@ export function setupHelpButton() {
   document
     .getElementById("help-dialog-close")
     .addEventListener("click", () => dlg.close());
-  // Click-outside-to-dismiss, mirroring the pending dialog.
+  // Click-outside-to-dismiss, mirroring the snapshots dialog.
   dlg.addEventListener("click", (e) => {
     if (e.target === dlg) dlg.close();
   });
 }
 
+// Snapshots are copies of one microgrid's managed file, so the
+// dialog only works on a selected, managed microgrid. With none, it
+// still opens (the button is always in the chrome) but says why it
+// can do nothing rather than firing at an /api/mg/null/… URL.
 export function setupSnapshotsDialog() {
   const dlg = document.getElementById("snapshots-dialog");
   const btn = document.getElementById("snapshots-btn");
@@ -163,12 +38,30 @@ export function setupSnapshotsDialog() {
   const list = document.getElementById("snapshots-list");
   const input = document.getElementById("snapshot-name-input");
   const form = document.getElementById("snapshot-save-form");
+  const hint = document.getElementById("snapshots-blocked");
   if (!dlg || !btn) return;
 
+  // Why the dialog can't act, or null when it can.
+  function blockedReason() {
+    const id = readSelectedMg();
+    if (id == null) return "Select a microgrid first — snapshots are per microgrid.";
+    const entry = currentMgEntry();
+    if (entry && !entry.managed) {
+      return `Microgrid #${id} is an unmanaged file — Adopt it to snapshot its structure.`;
+    }
+    return null;
+  }
+
   async function refresh() {
+    const blocked = blockedReason();
+    hint.textContent = blocked || "";
+    hint.hidden = !blocked;
+    form.hidden = Boolean(blocked);
     list.innerHTML = "";
+    if (blocked) return;
+    const id = readSelectedMg();
     try {
-      const res = await fetch("/api/snapshots");
+      const res = await fetch(`/api/mg/${id}/snapshots`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const names = (await res.json()).snapshots || [];
       if (names.length === 0) {
@@ -183,9 +76,9 @@ export function setupSnapshotsDialog() {
           <button class="hdr-btn snapshot-load" type="button">Load</button>
         `;
         li.querySelector(".snapshot-load").addEventListener("click", async () => {
-          if (!confirm(`Load snapshot "${name}"? Current overrides will be replaced.`)) return;
+          if (!confirm(`Load snapshot "${name}"? Microgrid #${id}'s current file will be replaced.`)) return;
           try {
-            await mutate("POST", "/api/snapshots/load", { name });
+            await mutate("POST", `/api/mg/${id}/snapshots/load`, { name });
           } catch (err) {
             notify(`Load failed: ${err.message}`);
             return;
@@ -209,43 +102,17 @@ export function setupSnapshotsDialog() {
   });
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    const id = readSelectedMg();
     const name = input.value.trim();
-    if (!name) return;
+    if (!name || id == null) return;
     try {
-      await mutate("POST", "/api/snapshots/save", { name });
+      await mutate("POST", `/api/mg/${id}/snapshots/save`, { name });
     } catch (err) {
       notify(`Save failed: ${err.message}`);
       return;
     }
     input.value = "";
     await refresh();
-  });
-}
-
-export function setupOverridesDialog() {
-  const dlg = document.getElementById("pending-dialog");
-  document
-    .getElementById("pending-dialog-close")
-    .addEventListener("click", () => dlg.close());
-  // Click on the backdrop (target === dialog itself, not inner
-  // card) closes the dialog. Keeps click-outside-to-dismiss working.
-  dlg.addEventListener("click", (e) => {
-    if (e.target === dlg) dlg.close();
-  });
-}
-
-export function setupOverridesPill() {
-  const pill = document.getElementById("pending-pill");
-  pill.addEventListener("click", showOverridesDialog);
-  const count = document.getElementById("pending-count");
-  // Every successful eval write-throughs to the override file, so
-  // the count is just the file's form total — no "unsaved" state
-  // to track. Hidden when zero so the chrome stays clean on a
-  // fresh checkout.
-  overrideState.subscribe((data) => {
-    const total = (data.persisted || []).length;
-    count.textContent = total;
-    pill.hidden = total === 0;
   });
 }
 
@@ -377,7 +244,8 @@ async function renderDefaults() {
     <h2>Per-category defaults</h2>
     <p class="hint">
       Edit a value (raw Lisp) and click Save to <code>setq</code> the
-      variable. Changes apply immediately and ride the pending log.
+      variable. Changes apply immediately and persist to
+      <code>enterprise.lisp</code>.
     </p>
     <div id="defaults-list"></div>
   `;

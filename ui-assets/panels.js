@@ -3,8 +3,18 @@
 // respond to clicks / WS pushes by re-fetching + re-rendering.
 
 import { escapeHtml, mutate, notify, selectMicrogrid } from "./app.js";
-import { jsToLispString } from "./inspect.js";
-import { readSelectedMg, renderReplMgChip } from "./routing.js";
+import { refreshPaletteLock } from "./editor.js";
+import { publishMgFlags, readSelectedMg, renderReplMgChip } from "./routing.js";
+
+// Lowest id `/api/microgrids/create` allocates when none is asked
+// for (`DEFAULT_MICROGRID_ID` server-side). The create dialog
+// pre-fills the same choice the server would make, computed off the
+// list the panel already holds, so the field shows a real id rather
+// than a blank the user has to guess at.
+const FIRST_MICROGRID_ID = 2200;
+
+const UNMANAGED_HINT =
+  "hand-written file — switchyard won't rewrite its structure until you Adopt it";
 
 export const microgridsPanel = (() => {
   let cached = []; // last /api/microgrids snapshot
@@ -24,30 +34,34 @@ export const microgridsPanel = (() => {
       card.className = "mglist-card";
       card.dataset.id = m.id;
       const tso = m.tso ? `<span class="mg-tso">${escapeHtml(m.tso)}</span>` : "";
+      // Two file-state chips: `unmanaged` means switchyard may not
+      // rewrite this file's structure (Adopt first), `unsaved` means
+      // an edit ran live that the file could not be given.
+      const chips = [
+        m.managed
+          ? ""
+          : `<span class="mg-chip unmanaged" title="${escapeHtml(UNMANAGED_HINT)}">unmanaged</span>`,
+        m.unsaved
+          ? `<span class="mg-chip unsaved" title="live edits this file could not record">unsaved</span>`
+          : "",
+      ].join("");
       card.innerHTML = `
         <span class="mglist-id">#${m.id}</span>
         <h3 class="mglist-name">${escapeHtml(m.name || "(unnamed)")}</h3>
-        ${tso}
+        ${tso}${chips}
         <span class="mglist-meta muted">${m.component_count} components · gRPC :${m.grpc_port}</span>
       `;
       card.addEventListener("click", () => selectMicrogrid(m.id));
       grid.appendChild(card);
     }
-    // Trailing [+ New microgrid] card: prompts for a name and
-    // POSTs /api/microgrids/create, then selects the new entry.
+    // Trailing [+ New microgrid] card: opens the create dialog,
+    // which POSTs /api/microgrids/create and selects the new entry.
     const newCard = document.createElement("button");
     newCard.type = "button";
     newCard.className = "mglist-card mglist-new";
     newCard.id = "mglist-new-btn";
     newCard.innerHTML = `<span class="mglist-plus">+</span><span>New microgrid</span>`;
-    newCard.addEventListener("click", () => {
-      const name = prompt("Name for the new microgrid:");
-      if (!name) return;
-      mutate("POST", "/api/microgrids/create", { name })
-        .then((r) => r.json())
-        .then((m) => selectMicrogrid(m.id))
-        .catch((e) => notify(`Create failed: ${e.message}`));
-    });
+    newCard.addEventListener("click", () => showCreateMgDialog());
     grid.appendChild(newCard);
     // Trailing [⇪ Import site…] card: picks a site export
     // (components.json + connections.json together) and POSTs
@@ -65,9 +79,10 @@ export const microgridsPanel = (() => {
     });
     grid.appendChild(importCard);
     // Trailing [▶ Load script…] card: opens the server-side file
-    // browser dialog, which evals a (load "path") so an on-disk lisp
-    // script (e.g. examples/berlin-demo.lisp) builds its world at
-    // runtime — the on-demand path for a bare boot.
+    // browser dialog, which POSTs /api/load so an on-disk lisp file
+    // (a microgrid file, or a script like examples/berlin-demo.lisp)
+    // builds its world at runtime — the on-demand path for a bare
+    // boot.
     const loadCard = document.createElement("button");
     loadCard.type = "button";
     loadCard.className = "mglist-card mglist-new";
@@ -79,28 +94,85 @@ export const microgridsPanel = (() => {
     grid.appendChild(loadCard);
   }
 
-  // Eval a (load "path") on the server; path is state-dir-relative
-  // (or absolute). Returns true when the load succeeded.
+  // POST /api/load for a state-dir-relative (or absolute) path.
+  // Returns true when the file loaded. The one recoverable failure
+  // is a 409 collision — the file declares an id something else
+  // already loaded — which renders the offer bar instead of a toast.
   async function loadScript(path) {
-    const lispPath = jsToLispString(path);
+    collisionBar().hidden = true;
+    let res;
     try {
-      const res = await fetch("/api/eval", {
+      res = await fetch("/api/load", {
         method: "POST",
-        body: `(load "${lispPath}")`,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path }),
       });
-      const body = await res.json();
-      if (!body.ok) throw new Error(body.error || `HTTP ${res.status}`);
-      await refresh();
-      return true;
     } catch (e) {
       notify(`Load failed: ${e.message}`);
       return false;
     }
+    if (res.ok) {
+      await refresh();
+      return true;
+    }
+    // The collision 409's body is JSON served as plain text, so it
+    // has to be parsed by hand; anything else (a lisp error, a
+    // missing file) is already a human-readable message.
+    const text = await res.text();
+    if (res.status === 409) {
+      let info = null;
+      try {
+        info = JSON.parse(text);
+      } catch (_) {}
+      if (info && info.collision_id != null) {
+        renderCollision(path, info);
+        return false;
+      }
+    }
+    notify(`Load failed: ${text || `HTTP ${res.status}`}`);
+    return false;
+  }
+
+  const collisionBar = () => document.getElementById("load-script-collision");
+
+  // The collision offer. A managed file can be copied under a free
+  // id mechanically (/api/load-as); a hand-written one can't — its
+  // id is wherever the author wrote it, so the only fix is editing
+  // the file.
+  function renderCollision(path, info) {
+    const bar = collisionBar();
+    bar.innerHTML = "";
+    bar.hidden = false;
+    const msg = document.createElement("span");
+    msg.textContent = info.managed
+      ? `microgrid ${info.collision_id} is already loaded — `
+      : `microgrid ${info.collision_id} is already loaded — edit the id in the file to load it alongside.`;
+    bar.appendChild(msg);
+    if (!info.managed) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hdr-btn primary";
+    btn.textContent = `Load as ${info.suggested_id}`;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      try {
+        await mutate("POST", "/api/load-as", { path, id: info.suggested_id });
+      } catch (e) {
+        notify(`Load failed: ${e.message}`);
+        btn.disabled = false;
+        return;
+      }
+      bar.hidden = true;
+      await refresh();
+      document.getElementById("load-script-dialog").close();
+      selectMicrogrid(info.suggested_id);
+    });
+    bar.appendChild(btn);
   }
 
   // Server-side file browser over GET /api/scripts. The browser's
   // native picker can't drive this: it selects a client-side file
-  // and never reveals a server path, while (load …) needs the file
+  // and never reveals a server path, while the load needs the file
   // on the server's disk (that's what reload replays and watch-file
   // can watch). The free-text field covers paths outside the
   // state-dir subtree the listing is confined to.
@@ -108,16 +180,14 @@ export const microgridsPanel = (() => {
     const dlg = document.getElementById("load-script-dialog");
     const list = document.getElementById("load-script-list");
     const crumb = document.getElementById("load-script-breadcrumb");
-    async function browse(dir) {
-      let data;
-      try {
-        const res = await fetch(`/api/scripts?dir=${encodeURIComponent(dir)}`);
-        if (!res.ok) throw new Error(await res.text());
-        data = await res.json();
-      } catch (e) {
-        notify(`Listing failed: ${e.message}`);
-        return;
-      }
+
+    async function fetchListing(dir) {
+      const res = await fetch(`/api/scripts?dir=${encodeURIComponent(dir)}`);
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    }
+
+    function renderListing(data) {
       crumb.textContent = `state dir${data.dir ? ` / ${data.dir}` : ""}`;
       list.innerHTML = "";
       const addRow = (label, onClick) => {
@@ -145,7 +215,28 @@ export const microgridsPanel = (() => {
         list.innerHTML = '<li class="hint">no .lisp files here</li>';
       }
     }
-    browse("");
+
+    async function browse(dir) {
+      try {
+        renderListing(await fetchListing(dir));
+      } catch (e) {
+        notify(`Listing failed: ${e.message}`);
+      }
+    }
+
+    // Open on microgrids/ — where managed files live, so the common
+    // case is one click. A state dir without that directory answers
+    // 4xx; fall back to the root listing.
+    async function browseDefault() {
+      try {
+        renderListing(await fetchListing("microgrids"));
+      } catch (_) {
+        await browse("");
+      }
+    }
+
+    collisionBar().hidden = true;
+    browseDefault();
     dlg.showModal();
   }
 
@@ -169,6 +260,73 @@ export const microgridsPanel = (() => {
           input.value = "";
           dlg.close();
         }
+      });
+  }
+
+  // The lowest free microgrid id — the same choice the server makes
+  // for a create that names none. Walks the ascending taken ids from
+  // FIRST_MICROGRID_ID, mirroring `next_free_id_in` server-side.
+  function nextFreeId() {
+    const taken = cached.map((m) => m.id).sort((a, b) => a - b);
+    let candidate = FIRST_MICROGRID_ID;
+    for (const id of taken) {
+      if (id === candidate) candidate += 1;
+      else if (id > candidate) break;
+    }
+    return candidate;
+  }
+
+  function showCreateMgDialog() {
+    const dlg = document.getElementById("create-mg-dialog");
+    if (!dlg) return;
+    const err = document.getElementById("create-mg-error");
+    err.hidden = true;
+    err.textContent = "";
+    document.getElementById("create-mg-name").value = "";
+    // Pre-filled, not fixed: the server re-checks the id under the
+    // create lock, and a taken one comes back as the inline 409.
+    document.getElementById("create-mg-id").value = String(nextFreeId());
+    document.getElementById("create-mg-port").value = "";
+    dlg.showModal();
+  }
+
+  function setupCreateMgDialog() {
+    const dlg = document.getElementById("create-mg-dialog");
+    if (!dlg) return;
+    document
+      .getElementById("create-mg-close")
+      .addEventListener("click", () => dlg.close());
+    dlg.addEventListener("click", (e) => {
+      if (e.target === dlg) dlg.close();
+    });
+    document
+      .getElementById("create-mg-form")
+      .addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const err = document.getElementById("create-mg-error");
+        const name = document.getElementById("create-mg-name").value.trim();
+        if (!name) return;
+        const body = { name };
+        // A blank number field means "let the server allocate" — an
+        // explicit 0 would be a claim on a real (and invalid) id.
+        const id = document.getElementById("create-mg-id").value.trim();
+        if (id !== "") body.id = Number(id);
+        const port = document.getElementById("create-mg-port").value.trim();
+        if (port !== "") body.grpc_port = Number(port);
+        let created;
+        try {
+          created = await (await mutate("POST", "/api/microgrids/create", body)).json();
+        } catch (ex) {
+          // A taken id or port comes back 409 with the server's own
+          // wording — shown in the dialog, which stays open so the
+          // user can pick another without retyping the name.
+          err.textContent = ex.message;
+          err.hidden = false;
+          return;
+        }
+        dlg.close();
+        await refresh();
+        selectMicrogrid(created.id);
       });
   }
 
@@ -243,6 +401,48 @@ export const microgridsPanel = (() => {
     if (breadcrumbTsoEl()) {
       breadcrumbTsoEl().textContent = entry?.tso ? `· ${entry.tso}` : "";
     }
+    renderHeaderState(entry);
+  }
+
+  // The selected microgrid's file state in its header: the same two
+  // chips the cards carry, plus the Adopt button — the way out of
+  // read-only, so it only shows while there is something to adopt.
+  function renderHeaderState(entry) {
+    const chips = document.getElementById("mg-file-chips");
+    const adopt = document.getElementById("mg-adopt-btn");
+    if (!chips || !adopt) return;
+    const unmanaged = Boolean(entry) && !entry.managed;
+    chips.innerHTML = [
+      unmanaged
+        ? `<span class="mg-chip unmanaged" title="${escapeHtml(UNMANAGED_HINT)}">unmanaged</span>`
+        : "",
+      entry?.unsaved
+        ? `<span class="mg-chip unsaved" title="live edits this file could not record">unsaved</span>`
+        : "",
+    ].join("");
+    adopt.hidden = !unmanaged;
+  }
+
+  // Take a hand-written file over: switchyard writes the live
+  // structure into it as a generated block and may rewrite it from
+  // then on. Anything the block can't carry comes back as warnings,
+  // which are the whole point of the round trip — surface every one.
+  async function adoptCurrent() {
+    const id = readSelectedMg();
+    if (id == null) return;
+    const btn = document.getElementById("mg-adopt-btn");
+    btn.disabled = true;
+    try {
+      const res = await mutate("POST", `/api/mg/${id}/adopt`);
+      const { warnings } = await res.json();
+      notify(`Adopted microgrid #${id}.`, "success");
+      for (const w of warnings || []) notify(`Adopt warning: ${w}`);
+    } catch (e) {
+      notify(`Adopt failed: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+    await refresh();
   }
 
   // Shared by refresh() and the 5 s poll. A non-ok response keeps
@@ -254,9 +454,13 @@ export const microgridsPanel = (() => {
   }
   function renderAll() {
     window.__mgPanelCache = cached;
+    // Publish before rendering: the palette lock and the inspector's
+    // read-only gate both read the flags this call installs.
+    publishMgFlags(cached);
     renderList();
     renderBreadcrumb();
     renderReplMgChip();
+    refreshPaletteLock();
   }
 
   async function refresh() {
@@ -298,6 +502,10 @@ export const microgridsPanel = (() => {
   });
 
   setupLoadScriptDialog();
+  setupCreateMgDialog();
+  // The header button is static markup, so one listener outlives
+  // every renderBreadcrumb (which only flips its hidden flag).
+  document.getElementById("mg-adopt-btn")?.addEventListener("click", adoptCurrent);
   return { refresh };
 })();
 

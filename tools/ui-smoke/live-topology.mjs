@@ -212,6 +212,40 @@ const unit = await page.evaluate(async () => {
 });
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
 
+// ── e2e: managed-file chrome on the microgrid list ────────────────
+// The overrides file is gone from the server, so nothing in the
+// chrome may still reach for it.
+check("e2e: the overrides pill is gone", (await page.locator("#pending-pill").count()) === 0);
+check("e2e: the overrides dialog is gone", (await page.locator("#pending-dialog").count()) === 0);
+
+// Create replaces the old prompt(): a dialog with a name field and
+// an id pre-filled from the microgrid list the panel already holds.
+check("e2e: create dialog exists", (await page.locator("#create-mg-dialog").count()) === 1);
+await page.click("#mglist-new-btn");
+check(
+  "e2e: the New-microgrid card opens the create dialog",
+  await page.evaluate(() => document.getElementById("create-mg-dialog").open),
+);
+const prefilledId = await page.inputValue("#create-mg-id");
+check(
+  "e2e: create dialog pre-fills a free microgrid id",
+  /^\d+$/.test(prefilledId) && Number(prefilledId) >= 2200,
+  prefilledId,
+);
+await page.click("#create-mg-close");
+
+// The load picker opens on microgrids/ — where managed files live.
+await page.click("#mglist-load-btn");
+const crumb = await waitFor(async () => {
+  const t = (await page.textContent("#load-script-breadcrumb")) || "";
+  return t.trim() ? t : null;
+});
+check("e2e: load dialog opens on the microgrids dir", /microgrids/.test(crumb), crumb);
+const listed = await page.$$eval("#load-script-list button", (bs) => bs.map((b) => b.textContent));
+check("e2e: load dialog lists that directory's entries", listed.length > 0, JSON.stringify(listed));
+check("e2e: the collision bar starts hidden", await page.locator("#load-script-collision").isHidden());
+await page.click("#load-script-close");
+
 // ── e2e: live pill models on the canvas ───────────────────────────
 const DEMO_CARD = '.mglist-card:has-text("Berlin demo")';
 const getModels = () =>
@@ -229,6 +263,42 @@ const hasChevron = (es) => es.some((e) => e.middleEnabled);
 
 await page.click(DEMO_CARD);
 await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+
+// ── e2e: the microgrid header's file state ────────────────────────
+// Adopt is the way out of read-only, so it shows exactly when the
+// file is unmanaged — checked against the listing rather than
+// against a hard-coded expectation, so it holds however the demo
+// example is shipped.
+const demoManaged = await page.evaluate(async () => {
+  const rows = await (await fetch("/api/microgrids")).json();
+  return rows.find((m) => m.id === 2200)?.managed;
+});
+const headerState = await waitFor(async () => {
+  const s = await page.evaluate(() => ({
+    adopt: !document.getElementById("mg-adopt-btn").hidden,
+    chip: Boolean(document.querySelector("#mg-file-chips .unmanaged")),
+  }));
+  return s.adopt === !demoManaged ? s : null;
+}, 8000).catch(() => null);
+check(
+  "e2e: Adopt + unmanaged chip show exactly when the file is unmanaged",
+  headerState !== null && headerState.chip === !demoManaged,
+  JSON.stringify({ demoManaged, headerState }),
+);
+
+// Undo is the server's: Ctrl+Z posts to /api/mg/{id}/undo instead of
+// replaying a client-side stack. With no structural edit behind it
+// the server answers 409, which is fine — the check is on the call.
+let undoPosts = 0;
+await page.route("**/api/mg/*/undo", (route) => {
+  if (route.request().method() === "POST") undoPosts++;
+  route.continue();
+});
+await page.keyboard.press("Control+z");
+await waitFor(() => undoPosts > 0, 5000).catch(() => {});
+check("e2e: Ctrl+Z posts the server's undo endpoint", undoPosts > 0, `${undoPosts} posts`);
+await page.unroute("**/api/mg/*/undo");
+
 // Values land on the next 1 Hz flush; chevrons ride the same flush
 // but need a power sample for the child first.
 const models = await waitFor(async () => {

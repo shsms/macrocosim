@@ -14,7 +14,6 @@ import {
   evRows,
   pvRows,
 } from "./dashboard.js";
-import { overrideState } from "./dialogs.js";
 import { formulaCanvas, refreshFormula } from "./explain.js";
 import { clearSide, refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
@@ -24,11 +23,42 @@ import { topology } from "./topology.js";
 // Prefixes /api/mg/{selected_id}/ when a microgrid is selected,
 // falls back to /api/{suffix} otherwise (used by the loopback HTTP
 // backfill on legacy endpoints that haven't been migrated yet,
-// e.g. /api/setpoints + /api/format + /api/snapshots).
+// e.g. /api/setpoints + /api/format).
 export function mgPath(suffix) {
   const id = readSelectedMg();
   return id == null ? `/api/${suffix}` : `/api/mg/${id}/${suffix}`;
 }
+
+// ─── Per-microgrid file flags ──────────────────────────────────────────────
+// The `managed` / `unsaved` / `source` fields off the last
+// /api/microgrids listing, keyed by id. microgridsPanel publishes on
+// every refresh; the inspector, the editor and the canvas read it to
+// decide whether a structural affordance is offered at all — only a
+// managed file can have its structure rewritten, so on an unmanaged
+// one the edit would run live and then be lost on the next reload.
+let mgFlags = new Map();
+
+export function publishMgFlags(rows) {
+  mgFlags = new Map(rows.map((m) => [m.id, m]));
+}
+
+export function currentMgEntry() {
+  const id = readSelectedMg();
+  return id == null ? null : mgFlags.get(id) || null;
+}
+
+// Permissive before the first listing lands (or for an id the
+// listing doesn't carry): greying the whole editor out on a
+// not-yet-known microgrid would claim "unmanaged file" about a file
+// we have not heard of. The server is the real gate — an edit to an
+// unmanaged file still evaluates, it just doesn't persist.
+export function structureEditable() {
+  const entry = currentMgEntry();
+  return entry == null || entry.managed === true;
+}
+
+export const READ_ONLY_TITLE =
+  "unmanaged file — structure is read-only (Adopt to edit)";
 
 // ─── Density toggle ────────────────────────────────────────────────────────
 // CSS-only mode that shrinks tile + pulse-bar paddings and fonts.
@@ -167,10 +197,7 @@ function setupRouterPopstate() {
     // Back/forward can land on a different microgrid; refetch so
     // the canvas and row modules rebuild for it (the click path
     // does this via selectMicrogrid).
-    if (parsed.selectedMg != null) {
-      refreshTopology();
-      overrideState.refresh();
-    }
+    if (parsed.selectedMg != null) refreshTopology();
   });
 }
 
@@ -280,11 +307,7 @@ export function selectMicrogrid(id) {
   // this the canvas keeps showing the previous microgrid's
   // components until a WS topology_changed event arrives — which
   // never happens just because the selection changed client-side.
-  // Same for the overrides pill: its snapshot is per-microgrid now.
-  if (id != null) {
-    refreshTopology();
-    overrideState.refresh();
-  }
+  if (id != null) refreshTopology();
 }
 
 // REPL chip — surfaces which microgrid the REPL form's POSTs

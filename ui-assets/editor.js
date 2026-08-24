@@ -1,12 +1,22 @@
-// Topology-canvas editor: clipboard + undo stack, copy / paste /
+// Topology-canvas editor: clipboard, undo / redo, copy / paste /
 // cut / delete / select-all hooked into the topology selection,
 // the floating right-click menu, the side-panel `Add component`
 // form, and helpers around them.
 
 import { escapeHtml, notify } from "./app.js";
 import { evalQuoted, OPERATIONAL_MODES, showComponent } from "./inspect.js";
-import { readSelectedMg } from "./routing.js";
+import { READ_ONLY_TITLE, readSelectedMg, structureEditable } from "./routing.js";
 import { ALIGN_MODES, topology } from "./topology.js";
+
+// Structural edits rewrite the microgrid's file, so they are only
+// offered on a managed one. Every entry point — palette, context
+// menu, keyboard shortcut — goes through this, so a shortcut can't
+// slip past a greyed-out button.
+function editable() {
+  if (structureEditable()) return true;
+  notify(READ_ONLY_TITLE);
+  return false;
+}
 
 function makeFnFor(c) {
   if (c.category === "inverter") {
@@ -44,104 +54,29 @@ export const clipboard = (() => {
   };
 })();
 
-// Per-microgrid undo / redo stacks over the overrides file. Each
-// canvas-driven mutation snapshots the file BEFORE the eval; Ctrl-Z
-// restores the snapshot via POST /api/mg/{id}/overrides/text, which
-// rewrites + reloads in one shot. Stacks are keyed by mg id so
-// switching microgrids doesn't lose either side's history.
+// Undo / redo over the selected microgrid's managed file. The
+// history lives on the server (one stacked generated block per
+// structural edit), so there is nothing to record client-side and a
+// page reload — or a second tab — walks the same history.
 export const undoMgr = (() => {
-  const undoStacks = new Map(); // mgId -> string[]
-  const redoStacks = new Map(); // mgId -> string[]
-  const MAX_DEPTH = 50;
-
-  function stackFor(map, mgId) {
-    let s = map.get(mgId);
-    if (!s) { s = []; map.set(mgId, s); }
-    return s;
-  }
-
-  async function fetchText(mgId) {
-    const res = await fetch(`/api/mg/${mgId}/overrides/text`);
-    if (!res.ok) throw new Error(`GET ${res.status}`);
-    return await res.text();
-  }
-
-  async function postText(mgId, text) {
-    const res = await fetch(`/api/mg/${mgId}/overrides/text`, {
-      method: "POST",
-      body: text,
-    });
+  async function step(direction) {
+    const mgId = readSelectedMg();
+    if (mgId == null) {
+      notify(`Select a microgrid to ${direction}.`);
+      return;
+    }
+    const res = await fetch(`/api/mg/${mgId}/${direction}`, { method: "POST" });
     if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`POST ${res.status}: ${body}`);
+      // 409 is "nothing left on that stack" or "unmanaged file" —
+      // the server's own wording says which, so pass it through.
+      notify(`${cap(direction)} failed: ${(await res.text()) || `HTTP ${res.status}`}`);
     }
-  }
-
-  // Snapshot the overrides file before a mutation. Pushes onto the
-  // current mg's undo stack and clears its redo stack (the standard
-  // editor rule — a fresh edit invalidates the redo history).
-  async function record() {
-    const mgId = readSelectedMg();
-    if (mgId == null) return;
-    try {
-      const snap = await fetchText(mgId);
-      const u = stackFor(undoStacks, mgId);
-      // Runtime pokes (health flips, knob sets) never touch the
-      // overrides file, so their snapshots are byte-identical to
-      // the stack top — pushing them would make Ctrl+Z a no-op
-      // press (that still rewrites the file and reloads the mg)
-      // for each poke since the last structural edit.
-      if (u.length && u[u.length - 1] === snap) return;
-      u.push(snap);
-      while (u.length > MAX_DEPTH) u.shift();
-      redoStacks.set(mgId, []);
-    } catch (e) {
-      console.warn("undoMgr.record failed:", e);
-    }
-  }
-
-  // Undo and redo are the same restore with the stack roles swapped:
-  // pop `from` until an entry differs from the current bytes, post
-  // it, push the displaced current text onto `to`.
-  async function restore(from, to, label) {
-    const mgId = readSelectedMg();
-    if (mgId == null) return;
-    const src = stackFor(from, mgId);
-    if (!src.length) {
-      notify(`Nothing to ${label} on this microgrid.`);
-      return;
-    }
-    let current;
-    try {
-      current = await fetchText(mgId);
-    } catch (e) {
-      notify(`${cap(label)} failed: ${e.message}`);
-      return;
-    }
-    // Snapshots identical to the current bytes (pre-dedup stacks)
-    // restore nothing — posting one would only force a pointless
-    // reload (resetting live ramp/SoC state). Fall through to the
-    // first entry that differs so no keypress is a dead no-op.
-    let target = src.pop();
-    while (target === current && src.length) target = src.pop();
-    if (target === current) {
-      notify(`Nothing to ${label} on this microgrid.`);
-      return;
-    }
-    try {
-      await postText(mgId, target);
-    } catch (e) {
-      src.push(target);
-      notify(`${cap(label)} failed: ${e.message}`);
-      return;
-    }
-    stackFor(to, mgId).push(current);
   }
   const cap = (s) => s[0].toUpperCase() + s.slice(1);
-  const undo = () => restore(undoStacks, redoStacks, "undo");
-  const redo = () => restore(redoStacks, undoStacks, "redo");
-
-  return { record, undo, redo };
+  return {
+    undo: () => step("undo"),
+    redo: () => step("redo"),
+  };
 })();
 
 function snapshotSelection(selectedIds) {
@@ -187,8 +122,9 @@ export function copySelection() {
 // Paste the clipboard subgraph as a fresh set of components + edges
 // via one let*-bound eval. Matches duplicate's old behavior — uses
 // the public make-* wrappers so per-category defaults apply, threads
-// component-id to wire reconnects atomically. One pending log entry.
+// component-id to wire reconnects atomically. One undo step.
 export async function pasteClipboard() {
+  if (!editable()) return;
   if (clipboard.isEmpty()) {
     notify("Clipboard is empty — copy something first.");
     return;
@@ -223,6 +159,7 @@ export async function pasteClipboard() {
 }
 
 export async function deleteSelection() {
+  if (!editable()) return;
   const ids = topology.selectedIds();
   if (!ids.length) {
     notify("Nothing selected to delete.");
@@ -234,6 +171,7 @@ export async function deleteSelection() {
 }
 
 export async function cutSelection() {
+  if (!editable()) return;
   if (copySelection()) await deleteSelection();
 }
 
@@ -302,7 +240,7 @@ export function showMenuItems(menu, items, x, y) {
 }
 
 // Bulk operational-mode set: one progn over the whole selection, so
-// a single undo (and one overrides-journal entry) covers the batch.
+// a single undo step covers the batch.
 // A config edit like the Formulas tab's telemetry toggle — it
 // persists and re-derives the runtime knobs server-side.
 async function setSelectionMode(ids, mode) {
@@ -338,12 +276,18 @@ export function showContextMenu(x, y) {
   const menu = document.getElementById("ctx-menu");
   const sel = topology.selectedIds();
   const items = [];
+  // Copy is a clipboard read, and the mode rows are runtime config —
+  // both stay on an unmanaged file. Cut / Delete / Paste rewrite the
+  // structure, so they only appear on a managed one.
+  const structural = structureEditable();
   if (sel.length) {
     items.push({ label: "Copy", shortcut: "Ctrl/Cmd+C", action: copySelection });
-    items.push({ label: "Cut", shortcut: "Ctrl/Cmd+X", action: cutSelection });
-    items.push({ label: "Delete", shortcut: "Del", action: deleteSelection });
+    if (structural) {
+      items.push({ label: "Cut", shortcut: "Ctrl/Cmd+X", action: cutSelection });
+      items.push({ label: "Delete", shortcut: "Del", action: deleteSelection });
+    }
     items.push(...modeMenuItems(sel));
-  } else if (!clipboard.isEmpty()) {
+  } else if (!clipboard.isEmpty() && structural) {
     items.push({ label: "Paste", shortcut: "Ctrl/Cmd+V", action: pasteClipboard });
   }
   if (sel.length >= 2) items.push(...alignMenuItems(topology));
@@ -373,6 +317,7 @@ export function setupAddForm() {
   document.getElementById("palette").addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".pal-btn");
     if (!btn) return;
+    if (!editable()) return;
     btn.disabled = true;
     try {
       await evalQuoted(`(${btn.dataset.make})`, "Create failed");
@@ -380,4 +325,22 @@ export function setupAddForm() {
       btn.disabled = false;
     }
   });
+}
+
+// Grey the whole Add-component palette out on an unmanaged
+// microgrid. Called on every microgrid-list refresh, so it tracks an
+// Adopt without the user having to reopen the panel.
+export function refreshPaletteLock() {
+  const palette = document.getElementById("palette");
+  if (!palette) return;
+  const locked = !structureEditable();
+  // The reason goes on the container too: a disabled button swallows
+  // pointer events, so its own title never surfaces as a tooltip.
+  if (locked) palette.title = READ_ONLY_TITLE;
+  else palette.removeAttribute("title");
+  for (const btn of palette.querySelectorAll(".pal-btn")) {
+    btn.disabled = locked;
+    if (locked) btn.title = READ_ONLY_TITLE;
+    else btn.removeAttribute("title");
+  }
 }

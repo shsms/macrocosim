@@ -411,8 +411,8 @@ export function openWebSocket(onTopologyChanged) {
       } else if (ev.kind === "log") {
         appendLog(ev);
       } else if (ev.kind === "config_error") {
-        // A failed hot-reload (site already reset) or an eval whose
-        // overrides-append failed — the one moment the user most
+        // A failed hot-reload (site already reset) or an eval the
+        // microgrid's file could not record — the one moment the user most
         // needs an explanation, so toast it and keep it in the log.
         // A reload failure is broadcast on every registered site's
         // bus (the WS pump has no enterprise channel for it), so a

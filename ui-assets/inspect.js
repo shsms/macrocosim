@@ -11,8 +11,7 @@ import {
   notify,
   openInspector,
 } from "./app.js";
-import { undoMgr } from "./editor.js";
-import { mgPath } from "./routing.js";
+import { mgPath, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { topology } from "./topology.js";
 
 const CHARTS_BY_CATEGORY = {
@@ -177,10 +176,16 @@ function knobsFor(d) {
 }
 
 function renderInspect(d, parentIds, childIds) {
+  // Rename and disconnect rewrite the microgrid's file; on an
+  // unmanaged one they are shown but inert, with the reason on
+  // hover. Everything below them — modes, health, knobs — is
+  // runtime state and stays live either way.
+  const locked = !structureEditable();
+  const lockAttrs = locked ? ` disabled title="${escapeHtml(READ_ONLY_TITLE)}"` : "";
   const renderEdgeRow = (id, dataAttr) => {
     const c = topology.get(id);
     const label = c ? c.name : `id ${id}`;
-    return `<li>${escapeHtml(label)} <button class="link-btn" ${dataAttr}="${id}">✕</button></li>`;
+    return `<li>${escapeHtml(label)} <button class="link-btn" ${dataAttr}="${id}"${lockAttrs}>✕</button></li>`;
   };
   const parentList = parentIds.length
     ? parentIds.map((id) => renderEdgeRow(id, "data-disconnect-from")).join("")
@@ -190,7 +195,7 @@ function renderInspect(d, parentIds, childIds) {
     : '<li class="hint">none</li>';
 
   inspectEl.innerHTML = `
-    <h2><input id="rename" class="name-input" value="${escapeHtml(d.name)}" /></h2>
+    <h2><input id="rename" class="name-input" value="${escapeHtml(d.name)}"${lockAttrs} /></h2>
     <dl>
       <dt>id</dt><dd>${d.id}</dd>
       <dt>category</dt><dd>${d.category}</dd>
@@ -295,14 +300,15 @@ export function jsToLispString(s) {
   return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
-// POST one Lisp expression to /api/eval, recording an undo snapshot
-// first. `label` is the notify prefix on failure (defaults to the
-// expression itself — pass something short like "Paste failed" when
-// the expression would be unreadable in a toast). Returns the parsed
-// response ({ ok, ... }) so callers can act on success, or an
-// { ok: false } shape when transport / parsing failed.
+// POST one Lisp expression to /api/eval. `label` is the notify
+// prefix on failure (defaults to the expression itself — pass
+// something short like "Paste failed" when the expression would be
+// unreadable in a toast). Returns the parsed response ({ ok, ... })
+// so callers can act on success, or an { ok: false } shape when
+// transport / parsing failed. Undo history is the server's: a
+// structural eval stacks the microgrid file's previous generated
+// block by itself, so there is nothing to record here.
 export async function evalQuoted(expr, label = expr) {
-  await undoMgr.record();
   let res;
   try {
     res = await fetch(mgPath("eval"), { method: "POST", body: expr });

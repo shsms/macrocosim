@@ -1,18 +1,15 @@
 // Phase-1 SPA. Renders /api/topology with vis-network, and on node
 // selection shows category-appropriate live charts in the floating
 // inspector.
-// Visual editing (add / connect / rename / delete) + REPL + Persist
-// + Defaults / Scenarios all hang off the same /api/eval mutation
+// Visual editing (add / connect / rename / delete) + REPL +
+// Defaults / Scenarios all hang off the same /api/eval mutation
 // path so anything done in the UI is also scriptable from outside.
 
 import { clockState, pulseBar } from "./chrome.js";
 import { dashboardTiles } from "./dashboard.js";
 import {
-  overrideState,
   setupDefaultsToggle,
   setupHelpButton,
-  setupOverridesDialog,
-  setupOverridesPill,
   setupScenarioReportToggle,
   setupSnapshotsDialog,
 } from "./dialogs.js";
@@ -30,7 +27,7 @@ import {
 import { formulaCanvas, refreshFormula, setupExplainPanel } from "./explain.js";
 import { setupFormulaTileClicks } from "./formulas.js";
 import { clearSide, showComponent } from "./inspect.js";
-import { scenariosPanel } from "./panels.js";
+import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { backfillLogs, openWebSocket, setupRepl } from "./repl.js";
 import {
   jumpToTopology,
@@ -367,10 +364,8 @@ async function init() {
   setupFloatingPanels();
   setupDrawerSplitter();
   setupFormulaDrawerSplitter();
-  setupOverridesDialog();
   setupSnapshotsDialog();
   backfillLogs();
-  setupOverridesPill();
   // The topology canvas calls back to showComponent / clearSide
   // (from inspect.js) on node click + canvas click. Wire it up
   // before the first apply so the listeners are in place.
@@ -450,14 +445,13 @@ async function init() {
   await clockState.init();
   pulseBar.setup();
   await refreshTopology();
-  await overrideState.refresh();
-  // WS push: refresh both the topology (so the canvas reflects the
-  // mutation) and the pending state (so the pill, dialog, and
-  // inspector all update) on TopologyChanged. Sample events go
+  // WS push: refresh the topology (so the canvas reflects the
+  // mutation) and the microgrid list (so the unsaved / unmanaged
+  // chips track the edit) on TopologyChanged. Sample events go
   // straight into the live-charts router.
   const onTopologyChanged = () => {
     refreshTopology();
-    overrideState.refresh();
+    microgridsPanel.refresh();
     // The formula depends on the topology; re-derive it while the
     // Formulas subview is showing (hidden, the subview-enter hook
     // refreshes on the next visit anyway). Debounced: each formula

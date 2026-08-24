@@ -17,13 +17,19 @@
 // - topology.resetLayout(name) / setSnap / alignSelection / scaleSelection
 // - topology.setValues(on) / valuesOn() — toggle live metric values on nodes/edges
 
-import { setStatus } from "./app.js";
+import { notify, setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
 import { evalQuoted } from "./inspect.js";
 import { deadBandW, edgeFlow } from "./live.js";
 import { cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
-import { mgPath, readSelectedMg, visibleSubview } from "./routing.js";
+import {
+  mgPath,
+  READ_ONLY_TITLE,
+  readSelectedMg,
+  structureEditable,
+  visibleSubview,
+} from "./routing.js";
 
 const CATEGORY_COLOR = {
   grid: cssToken("--cat-grid"),
@@ -1862,11 +1868,19 @@ export function createGraphCanvas(containerId, adapter = {}) {
 }
 
 // The Topology subview's canvas: full editing — Ctrl-drag connect
-// through the eval/overrides path, and the edit context menu.
+// through the eval path, and the edit context menu.
 export const topology = createGraphCanvas("topology", {
   tooltip: false,
   hoverCard: true,
   onConnect(from, to) {
+    // Wiring is structure, so it needs a managed file. Refuse here
+    // rather than at the keydown that arms edit mode — the drag is
+    // already finished by the time vis calls back, and a silent drop
+    // would look like the canvas ate the gesture.
+    if (!structureEditable()) {
+      notify(READ_ONLY_TITLE);
+      return;
+    }
     evalQuoted(`(connect ${from} ${to})`, "Connect failed");
   },
   onContextMenu: showContextMenu,
