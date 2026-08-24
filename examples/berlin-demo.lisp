@@ -53,11 +53,10 @@
 ;; enterprise-wide allocator, so they depend on what else loaded
 ;; first — and the scenarios below address components by id.
 
-;; No timer hygiene needed here: a hot-reload cancels every timer
-;; centrally before replaying the loaded files, so each script's
-;; `every` blocks re-register exactly once. (Only re-(load)ing a
-;; script into a LIVE world stacks its timers — run (cancel-timers)
-;; first in that case, or just save a watched file to reload.)
+;; No timer hygiene needed here: loading a file that is already
+;; loaded is treated as a reload — the file's own timers are
+;; cancelled first, so each script's `every` blocks re-register
+;; exactly once.
 
 ;; -----------------------------------------------------------------------------
 ;; Enterprise-level identity + grid frequency

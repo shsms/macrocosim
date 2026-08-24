@@ -39,8 +39,9 @@
 REPL-armed timers included. A whole-world reload calls this
 centrally before replaying the files, so scripts do NOT call it
 themselves — a script's own call, replayed after another script,
-would cancel that script's freshly re-registered timers. Call it
-manually only before re-(load)ing a script into a live world."
+would cancel that script's freshly re-registered timers.
+Re-loading one file cancels only that file's timers, via
+`cancel-file-timers`."
   (dolist (entry active-timers)
     (cancel-timer (cdr entry)))
   (setq active-timers nil))

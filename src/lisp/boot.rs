@@ -456,31 +456,66 @@ impl Config {
     /// `(load …)` and `(file-exists-p …)` use — so a path typed into
     /// the REPL means the same thing as one written in a config.
     ///
-    /// Loading a file that is already loaded is the reload path: its
-    /// own `(make-microgrid …)` forms reuse their entries in place
-    /// (so live runtimes keep their site handles) and the returned id
-    /// list is empty, since nothing is *new*.
+    /// Loading a file that is already loaded IS the reload path — the
+    /// load picker lists `microgrids/`, whose files are typically
+    /// live already. It runs the full per-file reload (this file's
+    /// timers cancelled, its microgrids' sites reset, then the
+    /// re-eval), so a second load can't stack a second copy of every
+    /// `every` block. Its `(make-microgrid …)` forms reuse their
+    /// entries in place, so live runtimes keep their site handles and
+    /// the returned id list is empty — nothing is *new*.
     pub fn load_file(&self, path: &Path) -> Result<Vec<u64>, LoadError> {
         let mut ctx = self.ctx.borrow_mut();
         self.load_file_locked(&mut ctx, path)
     }
 
     /// [`load_file`](Self::load_file) against an already-held
-    /// interpreter guard — for callers that must not re-borrow (a
-    /// `(load …)` routed out of `eval_locked`, the reload replay).
+    /// interpreter guard — for callers that must not re-borrow, like
+    /// a `(load …)` routed out of `eval_locked`.
     pub(super) fn load_file_locked(
         &self,
         ctx: &mut TulispContext,
         path: &Path,
     ) -> Result<Vec<u64>, LoadError> {
-        use crate::sim::microgrids::{LoadingFile, with_loading};
+        let resolved = self.resolve_in_state_dir(path);
+        let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+        // Already visited by the loader? Then this is a re-load, and
+        // re-evaluating it on top of itself would double-arm its
+        // timers. Go the whole reload way instead.
+        if self.source_files.lock().contains(&canonical) {
+            return self.reload_visited_locked(ctx, &canonical);
+        }
+        self.eval_source_file(ctx, &resolved, &canonical)
+    }
 
-        let resolved = if path.is_absolute() {
+    /// Resolve `path` the way every loader entry point does: absolute
+    /// paths pass through, relative ones join `state_dir` — the same
+    /// anchor `(load …)` and `(file-exists-p …)` use, so a path typed
+    /// into the REPL means what one written in a config means.
+    fn resolve_in_state_dir(&self, path: &Path) -> PathBuf {
+        if path.is_absolute() {
             path.to_path_buf()
         } else {
             self.state_dir.join(path)
-        };
-        let text = std::fs::read_to_string(&resolved)
+        }
+    }
+
+    /// Evaluate one source file with itself recorded as the ambient
+    /// loading file, record it as visited, and return the ids of the
+    /// microgrids it *newly* registered.
+    ///
+    /// The fresh-load body, with no reload preamble: callers that
+    /// need one (a re-load, a whole-world replay) do their cancelling
+    /// and resetting first and then come here.
+    fn eval_source_file(
+        &self,
+        ctx: &mut TulispContext,
+        resolved: &Path,
+        canonical: &Path,
+    ) -> Result<Vec<u64>, LoadError> {
+        use crate::sim::microgrids::{LoadingFile, with_loading};
+
+        let text = std::fs::read_to_string(resolved)
             .map_err(|e| LoadError::Other(format!("cannot read {}: {e}", resolved.display())))?;
         // A managed file's structure is switchyard's to rewrite, an
         // unmanaged one's is the author's — and the split also
@@ -488,14 +523,14 @@ impl Config {
         let parsed = super::microgrid_file::parse(&text)
             .map_err(|e| LoadError::Other(format!("{}: {e}", resolved.display())))?;
         let managed = parsed.generated.is_some();
-        // Canonicalized so every spelling of one file compares equal
-        // — that comparison is what distinguishes a reload of this
-        // file from a second file claiming its ids.
-        let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 
         let before: HashSet<u64> = self.microgrids.lock().keys().copied().collect();
+        // The canonical spelling is what the registry stores in
+        // `source`, so every spelling of one file compares equal —
+        // that comparison is what distinguishes a reload of this file
+        // from a second file claiming its ids.
         let file = LoadingFile {
-            path: canonical.clone(),
+            path: canonical.to_path_buf(),
             managed,
         };
         let result = with_loading(&self.loading, file, || match &parsed.generated {
@@ -543,7 +578,7 @@ impl Config {
         // evaluate is worth watching and worth re-evaluating on its
         // own even if it registered no microgrid — a driver script
         // that only arms `every` blocks is exactly that case.
-        self.note_source_file(&canonical);
+        self.note_source_file(canonical);
 
         let new_ids: Vec<u64> = self
             .microgrids
@@ -893,15 +928,29 @@ impl Config {
         ctx: &mut TulispContext,
         path: &Path,
     ) -> Result<Vec<u64>, String> {
-        let resolved = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.state_dir.join(path)
-        };
+        let resolved = self.resolve_in_state_dir(path);
         // The canonical spelling is what the registry stores in
         // `source` and what `(current-source-file)` reported to the
         // timers this file armed — both comparisons below need it.
         let canonical = resolved.canonicalize().unwrap_or(resolved);
+        self.reload_visited_locked(ctx, &canonical)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The per-file reload body, on an already-canonicalized path.
+    /// Shared with [`load_file_locked`](Self::load_file_locked),
+    /// which routes a re-load of an already-visited file here rather
+    /// than evaluating it a second time on top of itself.
+    ///
+    /// Keeps the typed [`LoadError`]: a reload can hit a collision too
+    /// (an edited file that moved onto another file's id), and the
+    /// load endpoint turns that into its "load it as N instead?"
+    /// offer.
+    fn reload_visited_locked(
+        &self,
+        ctx: &mut TulispContext,
+        canonical: &Path,
+    ) -> Result<Vec<u64>, LoadError> {
         // Cancel just this file's timers. A whole-world reload can
         // cancel everything centrally; a per-file one must not, or it
         // would silently freeze every other file's animation.
@@ -922,22 +971,20 @@ impl Config {
             .microgrids
             .lock()
             .values()
-            .filter(|e| e.source.as_deref() == Some(canonical.as_path()))
+            .filter(|e| e.source.as_deref() == Some(canonical))
         {
             entry.site.reset();
         }
-        let new_ids = self
-            .load_file_locked(ctx, &canonical)
-            .map_err(|e| e.to_string())?;
+        let new_ids = self.eval_source_file(ctx, canonical, canonical)?;
         // Tell UI subscribers this file's microgrids rebuilt.
-        // `load_file_locked` bumps only the ids that are new; a plain
+        // `eval_source_file` bumps only the ids that are new; a plain
         // re-load has none, and its rebuilt sites still need the
         // event.
         for (id, entry) in self
             .microgrids
             .lock()
             .iter()
-            .filter(|(_, e)| e.source.as_deref() == Some(canonical.as_path()))
+            .filter(|(_, e)| e.source.as_deref() == Some(canonical))
         {
             log_topology_validation(&entry.site, &format!("reload (microgrid {id})"));
             entry.site.bump_version();
@@ -1035,8 +1082,12 @@ impl Config {
             // Through the loader, not a bare eval_file: each file must
             // be replayed with itself as the ambient loading file, or
             // its own `(make-microgrid …)` forms would look like a
-            // stranger re-claiming ids the file already owns.
-            self.load_file_locked(ctx, file)
+            // stranger re-claiming ids the file already owns. The
+            // fresh-load body, not `load_file_locked`: the resets and
+            // the central `(cancel-timers)` above already did — once,
+            // for the whole world — what a per-file reload would
+            // repeat here for every file.
+            self.eval_source_file(ctx, file, file)
                 .map_err(|e| e.to_string())?;
         }
         warn_orphaned_chp_defaults(ctx);
@@ -1730,6 +1781,33 @@ mod tests {
         let r = reg.lock();
         let twenty = &r[&20].site;
         assert!((twenty.get(50).unwrap().aggregate_power_w(twenty) - 4321.0).abs() < 1e-3);
+    }
+
+    /// Loading a file that is ALREADY loaded is a reload, not a
+    /// second load: the load picker lists files that are typically
+    /// live, and a plain re-eval would arm a second copy of every
+    /// `every` block with no visible symptom but doubled animation.
+    #[test]
+    fn loading_an_already_loaded_file_does_not_double_arm_its_timers() {
+        let (cfg, dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let other = dir.join("t.lisp");
+        std::fs::write(
+            &other,
+            "(make-microgrid :id 10 :grpc-port 8801 :topology (lambda () nil))\n\
+             (every :milliseconds 1 :call (lambda () nil))",
+        )
+        .unwrap();
+        let count = || -> i64 {
+            cfg.eval_silent("(length active-timers)")
+                .unwrap()
+                .parse()
+                .unwrap()
+        };
+        cfg.load_file(&other).unwrap();
+        assert_eq!(count(), 1, "one timer after the first load");
+        cfg.load_file(&other).unwrap();
+        assert_eq!(count(), 1, "a second load must not stack the timer");
     }
 
     /// `reload_file` is per file: it rebuilds only the microgrids
