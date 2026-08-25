@@ -570,14 +570,28 @@ fidelity gap.
 
 ** Robustness / UI hardening (latent until --ui-bind ships)
 
-*** TODO [#B] Add CORS + confirm body limits before --ui-bind  :hardening:ui:
-The UI is loopback-only today. Before =--ui-bind= lands: add a
-=tower-http= =CorsLayer= (a cross-origin page could otherwise POST
-=text/plain= Lisp to =/api/eval= and run arbitrary code incl. file
-writes), and apply =DefaultBodyLimit= to =/api/eval=, =/api/format=,
-overrides-text, and the =BulkRemoveBody.indices= vec (unbounded). The
-body-limit gap and the snapshot-save/load ambient-scope hazard are already
-recorded (2026-06-01) — fold them into the same hardening pass.
+*** DONE [#B] Add CORS + confirm body limits before --ui-bind  :hardening:ui:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-25 Di] \\
+  Resolved with a server-side same-origin guard (src/ui/mod.rs
+  origin_guard) instead of a CorsLayer: a text/plain POST to
+  /api/eval needs no preflight, and CORS headers only gate reading
+  the response, not executing the request — so the server rejects
+  non-loopback Host (DNS rebinding) and Origin≠Host (plain
+  cross-origin, incl. WS handshakes) itself. Headerless non-browser
+  clients (curl, swctl, tests) pass. axum's stock 2 MB
+  DefaultBodyLimit on /api/eval is pinned by a test; the
+  overrides-text and BulkRemoveBody endpoints named below no longer
+  exist. Loopback allowlist needs a knob if --ui-bind lands.
+:END:
+The UI is loopback-only. The original plan here — a =tower-http=
+=CorsLayer= plus explicit =DefaultBodyLimit=s — predated the fix;
+what shipped is the =origin_guard= middleware described in the
+LOGBOOK note (a cross-origin page could otherwise POST =text/plain=
+Lisp to =/api/eval= and run arbitrary code incl. file writes). Of
+the unbounded bodies named back then, overrides-text and
+=BulkRemoveBody.indices= no longer exist. The snapshot-save/load
+ambient-scope hazard stays open in its own entry.
 
 *** TODO [#C] Re-emit latest snapshot over WS on a lagged Sample bus :ui:ws:robustness:
 The dashboard guards against dropped =Sample= WS frames client-side

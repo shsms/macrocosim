@@ -175,7 +175,95 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/ws/events", get(events_ws))
         .layer(Extension(microgrid))
         .layer(Extension(loopbacks))
+        .layer(axum::middleware::from_fn(origin_guard))
         .with_state(config)
+}
+
+/// Same-origin guard for the browser-facing surface.
+///
+/// `/api/eval` runs arbitrary Lisp — file writes included — and a
+/// cross-origin page can fire a `text/plain` POST at it without any
+/// CORS preflight: CORS response headers only gate *reading* the
+/// response, never executing the request, so a `CorsLayer` alone
+/// would not defend it. The server refuses requests that provably
+/// come from a foreign browser context instead:
+///
+/// - a non-loopback `Host` rejects DNS rebinding (evil.example
+///   resolving to 127.0.0.1 keeps its own name in `Host`);
+/// - an `Origin` whose authority differs from `Host` rejects plain
+///   cross-origin requests, cross-origin WebSocket handshakes
+///   included (the same-origin policy never blocked those).
+///
+/// Non-browser clients (curl, swctl/reqwest) pass because they
+/// address the server by its loopback authority — their `Host` is a
+/// loopback name and they send no `Origin`; requests with no `Host`
+/// at all (in-process test calls) pass too. Browsers always send
+/// `Host`, and always send `Origin` on cross-origin requests. GETs
+/// are guarded too — a cross-origin read of this UI has no
+/// legitimate use. The loopback allowlist needs a knob if
+/// `--ui-bind` ever lands.
+async fn origin_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{StatusCode, header};
+    use axum::response::IntoResponse;
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok());
+    if let Some(host) = host
+        && !is_loopback_host(authority_host(host))
+    {
+        return (StatusCode::FORBIDDEN, "non-loopback Host rejected\n").into_response();
+    }
+    if let Some(origin) = req.headers().get(header::ORIGIN) {
+        // `Origin: null` (sandboxed iframe, file://) and malformed
+        // values fall through to the rejection: only an authority
+        // exactly matching `Host` passes.
+        let matches_host = origin
+            .to_str()
+            .ok()
+            .and_then(|o| o.split_once("://").map(|(_, auth)| auth))
+            .zip(host)
+            .is_some_and(|(o_auth, host)| o_auth.eq_ignore_ascii_case(host));
+        if !matches_host {
+            return (StatusCode::FORBIDDEN, "cross-origin request rejected\n").into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// Host part of an authority string: brackets stripped from an IPv6
+/// literal, a trailing `:port` dropped.
+fn authority_host(authority: &str) -> &str {
+    let a = authority.trim();
+    if let Some(rest) = a.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match a.rsplit_once(':') {
+        // A ':' left in the head means a bare IPv6 literal, whose
+        // colons are not a port separator.
+        Some((h, p)) if !h.contains(':') && p.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => a,
+    }
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    // Browsers hardwire `localhost`, any `*.localhost` name, and
+    // their trailing-dot FQDN forms to loopback without consulting
+    // DNS (RFC 6761), and every 127.0.0.0/8 literal reaches a
+    // loopback-bound listener — all of those are this server's own
+    // origin, not a foreign one.
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if host.eq_ignore_ascii_case("localhost")
+        || host.to_ascii_lowercase().ends_with(".localhost")
+        || host == "::1"
+    {
+        return true;
+    }
+    host.parse::<std::net::Ipv4Addr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]

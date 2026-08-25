@@ -1574,3 +1574,119 @@ async fn undo_depths_track_edits() {
     let (st, _) = call(config.clone(), post("/api/mg/9/undo", "")).await;
     assert_eq!(st, StatusCode::CONFLICT);
 }
+
+// ─── same-origin guard + body limits ──────────────────────────────
+
+/// Browser-shaped request: `Host` plus, optionally, `Origin` — the
+/// header pair the same-origin guard keys on. Requests built by the
+/// plain `get`/`post` helpers carry neither, which is the
+/// non-browser client shape the guard waves through.
+fn browser_post(path: &str, host: &str, origin: Option<&str>, body: &str) -> Request<Body> {
+    let mut b = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header("host", host);
+    if let Some(o) = origin {
+        b = b.header("origin", o);
+    }
+    b.body(Body::from(body.to_string())).unwrap()
+}
+
+#[tokio::test]
+async fn origin_guard_passes_same_origin_browser_requests() {
+    let config = config_with("").await;
+    let (st, _) = call(
+        config.clone(),
+        browser_post(
+            "/api/eval",
+            "localhost:8801",
+            Some("http://localhost:8801"),
+            "(+ 1 2)",
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    // Bracketed IPv6 authority — the `http://[::1]:8801` shape.
+    let (st, _) = call(
+        config.clone(),
+        browser_post(
+            "/api/eval",
+            "[::1]:8801",
+            Some("http://[::1]:8801"),
+            "(+ 1 2)",
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    // Loopback spellings browsers resolve without DNS: *.localhost,
+    // trailing-dot FQDNs, and non-.1 addresses in 127.0.0.0/8.
+    for host in ["app.localhost:8801", "localhost.:8801", "127.0.0.5:8801"] {
+        let origin = format!("http://{host}");
+        let (st, _) = call(
+            config.clone(),
+            browser_post("/api/eval", host, Some(&origin), "(+ 1 2)"),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{host}");
+    }
+}
+
+#[tokio::test]
+async fn origin_guard_rejects_foreign_origin_and_rebound_host() {
+    let config = config_with("").await;
+    // Cross-origin POST — text/plain needs no CORS preflight, and
+    // executing it would run attacker Lisp, so the guard must reject
+    // before routing.
+    let (st, _) = call(
+        config.clone(),
+        browser_post(
+            "/api/eval",
+            "localhost:8801",
+            Some("http://evil.example:8801"),
+            "(+ 1 2)",
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    // `Origin: null` (sandboxed iframe, file://) is not same-origin.
+    let (st, _) = call(
+        config.clone(),
+        browser_post("/api/eval", "localhost:8801", Some("null"), "(+ 1 2)"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    // DNS rebinding: same-origin from the browser's point of view,
+    // but the foreign hostname survives in `Host`.
+    let (st, _) = call(
+        config,
+        browser_post("/api/eval", "evil.example:8801", None, "(+ 1 2)"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn eval_body_is_capped_by_the_default_limit() {
+    // Pin axum's stock 2 MB `DefaultBodyLimit` on /api/eval so a
+    // future extractor or layer reshuffle can't silently drop the
+    // cap on the code-execution endpoint.
+    let config = config_with("").await;
+    let (st, _) = call(config, post("/api/eval", &"x".repeat(3 * 1024 * 1024))).await;
+    assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn setpoints_are_reachable_per_microgrid() {
+    let config = config_with("").await; // registers microgrid 2200
+    let (st, body) = call(
+        config.clone(),
+        get("/api/mg/2200/setpoints?id=1&window_s=60"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["id"], 1);
+    assert!(v["events"].as_array().is_some());
+    let (st, _) = call(config, get("/api/mg/9999/setpoints?id=1")).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}
