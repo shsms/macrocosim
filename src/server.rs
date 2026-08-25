@@ -259,31 +259,16 @@ impl MicrogridServer {
         // its children's reported bounds and rejects setpoints that
         // exceed the result. Switchyard does the same here so client
         // code sees the production behaviour even though the inverter
-        // and battery don't share a data link in our model. The check
-        // is per axis — each power type gates against its own
-        // envelope. 0 (the fail-safe park) is always allowed, whatever
-        // the envelope, and short-circuits before the lookup.
-        if req.power != 0.0 {
-            let (gateway_envelope, unit) = match power_type {
-                PowerType::Active => (
-                    site.active_setpoint_envelope(req.electrical_component_id),
-                    "W",
-                ),
-                PowerType::Reactive => (
-                    site.reactive_setpoint_envelope(req.electrical_component_id),
-                    "VAr",
-                ),
-                PowerType::Unspecified => unreachable!("rejected above"),
-            };
-            if let Some(envelope) = gateway_envelope
-                && !envelope.contains(req.power)
-            {
-                return Err(tonic::Status::failed_precondition(format!(
-                    "set-point {} {unit} exceeds combined envelope {}",
-                    req.power, envelope
-                )));
-            }
-        }
+        // and battery don't share a data link in our model. The gate
+        // (per-axis envelope, 0-park carve-out, message) is shared
+        // with the DSL's set-*-power arms via `gate_setpoint`.
+        let axis = match power_type {
+            PowerType::Active => SetpointAxis::Active,
+            PowerType::Reactive => SetpointAxis::Reactive,
+            PowerType::Unspecified => unreachable!("rejected above"),
+        };
+        site.gate_setpoint(req.electrical_component_id, axis, req.power)
+            .map_err(tonic::Status::failed_precondition)?;
 
         // Resolve the request lifetime *before* actuating: an out-of-range
         // lifetime is a protocol error, and rejecting it after the setpoint
@@ -308,11 +293,6 @@ impl MicrogridServer {
         // The TTL is per power axis: this request's expiry resets only
         // the axis it set, leaving a longer-lived command on the other
         // axis running.
-        let axis = match power_type {
-            PowerType::Active => SetpointAxis::Active,
-            PowerType::Reactive => SetpointAxis::Reactive,
-            PowerType::Unspecified => unreachable!("rejected above"),
-        };
         site.add_timeout(req.electrical_component_id, axis, duration);
 
         // Per the proto, a successful response carries the expiry the

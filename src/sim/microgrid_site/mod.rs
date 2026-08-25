@@ -784,6 +784,39 @@ impl MicrogridSite {
         }
     }
 
+    /// The gateway gate for one setpoint, shared by the gRPC SetPower
+    /// route and both DSL set-*-power reject arms: 0 (the fail-safe
+    /// park) always passes, whatever the envelope; any other value
+    /// must sit inside the axis's combined envelope when one exists
+    /// (own bounds ∩ children's — `None` means no bounded children,
+    /// so only component-level validation applies). `Err` carries the
+    /// message every caller surfaces, so the wording can't drift
+    /// between surfaces.
+    pub fn gate_setpoint(
+        &self,
+        id: u64,
+        axis: crate::timeout_tracker::SetpointAxis,
+        value: f32,
+    ) -> Result<(), String> {
+        use crate::timeout_tracker::SetpointAxis;
+        if value == 0.0 {
+            return Ok(());
+        }
+        let envelope = match axis {
+            SetpointAxis::Active => self.active_setpoint_envelope(id),
+            SetpointAxis::Reactive => self.reactive_setpoint_envelope(id),
+        };
+        if let Some(envelope) = envelope
+            && !envelope.contains(value)
+        {
+            return Err(format!(
+                "set-point {value} {} exceeds combined envelope {envelope}",
+                axis.unit()
+            ));
+        }
+        Ok(())
+    }
+
     /// Wipe every registered component. Called from `(reset-state)` in
     /// the config DSL on hot-reload. Also resets the id allocator so a
     /// reloaded config sees the same ids the previous load saw,

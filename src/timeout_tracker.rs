@@ -31,6 +31,17 @@ pub enum SetpointAxis {
     Reactive,
 }
 
+impl SetpointAxis {
+    /// The axis's unit label, as carried into setpoint error
+    /// messages (`MicrogridSite::gate_setpoint`).
+    pub fn unit(self) -> &'static str {
+        match self {
+            SetpointAxis::Active => "W",
+            SetpointAxis::Reactive => "VAr",
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct TimeoutTracker {
     inner: Arc<Mutex<HashMap<(u64, SetpointAxis), Instant>>>,

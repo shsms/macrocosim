@@ -10,6 +10,7 @@ use parking_lot::RwLock;
 use tulisp::{Error, TulispContext};
 
 use crate::sim::microgrids::SharedSiteRouter;
+use crate::timeout_tracker::SetpointAxis;
 
 use super::super::Metadata;
 
@@ -114,15 +115,12 @@ pub(super) fn register(
                     {
                         watts = envelope.clamp(watts);
                     }
-                } else if let Some(envelope) = w.active_setpoint_envelope(id as u64)
-                    && !envelope.contains(watts)
-                {
-                    // Mirrors the gRPC SetPower gateway: reject a command
-                    // the battery can't accept rather than silently
-                    // saturating it.
-                    return Err(Error::invalid_argument(format!(
-                        "set-active-power: set-point {watts} W exceeds combined envelope {envelope}"
-                    )));
+                } else {
+                    // The same gate as the gRPC SetPower route: reject
+                    // a command the battery can't accept rather than
+                    // silently saturating it.
+                    w.gate_setpoint(id as u64, SetpointAxis::Active, watts)
+                        .map_err(|m| Error::invalid_argument(format!("set-active-power: {m}")))?;
                 }
             }
             component
@@ -172,13 +170,11 @@ pub(super) fn register(
                     {
                         vars = envelope.clamp(vars);
                     }
-                } else if let Some(envelope) = w.reactive_setpoint_envelope(id as u64)
-                    && !envelope.contains(vars)
-                {
-                    // Mirrors the gRPC SetPower gateway on the Q axis.
-                    return Err(Error::invalid_argument(format!(
-                        "set-reactive-power: set-point {vars} VAr exceeds combined envelope {envelope}"
-                    )));
+                } else {
+                    // The same gate as the gRPC SetPower route, on the
+                    // Q axis.
+                    w.gate_setpoint(id as u64, SetpointAxis::Reactive, vars)
+                        .map_err(|m| Error::invalid_argument(format!("set-reactive-power: {m}")))?;
                 }
             }
             component
