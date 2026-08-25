@@ -243,10 +243,16 @@ impl PowerAxis {
         self.augs.lock().add_augmentation(ts, bounds, lifetime);
     }
 
-    /// delay.reset + ramp.set_target(park). Does not touch `published`.
+    /// delay.reset + ramp.set_target(park) + publish `park`. The
+    /// published write is for Q axes, whose telemetry reads the slot:
+    /// a reset zeroes the reported Q immediately instead of waiting a
+    /// tick for `step` to republish the ramp. P-side consumers never
+    /// read `published` (they report `actual()` or their own measured
+    /// value), so the write is inert there.
     pub fn reset(&self, park: f32) {
         self.delay.reset();
         self.ramp.set_target(park);
+        *self.published.lock() = park;
     }
 
     /// ramp.snap_to(v) alone: the live output jumps to `v` with no
@@ -592,6 +598,9 @@ mod tests {
             },
         ); // → 1000
         ax.reset(0.0);
+        // The park is published immediately — a Q reader between the
+        // reset and the next tick sees 0, not the pre-reset value.
+        assert_eq!(ax.published(), 0.0);
         let v = ax.step(
             t0,
             Duration::from_secs(1) / 2,

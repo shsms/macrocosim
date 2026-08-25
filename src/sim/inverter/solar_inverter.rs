@@ -270,10 +270,7 @@ impl SimulatedComponent for SolarInverter {
         // live sunlight anyway, so a reset racing a cloud shift still
         // converges on the right floor.
         self.active.reset(self.min_avail_w());
-        // A Q reset zeroes the published value immediately rather than
-        // waiting for the next tick to republish the ramp.
         self.reactive.reset(0.0);
-        self.reactive.override_published(0.0);
     }
 
     fn reset_setpoint_axis(&self, axis: crate::timeout_tracker::SetpointAxis) {
@@ -283,10 +280,7 @@ impl SimulatedComponent for SolarInverter {
         use crate::timeout_tracker::SetpointAxis;
         match axis {
             SetpointAxis::Active => self.active.reset(self.min_avail_w()),
-            SetpointAxis::Reactive => {
-                self.reactive.reset(0.0);
-                self.reactive.override_published(0.0);
-            }
+            SetpointAxis::Reactive => self.reactive.reset(0.0),
         }
     }
 

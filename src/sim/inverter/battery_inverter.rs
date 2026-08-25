@@ -263,10 +263,7 @@ impl SimulatedComponent for BatteryInverter {
 
     fn reset_setpoint(&self) {
         self.active.reset(0.0);
-        // A Q reset zeroes the published value immediately rather than
-        // waiting for the next tick to republish the ramp.
         self.reactive.reset(0.0);
-        self.reactive.override_published(0.0);
         *self.measured_w.lock() = 0.0;
     }
 
@@ -278,10 +275,7 @@ impl SimulatedComponent for BatteryInverter {
         use crate::timeout_tracker::SetpointAxis;
         match axis {
             SetpointAxis::Active => self.active.reset(0.0),
-            SetpointAxis::Reactive => {
-                self.reactive.reset(0.0);
-                self.reactive.override_published(0.0);
-            }
+            SetpointAxis::Reactive => self.reactive.reset(0.0),
         }
     }
 
