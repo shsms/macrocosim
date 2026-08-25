@@ -15,8 +15,10 @@ use crate::sim::{
 pub enum ReactiveSource {
     /// VArs directly: constant, lambda, or symbol.
     Var(DynamicScalar),
-    /// Derive Q from this meter's live P: `|P|·tan(acos(pf))`,
-    /// negated when leading. `pf` is true cos φ in `(0, 1]`.
+    /// Derive Q from this meter's live P: `P·tan(acos(pf))`,
+    /// negated when leading, so lagging keeps Q on P's own sign
+    /// (the passive-sign convention the UI labels by). `pf` is
+    /// true cos φ in `(0, 1]`.
     PowerFactor { pf: f32, leading: bool },
 }
 
@@ -177,14 +179,18 @@ impl Meter {
 }
 
 /// Derive reactive power from active power and a power factor:
-/// `|P|·tan(acos(pf))`, negated when leading. `pf` is true cos φ in
+/// `P·tan(acos(pf))`, negated when leading. Signed P keeps a lagging
+/// Q on the same sign as the power flow — an exporting meter (P < 0)
+/// configured lagging yields -Q, so the UI's sign-pair rule
+/// (same signs = lagging) labels it the way it was configured.
+/// `pf` is true cos φ in
 /// `(0, 1]`; the clamp is a guard against `pf > 1` (whose `acos` is
 /// NaN). The lower bound is inert in f32 — `acos(f32::MIN_POSITIVE)`
 /// equals `acos(0.0)` bit for bit — so a `pf` of 0 still yields a
 /// nonsense Q. Construction validates the actual range; the clamp is
 /// only a backstop.
 fn derive_pf_q(p: f32, pf: f32, leading: bool) -> f32 {
-    p.abs() * pf.clamp(f32::MIN_POSITIVE, 1.0).acos().tan() * if leading { -1.0 } else { 1.0 }
+    p * pf.clamp(f32::MIN_POSITIVE, 1.0).acos().tan() * if leading { -1.0 } else { 1.0 }
 }
 
 impl fmt::Display for Meter {
@@ -728,6 +734,15 @@ mod tests {
         // source has no cached value of its own.
         assert!(m.set_active_power_override(4_000.0));
         assert!((m.aggregate_reactive_var(&w) - -3_000.0).abs() < 1.0);
+
+        // Signed P: an exporting meter keeps a lagging Q on the
+        // export's own sign, so the UI's sign-pair rule (same signs
+        // = lagging) labels it as configured.
+        assert!(m.set_power_factor(0.8, false));
+        assert!(m.set_active_power_override(-8_000.0));
+        assert!((m.aggregate_reactive_var(&w) - -6_000.0).abs() < 1.0);
+        assert!(m.set_power_factor(0.8, true));
+        assert!((m.aggregate_reactive_var(&w) - 6_000.0).abs() < 1.0);
     }
 
     /// `constructed_reactive` freezes the SAME way `constructed_power`

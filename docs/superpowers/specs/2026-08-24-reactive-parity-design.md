@@ -149,10 +149,13 @@ axes), but everything around them does not:
   - `Var(DynamicScalar)` — constant / lambda / symbol, exactly like
     `:power`;
   - `PowerFactor { pf, leading }` — Q derived from the meter's
-    **live P** at read time: `|P| · tan(acos(pf))`, negated when
-    `leading` (PF is always positive; lagging/inductive/+Q is the
-    default, matching the passive-sign convention the hover card
-    uses).
+    **live P** at read time: `P · tan(acos(pf))`, negated when
+    `leading` (PF is always positive; lagging/inductive is the
+    default). (Amended 2026-08-25: originally `|P| · …`, which made
+    an exporting meter's lagging Q positive while the UI's sign-pair
+    rule read that as leading — signed P keeps a lagging Q on the
+    power flow's own sign, matching the passive-sign convention the
+    hover card labels by.)
   Constructor kwargs `:reactive-power` and `:power-factor` (+
   `:leading t`) are mutually exclusive — both at once is a config
   error. Constants persist into generated blocks via

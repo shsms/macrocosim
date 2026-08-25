@@ -208,7 +208,7 @@ UI").
   true power factor (cos φ). A meter's own
   reactive source is the real thing: mutually-exclusive `:reactive-power`
   (a VAr constant, lambda, or symbol) or `:power-factor` + `:leading`
-  (true cos φ in `(0, 1]`, deriving `Q = |P|·tan(acos(pf))` off the
+  (true cos φ in `(0, 1]`, deriving `Q = P·tan(acos(pf))` off the
   meter's own live P, negated when leading). Like `:power`, a fixed
   numeric reactive source freezes into the persisted managed file; a
   lambda or symbol source doesn't, and leaves the meter unrenderable.
