@@ -16,11 +16,12 @@ async fn editing_config_lisp_rebuilds_the_world() {
     let initial = "(make-microgrid :id 9 :grpc-port 8800 :topology \
                    (lambda () (%make-grid-connection-point :id 1)))\n";
     let s = TestServer::start(initial).await;
-    // Spawn the watcher — production path is `tokio::spawn(config.clone().watch())`.
-    tokio::spawn(Config::clone(&s.config).watch());
-    // Give the watcher a moment to install the inotify hook before
-    // we rewrite. Without this the rewrite races the .watch() call.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Spawn the watcher — production path is `tokio::spawn(config.clone().watch())`;
+    // the readiness signal sequences our rewrite after the inotify
+    // hooks exist, where a sleep only made the race unlikely.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(Config::clone(&s.config).watch_with_ready(Some(ready_tx)));
+    ready_rx.await.expect("watch setup resolved");
 
     let v0 = s.config.site().version();
     let path = s.config_path();

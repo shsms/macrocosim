@@ -1211,6 +1211,25 @@ impl Config {
     }
 
     pub async fn watch(self) {
+        self.watch_with_ready(None).await
+    }
+
+    /// [`Config::watch`] with a readiness signal: `ready` fires once
+    /// watch setup has resolved — the initial watch set is armed, or
+    /// arming failed and hot-reload is off. Either way, a file
+    /// rewrite sequenced after the signal is seen by the watcher or
+    /// never will be, so tests can rewrite deterministically instead
+    /// of sleeping and hoping the inotify hook beat them to it.
+    pub async fn watch_with_ready(self, ready: Option<tokio::sync::oneshot::Sender<()>>) {
+        // Fires on every exit from the arming phase, the error
+        // bail-outs included — a waiting test must not hang on a
+        // watcher that decided not to run.
+        let mut ready = ready;
+        let mut armed_signal = move || {
+            if let Some(tx) = ready.take() {
+                let _ = tx.send(());
+            }
+        };
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         // notify can fail at construction (out of inotify slots —
         // `fs.inotify.max_user_watches` exhausted by an IDE running
@@ -1228,6 +1247,7 @@ impl Config {
             Ok(w) => w,
             Err(e) => {
                 log::error!("watch: notify init failed: {e}; hot-reload disabled");
+                armed_signal();
                 return;
             }
         };
@@ -1241,8 +1261,10 @@ impl Config {
             } else {
                 log::error!("watch: no watch could be registered; hot-reload disabled");
             }
+            armed_signal();
             return;
         }
+        armed_signal();
 
         // Debounce window. Editors typically fire several notify
         // events for a single save (write + close-after-write +

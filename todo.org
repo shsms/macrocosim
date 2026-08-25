@@ -850,14 +850,21 @@ the full multi-fetch refresh was already gated on the mode with a
 chip-only =/api/scenario= fallback; the remaining cadence call —
 how often that background chip poll should run — landed as 15 s.
 
-*** TODO [#C] hot_reload test races watcher installation          :testing:
+*** DONE [#C] hot_reload test races watcher installation          :testing:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-25 Di] \\
+  Config::watch_with_ready(Option<oneshot::Sender>) fires once the
+  arming phase resolves (initial watch set armed, or hot-reload
+  bailed out) — the test awaits it instead of sleeping 200 ms.
+  watch() delegates, so the production path is unchanged.
+:END:
 
-=tests/hot_reload.rs= sleeps 200 ms before rewriting the config,
-but =Config::watch()= exposes no readiness signal — on a slow
-machine the rewrite can fire before the inotify watch exists and
-the test burns its whole 10 s poll budget. Clean fix: a readiness
-hook on =watch()= (a oneshot/=Notify= fired once =watcher.watch()=
-succeeds); the downstream version-bump poll is already correct.
+=tests/hot_reload.rs= slept 200 ms before rewriting the config,
+but =Config::watch()= exposed no readiness signal — on a slow
+machine the rewrite could fire before the inotify watch existed
+and the test burned its whole 10 s poll budget. Fixed with the
+oneshot readiness hook (=watch_with_ready=) the entry proposed;
+the downstream version-bump poll was already correct.
 
 *** TODO [#C] One-sided rated bounds are dropped          :fidelity:bounds:
 
