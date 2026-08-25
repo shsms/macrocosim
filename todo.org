@@ -834,16 +834,21 @@ can never be made one-off; delete+recreate changes the id. Check
 the intended proto semantics; mirroring the duration treatment is
 a small change once decided.
 
-*** TODO [#C] Scenarios poller never pauses                            :ui:
+*** DONE [#C] Scenarios poller never pauses                            :ui:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-25 Di] \\
+  Mostly stale by the time it was picked up: schedulePoll already
+  gated on the mode, running the full 5-fetch refresh only while
+  Scenarios shows and a single /api/scenario chip fetch otherwise.
+  The remaining cadence call is now made too: the hidden-mode chip
+  poll runs every 15 s instead of 3 s.
+:END:
 
-=panels.js='s =schedulePoll= never cancels, so once the Scenarios
-view has been opened, =/api/scenarios= + =/api/scenario= (+
-report/events/csv while a journal exists) poll every 3 s forever,
-on every view — the module comment says "while the mode is
-active". The header's =#active-scenarios= chip does need some
-background signal, so the fix is a cadence design call: a slower
-background poll when the mode is inactive, or a chip-only summary
-poll.
+=panels.js='s =schedulePoll= never cancelled, so once the Scenarios
+view had been opened it kept polling on every view. By pickup time
+the full multi-fetch refresh was already gated on the mode with a
+chip-only =/api/scenario= fallback; the remaining cadence call —
+how often that background chip poll should run — landed as 15 s.
 
 *** TODO [#C] hot_reload test races watcher installation          :testing:
 

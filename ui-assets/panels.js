@@ -834,11 +834,15 @@ export const scenariosPanel = (() => {
 
   function schedulePoll() {
     if (pollTimer) return;
-    // Cheap 3 s poll — server-side scenario time + checks have no WS
-    // push, so the run view + header chip stay live by polling.
+    // Server-side scenario time + checks have no WS push, so the run
+    // view stays live on a 3 s poll while the mode shows. Hidden, only
+    // the header chip needs a signal — one summary fetch, and at a
+    // 15 s cadence: a scenario starting elsewhere is a coarse event,
+    // not something worth polling at run-view rates forever.
+    let tick = 0;
     pollTimer = setInterval(() => {
       if (document.body.dataset.mode === "scenarios") refresh();
-      else refreshChip();
+      else if (++tick % 5 === 0) refreshChip();
     }, 3000);
   }
 
