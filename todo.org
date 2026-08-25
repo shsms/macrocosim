@@ -38,7 +38,7 @@ animations move power around at 200 ms. Tests need to either
 freeze the world at known points or assert on stable structure
 rather than pixel-exact screenshots.
 
-*** TODO B1. Playwright harness + first round of functional tests   :testing:
+*** TODO [#A] B1. Playwright harness + first round of functional tests :testing:
 
 Lay the foundation; cover surfaces that don't need pixel-perfect
 output to verify.
@@ -78,7 +78,7 @@ Build on B1 to cover the more state-ful flows.
 Acceptance: each flow runs deterministically when the server is
 fresh; tests don't share state between runs.
 
-*** TODO B3. Visual regression on a small set of stable views       :testing:
+*** TODO [#A] B3. Visual regression on a small set of stable views  :testing:
 
 Pixel-exact snapshots only where the surface is reliably stable.
 Avoids the topology-layout flake.
@@ -102,7 +102,7 @@ fail every run.
 Acceptance: three snapshot tests, baselines checked in, second
 run on the same machine matches.
 
-*** TODO B4. CI integration for the browser tests                   :testing:
+*** TODO [#A] B4. CI integration for the browser tests              :testing:
 
 Add a fourth job to =.github/workflows/ci.yml=:
 
@@ -1394,8 +1394,9 @@ Deferred refinements, pick up if the need shows:
   A) layered on the counter would suppress it.
 
 * Potential designs to consider — UX ideas (2026-08-20)
-** TODO Live topology: values and flow on the canvas              :ux:design:
+** DONE Live topology: values and flow on the canvas              :ux:design:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-25 Di 12:14]
 - State "TODO"       from              [2026-08-20 Do 15:12]
 :END:
 
@@ -1403,6 +1404,12 @@ Nodes show current kW / SoC / health as badges; edges get flow
 direction + thickness from live power. Makes Topology the screen
 operators keep open instead of cross-referencing the dashboard.
 (Large. Top-3 pick; design started on its own branch.)
+
+Shipped 2026-08-25 via the reactive-parity SP3 work: nodes carry
+live P / Q-or-SoC values, edges get flow chevrons sized by
+magnitude, plus the hover card with envelope bars — see the
+=values= pill on the Topology canvas and the loopback
+grid_reactive_power stream.
 
 ** TODO Explain-this-number: formula tree with live values        :ux:design:
 :LOGBOOK:
@@ -1599,3 +1606,74 @@ Thresholds are guesses — mock a 60-node graph at three zooms (like
 the node-studies artifact) before fixing them. Hysteresis around
 each threshold so panning at the boundary doesn't flicker.
 (Medium. Requested 2026-08-20 after the pill redesign.)
+
+** TODO [#A] Inspector redesign for component selection           :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-25 Di 12:14]
+:END:
+
+Big redesign of the floating inspector (inspect.js renderInspect):
+one string-templated flat =<dl>= stacking identity, config,
+runtime selects, seven knobs (grown by reactive parity), connections,
+charts, and the setpoint log. Three structural problems to own:
+
+- *Blind knobs.* Write-only: type, eval, field clears — "we don't
+  have getters for most of these". A real redesign wants read-back
+  (current value, envelope, active override/setpoint), i.e. new
+  getter surface on the server. Scope call pending: UI-only vs
+  UI+read-back API (recommended) vs full E2 schema-driven forms
+  (E2 stays deferred per its own entry).
+- *Triple-serving panel.* The same aside hosts node inspection,
+  dashboard formula trees, Defaults editor, and the scenario report
+  via =dataset.panel= — split "component inspector" from "generic
+  side panel".
+- *No reactive envelope display* even though Q bounds now stream;
+  the topology hovercard has envelopeBar, the inspector doesn't.
+
+Queue: after the B-section browser-test harness, before the formula
+overlay and dashboard rethink (2026-08-25 gap analysis).
+
+** TODO [#A] Formula explorer as an overlay on the topology canvas :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-25 Di 12:14]
+:END:
+
+Merge the Formulas subview into the Topology view so there aren't
+two views with the same canvas look. The duplication is UX-level,
+not code-level: both canvases come from the same
+=createGraphCanvas= factory, but index.html carries two copies of
+the layout-pill block, node arrangements aren't shared, and the
+Formulas context menu is a strict subset.
+
+Proposed shape: a *formula overlay mode* on the single canvas —
+pick a metric, the formula card + Why drawer slide in,
+cross-highlighting runs on the live graph. Design calls to settle:
+
+- does structural editing stay live under the overlay? (leaning
+  yes — the engine re-generates on topology change anyway, and the
+  telemetry toggle already exists on both canvases)
+- how canvas selection interacts with the "limit to the selected
+  components" option.
+
+Queue: after the inspector redesign, before the dashboard rethink
+(2026-08-25 gap analysis).
+
+** TODO [#A] Dashboard space rethink: attention panel over tier rows :ux:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-25 Di 12:14]
+:END:
+
+The dashboard's exhaustive per-component tier rows predate the live
+topology canvas (values on nodes, hovercard envelopes) and mostly
+duplicate it now. What is NOT obsolete: sortable scannable columns —
+SoC-ascending batteries, health pills, envelope bars with
+pinned-at-bound dots; a canvas can't scan 30 batteries by SoC.
+
+Direction: replace exhaustive enumeration with an *attention panel*
+— unhealthy components, inverters pinned at their envelope, SoC
+extremes, recently rejected setpoints. Dashboard answers "what
+needs attention", topology answers "browse everything".
+
+Deliberately LAST in the redesign queue: what belongs in the freed
+space depends on what the new inspector and the formula overlay
+absorb (2026-08-25 gap analysis).
