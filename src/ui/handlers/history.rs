@@ -47,7 +47,7 @@ pub(in crate::ui) async fn history(
     State(config): State<Config>,
     Query(q): Query<HistoryQuery>,
 ) -> Result<Json<HistoryResponse>, (StatusCode, String)> {
-    history_body(&config.site(), q)
+    history_body(&config.legacy_site(), q)
 }
 
 pub(in crate::ui) async fn history_for_mg(
@@ -108,10 +108,23 @@ pub(in crate::ui) async fn setpoints(
     State(config): State<Config>,
     Query(q): Query<SetpointsQuery>,
 ) -> Json<SetpointsResponse> {
+    setpoints_body(&config.legacy_site(), q)
+}
+
+pub(in crate::ui) async fn setpoints_for_mg(
+    State(config): State<Config>,
+    Path(mg_id): Path<u64>,
+    Query(q): Query<SetpointsQuery>,
+) -> Result<Json<SetpointsResponse>, (StatusCode, String)> {
+    let site = resolve_site(&config, mg_id)?;
+    Ok(setpoints_body(&site, q))
+}
+
+fn setpoints_body(site: &crate::sim::MicrogridSite, q: SetpointsQuery) -> Json<SetpointsResponse> {
     // Same clamp as history_body: keep a hostile window_s from
     // panicking chrono.
     let window = ChronoDuration::seconds(q.window_s.unwrap_or(600).clamp(0, 31_536_000));
     let since = Utc::now() - window;
-    let events = config.site().setpoints_window(q.id, since);
+    let events = site.setpoints_window(q.id, since);
     Json(SetpointsResponse { id: q.id, events })
 }

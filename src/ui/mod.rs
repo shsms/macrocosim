@@ -62,7 +62,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         },
         eval::{eval, eval_for_mg, format},
         formula::formula_for_mg,
-        history::{history, history_for_mg, setpoints},
+        history::{history, history_for_mg, setpoints, setpoints_for_mg},
         microgrid_data::{
             clock_info, microgrid_formulas, microgrid_formulas_for_mg, microgrid_history,
             microgrid_history_for_mg, microgrid_latest, microgrid_latest_for_mg, microgrid_status,
@@ -129,6 +129,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
             post(component_drive_for_mg),
         )
         .route("/api/mg/{mg_id}/history", get(history_for_mg))
+        .route("/api/mg/{mg_id}/setpoints", get(setpoints_for_mg))
         .route(
             "/api/mg/{mg_id}/microgrid/status",
             get(microgrid_status_for_mg),

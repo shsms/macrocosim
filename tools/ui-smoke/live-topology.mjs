@@ -542,20 +542,24 @@ const hiddenCard = await waitFor(async () => {
 }, 3000);
 check("e2e: hover card hides on blur", hiddenCard.visible === false);
 
-// A sick /api/setpoints must not be re-polled by every 1 s card
+// A sick setpoints endpoint must not be re-polled by every 1 s card
 // re-render. Failures are cached for 10 s, so once a card is open on
 // a component nobody has hovered yet, a 4 s window adds no requests.
+// The glob matches the per-mg route (/api/mg/{id}/setpoints) the
+// card actually fetches; the open-hit check below fails loudly if
+// the interception ever stops matching the SPA's URL again.
 let setpointHits = 0;
-await page.route("**/api/setpoints**", (route) => {
+await page.route("**/setpoints**", (route) => {
   setpointHits++;
   route.abort();
 });
 const failCard = await hoverNodeCard(1000); // bat-1000, not hovered before
 const hitsAtOpen = setpointHits;
+check("e2e: opening the card hits the setpoints endpoint", hitsAtOpen >= 1, `${hitsAtOpen} requests`);
 await new Promise((r) => setTimeout(r, 4000));
 check("e2e: a failing setpoints endpoint is not re-polled every second", setpointHits - hitsAtOpen === 0, `${hitsAtOpen} → ${setpointHits} requests`);
 check("e2e: the card still renders when setpoints fails", /bat-1000/.test(failCard.text) && !/Last command/.test(failCard.text), failCard.text);
-await page.unroute("**/api/setpoints**");
+await page.unroute("**/setpoints**");
 await page.mouse.move(5, 5);
 await waitFor(async () => {
   const s = await readCard();

@@ -73,6 +73,14 @@ pub struct MicrogridSite {
     inner: Arc<MicrogridSiteInner>,
 }
 
+impl MicrogridSite {
+    /// Whether two handles point at the same live site. Clones share
+    /// the inner state, so pointer identity is site identity.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
 struct MicrogridSiteInner {
     /// Registration-order component list, snapshotted by every tick /
     /// sampler pass. The inner Arc makes a snapshot one refcount bump

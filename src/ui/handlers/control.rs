@@ -73,13 +73,7 @@ fn site_for(
         // (`config.site()` would follow the ambient `current_microgrid`
         // scope, whose contract needs the interpreter lock we don't
         // hold.) Registry empty = single bootstrap site.
-        None => Ok(config
-            .microgrids()
-            .lock()
-            .values()
-            .next()
-            .map(|entry| entry.site.clone())
-            .unwrap_or_else(|| config.site())),
+        None => Ok(config.legacy_site()),
         Some(id) => config
             .microgrids()
             .lock()

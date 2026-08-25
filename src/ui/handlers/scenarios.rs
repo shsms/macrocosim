@@ -52,7 +52,7 @@ pub(in crate::ui) async fn scenarios_stop(
 /// null`, zero counts) before any `(scenario-start)`; freezes
 /// `elapsed_s` once `(scenario-stop)` fires.
 pub(in crate::ui) async fn scenario_summary(State(config): State<Config>) -> Json<ScenarioSummary> {
-    Json(config.site().scenario_summary(Utc::now()))
+    Json(config.legacy_site().scenario_summary(Utc::now()))
 }
 
 #[derive(Deserialize)]
@@ -85,8 +85,8 @@ pub(in crate::ui) async fn scenario_events(
 ) -> Json<ScenarioEventsResponse> {
     let since = q.since.unwrap_or(0);
     let limit = q.limit.unwrap_or(200).min(1000);
-    let events = config.site().scenario_events_since(since, limit);
-    let summary = config.site().scenario_summary(Utc::now());
+    let events = config.legacy_site().scenario_events_since(since, limit);
+    let summary = config.legacy_site().scenario_summary(Utc::now());
     Json(ScenarioEventsResponse {
         events,
         next_event_id: summary.next_event_id,
@@ -106,7 +106,7 @@ pub(in crate::ui) struct ScenarioCsvList {
 pub(in crate::ui) async fn scenario_csv_list(
     State(config): State<Config>,
 ) -> Json<ScenarioCsvList> {
-    match config.site().scenario_csv_listing() {
+    match config.legacy_site().scenario_csv_listing() {
         Some((dir, files)) => Json(ScenarioCsvList {
             dir: Some(dir.to_string_lossy().into_owned()),
             files,
@@ -130,7 +130,7 @@ pub(in crate::ui) async fn scenario_csv_file(
         return Err((StatusCode::BAD_REQUEST, "invalid filename".into()));
     }
     let (dir, files) = config
-        .site()
+        .legacy_site()
         .scenario_csv_listing()
         .ok_or((StatusCode::NOT_FOUND, "no recording".into()))?;
     if !files.contains(&file) {
@@ -167,5 +167,5 @@ pub(in crate::ui) async fn scenario_csv_file(
 /// `/api/scenario/events` so a dashboard can poll metrics
 /// frequently without scanning the whole event log.
 pub(in crate::ui) async fn scenario_report(State(config): State<Config>) -> Json<ScenarioReport> {
-    Json(config.site().scenario_report(Utc::now()))
+    Json(config.legacy_site().scenario_report(Utc::now()))
 }

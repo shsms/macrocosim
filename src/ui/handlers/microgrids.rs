@@ -258,10 +258,11 @@ pub(in crate::ui) async fn microgrids_import(
     // `import.components` comes from a dedup-validated
     // parse, so the collected list is already sorted and unique.
     {
-        // Resolve the bootstrap site BEFORE taking the registry
-        // lock: config.site() takes that same (non-reentrant) lock
-        // internally, so the other order deadlocks.
-        let bootstrap = config.site();
+        // The TRUE bootstrap site: once a microgrid is registered,
+        // legacy_site()/site() return the first registry entry, which
+        // would leave components living on the bootstrap site (legacy
+        // single-site configs) out of the collision scan.
+        let bootstrap = config.bootstrap_site();
         // Snapshot the site handles under the lock, then scan with
         // the lock RELEASED: a big export means thousands of per-id
         // lookups, and holding the registry mutex through them

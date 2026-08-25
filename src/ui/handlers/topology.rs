@@ -1,6 +1,7 @@
-//! Topology snapshot endpoints. `/api/topology` returns the
-//! bootstrap site (legacy), `/api/mg/{id}/topology` the per-
-//! microgrid view.
+//! Topology snapshot endpoints. `/api/topology` (legacy) returns
+//! the first registered microgrid — the bootstrap site when none
+//! is registered — and `/api/mg/{id}/topology` the per-microgrid
+//! view.
 
 use axum::{
     Json,
@@ -67,7 +68,7 @@ struct ComponentSummary {
 }
 
 pub(in crate::ui) async fn topology(State(config): State<Config>) -> Json<TopologySnapshot> {
-    Json(topology_snapshot(&config.site()))
+    Json(topology_snapshot(&config.legacy_site()))
 }
 
 pub(in crate::ui) async fn topology_for_mg(

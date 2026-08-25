@@ -387,8 +387,28 @@ impl Config {
         self.metadata.read().dispatch_socket_addr.clone()
     }
 
+    /// Resolve the site the ambient scope points at. Follows
+    /// `current_microgrid`, whose contract requires the interpreter
+    /// lock — callers outside an eval (HTTP handlers) must use
+    /// [`Config::legacy_site`] instead.
     pub fn site(&self) -> MicrogridSite {
         self.router.site()
+    }
+
+    /// Deterministic scope-free resolution for the unscoped legacy
+    /// HTTP endpoints: the first registered microgrid (min id), else
+    /// the bootstrap site — the same default the typed control
+    /// endpoints and the Python client's gRPC reads use. Never
+    /// consults `current_microgrid`, so it cannot race a concurrent
+    /// `/api/mg/{id}/eval` holding the scope flipped.
+    pub fn legacy_site(&self) -> MicrogridSite {
+        self.router.first_site()
+    }
+
+    /// The bootstrap site legacy single-site configs run on — see
+    /// [`crate::sim::microgrids::SiteRouter::bootstrap_site`].
+    pub fn bootstrap_site(&self) -> MicrogridSite {
+        self.router.bootstrap_site()
     }
 
     /// IANA name of the configured display zone (default

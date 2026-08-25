@@ -23,7 +23,7 @@ import { topology } from "./topology.js";
 // Prefixes /api/mg/{selected_id}/ when a microgrid is selected,
 // falls back to /api/{suffix} otherwise (used by the loopback HTTP
 // backfill on legacy endpoints that haven't been migrated yet,
-// e.g. /api/setpoints + /api/format).
+// e.g. /api/format).
 export function mgPath(suffix) {
   const id = readSelectedMg();
   return id == null ? `/api/${suffix}` : `/api/mg/${id}/${suffix}`;

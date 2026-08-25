@@ -675,18 +675,30 @@ client believes a 15-minute command is running; nothing corrects
 it. Fix: arm the deadline atomically with (or before) actuation,
 or give each axis a setpoint generation the reset compares.
 
-*** TODO [#B] Legacy GET endpoints race the ambient microgrid scope :concurrency:ui:
+*** DONE [#B] Legacy GET endpoints race the ambient microgrid scope :concurrency:ui:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-25 Di] \\
+  Design call resolved as /first microgrid/: legacy = deterministic
+  first registry entry (else bootstrap), matching control.rs and the
+  Python client's gRPC default — never current_microgrid, whose
+  contract needs the interpreter lock GETs don't hold. New
+  SiteRouter::first_site / Config::legacy_site used by every legacy
+  handler (topology, history, setpoints, scenarios) and the two
+  spots that open-coded the dodge. /api/setpoints also gained the
+  per-mg twin /api/mg/{id}/setpoints and the SPA (inspector,
+  topology hovercard) now fetches it via mgPath.
+:END:
 
 =/api/topology=, =/api/history= and =/api/setpoints= resolve via
-=config.site()=, which reads =current_microgrid= without the
+=config.site()=, which read =current_microgrid= without the
 interpreter lock its contract requires. While a long
-=POST /api/mg/5/eval= holds the lock with the scope flipped, a
-concurrent legacy GET returns microgrid 5's data. =control.rs=
-already dodges this by taking the first registry entry. Design
-call first: should "legacy" mean /first microgrid/ or /currently
-scoped/? (=topology.rs='s module doc says "the bootstrap site
-(legacy)", which matches neither.) Same family as the 2026-06-01
-snapshot-scope item.
+=POST /api/mg/5/eval= held the lock with the scope flipped, a
+concurrent legacy GET returned microgrid 5's data. =control.rs=
+already dodged this by taking the first registry entry; the fix
+extended that resolution to every legacy handler (the scenario
+endpoints included) and corrected =topology.rs='s module doc,
+which had matched neither reading. Same family as the 2026-06-01
+snapshot-scope item, which stays open.
 
 *** TODO [#B] Concurrent disjoint augmentations can empty the envelope :bounds:concurrency:
 

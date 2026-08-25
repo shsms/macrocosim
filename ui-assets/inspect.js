@@ -463,7 +463,7 @@ async function renderSetpoints(id, container) {
   wrap.innerHTML = "<h3>Recent setpoints</h3>";
   container.appendChild(wrap);
   try {
-    const res = await fetch(`/api/setpoints?id=${id}&window_s=600`);
+    const res = await fetch(`${mgPath("setpoints")}?id=${id}&window_s=600`);
     const data = await res.json();
     // Always create the list element, even when empty — pushSetpoint
     // appends to it on incoming WS events. A no-events placeholder

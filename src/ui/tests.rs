@@ -1676,17 +1676,57 @@ async fn eval_body_is_capped_by_the_default_limit() {
 }
 
 #[tokio::test]
-async fn setpoints_are_reachable_per_microgrid() {
-    let config = config_with("").await; // registers microgrid 2200
-    let (st, body) = call(
+async fn setpoints_resolve_per_microgrid_and_legacy_first_site() {
+    use crate::sim::setpoints::{SetpointEvent, SetpointKind, SetpointOutcome};
+    // Two microgrids: 9 (first by id — the legacy site) and 31.
+    let config =
+        config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
+    call(
         config.clone(),
-        get("/api/mg/2200/setpoints?id=1&window_s=60"),
+        post_json("/api/microgrids/create", r#"{"name":"s","id":31}"#),
     )
     .await;
-    assert_eq!(st, StatusCode::OK);
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["id"], 1);
-    assert!(v["events"].as_array().is_some());
-    let (st, _) = call(config, get("/api/mg/9999/setpoints?id=1")).await;
+    // Plant one event per microgrid, each under its own component id,
+    // so the assertions can tell WHICH site each endpoint answered
+    // from — an existence check alone would pass even if every route
+    // read the same site.
+    let ev = || SetpointEvent {
+        ts: Utc::now(),
+        kind: SetpointKind::ActivePower,
+        value: 1234.0,
+        ttl_s: Some(60),
+        outcome: SetpointOutcome::Accepted {
+            effective_value: Some(1234.0),
+        },
+    };
+    let site_of = |mg: u64| {
+        config
+            .microgrids()
+            .lock()
+            .get(&mg)
+            .unwrap_or_else(|| panic!("microgrid {mg} registered"))
+            .site
+            .clone()
+    };
+    site_of(31).log_setpoint(600, ev());
+    site_of(9).log_setpoint(500, ev());
+    let events_at = |path: &str| {
+        let config = config.clone();
+        let path = path.to_string();
+        async move {
+            let (st, body) = call(config, get(&path)).await;
+            assert_eq!(st, StatusCode::OK, "{path}");
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            v["events"].as_array().unwrap().len()
+        }
+    };
+    assert_eq!(events_at("/api/mg/31/setpoints?id=600").await, 1);
+    assert_eq!(events_at("/api/mg/9/setpoints?id=600").await, 0);
+    // The unscoped legacy route answers from the FIRST microgrid:
+    // it sees 9's event — a bootstrap-site resolution would report 0
+    // here too — and not 31's.
+    assert_eq!(events_at("/api/setpoints?id=500").await, 1);
+    assert_eq!(events_at("/api/setpoints?id=600").await, 0);
+    let (st, _) = call(config, get("/api/mg/9999/setpoints?id=600")).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }

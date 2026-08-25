@@ -309,7 +309,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // this hover session. Cleared by hideHover, so the seed is a
   // one-shot per hover rather than a retry on every 1 Hz re-render.
   const seededHist = new Set();
-  // /api/setpoints per component: a hit is good for 60 s, a failure
+  // the setpoints endpoint per component: a hit is good for 60 s, a failure
   // for 10 s. Without the second half, a card left open on a
   // component whose endpoint is erroring re-fetches on every 1 s
   // re-render for as long as the pointer rests there.
@@ -321,7 +321,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
     const hit = setpointCache.get(id);
     if (hit && Date.now() - hit.at < (hit.failed ? SETPOINT_FAIL_TTL_MS : SETPOINT_TTL_MS)) return hit.last;
     try {
-      const res = await fetch(`/api/setpoints?id=${id}&window_s=600`, { signal });
+      const res = await fetch(`${mgPath("setpoints")}?id=${id}&window_s=600`, { signal });
       if (!res.ok) throw new Error(`setpoints: HTTP ${res.status}`);
       const data = await res.json();
       const e = data.events?.[data.events.length - 1];
