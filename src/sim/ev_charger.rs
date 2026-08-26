@@ -237,6 +237,19 @@ impl SimulatedComponent for EvCharger {
         self.active.augment(ts, bounds, lifetime);
     }
 
+    fn augmentation_active(
+        &self,
+        axis: crate::timeout_tracker::SetpointAxis,
+        now: DateTime<Utc>,
+    ) -> bool {
+        use crate::timeout_tracker::SetpointAxis;
+        match axis {
+            SetpointAxis::Active => self.active.augmented(now),
+            // Single-axis component: no reactive axis to narrow.
+            SetpointAxis::Reactive => false,
+        }
+    }
+
     fn reset_setpoint(&self) {
         // Today's reset is delay.reset + ramp.snap_to(0) — exactly
         // `PowerAxis::trip()` minus the published write. The EV never

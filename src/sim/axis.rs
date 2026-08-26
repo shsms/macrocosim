@@ -243,6 +243,14 @@ impl PowerAxis {
         self.augs.lock().add_augmentation(ts, bounds, lifetime);
     }
 
+    /// True while at least one unexpired augmentation is narrowing
+    /// this axis — the inspector's "augmented" badge. Delegates to
+    /// `ComponentBounds::has_live_augmentations`, the same live/expired
+    /// predicate `effective_at` already applies to the queue.
+    pub fn augmented(&self, now: DateTime<Utc>) -> bool {
+        self.augs.lock().has_live_augmentations(now)
+    }
+
     /// delay.reset + ramp.set_target(park) + publish `park`. The
     /// published write is for Q axes, whose telemetry reads the slot:
     /// a reset zeroes the reported Q immediately instead of waiting a
@@ -901,5 +909,24 @@ mod tests {
             },
         );
         assert_eq!(v, 4_000.0);
+    }
+
+    /// `augmented` tracks the same live/expired split as `accept`'s
+    /// static envelope: false before any augmentation, true while one
+    /// is live, false again once its TTL has elapsed.
+    #[test]
+    fn augmented_reflects_live_augmentations_and_expiry() {
+        let ax = PowerAxis::new(AxisConfig {
+            rated: Some((0.0, 100.0)),
+            caps: None,
+            command_delay: Duration::ZERO,
+            ramp_rate_per_s: f32::INFINITY,
+            unit: "W",
+        });
+        let t0 = Utc::now();
+        assert!(!ax.augmented(t0));
+        ax.augment(t0, VecBounds::single(200.0, 300.0), Duration::from_secs(60));
+        assert!(ax.augmented(t0));
+        assert!(!ax.augmented(t0 + chrono::Duration::seconds(120)));
     }
 }

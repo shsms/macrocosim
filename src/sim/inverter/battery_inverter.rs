@@ -279,6 +279,18 @@ impl SimulatedComponent for BatteryInverter {
         }
     }
 
+    fn augmentation_active(
+        &self,
+        axis: crate::timeout_tracker::SetpointAxis,
+        now: DateTime<Utc>,
+    ) -> bool {
+        use crate::timeout_tracker::SetpointAxis;
+        match axis {
+            SetpointAxis::Active => self.active.augmented(now),
+            SetpointAxis::Reactive => self.reactive.augmented(now),
+        }
+    }
+
     fn augment_active_bounds(
         &self,
         ts: DateTime<Utc>,

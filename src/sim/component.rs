@@ -632,6 +632,19 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
         None
     }
 
+    /// Whether a live (unexpired) augmentation is currently narrowing
+    /// `axis` — the inspector's "augmented" badge. Defaults to `false`
+    /// for components with no `PowerAxis` of their own; overridden by
+    /// components that own one to delegate to its
+    /// `PowerAxis::augmented`.
+    fn augmentation_active(
+        &self,
+        _axis: crate::timeout_tracker::SetpointAxis,
+        _now: DateTime<Utc>,
+    ) -> bool {
+        false
+    }
+
     // ── aggregation (parent reads from child) ────────────────────────
 
     /// Total real power flowing at this component. Parents (meters,
