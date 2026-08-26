@@ -58,6 +58,16 @@ impl TimeoutTracker {
             .insert((id, axis), Instant::now() + lifetime);
     }
 
+    /// Time left before the (id, axis) setpoint expires. `None` when
+    /// the pair isn't tracked or the deadline already passed (the
+    /// sweep will remove it shortly).
+    pub fn remaining(&self, id: u64, axis: SetpointAxis) -> Option<Duration> {
+        self.inner
+            .lock()
+            .get(&(id, axis))
+            .and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+    }
+
     pub fn remove_expired(&self) -> Vec<(u64, SetpointAxis)> {
         let now = Instant::now();
         let mut guard = self.inner.lock();
@@ -100,5 +110,27 @@ mod tests {
         t.add(7, SetpointAxis::Active, Duration::from_secs(3600));
         std::thread::sleep(Duration::from_millis(2));
         assert_eq!(t.remove_expired(), vec![(7, SetpointAxis::Reactive)]);
+    }
+
+    /// `remaining` reports the time left for a tracked, still-live
+    /// deadline, and None for an untracked axis or id.
+    #[test]
+    fn remaining_reports_time_left_and_none_when_absent() {
+        let t = TimeoutTracker::new();
+        t.add(1, SetpointAxis::Active, Duration::from_secs(60));
+        let left = t.remaining(1, SetpointAxis::Active).expect("tracked");
+        assert!(left <= Duration::from_secs(60) && left > Duration::from_secs(58));
+        assert_eq!(t.remaining(1, SetpointAxis::Reactive), None);
+        assert_eq!(t.remaining(2, SetpointAxis::Active), None);
+    }
+
+    /// A tracked pair whose deadline has already passed reports None,
+    /// same as an untracked one — the sweep just hasn't caught up yet.
+    #[test]
+    fn remaining_is_none_once_the_deadline_has_passed() {
+        let t = TimeoutTracker::new();
+        t.add(3, SetpointAxis::Active, Duration::ZERO);
+        std::thread::sleep(Duration::from_millis(1));
+        assert_eq!(t.remaining(3, SetpointAxis::Active), None);
     }
 }
