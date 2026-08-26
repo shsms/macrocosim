@@ -183,7 +183,97 @@ function knobsFor(d) {
   return knobs;
 }
 
+// Tint class for one chip's "on" state, keyed by the row's
+// vocabulary (`semantics.kind` on renderSegRow) and the option value
+// itself. Mirrors the old <select>'s implicit meaning: a fault
+// injector left in a non-normal state should read as a warning even
+// though the row itself isn't "wrong".
+function segTint(kind, value) {
+  if (kind === "health") {
+    if (value === "ok") return "on-good";
+    if (value === "error") return "on-bad";
+    if (value === "standby") return "on-warn";
+  }
+  if (kind === "telemetry" || kind === "commands") {
+    return value === "normal" ? "on" : "on-warn";
+  }
+  return "on"; // mode: always plain "on" — no state here is a fault
+}
+
+// One chip row for a state knob (mode / health / telemetry /
+// commands). `semantics.kind` picks the tint mapping above;
+// `semantics.disabledReason`, when set, disables every chip in the
+// row and puts the reason on each one's hover title — same story the
+// old disabled <select> told. Clicks aren't wired per-row: the single
+// delegated listener below handles every `[data-knob][data-value]`
+// chip the panel ever renders.
+function renderSegRow(knobKey, current, options, semantics = {}) {
+  const { kind = "mode", disabledReason = null } = semantics;
+  const disabledAttrs = disabledReason
+    ? ` disabled title="${escapeHtml(disabledReason)}"`
+    : "";
+  const chips = options
+    .map((o) => {
+      const on = o === current;
+      const cls = on ? `seg-chip ${segTint(kind, o)}` : "seg-chip";
+      return `<button type="button" class="${cls}" data-knob="${knobKey}" data-value="${escapeHtml(o)}"${disabledAttrs}>${escapeHtml(o)}</button>`;
+    })
+    .join("");
+  return `<div class="seg">${chips}</div>`;
+}
+
+// Chip knob token → the same Lisp setter the old <select> onchange
+// handlers called.
+const KNOB_DEFUNS = {
+  "operational-mode": "set-component-operational-mode",
+  health: "set-component-health",
+  "telemetry-mode": "set-component-telemetry-mode",
+  "command-mode": "set-component-command-mode",
+};
+
+// One delegated click listener for every chip row the panel will
+// ever render, attached once at module load — inspectEl itself is
+// never replaced (only its innerHTML, on every selection), so a
+// listener attached inside renderInspect would accumulate one copy
+// per selection. The target id rides on inspectEl's own dataset
+// (set at the top of renderInspect below) rather than a closure,
+// since a closure would go stale the moment a different node is
+// selected.
+inspectEl.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-knob][data-value]");
+  if (!btn || btn.disabled) return;
+  const defun = KNOB_DEFUNS[btn.dataset.knob];
+  const id = inspectEl.dataset.inspectId;
+  if (!defun || !id) return;
+  evalQuoted(`(${defun} ${id} '${btn.dataset.value})`);
+});
+
+// localStorage key the Charts fold row's open/closed state persists
+// under, across selections and reloads. Reads/writes are wrapped in
+// try/catch (private-mode / quota-exceeded storage throws) and
+// default to folded on any failure.
+const CHARTS_OPEN_KEY = "sw-inspector-charts-open";
+function loadChartsOpen() {
+  try {
+    return localStorage.getItem(CHARTS_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function saveChartsOpen(open) {
+  try {
+    localStorage.setItem(CHARTS_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // Storage unavailable — the fold still works for this session,
+    // it just won't remember next time.
+  }
+}
+
 function renderInspect(d, parentIds, childIds) {
+  // The delegated chip-click listener above reads the target id off
+  // this dataset entry rather than a closure — see its comment.
+  inspectEl.dataset.inspectId = d.id;
+
   // Rename and disconnect rewrite the microgrid's file; on an
   // unmanaged one they are shown but inert, with the reason on
   // hover. Everything below them — modes, health, knobs — is
@@ -202,77 +292,101 @@ function renderInspect(d, parentIds, childIds) {
     ? childIds.map((id) => renderEdgeRow(id, "data-disconnect-to")).join("")
     : '<li class="hint">none</li>';
 
+  const knobs = knobsFor(d);
+  const knobsHtml = knobs
+    .map((k) => {
+      const inputAttrs = k.dynamic
+        ? `type="text" placeholder="value or (lambda () ...)"`
+        : `type="number" step="any" placeholder="value"`;
+      // `k.flag`, when set, renders a checkbox alongside the input
+      // for an optional boolean arg (e.g. power factor's LEADING).
+      // The checkbox by itself never submits anything — it only
+      // qualifies whatever value is next entered into the input, at
+      // which point the change handler below reads it and appends
+      // it to the eval'd expression.
+      const flagHtml = k.flag
+        ? `<label class="knob-flag"><input type="checkbox" class="knob-flag-input" /> ${escapeHtml(k.flag)}</label>`
+        : "";
+      return `<dt>${escapeHtml(k.label)}</dt><dd>
+        <input ${inputAttrs} class="knob-input"
+               data-defun="${k.defun}" />${flagHtml}
+      </dd>`;
+    })
+    .join("");
+
+  // Charts fold summary — just a metric count; the charts themselves
+  // aren't fetched until first unfold (see renderNode/buildCharts).
+  const metrics = CHARTS_BY_CATEGORY[d.category] || [];
+  const chartsSummary = metrics.length
+    ? `${metrics.length} metric${metrics.length === 1 ? "" : "s"}`
+    : "none";
+
   inspectEl.innerHTML = `
     <h2><input id="rename" class="name-input" value="${escapeHtml(d.name)}"${lockAttrs} /></h2>
+    <div class="insp-meta">
+      <span class="insp-meta-id">id ${d.id}</span>
+      <span class="insp-chip insp-cat-chip" style="color:var(--cat-${escapeHtml(d.category)});border-color:var(--cat-${escapeHtml(d.category)})">${d.subtype ? `${escapeHtml(d.category)} · ${escapeHtml(d.subtype)}` : escapeHtml(d.category)}</span>
+      <span class="insp-chip insp-health-chip ${escapeHtml(d.health)}">${escapeHtml(d.health)}</span>
+      <span class="insp-chip insp-augmented" id="insp-augmented" hidden>augmented</span>
+    </div>
+
+    <h3>Graph</h3>
     <dl>
-      <dt>id</dt><dd>${d.id}</dd>
-      <dt>category</dt><dd>${d.category}</dd>
-      <dt>subtype</dt><dd>${d.subtype || "—"}</dd>
+      <dt>mode</dt><dd>${renderSegRow("operational-mode", d.operational_mode, OPERATIONAL_MODES.map((m) => m.value), { kind: "mode" })}</dd>
     </dl>
-    <h3>Config</h3>
+
+    <h3>Simulation</h3>
     <dl>
-      <dt>mode</dt><dd>${selectField("operational-mode", d.operational_mode, OPERATIONAL_MODES.map((m) => m.value))}</dd>
-    </dl>
-    <h3>Runtime</h3>
-    <dl>
-      <dt>health</dt><dd>${selectField("health", d.health, ["ok", "error", "standby"])}</dd>
-      <dt>telemetry</dt><dd>${selectField("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"], d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null)}</dd>
+      <dt>health</dt><dd>${renderSegRow("health", d.health, ["ok", "error", "standby"], { kind: "health" })}</dd>
+      <dt>telemetry</dt><dd>${renderSegRow("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"], { kind: "telemetry", disabledReason: d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null })}</dd>
       ${ACCEPTS_SETPOINTS.has(d.category)
-        ? `<dt>commands</dt><dd>${selectField("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"], d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null)}</dd>`
+        ? `<dt>commands</dt><dd>${renderSegRow("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"], { kind: "commands", disabledReason: d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null })}</dd>`
         : ""}
     </dl>
-    ${(() => {
-      const knobs = knobsFor(d);
-      if (!knobs.length) return "";
-      return `<h3>Knobs</h3><dl>${knobs
-        .map((k) => {
-          const inputAttrs = k.dynamic
-            ? `type="text" placeholder="value or (lambda () ...)"`
-            : `type="number" step="any" placeholder="value"`;
-          // `k.flag`, when set, renders a checkbox alongside the
-          // input for an optional boolean arg (e.g. power factor's
-          // LEADING). The checkbox by itself never submits anything
-          // — it only qualifies whatever value is next entered into
-          // the input, at which point the change handler below reads
-          // it and appends it to the eval'd expression.
-          const flagHtml = k.flag
-            ? `<label class="knob-flag"><input type="checkbox" class="knob-flag-input" /> ${escapeHtml(k.flag)}</label>`
-            : "";
-          return `<dt>${escapeHtml(k.label)}</dt><dd>
-            <input ${inputAttrs} class="knob-input"
-                   data-defun="${k.defun}" />${flagHtml}
-          </dd>`;
-        })
-        .join("")}</dl>`;
-    })()}
-    <h3>Connections</h3>
-    <div class="conns">
-      <div><strong>parents</strong><ul>${parentList}</ul></div>
-      <div><strong>children</strong><ul>${childList}</ul></div>
+
+    <h3>Power</h3>
+    <dl>
+      <dt>P</dt><dd>
+        <div class="env-bar" data-envelope="active"><div class="env-live"></div><div class="env-sp"></div></div>
+        <div class="env-ends" data-envelope-ends="active"></div>
+        <div class="env-setpoint hint" data-envelope-setpoint="active" hidden></div>
+      </dd>
+      <dt>Q</dt><dd>
+        <div class="env-bar" data-envelope="reactive"><div class="env-live"></div><div class="env-sp"></div></div>
+        <div class="env-ends" data-envelope-ends="reactive"></div>
+        <div class="env-setpoint hint" data-envelope-setpoint="reactive" hidden></div>
+      </dd>
+      ${knobsHtml}
+    </dl>
+
+    <div class="fold" id="charts-fold">
+      <h3 class="fold-toggle" data-fold-toggle>Charts<span class="fold-summary">${chartsSummary}<span class="fold-chevron">▾</span></span></h3>
+      <div class="fold-body"><div id="charts"></div></div>
     </div>
-    <div id="charts"></div>
+
+    <div id="setpoints-section"></div>
+
+    <div class="fold" id="connections-fold">
+      <h3 class="fold-toggle" data-fold-toggle>Connections<span class="fold-summary">${parentIds.length} parents · ${childIds.length} children<span class="fold-chevron">▾</span></span></h3>
+      <div class="fold-body">
+        <div class="conns">
+          <div><strong>parents</strong><ul>${parentList}</ul></div>
+          <div><strong>children</strong><ul>${childList}</ul></div>
+        </div>
+      </div>
+    </div>
   `;
 
   // Wire form callbacks. Every action POSTs to /api/eval; the WS
   // TopologyChanged refresh re-reads the form state from the server
-  // and re-renders this panel automatically.
+  // and re-renders this panel automatically. Mode/health/telemetry/
+  // commands chip clicks are handled by the single delegated
+  // listener on inspectEl, above — not wired per-render here.
   document.getElementById("rename").addEventListener("change", (e) => {
     const name = e.target.value.trim();
     if (!name) return;
     evalQuoted(`(rename-component ${d.id} "${jsToLispString(name)}")`);
   });
-  for (const [key, defun] of [
-    ["operational-mode", "set-component-operational-mode"],
-    ["health", "set-component-health"],
-    ["telemetry-mode", "set-component-telemetry-mode"],
-    ["command-mode", "set-component-command-mode"],
-  ]) {
-    const sel = inspectEl.querySelector(`select[data-knob="${key}"]`);
-    if (!sel) continue; // dropdown hidden for this category
-    sel.addEventListener("change", (e) => {
-      evalQuoted(`(${defun} ${d.id} '${e.target.value})`);
-    });
-  }
   // Numeric knob inputs: change (or Enter then blur) → eval the
   // setter with the typed value; then clear so the field reads as
   // "what would you set it to next" rather than "what's it set to
@@ -303,21 +417,15 @@ function renderInspect(d, parentIds, childIds) {
       evalQuoted(`(disconnect ${d.id} ${btn.dataset.disconnectTo})`),
     );
   }
-}
 
-// `disabledReason` (a string) greys the select out and becomes its
-// hover tooltip — used when the operational mode forbids the knob,
-// where the backend would reject the set with the same message.
-function selectField(knob, current, options, disabledReason = null) {
-  const opts = options
-    .map(
-      (o) => `<option value="${o}"${o === current ? " selected" : ""}>${o}</option>`,
-    )
-    .join("");
-  const attrs = disabledReason
-    ? ` disabled title="${escapeHtml(disabledReason)}"`
-    : "";
-  return `<select data-knob="${knob}"${attrs}>${opts}</select>`;
+  // Connections fold: session-only toggle, always starts folded, no
+  // async work behind it. The Charts fold (persisted, first-unfold
+  // build) is wired by renderNode below — it needs the render's
+  // generation guard, which only renderNode has.
+  const connFold = document.getElementById("connections-fold");
+  connFold.querySelector("[data-fold-toggle]").addEventListener("click", () => {
+    connFold.classList.toggle("open");
+  });
 }
 
 // Bumped on every showComponent call. Rapid node selection races two
@@ -346,8 +454,54 @@ async function renderNode(d, gen) {
   const childIds = topology.childrenOf(d.id);
   renderInspect(d, parentIds, childIds);
 
+  // Charts fold: history fetch + live-chart wiring are deferred to
+  // first unfold (folded by default; open state persists across
+  // selections via localStorage). `built` guards against wiring the
+  // charts twice if the row is folded/unfolded repeatedly.
+  const chartsFold = document.getElementById("charts-fold");
+  const chartsContainer = document.getElementById("charts");
+  let built = false;
+  const buildChartsOnce = async () => {
+    if (built) return;
+    built = true;
+    const charts = await buildCharts(d, chartsContainer);
+    // A rapid reselect can land after this fetch resolves; bail
+    // without activating the live-push session so a stale node's
+    // charts can't clobber whatever the newer selection is showing.
+    if (gen !== showGen) {
+      for (const ch of charts.values()) ch.plot.destroy();
+      return;
+    }
+    liveCharts.set(d.id, charts);
+  };
+  chartsFold
+    .querySelector("[data-fold-toggle]")
+    .addEventListener("click", () => {
+      const open = !chartsFold.classList.contains("open");
+      chartsFold.classList.toggle("open", open);
+      saveChartsOpen(open);
+      if (open) buildChartsOnce();
+    });
+  if (loadChartsOpen()) {
+    chartsFold.classList.add("open");
+    buildChartsOnce();
+  }
+
+  // Setpoint events: list recent control-app requests + outcome.
+  // Unlike charts this always runs on open — it's cheap and today's
+  // behavior, unchanged by the fold restructure.
+  await renderSetpoints(d.id, document.getElementById("setpoints-section"));
+}
+
+// Build the per-metric uPlot charts for `d` into `container` and
+// return them as a metric → {plot, xs, ys, scale} map. Extracted from
+// the old inline showComponent chart code so the Charts fold row can
+// call it lazily, on first unfold, instead of on every selection.
+// Doesn't touch `liveCharts` itself or check the render generation —
+// the caller (renderNode) owns both, since only it knows this
+// render's `gen` and whether a newer selection has since started.
+async function buildCharts(d, container) {
   const metrics = CHARTS_BY_CATEGORY[d.category] || [];
-  const container = document.getElementById("charts");
   const charts = new Map(); // metric → { plot, xs, ys }
 
   // All metric histories fetched concurrently — inspector-open
@@ -373,7 +527,6 @@ async function renderNode(d, gen) {
         ),
     ),
   );
-  if (gen !== showGen) return;
   for (const [i, { metric, slot }] of slots.entries()) {
     const { resp, err } = results[i];
     if (err) {
@@ -392,12 +545,7 @@ async function renderNode(d, gen) {
     // live push path can append by dividing each new sample once.
     charts.set(metric, { plot, xs, ys: ys.map((y) => y / scale.div), scale });
   }
-  liveCharts.set(d.id, charts);
-
-  // Setpoint events: list recent control-app requests + outcome
-  // below the charts. Live-overlay markers on the chart are a
-  // follow-up; this is the inspector's MVP.
-  await renderSetpoints(d.id, container);
+  return charts;
 }
 
 // One setpoint-event row, shared by the live-WS push and the REST
