@@ -219,21 +219,26 @@ const KNOB_DEFUNS = {
 };
 
 // One delegated click listener for every chip row the panel will
-// ever render, attached once at module load — inspectEl itself is
-// never replaced (only its innerHTML, on every selection), so a
+// ever render, attached once from app.js init() — inspectEl itself
+// is never replaced (only its innerHTML, on every selection), so a
 // listener attached inside renderInspect would accumulate one copy
 // per selection. The target id rides on inspectEl's own dataset
 // (set at the top of renderInspect below) rather than a closure,
 // since a closure would go stale the moment a different node is
-// selected.
-inspectEl.addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-knob][data-value]");
-  if (!btn || btn.disabled) return;
-  const defun = KNOB_DEFUNS[btn.dataset.knob];
-  const id = inspectEl.dataset.inspectId;
-  if (!defun || !id) return;
-  evalQuoted(`(${defun} ${id} '${btn.dataset.value})`);
-});
+// selected. This must NOT run at module load: inspectEl is a const
+// that app.js initializes in its module body, which runs after this
+// module's — touching it here at top level is a TDZ ReferenceError
+// that kills the whole module graph at boot.
+export function setupInspectorChips() {
+  inspectEl.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-knob][data-value]");
+    if (!btn || btn.disabled) return;
+    const defun = KNOB_DEFUNS[btn.dataset.knob];
+    const id = inspectEl.dataset.inspectId;
+    if (!defun || !id) return;
+    evalQuoted(`(${defun} ${id} '${btn.dataset.value})`);
+  });
+}
 
 // localStorage key the Charts fold row's open/closed state persists
 // under, across selections and reloads. Reads/writes are wrapped in

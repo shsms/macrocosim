@@ -26,7 +26,7 @@ import {
 } from "./editor.js";
 import { formulaCanvas, refreshFormula, setupExplainPanel } from "./explain.js";
 import { setupFormulaTileClicks } from "./formulas.js";
-import { showComponent } from "./inspect.js";
+import { setupInspectorChips, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { backfillLogs, openWebSocket, setupRepl } from "./repl.js";
 import {
@@ -352,6 +352,7 @@ async function init() {
   setupDefaultsToggle();
   setupScenarioReportToggle();
   setupFloatingPanels();
+  setupInspectorChips();
   setupDrawerSplitter();
   setupFormulaDrawerSplitter();
   setupSnapshotsDialog();
