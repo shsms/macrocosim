@@ -4,7 +4,8 @@
 // form, and helpers around them.
 
 import { escapeHtml, notify } from "./app.js";
-import { evalQuoted, OPERATIONAL_MODES, showComponent } from "./inspect.js";
+import { evalQuoted } from "./eval.js";
+import { OPERATIONAL_MODES, showComponent } from "./inspect.js";
 import { READ_ONLY_TITLE, readSelectedMg, structureEditable } from "./routing.js";
 import { ALIGN_MODES, topology } from "./topology.js";
 

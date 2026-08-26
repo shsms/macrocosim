@@ -19,8 +19,8 @@
 
 import { notify, setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
+import { evalQuoted } from "./eval.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
-import { evalQuoted } from "./inspect.js";
 import { deadBandW, edgeFlow } from "./live.js";
 import { cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
 import {

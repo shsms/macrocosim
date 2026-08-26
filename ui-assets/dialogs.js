@@ -10,7 +10,8 @@ import {
   notify,
   openInspector,
 } from "./app.js";
-import { clearSide, evalQuoted, startScenarioReportLoop } from "./inspect.js";
+import { evalQuoted } from "./eval.js";
+import { clearSide, startScenarioReportLoop } from "./inspect.js";
 import { currentMgEntry, readSelectedMg } from "./routing.js";
 
 export function setupHelpButton() {

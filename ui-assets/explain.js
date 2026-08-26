@@ -12,7 +12,7 @@
 
 import { escapeHtml, notify } from "./app.js";
 import { alignMenuItems, modeMenuItems, showMenuItems } from "./editor.js";
-import { evalQuoted } from "./inspect.js";
+import { evalQuoted } from "./eval.js";
 import { mgPath, readSelectedMg, visibleSubview } from "./routing.js";
 import { createGraphCanvas } from "./topology.js";
 
