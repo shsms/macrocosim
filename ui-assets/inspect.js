@@ -170,43 +170,47 @@ function knobsFor(d) {
   return knobs;
 }
 
-// Tint class for one chip's "on" state, keyed by the row's
-// vocabulary (`semantics.kind` on renderSegRow) and the option value
-// itself. Mirrors the old <select>'s implicit meaning: a fault
-// injector left in a non-normal state should read as a warning even
-// though the row itself isn't "wrong".
-function segTint(kind, value) {
-  if (kind === "health") {
-    if (value === "ok") return "on-good";
-    if (value === "error") return "on-bad";
-    if (value === "standby") return "on-warn";
-  }
-  if (kind === "telemetry" || kind === "commands") {
-    return value === "normal" ? "on" : "on-warn";
-  }
-  return "on"; // mode: always plain "on" — no state here is a fault
+// Tint class for a health chip's "on" state: the three states carry
+// their own severity colours.
+function segTint(value) {
+  if (value === "error") return "on-bad";
+  if (value === "standby") return "on-warn";
+  return "on-good"; // ok
 }
 
-// One chip row for a state knob (mode / health / telemetry /
-// commands). `semantics.kind` picks the tint mapping above;
-// `semantics.disabledReason`, when set, disables every chip in the
-// row and puts the reason on each one's hover title — same story the
-// old disabled <select> told. Clicks aren't wired per-row: the single
-// delegated listener below handles every `[data-knob][data-value]`
-// chip the panel ever renders.
-function renderSegRow(knobKey, current, options, semantics = {}) {
-  const { kind = "mode", disabledReason = null } = semantics;
-  const disabledAttrs = disabledReason
-    ? ` disabled title="${escapeHtml(disabledReason)}"`
-    : "";
+// The health row is the one state knob rendered as chips: three
+// short options fit on a single line and the active chip's colour
+// makes the health readable at a glance. The longer vocabularies
+// (mode / telemetry / commands) wrap badly as chips in the 420 px
+// panel and render as <select>s via selectField below instead.
+// Clicks aren't wired per-row: the single delegated listener below
+// handles every `[data-knob][data-value]` chip the panel renders.
+function renderSegRow(knobKey, current, options) {
   const chips = options
     .map((o) => {
       const on = o === current;
-      const cls = on ? `seg-chip ${segTint(kind, o)}` : "seg-chip";
-      return `<button type="button" class="${cls}" data-knob="${knobKey}" data-value="${escapeHtml(o)}"${disabledAttrs}>${escapeHtml(o)}</button>`;
+      const cls = on ? `seg-chip ${segTint(o)}` : "seg-chip";
+      return `<button type="button" class="${cls}" data-knob="${knobKey}" data-value="${escapeHtml(o)}">${escapeHtml(o)}</button>`;
     })
     .join("");
   return `<div class="seg">${chips}</div>`;
+}
+
+// `disabledReason` (a string) greys the select out and becomes its
+// hover tooltip — used when the operational mode forbids the knob,
+// where the backend would reject the set with the same message. The
+// current value stays selected while disabled, so the row still
+// shows what state the component is in.
+function selectField(knob, current, options, disabledReason = null) {
+  const opts = options
+    .map(
+      (o) => `<option value="${o}"${o === current ? " selected" : ""}>${o}</option>`,
+    )
+    .join("");
+  const attrs = disabledReason
+    ? ` disabled title="${escapeHtml(disabledReason)}"`
+    : "";
+  return `<select data-knob="${knob}"${attrs}>${opts}</select>`;
 }
 
 // Chip knob token → the same Lisp setter the old <select> onchange
@@ -237,6 +241,17 @@ export function setupInspectorChips() {
     const id = inspectEl.dataset.inspectId;
     if (!defun || !id) return;
     evalQuoted(`(${defun} ${id} '${btn.dataset.value})`);
+  });
+  // The state <select>s (mode / telemetry / commands) go through the
+  // same delegation: change bubbles, and the select's own value is
+  // the option token.
+  inspectEl.addEventListener("change", (e) => {
+    const sel = e.target.closest("select[data-knob]");
+    if (!sel) return;
+    const defun = KNOB_DEFUNS[sel.dataset.knob];
+    const id = inspectEl.dataset.inspectId;
+    if (!defun || !id) return;
+    evalQuoted(`(${defun} ${id} '${sel.value})`);
   });
 }
 
@@ -338,15 +353,15 @@ function renderInspect(d, parentIds, childIds) {
 
     <h3>Graph</h3>
     <dl>
-      <dt>mode</dt><dd>${renderSegRow("operational-mode", d.operational_mode, OPERATIONAL_MODES.map((m) => m.value), { kind: "mode" })}</dd>
+      <dt>mode</dt><dd>${selectField("operational-mode", d.operational_mode, OPERATIONAL_MODES.map((m) => m.value))}</dd>
     </dl>
 
     <h3>Simulation</h3>
     <dl>
-      <dt>health</dt><dd>${renderSegRow("health", d.health, ["ok", "error", "standby"], { kind: "health" })}</dd>
-      <dt>telemetry</dt><dd>${renderSegRow("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"], { kind: "telemetry", disabledReason: d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null })}</dd>
+      <dt>health</dt><dd>${renderSegRow("health", d.health, ["ok", "error", "standby"])}</dd>
+      <dt>telemetry</dt><dd>${selectField("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"], d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null)}</dd>
       ${ACCEPTS_SETPOINTS.has(d.category)
-        ? `<dt>commands</dt><dd>${renderSegRow("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"], { kind: "commands", disabledReason: d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null })}</dd>`
+        ? `<dt>commands</dt><dd>${selectField("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"], d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null)}</dd>`
         : ""}
     </dl>
 

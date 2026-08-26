@@ -1729,7 +1729,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   border-radius: 4px;
   background: var(--bg);
   color: var(--muted);
-  font: 12px var(--font-mono);
+  font: 13px var(--font-mono);
   cursor: pointer;
 }
 #inspect .seg-chip:hover:not(:disabled) { border-color: var(--accent); }
