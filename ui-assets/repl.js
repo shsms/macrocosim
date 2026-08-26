@@ -12,7 +12,7 @@ import {
   evRows,
   pvRows,
 } from "./dashboard.js";
-import { liveCharts } from "./inspect.js";
+import { inspectorLive, liveCharts } from "./inspect.js";
 import {
   COMPLETIONS,
   indentForNewline,
@@ -388,7 +388,7 @@ export function openWebSocket(onTopologyChanged) {
       const selectedMg = readSelectedMg();
       const perMg = ev.kind === "sample" || ev.kind === "microgrid_sample"
                  || ev.kind === "topology_changed" || ev.kind === "setpoint"
-                 || ev.kind === "dispatch_changed";
+                 || ev.kind === "dispatch_changed" || ev.kind === "knob_changed";
       if (perMg && selectedMg != null && ev.mg_id != null && ev.mg_id !== selectedMg) {
         return;
       }
@@ -400,14 +400,17 @@ export function openWebSocket(onTopologyChanged) {
         chpRows.applySample(ev);
         gridFrequency.applySample(ev);
         topology.applySample(ev);
+        inspectorLive.applySample(ev);
       } else if (ev.kind === "microgrid_sample") {
         dashboardTiles.applySample(ev);
       } else if (ev.kind === "topology_changed") {
         onTopologyChanged(ev.version);
       } else if (ev.kind === "setpoint") {
-        liveCharts.pushSetpoint(ev);
         topology.noteSetpoint(ev);
         pulseBar.recordSetpoint();
+        inspectorLive.applySetpoint(ev);
+      } else if (ev.kind === "knob_changed") {
+        inspectorLive.applyKnob(ev);
       } else if (ev.kind === "log") {
         appendLog(ev);
       } else if (ev.kind === "config_error") {

@@ -7,6 +7,7 @@
 
 import { escapeHtml, inspectEl } from "./app.js";
 import { evalQuoted, jsToLispString } from "./eval.js";
+import { formatScaled } from "./live.js";
 import { mgPath, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
 import { topology } from "./topology.js";
@@ -85,25 +86,6 @@ export const liveCharts = (() => {
       }
       series.plot.setData([series.xs, series.ys]);
     },
-    pushSetpoint(ev) {
-      // Only render if the event is for the currently-inspected
-      // component; otherwise it'll be picked up next time the user
-      // selects that node (the server's per-component log is the
-      // source of truth).
-      if (!active || active.id !== Number(ev.id)) return;
-      const list = inspectEl.querySelector(".sp-list");
-      if (!list) return;
-      // Drop the "none" placeholder if it's still showing.
-      const empty = list.querySelector(".sp-empty");
-      if (empty) empty.remove();
-      // The WS event carries the setpoint kind on `setpoint_kind`
-      // to dodge collision with the SiteEvent discriminator (also
-      // called `kind`).
-      list.prepend(setpointEventLi(ev.ts_ms, ev.setpoint_kind, ev.value, ev.accepted, ev.reason));
-      // Trim if the list is getting long — match the 600s window
-      // used by the initial fetch.
-      while (list.children.length > 100) list.removeChild(list.lastChild);
-    },
     refit() {
       if (!active) return;
       for (const series of active.charts.values()) {
@@ -148,13 +130,17 @@ export const ACCEPTS_SETPOINTS = new Set(["battery", "inverter", "ev-charger", "
 // expression (lambda, quoted symbol, …) — the underlying defun
 // dispatches on input kind. Inputs with `dynamic` render as text,
 // everything else as numeric. See the renderInspect Knobs block.
+// `unit`, on a dynamic knob only, labels the resolved per-tick value
+// line paintKnobEntry shows beneath an expression's printed source —
+// see knobDisplay/paintKnobEntry below.
 const KNOBS_BY_CATEGORY = {
   meter: [
-    { label: "power (W or expr)", defun: "set-meter-power", dynamic: true },
+    { label: "power (W or expr)", defun: "set-meter-power", dynamic: true, unit: "W" },
     {
       label: "reactive power (VAr or expr)",
       defun: "set-meter-reactive-power",
       dynamic: true,
+      unit: "VAr",
     },
     {
       label: "power factor (0–1]",
@@ -178,6 +164,7 @@ function knobsFor(d) {
       label: "sunlight (% or expr)",
       defun: "set-solar-sunlight",
       dynamic: true,
+      unit: "%",
     });
   }
   return knobs;
@@ -307,9 +294,23 @@ function renderInspect(d, parentIds, childIds) {
       const flagHtml = k.flag
         ? `<label class="knob-flag"><input type="checkbox" class="knob-flag-input" /> ${escapeHtml(k.flag)}</label>`
         : "";
+      // Dynamic knobs (meter-power / meter-reactive-power / solar-
+      // sunlight) additionally carry a small "expr" chip, shown
+      // whenever the input's current text is a Lisp expression
+      // rather than a plain number — see knobDisplay/toggleExprChip
+      // below.
+      const exprChipHtml = k.dynamic
+        ? `<span class="knob-expr-chip" hidden>expr</span>`
+        : "";
+      // Same chip condition drives a resolved-value line beneath the
+      // input — the printed source alone doesn't say what it's
+      // currently evaluating to. Hidden until paintKnobEntry has a
+      // reading to show; `data-unit` carries the display unit through
+      // to paintKnobEntry without another lookup table there.
+      const resolvedHtml = k.dynamic ? `<div class="knob-resolved" hidden></div>` : "";
       return `<dt>${escapeHtml(k.label)}</dt><dd>
         <input ${inputAttrs} class="knob-input"
-               data-defun="${k.defun}" />${flagHtml}
+               data-defun="${k.defun}"${k.dynamic ? ` data-dynamic="1" data-unit="${escapeHtml(k.unit || "")}"` : ""} />${exprChipHtml}${flagHtml}${resolvedHtml}
       </dd>`;
     })
     .join("");
@@ -347,17 +348,18 @@ function renderInspect(d, parentIds, childIds) {
     <h3>Power</h3>
     <dl>
       <dt>P</dt><dd>
-        <div class="env-bar" data-envelope="active"><div class="env-live"></div><div class="env-sp"></div></div>
+        <div class="env-bar" data-envelope="active"><div class="env-live" hidden></div><div class="env-sp" hidden></div></div>
         <div class="env-ends" data-envelope-ends="active"></div>
         <div class="env-setpoint hint" data-envelope-setpoint="active" hidden></div>
       </dd>
       <dt>Q</dt><dd>
-        <div class="env-bar" data-envelope="reactive"><div class="env-live"></div><div class="env-sp"></div></div>
+        <div class="env-bar" data-envelope="reactive"><div class="env-live" hidden></div><div class="env-sp" hidden></div></div>
         <div class="env-ends" data-envelope-ends="reactive"></div>
         <div class="env-setpoint hint" data-envelope-setpoint="reactive" hidden></div>
       </dd>
       ${knobsHtml}
     </dl>
+    <p class="hint" id="knob-readback-hint" hidden></p>
 
     <div class="fold" id="charts-fold">
       <h3 class="fold-toggle" data-fold-toggle>Charts<span class="fold-summary">${chartsSummary}<span class="fold-chevron">▾</span></span></h3>
@@ -387,24 +389,60 @@ function renderInspect(d, parentIds, childIds) {
     if (!name) return;
     evalQuoted(`(rename-component ${d.id} "${jsToLispString(name)}")`);
   });
-  // Numeric knob inputs: change (or Enter then blur) → eval the
-  // setter with the typed value; then clear so the field reads as
-  // "what would you set it to next" rather than "what's it set to
-  // now" (we don't have getters for most of these, and stale values
-  // would mislead).
+  // Edit-in-place: focus freezes the input's and its flag checkbox's
+  // visible WRITES against live/snapshot updates (data-editing — read
+  // by paintKnobEntry/setKnobText, which still keep dataset.live/the
+  // flag's own dataset.live current underneath so nothing newer is
+  // lost). Enter commits via evalQuoted and, on success, remembers
+  // the committed text (and flag state) as the new "live" baseline
+  // (data-live) instead of clearing the field. Esc and a plain blur
+  // both restore data-live (input text AND flag checked state), so
+  // anything typed but never committed — or rejected by the server —
+  // reverts rather than sticking around.
+  // A sibling `.knob-flag-input`, if this knob has one, qualifies the
+  // committed value as an optional trailing `t` arg (e.g. power
+  // factor's LEADING).
   for (const inp of inspectEl.querySelectorAll(".knob-input")) {
-    inp.addEventListener("change", (e) => {
-      const v = e.target.value.trim();
-      if (v === "") return;
-      // A sibling `.knob-flag-input`, if this knob has one, qualifies
-      // the value as an optional trailing `t` arg (e.g. power
-      // factor's LEADING) — the checkbox itself never triggers an
-      // eval on its own; it only takes effect once a value is typed.
-      const flag = e.target.closest("dd")?.querySelector(".knob-flag-input");
-      evalQuoted(
-        `(${e.target.dataset.defun} ${d.id} ${v}${flag?.checked ? " t" : ""})`,
-      );
-      e.target.value = "";
+    inp.dataset.live = inp.value;
+    const flag = inp.closest("dd")?.querySelector(".knob-flag-input");
+    if (flag) flag.dataset.live = flag.checked ? "1" : "0";
+    inp.addEventListener("focus", () => {
+      inp.dataset.editing = "1";
+    });
+    inp.addEventListener("blur", () => {
+      delete inp.dataset.editing;
+      inp.value = inp.dataset.live ?? "";
+      if (flag) flag.checked = flag.dataset.live === "1";
+    });
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const v = inp.value.trim();
+        if (v === "") return;
+        evalQuoted(
+          `(${inp.dataset.defun} ${d.id} ${v}${flag?.checked ? " t" : ""})`,
+        ).then((res) => {
+          if (!res.ok) {
+            inp.value = inp.dataset.live ?? "";
+            if (flag) flag.checked = flag.dataset.live === "1";
+            return;
+          }
+          inp.dataset.live = v;
+          if (flag) flag.dataset.live = flag.checked ? "1" : "0";
+          if (inp.dataset.dynamic === "1") {
+            const isExpr = !(v !== "" && Number.isFinite(Number(v)));
+            toggleExprChip(inp, isExpr);
+            // The actual resolved-value reading arrives shortly via
+            // the WS knob_changed event (paintKnobEntry); until then,
+            // a just-committed plain number can't be showing a stale
+            // resolved line from a previous expression.
+            if (!isExpr) paintResolved(inp, false, null);
+          }
+        });
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        inp.blur();
+      }
     });
   }
   for (const btn of inspectEl.querySelectorAll("[data-disconnect-from]")) {
@@ -428,6 +466,441 @@ function renderInspect(d, parentIds, childIds) {
   });
 }
 
+// ── Live read-back ─────────────────────────────────────────────────
+//
+// Snapshot fetch (/api/component), edit-in-place knob prefill,
+// envelope bars, and the setpoint TTL row for whichever node is
+// currently shown. One session slot (`liveState`), mirroring
+// liveCharts' one-active-selection discipline: rebuilt wholesale on
+// every showComponent, dropped on teardown (stopTtlTimer, called from
+// the node tenant's teardown alongside liveCharts.clear()).
+//
+// liveState = {
+//   id,
+//   knobEntries: Map<token, { input: HTMLInputElement, dynamic: bool }>,
+//   axes: {
+//     active:   { lo, hi, liveVal, sp: { value, deadlineMs } | null },
+//     reactive: { lo, hi, liveVal, sp: { value, deadlineMs } | null },
+//   },
+// }
+let liveState = null;
+let ttlTimerId = null;
+
+// Recency guards for /api/component fetches — orthogonal to
+// showComponent's own `showGen`, which only changes when a NEW node
+// is selected. Two failure modes `showGen` alone doesn't cover:
+//
+//   - closePanel(), or switching to a different tenant (Defaults /
+//     Report), runs this tenant's teardown (stopTtlTimer) WITHOUT
+//     bumping showGen — a fetch already in flight for the closed
+//     node would otherwise resolve, pass the (unchanged) gen check,
+//     and resurrect a timer no teardown will ever clear again.
+//     `snapshotAliveToken` closes this: stopTtlTimer bumps it, and
+//     every fetch's resolution checks it's still the token it
+//     started with.
+//   - inspectorLive.applySetpoint's re-fetch has no `gen` at all (it
+//     isn't triggered by a render), and two accepted setpoint events
+//     for the same still-open node can resolve out of order.
+//     `snapshotSeq` closes this: every snapshot-triggering fetch
+//     (the initial one AND every applySetpoint re-fetch) bumps it on
+//     start, and only the most-recently-STARTED one's resolution is
+//     allowed to paint.
+let snapshotAliveToken = 0;
+let snapshotSeq = 0;
+
+// Call when starting any /api/component fetch that will (on success)
+// call applySnapshot. Returns a token to pass to snapshotFetchStale
+// once the fetch settles.
+function beginSnapshotFetch() {
+  return { alive: snapshotAliveToken, seq: ++snapshotSeq };
+}
+function snapshotFetchStale(token) {
+  return token.alive !== snapshotAliveToken || token.seq !== snapshotSeq;
+}
+
+const EXPR_PLACEHOLDER = "(expression)";
+
+// Decide what a knob input should show, given a snapshot/WS reading's
+// `value` + `expr`. The server ships `expr` unfiltered on both paths
+// (no server-side normalization) — an unquoted `(lambda …)` literal
+// evaluates to tulisp's opaque `CompiledDefun` closure before the
+// component ever sees it, and that opaque Display is caught here,
+// the one place both the snapshot and WS paths funnel through, so
+// they can't render it differently.
+function knobDisplay(value, expr, dynamic) {
+  if (expr != null) {
+    const opaque = expr.startsWith("CompiledDefun");
+    return { text: opaque ? EXPR_PLACEHOLDER : expr, hasExpr: true };
+  }
+  // Degrade case (spec-mandated, shouldn't happen in practice since
+  // source_text is captured at construction): a dynamic knob with
+  // neither a usable expr nor a resolved value.
+  if (dynamic && value == null) return { text: EXPR_PLACEHOLDER, hasExpr: true };
+  return { text: value != null ? String(value) : "", hasExpr: false };
+}
+
+function toggleExprChip(input, show) {
+  const chip = input.closest("dd")?.querySelector(".knob-expr-chip");
+  if (chip) chip.hidden = !show;
+}
+
+// The small muted line beneath an expression-driven knob's input,
+// showing what it's currently resolving to this tick — the printed
+// source above doesn't say that on its own. Always live, never frozen
+// by data-editing: it's read-only, reporting the last-committed
+// expression's current output, not whatever the user is mid-typing.
+function paintResolved(input, show, value) {
+  const el = input.closest("dd")?.querySelector(".knob-resolved");
+  if (!el) return;
+  if (!show || value == null) {
+    // Clear as well as hide: a stale "→ …" line must not reappear
+    // if anything ever unhides the element without repainting it.
+    el.textContent = "";
+    el.hidden = true;
+    return;
+  }
+  el.textContent = `→ ${formatScaled(value, input.dataset.unit || "")} this tick`;
+  el.hidden = false;
+}
+
+// Paint one knob entry's input (+ its optional leading checkbox + its
+// resolved-value line) from a {value, expr, leading} reading — shared
+// by the snapshot prefill and the WS knob_changed apply, so the two
+// paths can't drift.
+//
+// `input.dataset.live` (and the flag's own `dataset.live`) are ALWAYS
+// refreshed to the newest reading, even while the user has the field
+// focused — otherwise a live update that arrives during an edit is
+// silently dropped, and Esc/blur restores a value as stale as focus
+// time instead of the actual current one. Only the visible WRITES
+// (input.value, the expr chip, the flag checkbox) are frozen while
+// `data-editing` is set, so a live update can't yank text out from
+// under the user mid-edit.
+function paintKnobEntry(entry, value, expr, leading) {
+  const { input, dynamic } = entry;
+  const disp = knobDisplay(value, expr, dynamic);
+  input.dataset.live = disp.text;
+  const flag = input.closest("dd")?.querySelector(".knob-flag-input");
+  if (leading != null && flag) flag.dataset.live = leading ? "1" : "0";
+  paintResolved(input, disp.hasExpr, value);
+  if (input.dataset.editing) return;
+  input.value = disp.text;
+  toggleExprChip(input, disp.hasExpr);
+  if (leading != null && flag) flag.checked = leading;
+}
+
+// Write a plain (non-expr) text reading to a knob input — used by the
+// two ad hoc prefillKnobs branches below that don't go through
+// knobDisplay (the power-factor-derived `reactive-power` reading, and
+// "no state for this token"). Same live-vs-editing discipline as
+// paintKnobEntry: dataset.live always updates, the visible write is
+// frozen while the user has the field focused.
+function setKnobText(input, text) {
+  input.dataset.live = text;
+  paintResolved(input, false, null);
+  if (input.dataset.editing) return;
+  input.value = text;
+  toggleExprChip(input, false);
+}
+
+// Bar geometry — same clamped formula as hovercard.js's envelopeBar
+// (hovercard.js:112-121).
+function markerPct(value, lo, hi) {
+  if (!Number.isFinite(value) || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, ((value - lo) / (hi - lo)) * 100));
+}
+
+function paintBar(axis, unit) {
+  const st = liveState.axes[axis];
+  const bar = inspectEl.querySelector(`[data-envelope="${axis}"]`);
+  const ends = inspectEl.querySelector(`[data-envelope-ends="${axis}"]`);
+  if (!bar || !ends) return;
+  const liveEl = bar.querySelector(".env-live");
+  const spEl = bar.querySelector(".env-sp");
+  const livePct = markerPct(st.liveVal, st.lo, st.hi);
+  const spPct = markerPct(st.sp?.value, st.lo, st.hi);
+  liveEl.hidden = livePct == null;
+  if (livePct != null) liveEl.style.left = `${livePct.toFixed(1)}%`;
+  spEl.hidden = spPct == null;
+  if (spPct != null) spEl.style.left = `${spPct.toFixed(1)}%`;
+  ends.innerHTML =
+    Number.isFinite(st.lo) && Number.isFinite(st.hi)
+      ? `<span>${escapeHtml(formatScaled(st.lo, unit))}</span><span>${escapeHtml(formatScaled(st.hi, unit))}</span>`
+      : "";
+}
+
+function ttlText(value, unit, remainingMs) {
+  const ttl = remainingMs == null ? "—" : `${Math.max(0, Math.ceil(remainingMs / 1000))}s`;
+  return `▾ ${formatScaled(value, unit)} · TTL ${ttl}`;
+}
+
+function paintTtlRow(axis, unit) {
+  const el = inspectEl.querySelector(`[data-envelope-setpoint="${axis}"]`);
+  if (!el) return;
+  const sp = liveState.axes[axis].sp;
+  if (!sp) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  const remaining = sp.deadlineMs == null ? null : Math.max(0, sp.deadlineMs - Date.now());
+  el.textContent = ttlText(sp.value, unit, remaining);
+}
+
+function paintAxis(axis, unit) {
+  paintBar(axis, unit);
+  paintTtlRow(axis, unit);
+}
+
+function paintAugmented(flags) {
+  const el = document.getElementById("insp-augmented");
+  if (!el) return;
+  const parts = [];
+  if (flags?.active) parts.push("P");
+  if (flags?.reactive) parts.push("Q");
+  el.hidden = parts.length === 0;
+  el.title = parts.length ? `bounds narrowed: ${parts.join(", ")}` : "";
+}
+
+// Prefill every knob input from a snapshot's `knobs` list, keyed by
+// stripping the input's own `set-` defun prefix down to the server's
+// token (set-meter-power → meter-power, …). The inverter's own
+// reactive-power VAr knob (`set-reactive-power`) is deliberately NOT
+// part of that vocabulary — the server never emits a KnobChanged for
+// it either, since it's a setpoint, not a knob — so it's prefilled
+// from the accepted reactive setpoint instead, when there is one.
+// An input with `data-editing` (the user has it focused) still gets
+// its `dataset.live` refreshed — only the visible input/chip/checkbox
+// write is skipped — matching the same freeze setKnobText/
+// paintKnobEntry apply, and inspectorLive.applyKnob relies on below.
+function prefillKnobs(snap) {
+  const byToken = new Map((snap.knobs || []).map((k) => [k.knob, k]));
+  const spByAxis = new Map((snap.setpoints || []).map((s) => [s.axis, s]));
+  for (const [token, entry] of liveState.knobEntries) {
+    if (token === "reactive-power") {
+      const sp = spByAxis.get("reactive");
+      setKnobText(entry.input, sp ? String(sp.value) : "");
+      continue;
+    }
+    const state = byToken.get(token);
+    if (!state) {
+      setKnobText(entry.input, "");
+      continue;
+    }
+    paintKnobEntry(entry, state.value, state.expr, state.leading);
+  }
+}
+
+// Rebuild liveState from a fresh /api/component snapshot and repaint
+// everything it drives: knob prefill, both envelope bars, both TTL
+// rows, the augmented badge. Shared by the initial fetch (renderNode)
+// and inspectorLive.applySetpoint's re-fetch on an accepted setpoint
+// — same shape either way, so there's exactly one place that turns a
+// snapshot into DOM.
+function applySnapshot(id, snap) {
+  const hintEl = document.getElementById("knob-readback-hint");
+  if (hintEl) hintEl.hidden = true;
+
+  // Live P/Q values only ever come from WS sample events (the
+  // snapshot doesn't carry them) — carry the last-observed ones
+  // across a re-fetch instead of blanking the marker for a beat.
+  const prevAxes = liveState && liveState.id === id ? liveState.axes : null;
+  const knobEntries = new Map();
+  for (const input of inspectEl.querySelectorAll(".knob-input[data-defun]")) {
+    const token = input.dataset.defun.replace(/^set-/, "");
+    knobEntries.set(token, { input, dynamic: input.dataset.dynamic === "1" });
+  }
+  liveState = {
+    id,
+    knobEntries,
+    axes: {
+      active: { lo: null, hi: null, liveVal: prevAxes?.active.liveVal ?? null, sp: null },
+      reactive: { lo: null, hi: null, liveVal: prevAxes?.reactive.liveVal ?? null, sp: null },
+    },
+  };
+
+  const [aLo, aHi] = snap.envelope?.active ?? [null, null];
+  liveState.axes.active.lo = aLo;
+  liveState.axes.active.hi = aHi;
+  // envelope.reactive is null for every real topology today — the Q
+  // bar's lo/hi come from live bound Sample metrics instead (see
+  // applySample below); this is just the bonus path for whenever the
+  // server does send one.
+  const [rLo, rHi] = snap.envelope?.reactive ?? [null, null];
+  liveState.axes.reactive.lo = rLo;
+  liveState.axes.reactive.hi = rHi;
+
+  const now = Date.now();
+  for (const sp of snap.setpoints || []) {
+    if (sp.axis !== "active" && sp.axis !== "reactive") continue;
+    liveState.axes[sp.axis].sp = {
+      value: sp.value,
+      deadlineMs: sp.remaining_ms != null ? now + sp.remaining_ms : null,
+    };
+  }
+
+  prefillKnobs(snap);
+  paintAxis("active", "W");
+  paintAxis("reactive", "VAr");
+  paintAugmented(snap.augmented);
+  startTtlTimer();
+}
+
+async function fetchSnapshot(id, gen) {
+  const token = beginSnapshotFetch();
+  try {
+    const res = await fetch(`${mgPath("component")}?id=${id}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const snap = await res.json();
+    // gen !== showGen: a newer selection has started. snapshotFetchStale:
+    // the tenant was torn down (closePanel / switched tenants) or a
+    // more-recent snapshot fetch (reselect or an applySetpoint
+    // re-fetch) has since started — either way this resolve is stale
+    // and must not paint or (re)start the TTL timer.
+    if (gen !== showGen || snapshotFetchStale(token)) return;
+    applySnapshot(id, snap);
+  } catch (err) {
+    if (gen !== showGen || snapshotFetchStale(token)) return;
+    // Degrade rule: knobs stay blank write-only, everything else
+    // (charts, connections, mode/health chips) still renders — this
+    // fetch is the only thing that failed.
+    const hintEl = document.getElementById("knob-readback-hint");
+    if (hintEl) {
+      hintEl.hidden = false;
+      hintEl.textContent = `read-back unavailable: ${err.message}`;
+    }
+  }
+}
+
+// The 1 s TTL countdown, owned by whichever node is currently shown.
+// Idempotent start (a snapshot re-fetch calls this again on every
+// accepted setpoint); stop also drops the live-readback session
+// itself, mirroring liveCharts.clear() — this is the node tenant's
+// second teardown hook (see showComponent below).
+function startTtlTimer() {
+  if (ttlTimerId != null) return;
+  ttlTimerId = setInterval(() => {
+    if (!liveState) return;
+    paintTtlRow("active", "W");
+    paintTtlRow("reactive", "VAr");
+  }, 1000);
+}
+function stopTtlTimer() {
+  if (ttlTimerId != null) {
+    clearInterval(ttlTimerId);
+    ttlTimerId = null;
+  }
+  liveState = null;
+  // Invalidate any /api/component fetch still in flight for the
+  // tenant being torn down — without this, a fetch that resolves
+  // after closePanel() (or after switching to a different tenant)
+  // would still pass fetchSnapshot's gen check (closePanel never
+  // touches showGen) and resurrect a timer this teardown just killed.
+  snapshotAliveToken++;
+}
+
+// Prepend one WS setpoint event to the Recent setpoints list, keyed
+// off `liveState.id` rather than the Charts fold's `liveCharts` — the
+// list has to keep growing whether or not the user has ever unfolded
+// Charts (liveState is populated as soon as a node is selected, charts
+// only on first unfold). Shared shape with the REST backfill via
+// setpointEventLi, below.
+function appendSetpointEvent(ev) {
+  const list = inspectEl.querySelector(".sp-list");
+  if (!list) return;
+  // Drop the "none" placeholder if it's still showing.
+  const empty = list.querySelector(".sp-empty");
+  if (empty) empty.remove();
+  // The WS event carries the setpoint kind on `setpoint_kind` to
+  // dodge collision with the SiteEvent discriminator (also called
+  // `kind`).
+  list.prepend(setpointEventLi(ev.ts_ms, ev.setpoint_kind, ev.value, ev.accepted, ev.reason));
+  // Trim if the list is getting long — match the 600s window used by
+  // the initial fetch.
+  while (list.children.length > 100) list.removeChild(list.lastChild);
+}
+
+// Exported so the WS hub (repl.js openWebSocket) can feed it knob /
+// sample / setpoint events for whichever node the inspector currently
+// has open. Every entry point no-ops when nothing is open or the
+// event is for a different component — same "is the right component
+// selected" guard liveCharts.pushSample uses.
+export const inspectorLive = {
+  applyKnob(ev) {
+    if (!liveState || Number(ev.id) !== liveState.id) return;
+    const entry = liveState.knobEntries.get(ev.knob);
+    if (!entry) return;
+    // paintKnobEntry always refreshes dataset.live (and the resolved
+    // line); it only skips the visible input/chip/checkbox write
+    // while the field is focused (data-editing).
+    paintKnobEntry(entry, ev.value, ev.expr, ev.leading);
+  },
+  applySample(ev) {
+    if (!liveState || Number(ev.id) !== liveState.id) return;
+    const axes = liveState.axes;
+    switch (ev.metric) {
+      case "active_power_w":
+        axes.active.liveVal = ev.value;
+        break;
+      case "reactive_power_var":
+        axes.reactive.liveVal = ev.value;
+        break;
+      case "active_power_lower_bound_w":
+        axes.active.lo = ev.value;
+        break;
+      case "active_power_upper_bound_w":
+        axes.active.hi = ev.value;
+        break;
+      case "reactive_power_lower_bound_var":
+        axes.reactive.lo = ev.value;
+        break;
+      case "reactive_power_upper_bound_var":
+        axes.reactive.hi = ev.value;
+        break;
+      default:
+        return;
+    }
+    paintAxis("active", "W");
+    paintAxis("reactive", "VAr");
+  },
+  applySetpoint(ev) {
+    if (!liveState || Number(ev.id) !== liveState.id) return;
+    // The Recent setpoints list gets every event, accepted or not —
+    // unlike the envelope/TTL refresh below, which only an accepted
+    // setpoint can move.
+    appendSetpointEvent(ev);
+    if (!ev.accepted) return;
+    const id = liveState.id;
+    // Neither the snapshot envelope's freshness nor the setpoint's
+    // remaining-TTL is on the WS frame itself, so an accepted
+    // active/reactive/augment_* event just re-fetches the one
+    // endpoint that carries all of it. Two accepted events for the
+    // same component (or a reselect racing this re-fetch) can
+    // resolve out of order — snapshotFetchStale drops any resolve
+    // that isn't the most-recently-started snapshot fetch, and/or
+    // whose tenant has since been torn down, so an older response
+    // can never paint over a newer one.
+    const token = beginSnapshotFetch();
+    fetch(`${mgPath("component")}?id=${id}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((snap) => {
+        if (snapshotFetchStale(token)) return;
+        if (liveState && liveState.id === id) applySnapshot(id, snap);
+      })
+      .catch(() => {
+        // Best-effort refresh only — the setpoint itself already
+        // landed in the Recent setpoints list via appendSetpointEvent,
+        // above; the bars/TTL just keep showing whatever the last
+        // successful snapshot had.
+      });
+  },
+};
+
 // Bumped on every showComponent call. Rapid node selection races two
 // async renders; an await that resolves after a newer call started
 // carries a stale generation and bails out (destroying any uPlots it
@@ -438,11 +911,14 @@ let showGen = 0;
 export function showComponent(d) {
   if (!d) return;
   const gen = ++showGen;
-  // liveCharts.clear() is the node tenant's teardown — side-panel.js
-  // runs it (as the PREVIOUS tenant's teardown) before renderNode
-  // paints, whether that's a re-selected node or any other tenant
-  // that had been showing.
-  openPanel("node", () => renderNode(d, gen), () => liveCharts.clear());
+  // liveCharts.clear() + stopTtlTimer() is the node tenant's
+  // teardown — side-panel.js runs it (as the PREVIOUS tenant's
+  // teardown) before renderNode paints, whether that's a re-selected
+  // node or any other tenant that had been showing.
+  openPanel("node", () => renderNode(d, gen), () => {
+    liveCharts.clear();
+    stopTtlTimer();
+  });
 }
 
 async function renderNode(d, gen) {
@@ -489,8 +965,12 @@ async function renderNode(d, gen) {
 
   // Setpoint events: list recent control-app requests + outcome.
   // Unlike charts this always runs on open — it's cheap and today's
-  // behavior, unchanged by the fold restructure.
+  // behavior, unchanged by the fold restructure. The read-back
+  // snapshot (knobs, envelope bars, TTL row) fetches concurrently —
+  // same generation guard, its own failure path (fetchSnapshot).
+  const snapshotP = fetchSnapshot(d.id, gen);
   await renderSetpoints(d.id, document.getElementById("setpoints-section"));
+  await snapshotP;
 }
 
 // Build the per-metric uPlot charts for `d` into `container` and
@@ -574,8 +1054,9 @@ async function renderSetpoints(id, container) {
   try {
     const res = await fetch(`${mgPath("setpoints")}?id=${id}&window_s=600`);
     const data = await res.json();
-    // Always create the list element, even when empty — pushSetpoint
-    // appends to it on incoming WS events. A no-events placeholder
+    // Always create the list element, even when empty —
+    // appendSetpointEvent appends to it on incoming WS events. A
+    // no-events placeholder
     // hint sits inside the list and gets dropped once the first
     // event lands.
     const list = document.createElement("ol");

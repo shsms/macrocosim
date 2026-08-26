@@ -1646,6 +1646,37 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #inspect .knob-flag-input { margin: 0; }
 
+/* A dynamic knob's "this is a Lisp expression, not a plain number"
+   marker (toggleExprChip in inspect.js). Same tinted-pill
+   look as .insp-augmented below (rgba of the existing --accent
+   token), just scoped to the knob's own dd. */
+#inspect .knob-expr-chip {
+  display: inline-block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(121, 184, 255, 0.16);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+/* The class's own display beats the UA's [hidden] rule (same trap
+   the other [hidden] re-asserts in this file guard against). */
+#inspect .knob-expr-chip[hidden],
+#inspect .knob-resolved[hidden] { display: none; }
+
+/* An expression-driven knob's resolved per-tick value, shown beneath
+   the printed source (paintResolved in inspect.js) — the source alone
+   doesn't say what it currently evaluates to. */
+#inspect .knob-resolved {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* Header meta row: id text plus the category / health / augmented
    chips (see inspect.js renderInspect's header markup). Same
    tinted-pill idea as the .seg-chip on-* states below,
