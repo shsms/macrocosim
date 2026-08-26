@@ -259,6 +259,30 @@ impl Telemetry {
     }
 }
 
+/// A single-axis knob read-back: the live resolved value plus, for a
+/// dynamic (lambda / symbol) source, the printed Lisp expression
+/// driving it. `expr` is `None` for a plain constant — see
+/// `DynamicScalar::source_text`, which this wraps. Cheap and
+/// lock-safe by construction: the source string is captured once at
+/// construction time, so reading it here never touches the
+/// interpreter.
+#[derive(Clone, Debug)]
+pub struct ScalarReading {
+    pub value: f32,
+    pub expr: Option<String>,
+}
+
+/// A meter's reactive-power knob read-back — the Q twin of
+/// `ScalarReading`, widened to also cover the power-factor
+/// derivation shape (`ReactiveSource::PowerFactor` has no scalar
+/// source of its own to read back, just the pf/leading pair it was
+/// configured with).
+#[derive(Clone, Debug)]
+pub enum ReactiveReading {
+    Var(ScalarReading),
+    PowerFactor { pf: f32, leading: bool },
+}
+
 /// The single trait every simulated component implements.
 ///
 /// Reading order:
@@ -577,6 +601,34 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
 
     /// Rated fuse current at the grid connection point.
     fn rated_fuse_current(&self) -> Option<u32> {
+        None
+    }
+
+    // ── knob read-back (inspector snapshot) ──────────────────────────
+
+    /// The meter's active-power source knob, as currently configured
+    /// — a live value plus, for a dynamic (lambda / symbol) source,
+    /// the printed Lisp expression driving it (`None` for a plain
+    /// constant). Distinct from `reactive_capability()`'s PF-limit /
+    /// kVA-cap read-back: this is the `:power` input side, not the Q
+    /// envelope. `None` for components with no active-power source
+    /// knob at all (only `Meter` has one).
+    fn meter_power_reading(&self) -> Option<ScalarReading> {
+        None
+    }
+
+    /// The meter's reactive-power source knob — either a direct VAr
+    /// value (mirrors `meter_power_reading`'s shape) or a
+    /// power-factor derivation from the meter's own live P. `None`
+    /// for components with no reactive source knob configured.
+    fn meter_reactive_reading(&self) -> Option<ReactiveReading> {
+        None
+    }
+
+    /// The PV inverter's cloud-cover knob — always present once a
+    /// solar inverter exists (it defaults to a constant), so `None`
+    /// here just means "not a solar inverter".
+    fn sunlight_reading(&self) -> Option<ScalarReading> {
         None
     }
 

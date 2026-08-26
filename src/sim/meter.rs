@@ -5,7 +5,9 @@ use parking_lot::RwLock;
 use tulisp::TulispContext;
 
 use crate::sim::{
-    Category, MicrogridSite, SimulatedComponent, Telemetry, dynamic_scalar::DynamicScalar,
+    Category, MicrogridSite, SimulatedComponent, Telemetry,
+    component::{ReactiveReading, ScalarReading},
+    dynamic_scalar::DynamicScalar,
 };
 
 /// A meter's reactive-power (Q) source — the VAr twin of the
@@ -293,6 +295,26 @@ impl SimulatedComponent for Meter {
     fn set_power_factor(&self, pf: f32, leading: bool) -> bool {
         self.set_power_factor_source(pf, leading);
         true
+    }
+
+    fn meter_power_reading(&self) -> Option<ScalarReading> {
+        self.power_source.read().as_ref().map(|s| ScalarReading {
+            value: s.get(),
+            expr: s.source_text(),
+        })
+    }
+
+    fn meter_reactive_reading(&self) -> Option<ReactiveReading> {
+        self.reactive_source.read().as_ref().map(|r| match r {
+            ReactiveSource::Var(s) => ReactiveReading::Var(ScalarReading {
+                value: s.get(),
+                expr: s.source_text(),
+            }),
+            ReactiveSource::PowerFactor { pf, leading } => ReactiveReading::PowerFactor {
+                pf: *pf,
+                leading: *leading,
+            },
+        })
     }
 
     fn is_hidden(&self) -> bool {

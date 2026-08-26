@@ -164,6 +164,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 #[cfg(test)]
 mod tests {
     use super::super::super::test_support::config_with;
+    use crate::sim::component::ReactiveReading;
 
     /// `(set-meter-power id (lambda () X))` installs a dynamic
     /// source. `Config::refresh_once` resolves the lambda and
@@ -309,5 +310,64 @@ mod tests {
         let soc = site.get(4).unwrap().telemetry(&site).soc_pct.unwrap();
         assert!((soc - 12.5).abs() < 1e-3, "{soc}");
         assert!(cfg.eval("(set-battery-soc 99 50.0)").is_err());
+    }
+
+    /// `meter_power_reading` round-trips a constant `:power` override
+    /// (no source text) and a dynamic lambda override (some source
+    /// text, opaque as it is — see the `expr` assertion below) — the
+    /// knob read-back Task 6's inspector snapshot pulls from.
+    #[test]
+    fn meter_power_reading_round_trips_constant_and_expr() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        cfg.eval("(set-meter-power 7 1500)").unwrap();
+        let site = cfg.site();
+        let c = site.get(7).unwrap();
+        let r = c.meter_power_reading().expect("reading");
+        assert_eq!(r.value, 1500.0);
+        assert_eq!(r.expr, None);
+
+        cfg.eval("(set-meter-power 7 (lambda () 25))").unwrap();
+        cfg.refresh_once();
+        let r = site.get(7).unwrap().meter_power_reading().expect("reading");
+        assert_eq!(r.value, 25.0);
+        // An unquoted lambda evaluates to a compiled function before
+        // `DynamicScalar::from_lisp` ever sees it, so it routes
+        // through the funcall branch and prints as the opaque
+        // "CompiledDefun" — not the literal source text. That's
+        // `source_text`'s documented behavior (see Task 1); the
+        // read-back contract here is just "dynamic source ⇒ some
+        // printed text", not pretty-printing.
+        assert!(r.expr.is_some(), "dynamic source should carry expr text");
+    }
+
+    /// `meter_reactive_reading` reports the `PowerFactor` shape (pf +
+    /// leading) once `(set-meter-power-factor)` has installed one —
+    /// the `Var` shape is exercised implicitly by every other
+    /// reactive-power test in this file.
+    #[test]
+    fn meter_power_factor_reading_reports_pf_and_leading() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        cfg.eval("(set-meter-power 7 1000)").unwrap();
+        cfg.eval("(set-meter-power-factor 7 0.9 t)").unwrap();
+        let site = cfg.site();
+        match site.get(7).unwrap().meter_reactive_reading() {
+            Some(ReactiveReading::PowerFactor { pf, leading }) => {
+                assert!((pf - 0.9).abs() < 1e-6);
+                assert!(leading);
+            }
+            other => panic!("expected PowerFactor, got {other:?}"),
+        }
+    }
+
+    /// `sunlight_reading` reads back the PV inverter's cloud-cover
+    /// knob after `(set-solar-sunlight)` pokes in a constant.
+    #[test]
+    fn sunlight_reading_reads_back_percentage() {
+        let (cfg, _dir) = config_with("(%make-solar-inverter :id 4)");
+        cfg.eval("(set-solar-sunlight 4 63)").unwrap();
+        cfg.refresh_once();
+        let site = cfg.site();
+        let r = site.get(4).unwrap().sunlight_reading().expect("reading");
+        assert_eq!(r.value, 63.0);
     }
 }

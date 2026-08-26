@@ -14,6 +14,7 @@ use crate::sim::{
     Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
     bounds::VecBounds,
+    component::ScalarReading,
     dynamic_scalar::DynamicScalar,
     reactive::ReactiveCapability,
     runtime::Health,
@@ -358,6 +359,14 @@ impl SimulatedComponent for SolarInverter {
 
     fn set_sunlight_source(&self, scalar: DynamicScalar) {
         SolarInverter::set_sunlight_source(self, scalar);
+    }
+
+    fn sunlight_reading(&self) -> Option<ScalarReading> {
+        let s = self.sunlight_source.read();
+        Some(ScalarReading {
+            value: s.get(),
+            expr: s.source_text(),
+        })
     }
 
     fn make_fn(&self) -> &'static str {
