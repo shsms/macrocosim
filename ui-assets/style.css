@@ -390,9 +390,17 @@ body.inspector-open[data-subview="dashboard"] main {
 body.inspector-open[data-subview="dashboard"] #inspector {
   grid-area: inspector;
   justify-self: stretch;
+  /* Docked into its own grid column here — undo the floating card's
+     fit-to-content sizing and any drag offset, and hide the grab
+     strip (setupInspectorDrag also refuses to start a drag in this
+     subview). */
+  align-self: stretch;
+  max-height: none;
+  transform: none !important;
   width: auto;
   margin: 10px;
 }
+body[data-subview="dashboard"] #inspector-drag { display: none; }
 
 #topology,
 #dashboard,
@@ -1306,7 +1314,11 @@ body.compact .tier5-soc-text { font-size: 10px; }
      canvas controls (layout picker + snap) clickable above it. */
   grid-area: topology;
   justify-self: end;
-  align-self: stretch;
+  /* Size to content instead of stretching the whole right side; the
+     max-height keeps a long panel scrollable inside the cell (the
+     48px top + 10px bottom margins are what the calc subtracts). */
+  align-self: start;
+  max-height: calc(100% - 58px);
   width: 420px;
   max-width: calc(100% - 20px);
   z-index: 7;
@@ -1323,9 +1335,31 @@ body.inspector-open #inspector { display: flex; flex-direction: column; }
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  /* extra top padding so content clears the floating × */
-  padding: 1.6rem 1rem 1rem;
+  /* slim top padding — the drag strip above already clears the
+     floating × */
+  padding: 0.4rem 1rem 1rem;
 }
+
+/* Grab strip along the card's top edge: drag to move the floating
+   card (wired in app.js setupInspectorDrag). The centered pill is
+   the only visual — the whole strip is the hit target. */
+#inspector-drag {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  cursor: grab;
+  touch-action: none;
+}
+#inspector-drag:active { cursor: grabbing; }
+#inspector-drag .drag-grip {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+#inspector-drag:hover .drag-grip { background: var(--muted); }
 
 .float-close {
   position: absolute;
@@ -1634,8 +1668,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   min-width: 0;
 }
 /* flex-basis 0 (not the input's own width) so the row never widens
-   the shared `1fr` dd column past the panel. */
-#inspect dd:has(.knob-flag) .knob-input { flex: 1 1 0; min-width: 0; }
+   the shared `1fr` dd column past the panel; the ch floor keeps a
+   typed value like 0.85 visible even beside the flag label. */
+#inspect dd:has(.knob-flag) .knob-input { flex: 1 1 0; min-width: 6ch; }
 #inspect .knob-flag {
   display: inline-flex;
   align-items: center;
@@ -1818,6 +1853,51 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect .fold-body { display: none; }
 #inspect .fold.open .fold-body { display: block; }
 
+/* Foldable cards: the panel's three main sections (Component /
+   Power / Charts & setpoints), each an inset box whose header row is
+   the fold toggle — same .fold machinery as the plain fold rows,
+   plus the card chrome. */
+#inspect .insp-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-top: 0.75rem;
+  padding: 0.35rem 0.75rem;
+}
+#inspect .insp-card > .fold-toggle { margin: 0.2rem 0; }
+#inspect .insp-card > .fold-body { padding-bottom: 0.5rem; }
+/* Sub-headers inside the Component card (Graph / Simulation): the
+   card title owns the h3 treatment, these sit one step below it. */
+#inspect .insp-card h4 {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin: 0.75rem 0 0.4rem;
+}
+
+/* Per-axis block in the Power card: a big live readout headlines
+   each envelope bar. */
+#inspect .env-axis { margin: 0.5rem 0 0.75rem; }
+#inspect .env-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 2px;
+}
+#inspect .env-label {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--muted);
+}
+#inspect .env-val {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
 .conns {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1947,7 +2027,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-family: var(--font-mono);
   font-size: 14px;
   display: grid;
-  grid-template-columns: max-content 1fr;
+  /* Cap the label column so a long dt ("reactive power (VAr or
+     expr)") wraps instead of starving the input column — inside a
+     card the panel's 420px loses two rounds of padding, so the
+     inputs cannot spare what a max-content label column takes. */
+  grid-template-columns: fit-content(45%) 1fr;
   gap: 0.25rem 0.75rem;
   margin: 0;
 }

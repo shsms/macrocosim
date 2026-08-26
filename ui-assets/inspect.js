@@ -133,6 +133,11 @@ export const ACCEPTS_SETPOINTS = new Set(["battery", "inverter", "ev-charger", "
 // `unit`, on a dynamic knob only, labels the resolved per-tick value
 // line paintKnobEntry shows beneath an expression's printed source —
 // see knobDisplay/paintKnobEntry below.
+// `group` places each knob in the Component card: "config" rows are
+// device configuration (a Config sub-section of their own), anything
+// else is an environment/simulation driver and joins the Simulation
+// rows — a meter's sources and a PV's sunlight steer what the sim
+// produces, the same family as health/telemetry.
 const KNOBS_BY_CATEGORY = {
   meter: [
     { label: "power (W or expr)", defun: "set-meter-power", dynamic: true, unit: "W" },
@@ -148,10 +153,14 @@ const KNOBS_BY_CATEGORY = {
       flag: "leading",
     },
   ],
+  // No direct VAr-setpoint input here: reactive power on an inverter
+  // is driven by control apps over the gRPC API (the REPL still has
+  // set-reactive-power). The inspector carries only component config
+  // and measurements — the API-driven setpoint shows up read-only as
+  // the Power card's marker + TTL row and in the setpoint log.
   inverter: [
-    { label: "reactive power (VAr)", defun: "set-reactive-power" },
-    { label: "reactive PF limit", defun: "set-reactive-pf-limit" },
-    { label: "reactive apparent (VA)", defun: "set-reactive-apparent-va" },
+    { label: "reactive PF limit", defun: "set-reactive-pf-limit", group: "config" },
+    { label: "reactive apparent (VA)", defun: "set-reactive-apparent-va", group: "config" },
   ],
 };
 
@@ -256,21 +265,24 @@ export function setupInspectorChips() {
   });
 }
 
-// localStorage key the Charts fold row's open/closed state persists
-// under, across selections and reloads. Reads/writes are wrapped in
-// try/catch (private-mode / quota-exceeded storage throws) and
-// default to folded on any failure.
-const CHARTS_OPEN_KEY = "sw-inspector-charts-open";
-function loadChartsOpen() {
+// Per-card fold state, persisted across selections and reloads.
+// Reads/writes are wrapped in try/catch (private-mode /
+// quota-exceeded storage throws) and fall back to the card's default
+// on any failure. Power starts open — the P/Q readouts are the
+// panel's headline — the other cards start folded.
+const CARD_KEY_PREFIX = "sw-inspector-card-";
+const CARD_DEFAULT_OPEN = { component: false, power: true, charts: false, setpoints: false };
+function loadCardOpen(name) {
   try {
-    return localStorage.getItem(CHARTS_OPEN_KEY) === "1";
+    const v = localStorage.getItem(CARD_KEY_PREFIX + name);
+    return v == null ? (CARD_DEFAULT_OPEN[name] ?? false) : v === "1";
   } catch {
-    return false;
+    return CARD_DEFAULT_OPEN[name] ?? false;
   }
 }
-function saveChartsOpen(open) {
+function saveCardOpen(name, open) {
   try {
-    localStorage.setItem(CHARTS_OPEN_KEY, open ? "1" : "0");
+    localStorage.setItem(CARD_KEY_PREFIX + name, open ? "1" : "0");
   } catch {
     // Storage unavailable — the fold still works for this session,
     // it just won't remember next time.
@@ -301,8 +313,7 @@ function renderInspect(d, parentIds, childIds) {
     : '<li class="hint">none</li>';
 
   const knobs = knobsFor(d);
-  const knobsHtml = knobs
-    .map((k) => {
+  const knobRow = (k) => {
       const inputAttrs = k.dynamic
         ? `type="text" placeholder="value or (lambda () ...)"`
         : `type="number" step="any" placeholder="value"`;
@@ -333,8 +344,9 @@ function renderInspect(d, parentIds, childIds) {
         <input ${inputAttrs} class="knob-input"
                data-defun="${k.defun}"${k.dynamic ? ` data-dynamic="1" data-unit="${escapeHtml(k.unit || "")}"` : ""} />${exprChipHtml}${flagHtml}${resolvedHtml}
       </dd>`;
-    })
-    .join("");
+    };
+  const configKnobsHtml = knobs.filter((k) => k.group === "config").map(knobRow).join("");
+  const simKnobsHtml = knobs.filter((k) => k.group !== "config").map(knobRow).join("");
 
   // Charts fold summary — just a metric count; the charts themselves
   // aren't fetched until first unfold (see renderNode/buildCharts).
@@ -352,42 +364,54 @@ function renderInspect(d, parentIds, childIds) {
       <span class="insp-chip insp-augmented" id="insp-augmented" hidden>augmented</span>
     </div>
 
-    <h3>Graph</h3>
-    <dl>
-      <dt>mode</dt><dd>${selectField("operational-mode", d.operational_mode, OPERATIONAL_MODES.map((m) => m.value))}</dd>
-    </dl>
+    <div class="insp-card fold" id="card-component" data-card="component">
+      <h3 class="fold-toggle" data-fold-toggle>Component<span class="fold-summary"><span class="fold-chevron">▾</span></span></h3>
+      <div class="fold-body">
+        <h4>Graph</h4>
+        <dl>
+          <dt>mode</dt><dd>${selectField("operational-mode", d.operational_mode, OPERATIONAL_MODES.map((m) => m.value))}</dd>
+        </dl>
+        ${configKnobsHtml ? `<h4>Config</h4><dl>${configKnobsHtml}</dl>` : ""}
+        <h4>Simulation</h4>
+        <dl>
+          <dt>health</dt><dd>${renderSegRow("health", d.health, ["ok", "error", "standby"])}</dd>
+          <dt>telemetry</dt><dd>${selectField("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"], d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null)}</dd>
+          ${ACCEPTS_SETPOINTS.has(d.category)
+            ? `<dt>commands</dt><dd>${selectField("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"], d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null)}</dd>`
+            : ""}
+          ${simKnobsHtml}
+        </dl>
+        <p class="hint" id="knob-readback-hint" hidden></p>
+      </div>
+    </div>
 
-    <h3>Simulation</h3>
-    <dl>
-      <dt>health</dt><dd>${renderSegRow("health", d.health, ["ok", "error", "standby"])}</dd>
-      <dt>telemetry</dt><dd>${selectField("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"], d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null)}</dd>
-      ${ACCEPTS_SETPOINTS.has(d.category)
-        ? `<dt>commands</dt><dd>${selectField("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"], d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null)}</dd>`
-        : ""}
-    </dl>
+    <div class="insp-card fold" id="card-power" data-card="power">
+      <h3 class="fold-toggle" data-fold-toggle>Power<span class="fold-summary"><span class="fold-chevron">▾</span></span></h3>
+      <div class="fold-body">
+        <div class="env-axis">
+          <div class="env-head"><span class="env-label">P</span><span class="env-val" data-envelope-val="active">—</span></div>
+          <div class="env-bar" data-envelope="active"><div class="env-live" hidden></div><div class="env-sp" hidden></div></div>
+          <div class="env-ends" data-envelope-ends="active"></div>
+          <div class="env-setpoint hint" data-envelope-setpoint="active" hidden></div>
+        </div>
+        <div class="env-axis">
+          <div class="env-head"><span class="env-label">Q</span><span class="env-val" data-envelope-val="reactive">—</span></div>
+          <div class="env-bar" data-envelope="reactive"><div class="env-live" hidden></div><div class="env-sp" hidden></div></div>
+          <div class="env-ends" data-envelope-ends="reactive"></div>
+          <div class="env-setpoint hint" data-envelope-setpoint="reactive" hidden></div>
+        </div>
+      </div>
+    </div>
 
-    <h3>Power</h3>
-    <dl>
-      <dt>P</dt><dd>
-        <div class="env-bar" data-envelope="active"><div class="env-live" hidden></div><div class="env-sp" hidden></div></div>
-        <div class="env-ends" data-envelope-ends="active"></div>
-        <div class="env-setpoint hint" data-envelope-setpoint="active" hidden></div>
-      </dd>
-      <dt>Q</dt><dd>
-        <div class="env-bar" data-envelope="reactive"><div class="env-live" hidden></div><div class="env-sp" hidden></div></div>
-        <div class="env-ends" data-envelope-ends="reactive"></div>
-        <div class="env-setpoint hint" data-envelope-setpoint="reactive" hidden></div>
-      </dd>
-      ${knobsHtml}
-    </dl>
-    <p class="hint" id="knob-readback-hint" hidden></p>
-
-    <div class="fold" id="charts-fold">
+    <div class="insp-card fold" id="card-charts" data-card="charts">
       <h3 class="fold-toggle" data-fold-toggle>Charts<span class="fold-summary">${chartsSummary}<span class="fold-chevron">▾</span></span></h3>
       <div class="fold-body"><div id="charts"></div></div>
     </div>
 
-    <div id="setpoints-section"></div>
+    <div class="insp-card fold" id="card-setpoints" data-card="setpoints">
+      <h3 class="fold-toggle" data-fold-toggle>Setpoints<span class="fold-summary"><span class="fold-chevron">▾</span></span></h3>
+      <div class="fold-body"><div id="setpoints-section"></div></div>
+    </div>
 
     <div class="fold" id="connections-fold">
       <h3 class="fold-toggle" data-fold-toggle>Connections<span class="fold-summary">${parentIds.length} parents · ${childIds.length} children<span class="fold-chevron">▾</span></span></h3>
@@ -477,10 +501,23 @@ function renderInspect(d, parentIds, childIds) {
     );
   }
 
-  // Connections fold: session-only toggle, always starts folded, no
-  // async work behind it. The Charts fold (persisted, first-unfold
-  // build) is wired by renderNode below — it needs the render's
-  // generation guard, which only renderNode has.
+  // Component, Power, and Setpoints cards: persisted per-card fold
+  // state, no async work behind any of them (the setpoint list is
+  // rendered — and keeps accumulating WS events — whether or not its
+  // card is open). The Charts card (persisted too, but with a
+  // first-unfold chart build) is wired by renderNode below — it
+  // needs the render's generation guard, which only renderNode has.
+  for (const name of ["component", "power", "setpoints"]) {
+    const card = document.getElementById(`card-${name}`);
+    card.classList.toggle("open", loadCardOpen(name));
+    card.querySelector("[data-fold-toggle]").addEventListener("click", () => {
+      const open = !card.classList.contains("open");
+      card.classList.toggle("open", open);
+      saveCardOpen(name, open);
+    });
+  }
+
+  // Connections fold: session-only toggle, always starts folded.
   const connFold = document.getElementById("connections-fold");
   connFold.querySelector("[data-fold-toggle]").addEventListener("click", () => {
     connFold.classList.toggle("open");
@@ -610,10 +647,9 @@ function paintKnobEntry(entry, value, expr, leading) {
   if (leading != null && flag) flag.checked = leading;
 }
 
-// Write a plain (non-expr) text reading to a knob input — used by the
-// two ad hoc prefillKnobs branches below that don't go through
-// knobDisplay (the power-factor-derived `reactive-power` reading, and
-// "no state for this token"). Same live-vs-editing discipline as
+// Write a plain (non-expr) text reading to a knob input — used by
+// prefillKnobs' "no state for this token" blank-out, which doesn't
+// go through knobDisplay. Same live-vs-editing discipline as
 // paintKnobEntry: dataset.live always updates, the visible write is
 // frozen while the user has the field focused.
 function setKnobText(input, text) {
@@ -638,6 +674,14 @@ function paintBar(axis, unit) {
   const bar = inspectEl.querySelector(`[data-envelope="${axis}"]`);
   const ends = inspectEl.querySelector(`[data-envelope-ends="${axis}"]`);
   if (!bar || !ends) return;
+  // The big per-axis readout above the bar — the Power card's
+  // headline number, fed by the same live WS samples as the marker.
+  const valEl = inspectEl.querySelector(`[data-envelope-val="${axis}"]`);
+  if (valEl) {
+    valEl.textContent = Number.isFinite(st.liveVal)
+      ? formatScaled(st.liveVal, unit)
+      : "—";
+  }
   const liveEl = bar.querySelector(".env-live");
   const spEl = bar.querySelector(".env-sp");
   const livePct = markerPct(st.liveVal, st.lo, st.hi);
@@ -687,24 +731,14 @@ function paintAugmented(flags) {
 
 // Prefill every knob input from a snapshot's `knobs` list, keyed by
 // stripping the input's own `set-` defun prefix down to the server's
-// token (set-meter-power → meter-power, …). The inverter's own
-// reactive-power VAr knob (`set-reactive-power`) is deliberately NOT
-// part of that vocabulary — the server never emits a KnobChanged for
-// it either, since it's a setpoint, not a knob — so it's prefilled
-// from the accepted reactive setpoint instead, when there is one.
+// token (set-meter-power → meter-power, …).
 // An input with `data-editing` (the user has it focused) still gets
 // its `dataset.live` refreshed — only the visible input/chip/checkbox
 // write is skipped — matching the same freeze setKnobText/
 // paintKnobEntry apply, and inspectorLive.applyKnob relies on below.
 function prefillKnobs(snap) {
   const byToken = new Map((snap.knobs || []).map((k) => [k.knob, k]));
-  const spByAxis = new Map((snap.setpoints || []).map((s) => [s.axis, s]));
   for (const [token, entry] of liveState.knobEntries) {
-    if (token === "reactive-power") {
-      const sp = spByAxis.get("reactive");
-      setKnobText(entry.input, sp ? String(sp.value) : "");
-      continue;
-    }
     const state = byToken.get(token);
     if (!state) {
       setKnobText(entry.input, "");
@@ -951,11 +985,11 @@ async function renderNode(d, gen) {
   const childIds = topology.childrenOf(d.id);
   renderInspect(d, parentIds, childIds);
 
-  // Charts fold: history fetch + live-chart wiring are deferred to
+  // Charts card: history fetch + live-chart wiring are deferred to
   // first unfold (folded by default; open state persists across
   // selections via localStorage). `built` guards against wiring the
-  // charts twice if the row is folded/unfolded repeatedly.
-  const chartsFold = document.getElementById("charts-fold");
+  // charts twice if the card is folded/unfolded repeatedly.
+  const chartsFold = document.getElementById("card-charts");
   const chartsContainer = document.getElementById("charts");
   let built = false;
   const buildChartsOnce = async () => {
@@ -976,17 +1010,18 @@ async function renderNode(d, gen) {
     .addEventListener("click", () => {
       const open = !chartsFold.classList.contains("open");
       chartsFold.classList.toggle("open", open);
-      saveChartsOpen(open);
+      saveCardOpen("charts", open);
       if (open) buildChartsOnce();
     });
-  if (loadChartsOpen()) {
+  if (loadCardOpen("charts")) {
     chartsFold.classList.add("open");
     buildChartsOnce();
   }
 
   // Setpoint events: list recent control-app requests + outcome.
-  // Unlike charts this always runs on open — it's cheap and today's
-  // behavior, unchanged by the fold restructure. The read-back
+  // Unlike charts this always runs on open — it's cheap, and the
+  // list has to exist (hidden inside the folded card) so incoming WS
+  // events keep accumulating via appendSetpointEvent. The read-back
   // snapshot (knobs, envelope bars, TTL row) fetches concurrently —
   // same generation guard, its own failure path (fetchSnapshot).
   const snapshotP = fetchSnapshot(d.id, gen);

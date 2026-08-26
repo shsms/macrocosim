@@ -131,13 +131,15 @@ export function escapeHtml(s) {
 }
 
 // Wire the floating panels' chrome: the inspector's × (close +
-// deselect the node so a re-click reopens it), and the + Add button /
-// its panel's × (toggle the topology-only Add-component card).
+// deselect the node so a re-click reopens it), its grab strip (drag
+// to move), and the + Add button / its panel's × (toggle the
+// topology-only Add-component card).
 function setupFloatingPanels() {
   document.getElementById("inspector-close").addEventListener("click", () => {
     closePanel();
     topology.select([]);
   });
+  setupInspectorDrag();
   const addPanel = document.getElementById("add-panel");
   document
     .getElementById("add-toggle")
@@ -145,6 +147,45 @@ function setupFloatingPanels() {
   document
     .getElementById("add-panel-close")
     .addEventListener("click", () => addPanel.classList.remove("open"));
+}
+
+// Drag-to-move for the floating inspector card, via the grab strip.
+// The offset is a transform on #inspector, so it survives content
+// re-renders (only #inspect's innerHTML is replaced) and sticks for
+// the rest of the session across close/reopen. Inert in the
+// dashboard subview, where the panel is docked into a grid column
+// (the CSS there forces transform: none and hides the strip).
+function setupInspectorDrag() {
+  const strip = document.getElementById("inspector-drag");
+  let dx = 0;
+  let dy = 0;
+  strip.addEventListener("pointerdown", (e) => {
+    if (document.body.dataset.subview === "dashboard") return;
+    e.preventDefault();
+    strip.setPointerCapture(e.pointerId);
+    const startX = e.clientX - dx;
+    const startY = e.clientY - dy;
+    // The card's untranslated position, for clamping: keep at least
+    // the grab strip's row inside the viewport so the card can't be
+    // dragged somewhere it can never be grabbed back from.
+    const rect = inspectorEl.getBoundingClientRect();
+    const baseLeft = rect.left - dx;
+    const baseTop = rect.top - dy;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const move = (ev) => {
+      dx = clamp(
+        ev.clientX - startX,
+        -(baseLeft + rect.width - 80),
+        window.innerWidth - baseLeft - 80,
+      );
+      dy = clamp(ev.clientY - startY, -baseTop, window.innerHeight - baseTop - 40);
+      inspectorEl.style.transform = `translate(${dx}px, ${dy}px)`;
+    };
+    const stop = () => strip.removeEventListener("pointermove", move);
+    strip.addEventListener("pointermove", move);
+    strip.addEventListener("pointerup", stop, { once: true });
+    strip.addEventListener("pointercancel", stop, { once: true });
+  });
 }
 
 // JSON mutation helper shared by the dispatches panel's row actions
