@@ -9,6 +9,7 @@ use crate::lisp::Config;
 use super::state::{MicrogridLoopbacks, SharedMicrogrid};
 
 pub(in crate::ui) mod assets;
+pub(in crate::ui) mod component;
 pub(in crate::ui) mod control;
 pub(in crate::ui) mod defaults;
 pub(in crate::ui) mod dispatches;

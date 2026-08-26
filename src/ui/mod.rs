@@ -52,6 +52,7 @@ pub async fn serve_with_listener(
 fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopbacks) -> Router {
     use handlers::{
         assets::{asset, index, logs_backfill},
+        component::{component, component_for_mg},
         control::{
             component_drive, component_drive_for_mg, component_status, component_status_for_mg,
         },
@@ -92,6 +93,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/api/history", get(history))
         .route("/api/defaults", get(defaults))
         .route("/api/setpoints", get(setpoints))
+        .route("/api/component", get(component))
         .route("/api/logs", get(logs_backfill))
         .route("/api/scenario", get(scenario_summary))
         .route("/api/scenario/events", get(scenario_events))
@@ -130,6 +132,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         )
         .route("/api/mg/{mg_id}/history", get(history_for_mg))
         .route("/api/mg/{mg_id}/setpoints", get(setpoints_for_mg))
+        .route("/api/mg/{mg_id}/component", get(component_for_mg))
         .route(
             "/api/mg/{mg_id}/microgrid/status",
             get(microgrid_status_for_mg),

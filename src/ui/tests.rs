@@ -1731,6 +1731,227 @@ async fn setpoints_resolve_per_microgrid_and_legacy_first_site() {
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
 
+/// A meter's `meter-power` knob reads back the live constant
+/// override, and a `set-meter-power-factor` call swaps its Q source
+/// from `meter-reactive-power` to `meter-power-factor` (with
+/// `leading`) — the two are mutually exclusive readings of the same
+/// underlying reactive source.
+#[tokio::test]
+async fn component_snapshot_reads_meter_knobs_and_envelope() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    call(cfg.clone(), post("/api/eval", "(set-meter-power 7 1500)")).await;
+    call(
+        cfg.clone(),
+        post("/api/eval", "(set-meter-power-factor 7 0.9 t)"),
+    )
+    .await;
+    let (status, body) = call(cfg, get("/api/component?id=7")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["id"], 7);
+    let knobs = v["knobs"].as_array().unwrap();
+    let power = knobs.iter().find(|k| k["knob"] == "meter-power").unwrap();
+    assert_eq!(power["value"], 1500.0);
+    assert!(power["expr"].is_null());
+    let pf = knobs
+        .iter()
+        .find(|k| k["knob"] == "meter-power-factor")
+        .unwrap();
+    assert_eq!(pf["value"], 0.9);
+    assert_eq!(pf["leading"], true);
+    // The meter never had a direct VAr source configured, so the
+    // knob list shouldn't carry a stale `meter-reactive-power` entry
+    // alongside the power-factor one.
+    assert!(!knobs.iter().any(|k| k["knob"] == "meter-reactive-power"));
+}
+
+/// A quoted or symbol source prints its Lisp form readably in `expr`.
+#[tokio::test]
+async fn component_snapshot_prints_expression_sources() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post("/api/eval", "(set-meter-power 7 '(lambda () 25))"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    cfg.refresh_once();
+    let (_s, body) = call(cfg, get("/api/component?id=7")).await;
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let power = v["knobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["knob"] == "meter-power")
+        .unwrap()
+        .clone();
+    assert!(power["expr"].as_str().unwrap().contains("lambda"));
+}
+
+/// An unquoted `(lambda …)` literal evaluates to tulisp's opaque
+/// `CompiledDefun` closure before `set-meter-power` ever sees it —
+/// its `source_text()` is the literal, useless string "CompiledDefun".
+/// The handler ships that raw opaque string unfiltered (no server-
+/// side normalization — see `handlers/component.rs`); it's the
+/// client's `knobDisplay` (`ui-assets/inspect.js`) that detects the
+/// `CompiledDefun` marker and swaps in a placeholder, the one place
+/// both the snapshot and WS paths funnel through. The live resolved
+/// `value` still reflects the lambda's result either way.
+#[tokio::test]
+async fn component_snapshot_ships_raw_compiled_defun_expr() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post("/api/eval", "(set-meter-power 7 (lambda () 25))"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    cfg.refresh_once();
+    let (_s, body) = call(cfg, get("/api/component?id=7")).await;
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let power = v["knobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["knob"] == "meter-power")
+        .unwrap()
+        .clone();
+    assert!(
+        power["expr"].as_str().unwrap().starts_with("CompiledDefun"),
+        "expr: {:?}",
+        power["expr"]
+    );
+    assert_eq!(power["value"], 25.0);
+}
+
+#[tokio::test]
+async fn component_snapshot_404s_unknown_ids() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let (status, _b) = call(cfg.clone(), get("/api/component?id=99")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _b) = call(cfg, get("/api/mg/9999/component?id=7")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// A solar inverter's knob set is sunlight + both reactive caps
+/// (mirroring the client's `KNOBS_BY_CATEGORY` solar rule), and the
+/// unset `reactive-apparent-va` cap still gets an entry with
+/// `value: null` so the client renders the input. `envelope.reactive`
+/// needs a downstream component reporting a Q band to populate (see
+/// `MicrogridSite::aggregate_child_reactive_bounds`) — a battery
+/// inverter wired as a (topologically nonsensical, but type-legal)
+/// child gives it one without dragging in a whole battery rig.
+#[tokio::test]
+async fn component_snapshot_inverter_knobs_and_reactive_envelope() {
+    let cfg = config_with(
+        "(%make-solar-inverter :id 4)
+         (%make-battery-inverter :id 5)
+         (connect 4 5)",
+    )
+    .await;
+    call(cfg.clone(), post("/api/eval", "(set-solar-sunlight 4 63)")).await;
+    let (status, _) = call(
+        cfg.clone(),
+        post("/api/eval", "(set-reactive-pf-limit 4 0.95)"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(cfg, get("/api/component?id=4")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let knobs = v["knobs"].as_array().unwrap();
+    let sunlight = knobs
+        .iter()
+        .find(|k| k["knob"] == "solar-sunlight")
+        .unwrap();
+    assert_eq!(sunlight["value"], 63.0);
+    let pf_limit = knobs
+        .iter()
+        .find(|k| k["knob"] == "reactive-pf-limit")
+        .unwrap();
+    assert_eq!(pf_limit["value"], 0.95);
+    let apparent_va = knobs
+        .iter()
+        .find(|k| k["knob"] == "reactive-apparent-va")
+        .unwrap();
+    assert!(apparent_va["value"].is_null());
+    assert!(!v["envelope"]["reactive"].is_null());
+}
+
+/// `setpoints[axis].remaining_ms` reflects the live `TimeoutTracker`
+/// deadline armed by `(set-active-power … LIFETIME-MS)`, bounded by
+/// the lifetime just requested. The value/axis themselves come from
+/// the separate setpoint-event log (`log_setpoint`), which
+/// `(set-active-power)` doesn't populate on its own — planted here
+/// the same way `setpoints_resolve_per_microgrid_and_legacy_first_site`
+/// does.
+#[tokio::test]
+async fn component_snapshot_reports_remaining_ms_for_a_timed_setpoint() {
+    use crate::sim::setpoints::{SetpointEvent, SetpointKind, SetpointOutcome};
+    let cfg = config_with("(%make-solar-inverter :id 4)").await;
+    let lifetime_ms: u64 = 5000;
+    let (status, _) = call(
+        cfg.clone(),
+        post("/api/eval", "(set-active-power 4 -5000 5000)"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    cfg.legacy_site().log_setpoint(
+        4,
+        SetpointEvent {
+            ts: Utc::now(),
+            kind: SetpointKind::ActivePower,
+            value: -5000.0,
+            ttl_s: Some(5),
+            outcome: SetpointOutcome::Accepted {
+                effective_value: Some(-5000.0),
+            },
+        },
+    );
+    let (status, body) = call(cfg, get("/api/component?id=4")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let sp = v["setpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["axis"] == "active")
+        .unwrap();
+    assert_eq!(sp["value"], -5000.0);
+    let remaining = sp["remaining_ms"].as_u64().unwrap();
+    assert!(
+        remaining > 0 && remaining <= lifetime_ms,
+        "remaining={remaining}"
+    );
+}
+
+/// A meter driven directly via `(set-meter-reactive-power id V)` (as
+/// opposed to `component_snapshot_reads_meter_knobs_and_envelope`'s
+/// power-factor-derived reading) exercises the `ReactiveReading::Var`
+/// read-back arm in `knobs_for` — the `meter-reactive-power` knob
+/// shows up with the constant value just set, no `expr`.
+#[tokio::test]
+async fn component_snapshot_reads_reactive_var_knob() {
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post("/api/eval", "(set-meter-reactive-power 7 1250)"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(cfg, get("/api/component?id=7")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let reactive = v["knobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["knob"] == "meter-reactive-power")
+        .unwrap();
+    assert_eq!(reactive["value"], 1250.0);
+    assert!(reactive["expr"].is_null());
+}
+
 /// The typed control API's drive endpoint is a second door onto the
 /// same setters the Lisp defuns use (src/lisp/defuns/load_drivers.rs)
 /// — it must broadcast `KnobChanged` on the same success path, so a

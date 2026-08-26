@@ -392,6 +392,19 @@ impl MicrogridSite {
         self.inner.timeout_tracker.remove_expired()
     }
 
+    /// Time left before `id`'s `axis` setpoint expires — `None` when
+    /// that axis isn't tracked (a persistent setpoint set with no
+    /// lifetime) or its deadline already passed. Read-only mirror of
+    /// [`Self::add_timeout`]/[`Self::drain_expired_timeouts`] for the
+    /// `/api/component` snapshot's `remaining_ms` field.
+    pub fn setpoint_remaining(
+        &self,
+        id: u64,
+        axis: crate::timeout_tracker::SetpointAxis,
+    ) -> Option<Duration> {
+        self.inner.timeout_tracker.remaining(id, axis)
+    }
+
     // ─── Version counter + event broadcast bus ────────────────────────
     //
     // Every accepted /api/eval bumps `version`, which fires a
