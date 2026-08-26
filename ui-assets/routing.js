@@ -15,8 +15,9 @@ import {
   pvRows,
 } from "./dashboard.js";
 import { formulaCanvas, refreshFormula } from "./explain.js";
-import { clearSide, refitCharts, showComponent } from "./inspect.js";
+import { refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
+import { closePanel } from "./side-panel.js";
 import { topology } from "./topology.js";
 
 // ─── Per-mg URL helper ─────────────────────────────────────────────────────
@@ -226,7 +227,7 @@ function applyMode(mode) {
   // The canvases keep their selection, so tell them the inspector is
   // gone: without resetNotify, re-clicking the still-selected node
   // after switching back would dedup and never reopen the inspector.
-  clearSide();
+  closePanel();
   topology.resetNotify();
   formulaCanvas().resetNotify();
   document.getElementById("add-panel").classList.remove("open");

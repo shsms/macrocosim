@@ -2,17 +2,10 @@
 // - Help, Snapshots dialogs.
 // - Side-panel toggles for Defaults and the live Scenario report.
 
-import {
-  escapeHtml,
-  inspectEl,
-  inspectorEl,
-  mutate,
-  notify,
-  openInspector,
-} from "./app.js";
+import { escapeHtml, inspectEl, mutate, notify } from "./app.js";
 import { evalQuoted } from "./eval.js";
-import { clearSide, startScenarioReportLoop } from "./inspect.js";
 import { currentMgEntry, readSelectedMg } from "./routing.js";
+import { closePanel, currentPanel, openPanel } from "./side-panel.js";
 
 export function setupHelpButton() {
   const dlg = document.getElementById("help-dialog");
@@ -120,18 +113,18 @@ export function setupSnapshotsDialog() {
 /// Generic inspector toggle: a chrome button (Defaults / Report) that
 /// opens the floating inspector with some custom render. Clicking it
 /// again closes the inspector.
-function makeSidePanelToggle(btnId, render) {
+function makeSidePanelToggle(btnId, render, teardown = null) {
   const btn = document.getElementById(btnId);
-  btn.addEventListener("click", async () => {
+  btn.addEventListener("click", () => {
     // Clicking the lit button (its panel is the one showing) closes;
-    // otherwise render this panel and open — even if the inspector is
-    // already up showing something else, which just swaps the content.
-    if (document.body.classList.contains("inspector-open") && inspectorEl.dataset.panel === btnId) {
-      clearSide();
+    // otherwise open this panel — even if the inspector is already up
+    // showing something else, which just swaps the content (openPanel
+    // runs the outgoing tenant's teardown before this one renders).
+    if (currentPanel() === btnId) {
+      closePanel();
       return;
     }
-    await render();
-    openInspector(btnId);
+    openPanel(btnId, render, teardown);
   });
 }
 
@@ -139,7 +132,20 @@ function makeSidePanelToggle(btnId, render) {
 // panel pattern. The render functions below own the actual content.
 export const setupDefaultsToggle = () => makeSidePanelToggle("defaults-btn", renderDefaults);
 export const setupScenarioReportToggle = () =>
-  makeSidePanelToggle("scenario-report-btn", renderScenarioReport);
+  makeSidePanelToggle("scenario-report-btn", renderScenarioReport, stopScenarioReportLoop);
+
+// Side-panel scenario-report poll handle. Local to this module now
+// that the timer no longer needs to be cancelled from inspect.js —
+// side-panel.js runs `stopScenarioReportLoop` as this tenant's
+// teardown on swap/close, so a stale interval can't keep firing into
+// a torn-down panel.
+let scenarioReportTimer = null;
+function stopScenarioReportLoop() {
+  if (scenarioReportTimer != null) {
+    clearInterval(scenarioReportTimer);
+    scenarioReportTimer = null;
+  }
+}
 
 async function renderScenarioReport() {
   inspectEl.innerHTML = `
@@ -150,16 +156,14 @@ async function renderScenarioReport() {
     <h3>Recent events</h3>
     <ul id="sc-report-events" class="sc-events"><li class="hint">—</li></ul>
   `;
-  // Initial paint, then start polling. inspect.js owns the timer
-  // handle so clearSide can cancel it from the inspect tear-down
-  // path without reaching across module boundaries.
+  // Initial paint, then start polling.
   await refreshScenarioReport();
   // If the inspector moved on during the await (closed, or another
   // panel / node view replaced our markup), don't start a poll loop
-  // into a dead panel — clearSide can't cancel a timer that didn't
+  // into a dead panel — our teardown can't cancel a timer that didn't
   // exist yet when the panel went away.
   if (!document.getElementById("sc-report-card")) return;
-  startScenarioReportLoop(setInterval(refreshScenarioReport, 2000));
+  scenarioReportTimer = setInterval(refreshScenarioReport, 2000);
 }
 
 async function refreshScenarioReport() {

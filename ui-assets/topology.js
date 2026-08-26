@@ -12,7 +12,7 @@
 // - topology.get(id)             — lookup the component object by id
 // - topology.parentsOf / childrenOf / connections / allIds / selectedIds
 // - topology.mainMeterId()       — the meter flagged :main t (if any)
-// - topology.setSelectionHandler — wire showComponent / clearSide to the canvas
+// - topology.setSelectionHandler — wire showComponent / closePanel to the canvas
 // - topology.highlight(ids, subtractedIds) — temporary highlight (explanation hover)
 // - topology.resetLayout(name) / setSnap / alignSelection / scaleSelection
 // - topology.setValues(on) / valuesOn() — toggle live metric values on nodes/edges

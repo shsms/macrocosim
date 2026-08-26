@@ -1,12 +1,14 @@
 // Side-panel inspector: live charts per metric, per-category
 // knobs / inputs, setpoint event log, and the small utility
 // chooseScale / liveCharts machinery the charts route through.
-// `showComponent` renders the whole side panel for a selected
-// node; `clearSide` tears it back down to the empty hint.
+// `showComponent` renders the whole side panel for a selected node,
+// registering `liveCharts.clear()` as the node tenant's teardown
+// (side-panel.js runs it on tenant swap or close).
 
-import { escapeHtml, inspectEl, inspectorEl, openInspector } from "./app.js";
+import { escapeHtml, inspectEl } from "./app.js";
 import { evalQuoted, jsToLispString } from "./eval.js";
 import { mgPath, READ_ONLY_TITLE, structureEditable } from "./routing.js";
+import { openPanel } from "./side-panel.js";
 import { topology } from "./topology.js";
 
 const CHARTS_BY_CATEGORY = {
@@ -325,12 +327,17 @@ function selectField(knob, current, options, disabledReason = null) {
 // render and explain's refreshFormula.
 let showGen = 0;
 
-export async function showComponent(d) {
+export function showComponent(d) {
   if (!d) return;
   const gen = ++showGen;
-  openInspector("node");
-  liveCharts.clear();
+  // liveCharts.clear() is the node tenant's teardown — side-panel.js
+  // runs it (as the PREVIOUS tenant's teardown) before renderNode
+  // paints, whether that's a re-selected node or any other tenant
+  // that had been showing.
+  openPanel("node", () => renderNode(d, gen), () => liveCharts.clear());
+}
 
+async function renderNode(d, gen) {
   // vis-network's getConnectedNodes(id, direction) returns the
   // ids on either side of the selected node — cheaper than walking
   // /api/topology for the disconnect buttons. Display labels get
@@ -472,32 +479,4 @@ function makePlot(container, metric, quantity, unit, xs, ys) {
     ],
   };
   return { plot: new uPlot(opts, [xs, scaledYs], container), scale };
-}
-
-// Close the floating inspector: stop its live charts / report poll,
-// reset its content, and hide the card. Named `clearSide` for the
-// callers that predate the float (deselect handler, Esc, panel toggles).
-export function clearSide() {
-  liveCharts.clear();
-  if (scenarioReportTimer != null) {
-    clearInterval(scenarioReportTimer);
-    scenarioReportTimer = null;
-  }
-  inspectEl.innerHTML =
-    '<p class="hint">Click a node to inspect. Right-click for the context menu.</p>';
-  document.body.classList.remove("inspector-open");
-  delete inspectorEl.dataset.panel;
-  for (const b of document.querySelectorAll("#defaults-btn, #scenario-report-btn")) {
-    b.classList.remove("primary");
-  }
-}
-
-// Side-panel scenario-report poll handle. dialogs/refreshScenarioReport
-// calls `startScenarioReportLoop(setInterval(...))` to register the
-// id; `clearSide` cancels via the module-private handle so a stale
-// interval can't keep firing into a torn-down inspect.
-let scenarioReportTimer = null;
-export function startScenarioReportLoop(id) {
-  if (scenarioReportTimer != null) clearInterval(scenarioReportTimer);
-  scenarioReportTimer = id;
 }

@@ -26,7 +26,7 @@ import {
 } from "./editor.js";
 import { formulaCanvas, refreshFormula, setupExplainPanel } from "./explain.js";
 import { setupFormulaTileClicks } from "./formulas.js";
-import { clearSide, showComponent } from "./inspect.js";
+import { showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { backfillLogs, openWebSocket, setupRepl } from "./repl.js";
 import {
@@ -40,6 +40,7 @@ import {
   setupReplMgChip,
   visibleSubview,
 } from "./routing.js";
+import { closePanel } from "./side-panel.js";
 import { setupDrawerSplitter, setupFormulaDrawerSplitter } from "./splitter.js";
 import { topology } from "./topology.js";
 
@@ -62,21 +63,10 @@ const status = document.getElementById("status");
 // resizes it, so a double-click's second click lands on an unmoved
 // graph. Set when something is selected (or a chrome panel is
 // opened); cleared on deselect, Esc, the × button, or a tab switch —
-// all via clearSide().
+// all via closePanel() (side-panel.js — it also owns openPanel(),
+// which sets these two elements up on open).
 export const inspectEl = document.getElementById("inspect");
 export const inspectorEl = document.getElementById("inspector");
-
-// Open the floating inspector showing `panel` — "node" / "formula" or a
-// chrome toggle's button id. The matching chrome toggle (Defaults /
-// Report) lights up, so its state tracks the actual panel instead of a
-// private flag that a ×/tab-switch close would leave stale.
-export function openInspector(panel) {
-  document.body.classList.add("inspector-open");
-  inspectorEl.dataset.panel = panel || "";
-  for (const b of document.querySelectorAll("#defaults-btn, #scenario-report-btn")) {
-    b.classList.toggle("primary", b.id === panel);
-  }
-}
 
 export function setStatus(text, klass) {
   status.textContent = text;
@@ -145,7 +135,7 @@ export function escapeHtml(s) {
 // its panel's × (toggle the topology-only Add-component card).
 function setupFloatingPanels() {
   document.getElementById("inspector-close").addEventListener("click", () => {
-    clearSide();
+    closePanel();
     topology.select([]);
   });
   const addPanel = document.getElementById("add-panel");
@@ -366,10 +356,10 @@ async function init() {
   setupFormulaDrawerSplitter();
   setupSnapshotsDialog();
   backfillLogs();
-  // The topology canvas calls back to showComponent / clearSide
-  // (from inspect.js) on node click + canvas click. Wire it up
-  // before the first apply so the listeners are in place.
-  topology.setSelectionHandler(showComponent, clearSide);
+  // The topology canvas calls back to showComponent (from inspect.js)
+  // / closePanel (from side-panel.js) on node click + canvas click.
+  // Wire it up before the first apply so the listeners are in place.
+  topology.setSelectionHandler(showComponent, closePanel);
   setupCanvasControls("topology-controls", topology);
   const valuesBtn = document.querySelector("#topology-controls .values-btn");
   if (valuesBtn) valuesBtn.classList.toggle("active", topology.valuesOn());
@@ -396,7 +386,7 @@ async function init() {
         if (document.body.dataset.subview === "formulas") {
           formulaCanvas().select([]);
         }
-        clearSide();
+        closePanel();
       }
       return;
     }
@@ -432,7 +422,7 @@ async function init() {
       // Topology's own click handler closes the inspector on deselect;
       // mirror that here for keyboard parity.
       topology.select([]);
-      clearSide();
+      closePanel();
     }
   });
   setupContextMenu();

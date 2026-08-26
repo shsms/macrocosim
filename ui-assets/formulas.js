@@ -7,7 +7,8 @@
 // the dashboard tile titles + the click → openFormulaPanel
 // handoff.
 
-import { escapeHtml, inspectEl, jumpToTopology, mgPath, openInspector } from "./app.js";
+import { escapeHtml, inspectEl, jumpToTopology, mgPath } from "./app.js";
+import { openPanel } from "./side-panel.js";
 
 // Parses a graph-crate-rendered formula like
 //   MAX(#2 - COALESCE(#1002, #1001, 0.0), 0.0)
@@ -133,8 +134,13 @@ function formulaToHtml(node) {
 // Open the formula tree for the given stream in the inspector. Re-uses
 // the inspector (same pattern as
 // renderScenarioReport / renderDefaults) so the layout stays
-// uniform.
-async function openFormulaPanel(stream) {
+// uniform. No teardown — the panel is static markup with no live
+// resources to tear back down.
+function openFormulaPanel(stream) {
+  openPanel("formula", () => renderFormulaPanel(stream));
+}
+
+async function renderFormulaPanel(stream) {
   try {
     const res = await fetch(mgPath("microgrid/formulas"));
     if (!res.ok) return;
@@ -148,7 +154,6 @@ async function openFormulaPanel(stream) {
         <p class="hint">Click any <code>#N</code> to jump to that component on the Topology canvas.</p>
       </div>
     `;
-    openInspector("formula");
     // Delegate refs: one listener per panel-open, no per-span hookup.
     inspectEl.querySelector(".formula-tree")?.addEventListener("click", (ev) => {
       const t = ev.target.closest(".formula-ref");
