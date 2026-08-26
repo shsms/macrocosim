@@ -454,6 +454,29 @@ impl MicrogridSite {
         });
     }
 
+    /// Broadcast a `KnobChanged` event. Called from the defun
+    /// chokepoints (`set-meter-power` and friends) and from the
+    /// typed control API's drive handlers — the two doors that write
+    /// a runtime knob — on the success path only. Fire-and-forget for
+    /// the same reason [`Self::broadcast_config_error`] is.
+    pub fn note_knob_changed(
+        &self,
+        id: u64,
+        knob: &'static str,
+        value: Option<f32>,
+        expr: Option<String>,
+        leading: Option<bool>,
+    ) {
+        let _ = self.inner.events.send(SiteEvent::KnobChanged {
+            id,
+            ts_ms: chrono::Utc::now().timestamp_millis(),
+            knob,
+            value,
+            expr,
+            leading,
+        });
+    }
+
     // ─── Scheduler knobs + grid state ────────────────────────────────
     //
     // `physics_tick` is the cadence at which `spawn_physics` runs

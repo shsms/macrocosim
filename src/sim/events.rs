@@ -102,4 +102,23 @@ pub enum SiteEvent {
         /// `"created"` / `"updated"` / `"deleted"`.
         change: &'static str,
     },
+    /// A runtime knob changed — REPL, scenario, typed control API, or the
+    /// web UI; all writes funnel through the defuns or the control
+    /// handlers, and both emit this. The inspector refreshes its
+    /// edit-in-place inputs from it.
+    KnobChanged {
+        id: u64,
+        ts_ms: i64,
+        /// One of: "meter-power" / "meter-reactive-power" /
+        /// "meter-power-factor" / "solar-sunlight" /
+        /// "reactive-pf-limit" / "reactive-apparent-va".
+        knob: &'static str,
+        /// New value; None when the knob was cleared (pf-limit /
+        /// apparent-va accept clearing).
+        value: Option<f32>,
+        /// Printed Lisp source when the write installed an expression.
+        expr: Option<String>,
+        /// meter-power-factor only.
+        leading: Option<bool>,
+    },
 }

@@ -35,10 +35,23 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                 // Lisp keeps the historic lenient behavior: the bool is
                 // only enforced by the typed control API.
                 let _ = c.set_active_power_override(watts as f32);
+                w.note_knob_changed(id as u64, "meter-power", Some(watts as f32), None, None);
             } else if let Some(scalar) =
                 crate::sim::dynamic_scalar::DynamicScalar::from_lisp(&value, 0.0)
             {
+                // Printed source (same text `source_text` would report)
+                // and the cached value right after construction, before
+                // the scalar moves into the component.
+                let printed = value.to_string();
+                let resolved_now = scalar.get();
                 c.set_active_power_source(scalar);
+                w.note_knob_changed(
+                    id as u64,
+                    "meter-power",
+                    Some(resolved_now),
+                    Some(printed),
+                    None,
+                );
             } else {
                 return Err(Error::invalid_argument(format!(
                     "set-meter-power: expected a number, lambda, or symbol — got {value}"
@@ -67,10 +80,29 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                 // Lisp keeps the historic lenient behavior: the bool is
                 // only enforced by the typed control API.
                 let _ = c.set_reactive_power_override(vars as f32);
+                w.note_knob_changed(
+                    id as u64,
+                    "meter-reactive-power",
+                    Some(vars as f32),
+                    None,
+                    None,
+                );
             } else if let Some(scalar) =
                 crate::sim::dynamic_scalar::DynamicScalar::from_lisp(&value, 0.0)
             {
+                // Printed source and the cached value right after
+                // construction, before the scalar moves into the
+                // component — same pattern as set-meter-power above.
+                let printed = value.to_string();
+                let resolved_now = scalar.get();
                 c.set_reactive_power_source(scalar);
+                w.note_knob_changed(
+                    id as u64,
+                    "meter-reactive-power",
+                    Some(resolved_now),
+                    Some(printed),
+                    None,
+                );
             } else {
                 return Err(Error::invalid_argument(format!(
                     "set-meter-reactive-power: expected a number, lambda, or symbol — got {value}"
@@ -103,7 +135,15 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             };
             // Lisp keeps the historic lenient behavior: a non-meter is a
             // no-op here, only the typed control API rejects it.
-            let _ = c.set_power_factor(pf as f32, leading.unwrap_or(false));
+            let leading = leading.unwrap_or(false);
+            let _ = c.set_power_factor(pf as f32, leading);
+            w.note_knob_changed(
+                id as u64,
+                "meter-power-factor",
+                Some(pf as f32),
+                None,
+                Some(leading),
+            );
             Ok(true)
         },
     );
@@ -147,10 +187,22 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             if value.numberp() {
                 let pct = f64::try_from(&value)?;
                 let _ = c.set_sunlight_pct(pct as f32);
+                w.note_knob_changed(id as u64, "solar-sunlight", Some(pct as f32), None, None);
             } else if let Some(scalar) =
                 crate::sim::dynamic_scalar::DynamicScalar::from_lisp(&value, 100.0)
             {
+                // Printed source and the cached value right after
+                // construction — same pattern as set-meter-power above.
+                let printed = value.to_string();
+                let resolved_now = scalar.get();
                 c.set_sunlight_source(scalar);
+                w.note_knob_changed(
+                    id as u64,
+                    "solar-sunlight",
+                    Some(resolved_now),
+                    Some(printed),
+                    None,
+                );
             } else {
                 return Err(Error::invalid_argument(format!(
                     "set-solar-sunlight: expected a number, lambda, or symbol — got {value}"
@@ -165,6 +217,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 mod tests {
     use super::super::super::test_support::config_with;
     use crate::sim::component::ReactiveReading;
+    use crate::sim::events::SiteEvent;
 
     /// `(set-meter-power id (lambda () X))` installs a dynamic
     /// source. `Config::refresh_once` resolves the lambda and
@@ -220,6 +273,123 @@ mod tests {
         assert!(
             (p - (-2000.0)).abs() < 1.0,
             "expected sunlight-clipped -2000 W, got {p}",
+        );
+    }
+
+    /// `(set-meter-power id V)` broadcasts a `KnobChanged` on the
+    /// site event bus so live UI inspector tabs can refresh their
+    /// edit-in-place input without a full topology refetch.
+    #[test]
+    fn set_meter_power_broadcasts_knob_changed() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        let mut rx = cfg.site().subscribe_events();
+        cfg.eval("(set-meter-power 7 1500)").unwrap();
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged { id: 7, knob: "meter-power", value: Some(v), expr: None, .. }
+                    if (*v - 1500.0).abs() < 1e-6
+            )),
+            "no matching KnobChanged on the bus; saw: {seen:?}"
+        );
+    }
+
+    /// `(set-meter-reactive-power id V)` broadcasts a `KnobChanged`
+    /// mirroring the active-power case above.
+    #[test]
+    fn set_meter_reactive_power_broadcasts_knob_changed() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        let mut rx = cfg.site().subscribe_events();
+        cfg.eval("(set-meter-reactive-power 7 500.0)").unwrap();
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged { id: 7, knob: "meter-reactive-power", value: Some(v), expr: None, .. }
+                    if (*v - 500.0).abs() < 1e-6
+            )),
+            "no matching KnobChanged on the bus; saw: {seen:?}"
+        );
+    }
+
+    /// `(set-meter-power-factor id PF LEADING)` broadcasts a
+    /// `KnobChanged` carrying the `leading` flag — the inspector's
+    /// PF input needs it to render the lagging/leading toggle.
+    #[test]
+    fn set_meter_power_factor_broadcasts_knob_changed() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 8000.0)");
+        let mut rx = cfg.site().subscribe_events();
+        cfg.eval("(set-meter-power-factor 7 0.8 t)").unwrap();
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged {
+                    id: 7,
+                    knob: "meter-power-factor",
+                    value: Some(v),
+                    expr: None,
+                    leading: Some(true),
+                    ..
+                } if (*v - 0.8).abs() < 1e-6
+            )),
+            "no matching KnobChanged on the bus; saw: {seen:?}"
+        );
+    }
+
+    /// `(set-solar-sunlight id V)` broadcasts a `KnobChanged`
+    /// mirroring the meter-power case.
+    #[test]
+    fn set_solar_sunlight_broadcasts_knob_changed() {
+        let (cfg, _dir) = config_with("(%make-solar-inverter :id 8)");
+        let mut rx = cfg.site().subscribe_events();
+        cfg.eval("(set-solar-sunlight 8 63)").unwrap();
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged { id: 8, knob: "solar-sunlight", value: Some(v), expr: None, .. }
+                    if (*v - 63.0).abs() < 1e-6
+            )),
+            "no matching KnobChanged on the bus; saw: {seen:?}"
+        );
+    }
+
+    /// A dynamic (lambda) source carries the printed source text in
+    /// `expr` instead of `None`.
+    #[test]
+    fn set_meter_power_knob_changed_carries_expr_for_lambda() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        let mut rx = cfg.site().subscribe_events();
+        cfg.eval("(set-meter-power 7 (lambda () 25))").unwrap();
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged {
+                    id: 7,
+                    knob: "meter-power",
+                    expr: Some(_),
+                    ..
+                }
+            )),
+            "no matching KnobChanged with expr on the bus; saw: {seen:?}"
         );
     }
 

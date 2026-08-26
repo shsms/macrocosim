@@ -256,13 +256,23 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
     // The debug_asserts catch a takes_* predicate drifting from its
     // setter: predicate true + setter false would be a 200 that did
     // nothing, the exact silent no-op this endpoint must not produce.
+    // The second door: emit KnobChanged on the same success path as the
+    // Lisp defuns (src/lisp/defuns/load_drivers.rs), for the same four
+    // tokens — `soc_pct` isn't part of the knob vocabulary the
+    // inspector reads back, so set_soc_pct gets no broadcast.
     if let Some(watts) = req.power_w {
         let applied = component.set_active_power_override(watts as f32);
         debug_assert!(applied, "takes_active_power_override disagrees with setter");
+        if applied {
+            site.note_knob_changed(id, "meter-power", Some(watts as f32), None, None);
+        }
     }
     if let Some(pct) = req.sunlight_pct {
         let applied = component.set_sunlight_pct(pct as f32);
         debug_assert!(applied, "takes_sunlight_pct disagrees with setter");
+        if applied {
+            site.note_knob_changed(id, "solar-sunlight", Some(pct as f32), None, None);
+        }
     }
     if let Some(pct) = req.soc_pct {
         let applied = component.set_soc_pct(pct as f32);
@@ -274,13 +284,26 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
             applied,
             "takes_reactive_power_override disagrees with setter"
         );
+        if applied {
+            site.note_knob_changed(id, "meter-reactive-power", Some(vars as f32), None, None);
+        }
     }
     if let Some(pf) = req.power_factor {
-        let applied = component.set_power_factor(pf as f32, req.leading.unwrap_or(false));
+        let leading = req.leading.unwrap_or(false);
+        let applied = component.set_power_factor(pf as f32, leading);
         debug_assert!(
             applied,
             "takes_reactive_power_override disagrees with setter"
         );
+        if applied {
+            site.note_knob_changed(
+                id,
+                "meter-power-factor",
+                Some(pf as f32),
+                None,
+                Some(leading),
+            );
+        }
     }
     Ok(Json(serde_json::json!({})))
 }

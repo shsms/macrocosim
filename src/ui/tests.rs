@@ -1730,3 +1730,37 @@ async fn setpoints_resolve_per_microgrid_and_legacy_first_site() {
     let (st, _) = call(config, get("/api/mg/9999/setpoints?id=600")).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
+
+/// The typed control API's drive endpoint is a second door onto the
+/// same setters the Lisp defuns use (src/lisp/defuns/load_drivers.rs)
+/// — it must broadcast `KnobChanged` on the same success path, so a
+/// live UI inspector tab refreshes its edit-in-place input regardless
+/// of which door the write came through. Same event-bus assertion
+/// shape as `set_meter_power_broadcasts_knob_changed` in
+/// `lisp/defuns/load_drivers.rs`, driven over HTTP instead of `eval`.
+#[tokio::test]
+async fn control_drive_broadcasts_knob_changed() {
+    use crate::sim::events::SiteEvent;
+
+    let cfg = config_with("(%make-meter :id 7)").await;
+    let mut rx = cfg.site().subscribe_events();
+    let (status, _) = call(
+        cfg,
+        post_json("/api/component/7/drive", r#"{"power_w": 1234.5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut seen = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        seen.push(ev);
+    }
+    assert!(
+        seen.iter().any(|ev| matches!(
+            ev,
+            SiteEvent::KnobChanged { id: 7, knob: "meter-power", value: Some(v), expr: None, .. }
+                if (*v - 1234.5).abs() < 1e-6
+        )),
+        "no matching KnobChanged on the bus; saw: {seen:?}"
+    );
+}
