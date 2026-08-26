@@ -7,7 +7,8 @@
 
 import { escapeHtml, inspectEl } from "./app.js";
 import { evalQuoted, jsToLispString } from "./eval.js";
-import { formatScaled } from "./live.js";
+import { deadBandW, formatScaled } from "./live.js";
+import { powerColor, reactiveColor } from "./pill.js";
 import { mgPath, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
 import { topology } from "./topology.js";
@@ -674,13 +675,20 @@ function paintBar(axis, unit) {
   const bar = inspectEl.querySelector(`[data-envelope="${axis}"]`);
   const ends = inspectEl.querySelector(`[data-envelope-ends="${axis}"]`);
   if (!bar || !ends) return;
-  // The big per-axis readout above the bar — the Power card's
-  // headline number, fed by the same live WS samples as the marker.
+  // The per-axis readout above the bar, fed by the same live WS
+  // samples as the marker. Coloured with the topology nodes' flow
+  // convention (export green / import blue / dim in the dead band),
+  // with the dead band derived from this component's own envelope
+  // rather than the site-wide reference the canvas uses.
   const valEl = inspectEl.querySelector(`[data-envelope-val="${axis}"]`);
   if (valEl) {
     valEl.textContent = Number.isFinite(st.liveVal)
       ? formatScaled(st.liveVal, unit)
       : "—";
+    const maxAbs = Math.max(Math.abs(st.lo ?? 0), Math.abs(st.hi ?? 0));
+    const db = deadBandW(Number.isFinite(maxAbs) ? maxAbs : 0);
+    valEl.style.color =
+      axis === "active" ? powerColor(st.liveVal, db) : reactiveColor(st.liveVal, db);
   }
   const liveEl = bar.querySelector(".env-live");
   const spEl = bar.querySelector(".env-sp");

@@ -1799,12 +1799,15 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #inspect .env-live {
   position: absolute;
-  top: -2px;
-  width: 2px;
-  height: 8px;
-  border-radius: 1px;
+  top: -4px;
+  width: 3px;
+  height: 12px;
+  border-radius: 1.5px;
   background: var(--accent);
-  transform: translateX(-1px);
+  /* A soft glow so the live marker reads at a glance against the
+     track — it's the one element on the bar that moves. */
+  box-shadow: 0 0 6px var(--accent);
+  transform: translateX(-1.5px);
 }
 #inspect .env-sp {
   position: absolute;
@@ -1893,9 +1896,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #inspect .env-val {
   font-family: var(--font-mono);
-  font-size: 18px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
-  color: var(--accent);
+  /* paintBar recolours per the flow convention (export green /
+     import blue); dim is the no-data resting state. */
+  color: var(--flow-dim);
 }
 
 .conns {
