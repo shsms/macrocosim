@@ -38,6 +38,10 @@ enum Source {
 pub struct DynamicScalar {
     cached: AtomicU32,
     source: Option<Source>,
+    /// Printed Lisp form of `source`, captured at construction so
+    /// read-back never touches the `TulispObject` off the
+    /// interpreter lock. `None` for constants.
+    source_text: Option<String>,
 }
 
 impl DynamicScalar {
@@ -46,6 +50,7 @@ impl DynamicScalar {
         Self {
             cached: AtomicU32::new(v.to_bits()),
             source: None,
+            source_text: None,
         }
     }
 
@@ -54,9 +59,11 @@ impl DynamicScalar {
     /// or arbitrary Lisp expressions whose evaluation yields a
     /// number.
     pub fn from_eval(expr: TulispObject, fallback: f32) -> Self {
+        let source_text = Some(expr.to_string());
         Self {
             cached: AtomicU32::new(fallback.to_bits()),
             source: Some(Source::Eval(expr)),
+            source_text,
         }
     }
 
@@ -65,9 +72,11 @@ impl DynamicScalar {
     /// any other zero-arg callable handed in directly as a plist
     /// value.
     pub fn from_funcall(callable: TulispObject, fallback: f32) -> Self {
+        let source_text = Some(callable.to_string());
         Self {
             cached: AtomicU32::new(fallback.to_bits()),
             source: Some(Source::Funcall(callable)),
+            source_text,
         }
     }
 
@@ -115,6 +124,14 @@ impl DynamicScalar {
     /// for the common numeric case.
     pub fn is_dynamic(&self) -> bool {
         self.source.is_some()
+    }
+
+    /// The printed Lisp form of the source expression, captured once
+    /// at construction. `None` for constants. Safe to call off the
+    /// interpreter lock — unlike `source`, this never touches a
+    /// `TulispObject`.
+    pub fn source_text(&self) -> Option<String> {
+        self.source_text.clone()
     }
 
     /// Re-resolve the source and update the cached value. No-op for
@@ -267,5 +284,24 @@ mod tests {
         // nil → None.
         let nil = ctx.eval_string("nil").unwrap();
         assert!(DynamicScalar::from_lisp(&nil, 0.0).is_none());
+    }
+
+    #[test]
+    fn constant_has_no_source_text() {
+        let s = DynamicScalar::constant(42.0);
+        assert_eq!(s.source_text(), None);
+    }
+
+    #[test]
+    fn from_lisp_captures_printed_source() {
+        let mut ctx = TulispContext::new();
+        // Quoted so `from_lisp` sees a cons (unevaluated lambda form)
+        // and routes through `from_eval`, preserving the printed
+        // source rather than the opaque `CompiledDefun` a compiled
+        // lambda value would print as.
+        let obj = ctx.eval_string("'(lambda () 5)").unwrap();
+        let s = DynamicScalar::from_lisp(&obj, 0.0).unwrap();
+        let text = s.source_text().expect("dynamic scalar has source text");
+        assert!(text.contains("lambda"), "got: {text}");
     }
 }
