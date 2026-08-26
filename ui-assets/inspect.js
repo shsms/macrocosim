@@ -204,7 +204,8 @@ function renderSegRow(knobKey, current, options) {
 function selectField(knob, current, options, disabledReason = null) {
   const opts = options
     .map(
-      (o) => `<option value="${o}"${o === current ? " selected" : ""}>${o}</option>`,
+      (o) =>
+        `<option value="${escapeHtml(o)}"${o === current ? " selected" : ""}>${escapeHtml(o)}</option>`,
     )
     .join("");
   const attrs = disabledReason

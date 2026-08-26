@@ -1712,12 +1712,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   border-color: var(--accent);
 }
 
-/* Segmented chip rows — replace the old <select> knobs (mode /
-   health / telemetry / commands). One click sets the value (see the
-   delegated [data-knob][data-value] listener in inspect.js); the
-   active chip is tinted per renderSegRow's semantic mapping. Tints
-   are rgba() of the existing --accent/--good/--standby/--bad tokens
-   at their literal RGB triples — no new colors. */
+/* The health row's segmented chips — its three states each fit one
+   line and carry their own severity colour. One click sets the value
+   (see the delegated [data-knob][data-value] listener in inspect.js);
+   the active chip is tinted per segTint. Tints are rgba() of the
+   existing --good/--standby/--bad tokens at their literal RGB
+   triples — no new colors. */
 #inspect .seg {
   display: flex;
   flex-wrap: wrap;
@@ -1732,13 +1732,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font: 13px var(--font-mono);
   cursor: pointer;
 }
-#inspect .seg-chip:hover:not(:disabled) { border-color: var(--accent); }
-#inspect .seg-chip:disabled { opacity: 0.45; cursor: default; }
-#inspect .seg-chip.on {
-  background: rgba(121, 184, 255, 0.16);
-  color: var(--accent);
-  border-color: var(--accent);
-}
+#inspect .seg-chip:hover { border-color: var(--accent); }
 #inspect .seg-chip.on-good {
   background: rgba(111, 191, 115, 0.16);
   color: var(--good);
