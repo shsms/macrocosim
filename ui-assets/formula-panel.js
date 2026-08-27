@@ -248,7 +248,18 @@ function clearCrossHighlight() {
   }
 }
 
-// Show `message` in the error banner and clear the formula pane.
+// Whether a settled request may still paint. Two ways it may not:
+// a newer request superseded this one, or the panel closed while the
+// fetch was in flight — closePanel() empties the panel's contentEl, so
+// every getElementById below would be null and throw. Both are
+// ordinary (pick a metric, then close the panel or switch tab before
+// the response lands), so bail quietly.
+function stale(seq) {
+  return seq !== requestSeq || !isPanelOpen(PANEL);
+}
+
+// Show `message` in the error banner and clear the formula pane. Only
+// ever called from behind a stale() guard, so the elements exist.
 function showFormulaError(message) {
   const errorEl = document.getElementById("formula-error");
   errorEl.textContent = message;
@@ -280,6 +291,13 @@ export async function refreshFormula() {
 
   const params = new URLSearchParams({ metric });
   const selection = topology.selectedIds();
+  // Record the selection this request is built from, synchronously:
+  // formulaSelectionChanged dedupes against it, so it has to name the
+  // selection the last-issued fetch actually used. Left behind, a
+  // panel opened over a live selection would fetch that selection's
+  // ids while the key still said "none", and the deselect that
+  // followed would dedupe away as a no-op.
+  lastSelectionKey = selection.join(",");
   if (
     SINGLE_ID_METRICS.has(metric) ||
     (GROUP_ID_METRICS.has(metric) && useSelectionEl().checked && selection.length)
@@ -294,13 +312,22 @@ export async function refreshFormula() {
   let data;
   try {
     const res = await fetch(`${mgPath("formula")}?${params}`);
+    // The server's rejections (unknown microgrid, unknown metric) are
+    // plain-text bodies, not the JSON envelope — parsing one as JSON
+    // would bury the server's message under a syntax error.
+    if (!res.ok) {
+      const text = await res.text();
+      if (stale(seq)) return;
+      showFormulaError(`${res.status}: ${text}`);
+      return;
+    }
     data = await res.json();
   } catch (e) {
-    if (seq !== requestSeq) return; // a newer request superseded this one
+    if (stale(seq)) return;
     showFormulaError(`Formula request failed: ${e.message}`);
     return;
   }
-  if (seq !== requestSeq) return;
+  if (stale(seq)) return;
   if (!data.ok) {
     showFormulaError(data.error);
     return;

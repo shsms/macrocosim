@@ -295,11 +295,22 @@ function applyMode(mode) {
 }
 
 // Jump to the topology subview within the current mode and select
-// `id` on the canvas. Used by dashboard tier rows + the formula-tree
-// chip clicks. Pushes a history entry so the back button returns
-// the user to where they clicked from.
+// `id` on the canvas. Used by dashboard tier rows, the dashboard
+// formula tree's chips and the formula explorer's #N refs. Pushes a
+// history entry so the back button returns the user to where they
+// clicked from.
 export function jumpToTopology(id) {
   navigateTo({ subview: "topology" });
+  // An explicit jump always notifies, even when it lands on the node
+  // that is already selected. notifySelection() dedups on the
+  // selection set, so without this a repeat jump to the same id would
+  // reach none of the selection handlers — the panels they feed can
+  // have been closed behind the canvas's back in the meantime (Esc on
+  // the inspector while its node stays selected). The inspector itself
+  // is opened directly below, so this is about the other handlers
+  // staying in step, and about the invariant holding if that direct
+  // call ever moves.
+  topology.resetNotify();
   topology.select([id]);
   const c = topology.get(id);
   if (c) showComponent(c);
