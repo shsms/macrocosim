@@ -500,7 +500,7 @@
         </ul>
         <h4>Aggregations</h4>
         <ul class="help-list">
-          <li>Pool tiles read from the same <code>frequenz-microgrid</code> client a production control app would use. Click any tile to open the formula tree in the inspector — each <code>#N</code> is a link back to the topology canvas.</li>
+          <li>Pool tiles read from the same <code>frequenz-microgrid</code> client a production control app would use. Click any tile to open the formula tree in its own floating panel — each <code>#N</code> is a link back to the topology canvas.</li>
           <li>Pulse-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>density</em> + <em>TZ</em> toggle visual options.</li>
         </ul>
         <h4>Snapshots</h4>
@@ -523,10 +523,10 @@
         </ul>
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
-          <li><strong>Inspector</strong> — one of the floating panels on the right — the inspector, the formula explorer, Defaults, the Report — each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs) or a Dashboard tile (formula tree), and also closes when you click empty canvas or switch tab.</li>
+          <li><strong>Inspector</strong> — one of the floating panels on the right, alongside the formula explorer, Defaults, the Report and the Dashboard's formula tree; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
-          <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in the inspector; edits write to <code>enterprise.lisp</code>.</li>
+          <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in its own floating panel; edits write to <code>enterprise.lisp</code>.</li>
           <li><strong>Managed files</strong> — every microgrid is a file. A <em>managed</em> one (created here, or adopted) carries a switchyard-generated block that is rewritten on each structural edit; an <em>unmanaged</em> one is hand-written, so its structure is read-only in the UI and its card carries an <em>unmanaged</em> chip. Hit <em>Adopt</em> in the microgrid header to take it over. An <em>unsaved</em> chip means a live edit the file could not record.</li>
         </ul>
         <h4>REPL</h4>

@@ -10,13 +10,10 @@ const escapeHtml = (s) =>
     (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c],
   );
 
-// Parses a graph-crate-rendered formula like
-//   MAX(#2 - COALESCE(#1002, #1001, 0.0), 0.0)
-// into an AST: { kind: "op" | "call" | "ref" | "num", ... }. Used by
-// the formula inspector (F4 stage 2) to pretty-print the formula
-// with each #N as a clickable link to the topology canvas. Hand-
-// rolled recursive descent — the grammar is tiny (numbers, refs,
-// + - * /, function calls) and a parser library would dwarf it.
+// Parses a formula into an AST: { kind: "op" | "call" | "ref" |
+// "num", ... }. Hand-rolled recursive descent — the grammar is tiny
+// (numbers, refs, + - * /, function calls) and a parser library
+// would dwarf it.
 export function parseFormula(src) {
   let i = 0;
   const skipWs = () => {

@@ -1686,20 +1686,21 @@ per docs/superpowers/specs/2026-08-27-formula-explorer-v2-design.md and
 docs/superpowers/plans/2026-08-27-formula-explorer-v2.md — the formula
 explorer is now a floating panel on Topology, backed by the generalized
 multi-panel shell (concurrent floating panels, drag persistence,
-dashboard dock). The old Formulas subview and the server-side explain.js
-fork are gone; the graph crate moved off the shsms explain fork onto
-stock crates.io component-graph 0.6.2, which serves formula strings only
-— parsing, AST rendering, and cross-highlighting all run client-side now
-(shared ui-assets/formula-ast.js + tools/formula-ast-test.mjs). cargo
-test green (450), biome clean on ui-assets modulo pre-existing
-=index.html= a11y findings, formula-ast parser tests green. In-browser
-click-through sweep run live against the Berlin demo (mg 2200) and a
-battery-heavy microgrid (mg 2201): grid/consumer formula rendering,
-hover cross-highlight (blue add / red subtracted), #N jump + inspector
-side-by-side, battery metric with "limit to selection" narrowing and
-following a 2-battery selection, meter deletion updating the formula via
-WS event, dashboard-subview panel docking, and Esc-closes-newest-first
-all verified passing.
+dashboard dock). The old Formulas subview and its client-side
+=explain.js= are gone, and the Rust graph-crate dependency moved off the
+shsms explain fork onto stock crates.io component-graph 0.6.2, which
+serves formula strings only — parsing, AST rendering, and
+cross-highlighting all run client-side now (shared
+ui-assets/formula-ast.js + tools/formula-ast-test.mjs). cargo test green
+(450), biome clean on ui-assets modulo the pre-existing findings
+(=topology.js= line 270 useOptionalChain and the =index.html= a11y set),
+formula-ast parser tests green. In-browser click-through sweep run live
+against the Berlin demo (mg 2200) and a battery-heavy microgrid (mg
+2201): grid/consumer formula rendering, hover cross-highlight (blue add /
+red subtracted), #N jump + inspector side-by-side, battery metric with
+"limit to selection" narrowing and following a 2-battery selection, meter
+deletion updating the formula via WS event, dashboard-subview panel
+docking, and Esc-closes-newest-first all verified passing.
 
 ** TODO [#A] Dashboard space rethink: attention panel over tier rows :ux:design:
 :LOGBOOK:

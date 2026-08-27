@@ -29,7 +29,7 @@ is wiring the topology + animating the environment.
     `(connect …)` forms for `/api/microgrids/import`
   - `graph_adapter.rs` — lifts a site into
     `frequenz-microgrid-component-graph` nodes/edges (validation +
-    the Formulas tab's explained-formula endpoint)
+    the formula endpoint behind the formula explorer panel)
 - `src/lisp/` — config DSL glue
   - `mod.rs` — `Config` (fields, accessors, reload)
   - `boot.rs` — `Config::new`: interpreter setup, defun registration,
@@ -236,7 +236,15 @@ cargo run --bin swctl -- set-power 1001 5000
 `ui-assets/` changes: `npx @biomejs/biome check ui-assets` (config in
 `biome.json`) — `npx biome` alone resolves to an unrelated no-op
 package on the npm registry, not this project's linter, so always
-spell out `@biomejs/biome`.
+spell out `@biomejs/biome`. Plus two node-only gates that need
+neither a browser nor a running server:
+
+```sh
+node tools/boot-smoke.mjs        # imports app.js under a DOM shim:
+                                 # catches TDZ / cycle / bad-export
+                                 # breakage a curl-200 can't see
+node tools/formula-ast-test.mjs  # formula-ast.js parser + renderer
+```
 
 Each registered microgrid binds its own gRPC port; the first
 defaults to `[::1]:8800` and subsequent microgrids step by ten

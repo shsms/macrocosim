@@ -126,8 +126,11 @@ The node inspector's internals (cards, folds, live updates, teardown)
 are untouched — it is re-hosted, not redesigned. Defaults and
 scenario report likewise re-host as-is.
 
-Default placement: inspector keeps its current right-side dock; the
-formula panel spawns at the opposite (left) side. Both draggable.
+Default placement: every panel stacks in the one right-side dock the
+inspector already uses. A left-side spawn was dropped — the canvas's
+left edge belongs to the *+ Add* palette and the card it opens — and
+per-panel drag with positions persisted to localStorage covers
+placement preference anyway. All draggable.
 
 ## 4. Formula overlay on Topology
 

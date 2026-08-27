@@ -45,9 +45,9 @@ jobs:
       - name: cargo test
         run: cargo test --all-features
 
-  # Lint the hand-written JS in ui-assets/. Vendored libs and
-  # everything outside ui-assets/ are excluded via biome.json's
-  # `files.includes` patterns.
+  # Lint the hand-written JS in ui-assets/, then run the two node
+  # gates over it. Vendored libs and everything outside ui-assets/
+  # are excluded via biome.json's `files.includes` patterns.
   ui-lint:
     runs-on: ubuntu-latest
     steps:
@@ -58,6 +58,17 @@ jobs:
       - name: biome lint
         # Pinned to the same version as biome.json's $schema.
         run: npx --yes @biomejs/biome@2.4.14 lint ui-assets/*.js
+
+      # Parser/renderer round-trip against the crate's own rendering,
+      # plus the subtraction-parity tinting the panel reads back.
+      - name: formula-ast tests
+        run: node tools/formula-ast-test.mjs
+
+      # Executes the whole ES-module import graph under a DOM shim —
+      # catches a TDZ / class-ordering error or a renamed export that
+      # serving the file happily would not.
+      - name: boot smoke
+        run: node tools/boot-smoke.mjs
 
   # Smoke test: boot the binary against the sample config.lisp and
   # curl /api/topology to confirm the server stood up. Catches

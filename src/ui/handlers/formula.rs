@@ -1,4 +1,4 @@
-//! Formula endpoint for the Formulas subview.
+//! Formula endpoint behind the formula explorer panel.
 //!
 //! Unlike `/api/mg/{id}/microgrid/formulas` (which reads rendered
 //! strings off the loopback client's logical meter), this endpoint
@@ -53,7 +53,7 @@ pub(in crate::ui) async fn formula_for_mg(
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let site = resolve_site(&config, mg_id)?;
     // spawn_blocking like the other CPU-bound handlers: on a large
-    // imported site the graph validation + explanation tree is real
+    // imported site the graph validation + formula generation is real
     // CPU work, and running it inline would stall a tokio worker
     // that also serves the WS pump and telemetry forwarders.
     super::blocking(move || formula_body(site, query)).await?
