@@ -109,6 +109,41 @@ function chooseDiv(values) {
   return { div: 1, prefix: "" };
 }
 
+// The spec's dashed y=0 line: the import/export divide, drawn only
+// where it means something. Guarded twice — the "y" scale only, so
+// the PF overlay's right-hand 0.85–1.02 axis never gets one, and
+// only when the window's range actually straddles zero, so a chart
+// living wholly above it (frequency, a site that never exports)
+// doesn't grow a line welded to its floor. uPlot hands canvas hooks
+// a device-pixel context (valToPos's third argument asks for the
+// same space), so the width and dash lengths scale by the canvas's
+// own pixel ratio or they'd be hairlines on a HiDPI screen.
+function drawZeroLine(u) {
+  const { min, max } = u.scales.y;
+  if (min == null || max == null || min > 0 || max < 0) return;
+  const dpr = u.ctx.canvas.width / (u.width || 1);
+  const { left, top, width, height } = u.bbox;
+  // Snap the stroke's centre so its edges land on device-pixel
+  // boundaries: an unsnapped 1px line straddles two rows and
+  // antialiases into a grey smear half the intended contrast.
+  const y = Math.round(u.valToPos(0, "y", true) - dpr / 2) + dpr / 2;
+  const ctx = u.ctx;
+  ctx.save();
+  // Clip to the plot area: a rounded zero on a range whose edge sits
+  // a fraction of a pixel away would otherwise bleed into the axis.
+  ctx.beginPath();
+  ctx.rect(left, top, width, height);
+  ctx.clip();
+  ctx.strokeStyle = "#3d4450";
+  ctx.lineWidth = dpr;
+  ctx.setLineDash([4 * dpr, 4 * dpr]);
+  ctx.beginPath();
+  ctx.moveTo(left, y);
+  ctx.lineTo(left + width, y);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function buildChart(card, slot) {
   const active = card.series.filter(seriesOn);
   if (!active.length) {
@@ -223,6 +258,7 @@ function buildChart(card, slot) {
     axes,
     series,
     bands,
+    hooks: { draw: [drawZeroLine] },
   };
   plots.set(card.key, { plot: new uPlot(opts, assemble(), slot), assemble });
 }
