@@ -219,10 +219,22 @@ function applyInitialRoute() {
   applyMode(cur.mode);
 }
 
+// The (mode, mg, subview) triple the last applyMode() settled on, so a
+// re-entrant call for the SAME route can be told apart from a real
+// navigation. null until the first call, which therefore always counts
+// as a change.
+let lastAppliedRoute = null;
+
 function applyMode(mode) {
   if (!VALID_MODES.has(mode)) mode = "microgrids";
   const selected = readSelectedMg();
   const subview = readSubview();
+  const routeChanged =
+    lastAppliedRoute === null ||
+    lastAppliedRoute.mode !== mode ||
+    lastAppliedRoute.selected !== selected ||
+    lastAppliedRoute.subview !== subview;
+  lastAppliedRoute = { mode, selected, subview };
   document.body.dataset.mode = mode;
   document.body.dataset.mgView = selected == null ? "list" : "selected";
   document.body.dataset.subview = subview;
@@ -231,9 +243,17 @@ function applyMode(mode) {
   // The canvases keep their selection, so tell them the inspector is
   // gone: without resetNotify, re-clicking the still-selected node
   // after switching back would dedup and never reopen the inspector.
-  closeAllPanels();
-  topology.resetNotify();
-  document.getElementById("add-panel").classList.remove("open");
+  //
+  // Only on a REAL navigation, though: navigateTo() runs applyMode
+  // unconditionally, so a no-op route write — jumpToTopology() asking
+  // for the topology subview while already on it, say — would otherwise
+  // dismiss the very panel the user clicked from (the formula
+  // explorer's #N links).
+  if (routeChanged) {
+    closeAllPanels();
+    topology.resetNotify();
+    document.getElementById("add-panel").classList.remove("open");
+  }
   for (const btn of document.querySelectorAll("#mode-toggle .mode-btn")) {
     btn.classList.toggle("active", btn.dataset.mode === mode);
   }

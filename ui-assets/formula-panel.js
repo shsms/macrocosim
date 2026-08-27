@@ -187,7 +187,18 @@ function wire(contentEl) {
   });
   view.addEventListener("click", (ev) => {
     const ref = ev.target.closest(".formula-ref");
-    if (ref) jumpToTopology(Number(ref.dataset.id));
+    if (!ref) return;
+    // End the hover highlight BEFORE jumping. topology.highlight()
+    // borrows the vis selection and stashes the user's own; the
+    // mouseleave that the opening inspector triggers (the dock reflows
+    // the formula out from under the cursor) would then restore that
+    // stash over the jump's freshly-selected node. Unhighlighting here
+    // drops the stash, so the jump's selection is the one that sticks
+    // and the later mouseleave is a no-op.
+    hovered?.classList.remove("expr-hl");
+    hovered = null;
+    clearCrossHighlight();
+    jumpToTopology(Number(ref.dataset.id));
   });
 }
 
