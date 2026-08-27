@@ -40,7 +40,7 @@ import {
   setupReplMgChip,
   visibleSubview,
 } from "./routing.js";
-import { closePanel } from "./side-panel.js";
+import { closePanel, closeTopPanel, isPanelOpen } from "./side-panel.js";
 import { setupDrawerSplitter, setupFormulaDrawerSplitter } from "./splitter.js";
 import { topology } from "./topology.js";
 
@@ -57,14 +57,13 @@ export {
 };
 
 const status = document.getElementById("status");
-// `inspect` holds the inspector's swappable content; `inspector` is the
-// floating card around it. The `inspector-open` class on <body> shows
-// the card, which overlays the right side of the canvas — it never
-// resizes it, so a double-click's second click lands on an unmoved
-// graph. Set when something is selected (or a chrome panel is
-// opened); cleared on deselect, Esc, the × button, or a tab switch —
-// all via closePanel() (side-panel.js — it also owns openPanel(),
-// which sets these two elements up on open).
+// `inspect` holds the node inspector's content; `inspector` is the
+// floating card around it — one of the cards in #panel-dock, which
+// overlays the right side of the canvas without ever resizing it, so
+// a double-click's second click lands on an unmoved graph. The card
+// is shown when something is selected; hidden on deselect, Esc, the ×
+// button, or a tab switch — all via closePanel("node") (side-panel.js
+// owns the whole dock, including openPanel()).
 export const inspectEl = document.getElementById("inspect");
 export const inspectorEl = document.getElementById("inspector");
 
@@ -131,15 +130,14 @@ export function escapeHtml(s) {
 }
 
 // Wire the floating panels' chrome: the inspector's × (close +
-// deselect the node so a re-click reopens it), its grab strip (drag
-// to move), and the + Add button / its panel's × (toggle the
-// topology-only Add-component card).
+// deselect the node so a re-click reopens it) and the + Add button /
+// its panel's × (toggle the topology-only Add-component card). The
+// grab strips are wired by side-panel.js, which owns the dock.
 function setupFloatingPanels() {
   document.getElementById("inspector-close").addEventListener("click", () => {
-    closePanel();
+    closePanel("node");
     topology.select([]);
   });
-  setupInspectorDrag();
   const addPanel = document.getElementById("add-panel");
   document
     .getElementById("add-toggle")
@@ -147,45 +145,6 @@ function setupFloatingPanels() {
   document
     .getElementById("add-panel-close")
     .addEventListener("click", () => addPanel.classList.remove("open"));
-}
-
-// Drag-to-move for the floating inspector card, via the grab strip.
-// The offset is a transform on #inspector, so it survives content
-// re-renders (only #inspect's innerHTML is replaced) and sticks for
-// the rest of the session across close/reopen. Inert in the
-// dashboard subview, where the panel is docked into a grid column
-// (the CSS there forces transform: none and hides the strip).
-function setupInspectorDrag() {
-  const strip = document.getElementById("inspector-drag");
-  let dx = 0;
-  let dy = 0;
-  strip.addEventListener("pointerdown", (e) => {
-    if (document.body.dataset.subview === "dashboard") return;
-    e.preventDefault();
-    strip.setPointerCapture(e.pointerId);
-    const startX = e.clientX - dx;
-    const startY = e.clientY - dy;
-    // The card's untranslated position, for clamping: keep at least
-    // the grab strip's row inside the viewport so the card can't be
-    // dragged somewhere it can never be grabbed back from.
-    const rect = inspectorEl.getBoundingClientRect();
-    const baseLeft = rect.left - dx;
-    const baseTop = rect.top - dy;
-    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-    const move = (ev) => {
-      dx = clamp(
-        ev.clientX - startX,
-        -(baseLeft + rect.width - 80),
-        window.innerWidth - baseLeft - 80,
-      );
-      dy = clamp(ev.clientY - startY, -baseTop, window.innerHeight - baseTop - 40);
-      inspectorEl.style.transform = `translate(${dx}px, ${dy}px)`;
-    };
-    const stop = () => strip.removeEventListener("pointermove", move);
-    strip.addEventListener("pointermove", move);
-    strip.addEventListener("pointerup", stop, { once: true });
-    strip.addEventListener("pointercancel", stop, { once: true });
-  });
 }
 
 // JSON mutation helper shared by the dispatches panel's row actions
@@ -400,8 +359,11 @@ async function init() {
   backfillLogs();
   // The topology canvas calls back to showComponent (from inspect.js)
   // / closePanel (from side-panel.js) on node click + canvas click.
-  // Wire it up before the first apply so the listeners are in place.
-  topology.setSelectionHandler(showComponent, closePanel);
+  // Deselecting only dismisses the node panel — other open panels
+  // (Defaults, Report, the formula explorer) are not about the
+  // selection and stay put. Wire it up before the first apply so the
+  // listeners are in place.
+  topology.setSelectionHandler(showComponent, () => closePanel("node"));
   setupCanvasControls("topology-controls", topology);
   const valuesBtn = document.querySelector("#topology-controls .values-btn");
   if (valuesBtn) valuesBtn.classList.toggle("active", topology.valuesOn());
@@ -428,7 +390,7 @@ async function init() {
         if (document.body.dataset.subview === "formulas") {
           formulaCanvas().select([]);
         }
-        closePanel();
+        closeTopPanel();
       }
       return;
     }
@@ -461,10 +423,14 @@ async function init() {
       e.preventDefault();
       deleteSelection();
     } else if (e.key === "Escape") {
-      // Topology's own click handler closes the inspector on deselect;
-      // mirror that here for keyboard parity.
-      topology.select([]);
-      closePanel();
+      // Esc peels ONE panel off the top of the dock, newest first.
+      // Deselecting unconditionally would dismiss two cards at once,
+      // since topology's own deselect handler closes the node panel;
+      // so mirror topology's click-to-deselect only when Esc took the
+      // node panel away, or when there was no panel to take away at
+      // all — Esc on a bare canvas is still the deselect gesture.
+      const closed = closeTopPanel();
+      if (closed === null || closed === "node") topology.select([]);
     }
   });
   setupContextMenu();

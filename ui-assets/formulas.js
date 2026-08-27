@@ -7,27 +7,26 @@
 // setupFormulaTileClicks wire up the dashboard tile titles + the
 // click → openFormulaPanel handoff.
 
-import { inspectEl, jumpToTopology, mgPath } from "./app.js";
+import { jumpToTopology, mgPath } from "./app.js";
 import { formulaToHtml, parseFormula } from "./formula-ast.js";
 import { openPanel } from "./side-panel.js";
 
-// Open the formula tree for the given stream in the inspector. Re-uses
-// the inspector (same pattern as
-// renderScenarioReport / renderDefaults) so the layout stays
-// uniform. No teardown — the panel is static markup with no live
-// resources to tear back down.
+// Open the formula tree for the given stream in its own floating
+// panel (same pattern as renderScenarioReport / renderDefaults) so
+// the layout stays uniform. No teardown — the panel is static markup
+// with no live resources to tear back down.
 function openFormulaPanel(stream) {
-  openPanel("formula", () => renderFormulaPanel(stream));
+  openPanel("formula-tree", (contentEl) => renderFormulaPanel(contentEl, stream));
 }
 
-async function renderFormulaPanel(stream) {
+async function renderFormulaPanel(contentEl, stream) {
   try {
     const res = await fetch(mgPath("microgrid/formulas"));
     if (!res.ok) return;
     const map = await res.json();
     const src = map[stream];
     if (!src) return;
-    inspectEl.innerHTML = `
+    contentEl.innerHTML = `
       <div class="formula-panel">
         <h2>Formula · <code>${stream}</code></h2>
         <pre class="formula-tree">${formulaToHtml(parseFormula(src))}</pre>
@@ -35,7 +34,7 @@ async function renderFormulaPanel(stream) {
       </div>
     `;
     // Delegate refs: one listener per panel-open, no per-span hookup.
-    inspectEl.querySelector(".formula-tree")?.addEventListener("click", (ev) => {
+    contentEl.querySelector(".formula-tree")?.addEventListener("click", (ev) => {
       const t = ev.target.closest(".formula-ref");
       if (!t) return;
       jumpToTopology(Number(t.dataset.id));

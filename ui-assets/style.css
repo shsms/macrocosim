@@ -352,7 +352,7 @@ dialog header button:hover { color: var(--fg); }
 main {
   display: grid;
   /* Single content column: the topology/dashboard/dispatches panes
-     span the full width; the inspector + add panel float over the
+     span the full width; the panel dock + add panel float over the
      `topology` area (same grid cell, pinned to a side) rather than
      occupying a docked column. mg-header is auto height (collapses to
      0 off a selection); the repl drawer's row size is JS-rewritten. */
@@ -374,33 +374,35 @@ main {
   min-height: 0;
 }
 
-/* On the Dashboard subview the inspector keeps the old docked
+/* On the Dashboard subview the panel dock keeps the old docked
    column: tiles reflow beside it instead of hiding under it, and
    there is no click-position gesture there for a resize to break.
-   The canvas subviews (Topology / Formulas) get the overlay
-   instead — see #inspector below. */
-body.inspector-open[data-subview="dashboard"] main {
+   The canvas subviews get the floating overlay instead — see
+   #panel-dock below. */
+body.panel-open[data-subview="dashboard"] main {
   grid-template-columns: 1fr 420px;
   grid-template-areas:
     "mgheader        mgheader"
-    "topology        inspector"
+    "topology        paneldock"
     "drawer-splitter drawer-splitter"
     "repl            repl";
 }
-body.inspector-open[data-subview="dashboard"] #inspector {
-  grid-area: inspector;
+body.panel-open[data-subview="dashboard"] #panel-dock {
+  grid-area: paneldock;
   justify-self: stretch;
-  /* Docked into its own grid column here — undo the floating card's
-     fit-to-content sizing and any drag offset, and hide the grab
-     strip (setupInspectorDrag also refuses to start a drag in this
-     subview). */
   align-self: stretch;
   max-height: none;
+  margin: 10px;
+  overflow-y: auto;
+  pointer-events: auto;
+}
+/* Docked panels stack full-width in the column; undo any drag offset. */
+body[data-subview="dashboard"] .float-panel {
   transform: none !important;
   width: auto;
-  margin: 10px;
+  max-height: none;
 }
-body[data-subview="dashboard"] #inspector-drag { display: none; }
+body[data-subview="dashboard"] .panel-drag { display: none; }
 
 #topology,
 #dashboard,
@@ -1301,37 +1303,52 @@ body.compact .tier5-soc-text { font-size: 10px; }
 #drawer-splitter:hover, #drawer-splitter.dragging { background: var(--accent); }
 
 /* ── Floating panels ─────────────────────────────────────────────────
-   The inspector (right) and the Add-component panel (left) share the
+   The panel dock (right) and the Add-component panel (left) share the
    `topology` grid cell with the active pane and pin to a side, so they
    float over the content instead of occupying a docked column. Both
    are inset cards with elevation; both are hidden until summoned. */
-#inspector {
-  display: none;
-  /* Overlays the right side of the content cell instead of taking a
-     grid column of its own: opening or closing it must never resize
-     the canvas — a double-click's second click would land on a
-     re-fitted, shifted graph. The top margin keeps the floating
-     canvas controls (layout picker + snap) clickable above it. */
+/* The panel dock overlays the right side of the content cell instead
+   of taking a grid column of its own: opening or closing a panel must
+   never resize the canvas — a double-click's second click would land
+   on a re-fitted, shifted graph. The dock itself is click-through
+   (pointer-events: none); each panel card re-enables hits. The top
+   margin keeps the floating canvas controls clickable above it. */
+#panel-dock {
   grid-area: topology;
   justify-self: end;
-  /* Size to content instead of stretching the whole right side; the
-     max-height keeps a long panel scrollable inside the cell (the
-     48px top + 10px bottom margins are what the calc subtracts). */
   align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   max-height: calc(100% - 58px);
-  width: 420px;
   max-width: calc(100% - 20px);
+  /* min-height: 0 keeps the dock out of the `topology` row's automatic
+     minimum: with `auto` the stacked cards' full height would grow the
+     1fr row, the percentage max-height would then resolve against the
+     grown row, and the cap would never bite (the panels would run off
+     the bottom of the window). */
+  min-height: 0;
+  margin: 48px 10px 10px;
   z-index: 7;
   position: relative;
-  margin: 48px 10px 10px;
+  pointer-events: none;
+}
+.float-panel {
+  display: none;
+  width: 420px;
+  max-width: 100%;
+  min-height: 0;
+  pointer-events: auto;
+  /* The floating × is absolutely positioned inside its own card. */
+  position: relative;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
   overflow: hidden;
 }
-body.inspector-open #inspector { display: flex; flex-direction: column; }
-#inspect {
+.float-panel.open { display: flex; flex-direction: column; }
+.panel-content {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -1341,9 +1358,9 @@ body.inspector-open #inspector { display: flex; flex-direction: column; }
 }
 
 /* Grab strip along the card's top edge: drag to move the floating
-   card (wired in app.js setupInspectorDrag). The centered pill is
-   the only visual — the whole strip is the hit target. */
-#inspector-drag {
+   card (wired in side-panel.js). The centered pill is the only
+   visual — the whole strip is the hit target. */
+.panel-drag {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -1352,14 +1369,14 @@ body.inspector-open #inspector { display: flex; flex-direction: column; }
   cursor: grab;
   touch-action: none;
 }
-#inspector-drag:active { cursor: grabbing; }
-#inspector-drag .drag-grip {
+.panel-drag:active { cursor: grabbing; }
+.panel-drag .drag-grip {
   width: 36px;
   height: 4px;
   border-radius: 2px;
   background: var(--border);
 }
-#inspector-drag:hover .drag-grip { background: var(--muted); }
+.panel-drag:hover .drag-grip { background: var(--muted); }
 
 .float-close {
   position: absolute;
@@ -1597,14 +1614,16 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #repl-form button:hover { filter: brightness(1.1); }
 
-#inspect h2, .float-head h2 {
+/* Panel typography: shared by the inspector (#inspect is itself a
+   .panel-content) and every other floating panel's content. */
+.panel-content h2, .float-head h2 {
   font-family: var(--font-mono);
   font-size: 15px;
   margin: 0 0 0.5rem;
   color: var(--accent);
 }
 
-#inspect .hint, #add-panel .hint {
+.panel-content .hint, #add-panel .hint {
   color: var(--muted);
   font-size: 14px;
 }
@@ -1624,7 +1643,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   outline: none;
 }
 
-#inspect h3 {
+.panel-content h3 {
   font-family: var(--font-mono);
   font-size: 13px;
   text-transform: uppercase;
@@ -2028,7 +2047,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   margin-right: 0.5rem;
 }
 
-#inspect dl {
+.panel-content dl {
   font-family: var(--font-mono);
   font-size: 14px;
   display: grid;
@@ -2041,8 +2060,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   margin: 0;
 }
 
-#inspect dt { color: var(--muted); }
-#inspect dd { margin: 0; word-break: break-all; }
+.panel-content dt { color: var(--muted); }
+.panel-content dd { margin: 0; word-break: break-all; }
 
 #charts { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
 .chart { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem; }

@@ -325,19 +325,19 @@
           to another, or from the REPL.
         </p>
       </aside>
-      <!-- Floating right: the inspector. Hidden until something is
-           selected / a chrome panel is opened; closes on deselect,
-           Esc, the × button, or a tab/mode switch. -->
-      <aside id="inspector" aria-label="inspector">
-        <!-- Grab strip: drag to move the floating card (inert while
-             the dashboard subview docks the panel into its grid
-             column — see the CSS + setupInspectorDrag). -->
-        <div id="inspector-drag" title="Drag to move"><span class="drag-grip"></span></div>
-        <button id="inspector-close" class="float-close" type="button" title="Close (Esc)">×</button>
-        <div id="inspect">
-          <p class="hint">Click a node to inspect. Right-click for the context menu.</p>
-        </div>
-      </aside>
+      <!-- Floating panels dock. Panels (inspector, formula explorer,
+           Defaults, Report, dashboard formula tree) stack here on the
+           right; each is independently closable and draggable. On the
+           Dashboard subview the dock becomes a docked grid column. -->
+      <div id="panel-dock">
+        <aside id="inspector" class="float-panel" aria-label="inspector">
+          <div id="inspector-drag" class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
+          <button id="inspector-close" class="float-close" type="button" title="Close (Esc)">×</button>
+          <div id="inspect" class="panel-content">
+            <p class="hint">Click a node to inspect. Right-click for the context menu.</p>
+          </div>
+        </aside>
+      </div>
       <div id="drawer-splitter" title="Drag to resize"></div>
       <section id="repl">
         <div id="logs"></div>

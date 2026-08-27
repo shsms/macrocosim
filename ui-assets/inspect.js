@@ -2,8 +2,8 @@
 // knobs / inputs, setpoint event log, and the small utility
 // chooseScale / liveCharts machinery the charts route through.
 // `showComponent` renders the whole side panel for a selected node,
-// registering `liveCharts.clear()` as the node tenant's teardown
-// (side-panel.js runs it on tenant swap or close).
+// registering `liveCharts.clear()` as the node panel's teardown
+// (side-panel.js runs it on re-render or close).
 
 import { escapeHtml, inspectEl } from "./app.js";
 import { evalQuoted, jsToLispString } from "./eval.js";
@@ -549,9 +549,9 @@ let ttlTimerId = null;
 // showComponent's own `showGen`, which only changes when a NEW node
 // is selected. Two failure modes `showGen` alone doesn't cover:
 //
-//   - closePanel(), or switching to a different tenant (Defaults /
-//     Report), runs this tenant's teardown (stopTtlTimer) WITHOUT
-//     bumping showGen — a fetch already in flight for the closed
+//   - closePanel("node"), or re-rendering the node panel, runs this
+//     panel's teardown (stopTtlTimer) WITHOUT bumping showGen — a
+//     fetch already in flight for the closed
 //     node would otherwise resolve, pass the (unchanged) gen check,
 //     and resurrect a timer no teardown will ever clear again.
 //     `snapshotAliveToken` closes this: stopTtlTimer bumps it, and
@@ -857,10 +857,10 @@ function stopTtlTimer() {
   }
   liveState = null;
   // Invalidate any /api/component fetch still in flight for the
-  // tenant being torn down — without this, a fetch that resolves
-  // after closePanel() (or after switching to a different tenant)
-  // would still pass fetchSnapshot's gen check (closePanel never
-  // touches showGen) and resurrect a timer this teardown just killed.
+  // panel being torn down — without this, a fetch that resolves after
+  // closePanel("node") (or after the node panel re-renders) would
+  // still pass fetchSnapshot's gen check (closePanel never touches
+  // showGen) and resurrect a timer this teardown just killed.
   snapshotAliveToken++;
 }
 
@@ -974,10 +974,10 @@ let showGen = 0;
 export function showComponent(d) {
   if (!d) return;
   const gen = ++showGen;
-  // liveCharts.clear() + stopTtlTimer() is the node tenant's
-  // teardown — side-panel.js runs it (as the PREVIOUS tenant's
-  // teardown) before renderNode paints, whether that's a re-selected
-  // node or any other tenant that had been showing.
+  // liveCharts.clear() + stopTtlTimer() is the node panel's teardown
+  // — side-panel.js runs the previously registered one before
+  // renderNode paints, so re-selecting a node tears the old node's
+  // charts and timers down first.
   openPanel("node", () => renderNode(d, gen), () => {
     liveCharts.clear();
     stopTtlTimer();
@@ -1048,7 +1048,7 @@ async function buildCharts(d, container) {
   const metrics = CHARTS_BY_CATEGORY[d.category] || [];
   const charts = new Map(); // metric → { plot, xs, ys }
 
-  // All metric histories fetched concurrently — inspector-open
+  // All metric histories fetched concurrently — inspector open
   // latency is the slowest round-trip, not the sum. Errors settle
   // into the result slot so a stale-generation return can't leak an
   // unhandled rejection.
