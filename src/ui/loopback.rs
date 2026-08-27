@@ -252,8 +252,7 @@ async fn subscribe_power_forwarders(
             handles.push(h);
         }
     }
-    // Only the grid formula — no consumer/producer/pv reactive streams
-    // (spec: one site tile).
+    // Site Q at the connection point.
     if let Some(h) = subscribe_reactive_forwarder(
         "grid_reactive_power",
         lm.grid::<metric::AcPowerReactive>(),
@@ -263,6 +262,21 @@ async fn subscribe_power_forwarders(
     .await
     {
         handles.push(h);
+    }
+    // Per-source Q for the metrics panel's Reactive card: the same
+    // logical-meter formulas as the power streams, metric
+    // AcPowerReactive. energy_stream_for maps none of them — varh
+    // accumulation stays out of scope, as with grid Q.
+    for (stream, formula) in [
+        ("pv_reactive_power", lm.pv::<metric::AcPowerReactive>(None)),
+        (
+            "battery_reactive_power",
+            lm.battery::<metric::AcPowerReactive>(None),
+        ),
+    ] {
+        if let Some(h) = subscribe_reactive_forwarder(stream, formula, site, state.clone()).await {
+            handles.push(h);
+        }
     }
     // Grid frequency via `lm.grid::<metric::AcFrequency>()` would
     // be the natural way to feed a "Grid frequency" tile, but the

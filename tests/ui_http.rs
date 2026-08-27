@@ -314,4 +314,81 @@ async fn grid_reactive_formula_converges_over_a_site_with_an_ev_charger() {
         snapshot.get("grid_reactive_energy").is_none(),
         "unexpected grid_reactive_energy stream: {snapshot}"
     );
+
+    // No PV in this site: unlike consumer/producer, the pv formula
+    // doesn't error at build time when the category is absent — the
+    // empty-category formula renders to the literal "0.0" (see
+    // category.rs:182-184 upstream), so pv_reactive_power still shows
+    // up here, deterministically pinned at exactly 0.
+    let pv_entry = &snapshot["pv_reactive_power"];
+    let pv_value = pv_entry["value"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("pv_reactive_power never converged: {snapshot}"));
+    assert_eq!(pv_value, 0.0, "{snapshot}");
+    assert_eq!(pv_entry["quantity"], "ReactivePower", "{snapshot}");
+    assert_eq!(pv_entry["unit"], "var", "{snapshot}");
+}
+
+/// The metrics panel's Reactive card charts per-source Q: grid, PV,
+/// battery — the same logical-meter formulas as the power streams,
+/// metric AcPowerReactive. This proves both new streams end to end
+/// over a site that has both categories, and that neither grows a
+/// varh companion (reactive-energy integration stays out of scope,
+/// as with grid Q).
+#[tokio::test(flavor = "multi_thread")]
+async fn per_source_reactive_streams_converge() {
+    let topology = r#"
+(%make-grid-connection-point :id 1
+    :successors
+    (list (%make-meter :id 2
+                        :successors
+                        (list (%make-battery-inverter :id 3
+                                                        :successors
+                                                        (list (%make-battery :id 4)))))
+          (%make-meter :id 5
+                       :successors
+                       (list (%make-solar-inverter :id 6)))))
+"#;
+    let s = TestServer::start(topology).await;
+    let client = reqwest::Client::new();
+
+    let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
+    let id = mgs
+        .as_array()
+        .expect("microgrids array")
+        .first()
+        .expect("one microgrid")["id"]
+        .as_u64()
+        .expect("microgrid id");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let snapshot = loop {
+        let body = json(
+            &client,
+            format!("{}/api/mg/{id}/microgrid/latest", s.ui_url),
+        )
+        .await;
+        let converged = ["pv_reactive_power", "battery_reactive_power"]
+            .iter()
+            .all(|s| body[*s]["value"].as_f64().is_some_and(|v| v.is_finite()));
+        if converged || tokio::time::Instant::now() >= deadline {
+            break body;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    for stream in ["pv_reactive_power", "battery_reactive_power"] {
+        let entry = &snapshot[stream];
+        entry["value"]
+            .as_f64()
+            .filter(|v| v.is_finite())
+            .unwrap_or_else(|| panic!("{stream} never converged: {snapshot}"));
+        assert_eq!(entry["quantity"], "ReactivePower", "{stream}: {snapshot}");
+        assert_eq!(entry["unit"], "var", "{stream}: {snapshot}");
+    }
+    assert!(
+        snapshot.get("pv_reactive_energy").is_none()
+            && snapshot.get("battery_reactive_energy").is_none(),
+        "unexpected varh stream: {snapshot}"
+    );
 }
