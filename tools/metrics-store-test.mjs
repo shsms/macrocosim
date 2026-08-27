@@ -63,6 +63,11 @@ assert.equal(pfText(30, 40), "PF 0.60 lag");
 assert.equal(pfText(30, -40), "PF 0.60 lead");
 assert.equal(pfText(100, 1), "PF 1.00");
 assert.equal(pfText(null, 40), "PF —");
+// Leading with the P sign flipped, and either side missing/NaN reads
+// as undefined PF rather than a sign artifact.
+assert.equal(pfText(-8000, 6000), "PF 0.80 lead");
+assert.equal(pfText(8000, null), "PF —");
+assert.equal(pfText(Number.NaN, 6000), "PF —");
 
 // ── fmtValue ────────────────────────────────────────────────────
 assert.equal(fmtValue("Power", "W", 1_234_000), "1.23 MW");

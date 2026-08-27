@@ -102,10 +102,6 @@ function syncButton(name, open) {
     ?.classList.toggle("primary", open && name.endsWith("-btn"));
 }
 
-function syncBodyClass() {
-  document.body.classList.toggle("panel-open", openStack.length > 0);
-}
-
 // Open (or re-render) the panel `name`. `render(contentEl)` fills the
 // panel's own content element; `teardown()` runs when this panel
 // re-renders or closes — each tenant cleans up ONLY its own resources.
@@ -115,7 +111,6 @@ export function openPanel(name, render, teardown = null) {
   p.teardown = teardown;
   if (!openStack.includes(name)) openStack.push(name);
   p.el.classList.add("open");
-  syncBodyClass();
   syncButton(name, true);
   render(p.contentEl);
 }
@@ -133,7 +128,6 @@ export function closePanel(name) {
       : "";
   p.el.classList.remove("open");
   openStack.splice(openStack.indexOf(name), 1);
-  syncBodyClass();
   syncButton(name, false);
 }
 

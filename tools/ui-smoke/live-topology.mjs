@@ -534,6 +534,43 @@ await waitFor(async () => {
   return s && !s.visible;
 }, 3000);
 
+// ── e2e: the metrics panel ───────────────────────────────────────
+// Took over the Dashboard subview's job as a floating panel instead
+// of a subview: open via the chrome pill, values stream in off the
+// loopback's aggregate streams, and a uPlot chart mounts on the
+// Power card (open by default). The reactive card is folded by
+// default, but its fold-summary keeps repainting off the store while
+// folded, so that — not an unfolded chip — is where the restored
+// reactive-aggregate coverage lives.
+await page.click("#metrics-btn");
+check("e2e: metrics panel opens", await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === true));
+await new Promise((r) => setTimeout(r, 3000)); // let a few 1 Hz samples land
+const chipValue = await waitFor(async () => {
+  const vs = await page.evaluate(() => [...document.querySelectorAll(".mchip .mchip-value")].map((e) => e.textContent));
+  return vs.some((v) => v && v !== "—") ? vs : null;
+}, 15000);
+check("e2e: at least one metrics chip shows a live value", Array.isArray(chipValue), JSON.stringify(chipValue));
+check("e2e: the Power card mounts a uPlot canvas", (await page.locator('.mcard[data-card="power"] canvas').count()) > 0);
+const reactiveSummary = await waitFor(async () => {
+  const t = await page.evaluate(() => document.querySelector('[data-summary="reactive"]')?.textContent);
+  return t && /VAr/.test(t) ? t : null;
+}, 15000);
+check("e2e: the folded reactive card's fold-summary paints a VAr value", /VAr/.test(reactiveSummary ?? ""), reactiveSummary);
+const chip = page.locator("#panel-metrics-btn .mchip[data-chip]").first();
+await chip.click();
+check("e2e: clicking a series chip marks it off", await chip.evaluate((el) => el.classList.contains("off")));
+await chip.click();
+check("e2e: clicking it again clears off", await chip.evaluate((el) => !el.classList.contains("off")));
+await page.click("#metrics-btn");
+check("e2e: metrics panel closes", await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === false));
+// Negative control: the Dashboard subview is gone outright, not just
+// hidden — no element, no subtoggle entry to reach it by.
+check("e2e: no #dashboard element remains", await page.evaluate(() => document.querySelector("#dashboard") === null));
+check(
+  "e2e: the subtoggle has no dashboard entry",
+  await page.evaluate(() => document.querySelector('#mg-subtoggle [data-subview="dashboard"]') === null),
+);
+
 // ── e2e: the inspector's reactive knobs ──────────────────────────
 // Any visible meter that isn't the main one will do — the demo drives
 // none of their reactive slots, so the knob is the only writer. Read
