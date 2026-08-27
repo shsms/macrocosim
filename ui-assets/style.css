@@ -1567,6 +1567,13 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-size: 10px;
   font-family: var(--font-mono);
   margin-bottom: 4px;
+  /* A transient null envelope (see applySnapshot's fallback in
+     inspect.js) empties this row's innerHTML for a beat; without a
+     fixed line-height a flex row with no children collapses to 0
+     height, so the card resizes and back — pin one line's worth so
+     empty and filled render at the same height. */
+  line-height: 12px;
+  min-height: 12px;
 }
 #inspect .env-setpoint {
   font-size: 11px;

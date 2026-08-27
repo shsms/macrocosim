@@ -834,16 +834,19 @@ function applySnapshot(id, snap) {
     },
   };
 
+  // A null snapshot axis (no setpoint envelope AND no own bounds —
+  // rare, but the server can still return it) must not blank out
+  // bounds the WS bound-Sample stream already drew (see applySample
+  // below): fall back to the last-known lo/hi the same way liveVal
+  // carries over above. Without this, every accepted setpoint's
+  // re-fetch raced the stream and flickered the graduation empty for
+  // a beat.
   const [aLo, aHi] = snap.envelope?.active ?? [null, null];
-  liveState.axes.active.lo = aLo;
-  liveState.axes.active.hi = aHi;
-  // envelope.reactive is null for every real topology today — the Q
-  // bar's lo/hi come from live bound Sample metrics instead (see
-  // applySample below); this is just the bonus path for whenever the
-  // server does send one.
+  liveState.axes.active.lo = aLo ?? prevAxes?.active.lo ?? null;
+  liveState.axes.active.hi = aHi ?? prevAxes?.active.hi ?? null;
   const [rLo, rHi] = snap.envelope?.reactive ?? [null, null];
-  liveState.axes.reactive.lo = rLo;
-  liveState.axes.reactive.hi = rHi;
+  liveState.axes.reactive.lo = rLo ?? prevAxes?.reactive.lo ?? null;
+  liveState.axes.reactive.hi = rHi ?? prevAxes?.reactive.hi ?? null;
 
   const now = Date.now();
   for (const sp of snap.setpoints || []) {

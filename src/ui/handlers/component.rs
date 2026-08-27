@@ -215,8 +215,25 @@ fn component_state(
             reactive: c.augmentation_active(SetpointAxis::Reactive, now),
         },
         envelope: Envelope {
-            active: envelope_tuple(site.active_setpoint_envelope(id)),
-            reactive: envelope_tuple(site.reactive_setpoint_envelope(id)),
+            // The gateway's setpoint envelope is `None` whenever no
+            // CHILD exposes bounds on that axis (see
+            // `MicrogridSite::{active,reactive}_setpoint_envelope`) —
+            // for reactive power that's the common case, since Q
+            // terminates at the inverter and its battery children
+            // never report a Q band. Falling back to the component's
+            // OWN bounds keeps the inspector's graduation fed from
+            // the same window the WS stream already draws, instead
+            // of clobbering it to null on every snapshot re-fetch
+            // (every accepted setpoint, once a second under a
+            // control loop).
+            active: envelope_tuple(
+                site.active_setpoint_envelope(id)
+                    .or_else(|| c.effective_active_bounds()),
+            ),
+            reactive: envelope_tuple(
+                site.reactive_setpoint_envelope(id)
+                    .or_else(|| c.reactive_bounds()),
+            ),
         },
     })
 }

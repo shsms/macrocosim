@@ -1881,6 +1881,53 @@ async fn component_snapshot_inverter_knobs_and_reactive_envelope() {
     assert!(!v["envelope"]["reactive"].is_null());
 }
 
+/// A battery inverter's own reactive capability must populate
+/// `envelope.reactive` even when its only child is a battery, which
+/// (correctly) exposes no Q bounds of its own — `reactive_bounds()`
+/// terminates at the inverter. Before the fix,
+/// `reactive_setpoint_envelope` short-circuited on the childless-
+/// bounds `?` and returned `None` without ever consulting the
+/// inverter's own band, so the WS-fed graduation the inspector was
+/// already drawing got clobbered to null on every snapshot re-fetch
+/// (every accepted setpoint) — the once-a-second flicker this test
+/// guards against.
+#[tokio::test]
+async fn component_snapshot_reactive_envelope_falls_back_to_own_bounds() {
+    let cfg = config_with(
+        "(%make-battery-inverter :id 3
+           :successors (list (%make-battery :id 4)))",
+    )
+    .await;
+    let (status, _) = call(
+        cfg.clone(),
+        // Clear the microsim-default PF cap (±35% of |P|) first — at
+        // this inverter's idle P = 0 that cap alone pins Q to (0, 0),
+        // masking the fallback this test targets. The kVA cap alone
+        // gives the full ±VA band at P = 0.
+        post("/api/eval", "(set-reactive-pf-limit 3 0)"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(
+        cfg.clone(),
+        post("/api/eval", "(set-reactive-apparent-va 3 3000.0)"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(cfg, get("/api/component?id=3")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let reactive = &v["envelope"]["reactive"];
+    assert!(!reactive.is_null(), "{v}");
+    let bounds = reactive.as_array().unwrap();
+    let lo = bounds[0].as_f64().unwrap();
+    let hi = bounds[1].as_f64().unwrap();
+    assert!(
+        lo < 0.0 && 0.0 < hi,
+        "expected lo < 0 < hi, got ({lo}, {hi})"
+    );
+}
+
 /// `setpoints[axis].remaining_ms` reflects the live `TimeoutTracker`
 /// deadline armed by `(set-active-power … LIFETIME-MS)`, bounded by
 /// the lifetime just requested. The value/axis themselves come from
