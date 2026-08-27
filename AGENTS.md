@@ -236,7 +236,7 @@ cargo run --bin swctl -- set-power 1001 5000
 `ui-assets/` changes: `npx @biomejs/biome check ui-assets` (config in
 `biome.json`) — `npx biome` alone resolves to an unrelated no-op
 package on the npm registry, not this project's linter, so always
-spell out `@biomejs/biome`. Plus two node-only gates that need
+spell out `@biomejs/biome`. Plus three node-only gates that need
 neither a browser nor a running server:
 
 ```sh
@@ -244,6 +244,7 @@ node tools/boot-smoke.mjs        # imports app.js under a DOM shim:
                                  # catches TDZ / cycle / bad-export
                                  # breakage a curl-200 can't see
 node tools/formula-ast-test.mjs  # formula-ast.js parser + renderer
+node tools/metrics-store-test.mjs  # metrics-store.js ring/PF/format
 ```
 
 Each registered microgrid binds its own gRPC port; the first

@@ -45,9 +45,9 @@ jobs:
       - name: cargo test
         run: cargo test --all-features
 
-  # Lint the hand-written JS in ui-assets/, then run the two node
-  # gates over it. Vendored libs and everything outside ui-assets/
-  # are excluded via biome.json's `files.includes` patterns.
+  # Lint the hand-written JS in ui-assets/, then run the node gates
+  # over it. Vendored libs and everything outside ui-assets/ are
+  # excluded via biome.json's `files.includes` patterns.
   ui-lint:
     runs-on: ubuntu-latest
     steps:
@@ -63,6 +63,11 @@ jobs:
       # plus the subtraction-parity tinting the panel reads back.
       - name: formula-ast tests
         run: node tools/formula-ast-test.mjs
+
+      # Ring push/read windowing, PF derivation, and display
+      # formatting for the metrics panel's DOM-free sample store.
+      - name: metrics-store tests
+        run: node tools/metrics-store-test.mjs
 
       # Executes the whole ES-module import graph under a DOM shim —
       # catches a TDZ / class-ordering error or a renamed export that
