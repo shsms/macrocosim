@@ -20,13 +20,22 @@ const SIZE_KEY_PREFIX = "sw-panel-size-";
 // two panels summoned in a row never land perfectly on top of each
 // other and each keeps a grabbable strip.
 const CASCADE_STEP = 32;
-// A resized panel must stay tall enough to grab and re-open: the drag
+// A capped panel must stay tall enough to grab and re-open: the drag
 // strip plus a row of content.
 const MIN_HEIGHT = 60;
 // Of a clamped panel, how much must stay on screen: enough of the
 // card's width to grab horizontally, and its strip vertically.
 const KEEP_X = 80;
 const KEEP_Y = 40;
+// Quiet time after the last resize tick that counts as "the gesture
+// ended". Converting the dragged height into a cap mid-drag would
+// fight the browser's own resize, which keeps sizing from the height
+// it started with.
+const RESIZE_SETTLE = 280;
+
+// Every card lives in the dock, and the dock's box is both the drag
+// floor and the height bound.
+const dockEl = () => document.getElementById("panel-dock");
 
 function ensurePanel(name) {
   let p = panels.get(name);
@@ -49,7 +58,7 @@ function ensurePanel(name) {
       <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
       <button class="float-close" type="button" title="Close (Esc)">×</button>
       <div class="panel-content"></div>`;
-    document.getElementById("panel-dock").appendChild(el);
+    dockEl().appendChild(el);
     contentEl = el.querySelector(".panel-content");
     el.querySelector(".float-close").addEventListener("click", () => closePanel(name));
   }
@@ -70,15 +79,17 @@ function anchorOf(el, pos) {
   return { left: rect.left - pos.dx, top: rect.top - pos.dy, width: rect.width };
 }
 
-// Keep a drag offset reachable: the grab strip may not slide under the
-// fixed header (measured, never hardcoded — the chrome's height is
-// CSS's business), nor off the other three edges.
+// Keep a drag offset reachable: the grab strip may not slide up under
+// the chrome, nor off the other three edges. The floor is the dock's
+// own top edge, measured live — the dock starts below every piece of
+// chrome (header, pulse bar, microgrid header) by construction, so
+// there is nothing left to measure or hardcode separately.
 function clampOffset(anchor, dx, dy) {
-  const headerBottom = document.querySelector("body > header")?.getBoundingClientRect().bottom ?? 0;
+  const floor = dockEl()?.getBoundingClientRect().top ?? 0;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   return {
     dx: clamp(dx, -(anchor.left + anchor.width - KEEP_X), window.innerWidth - anchor.left - KEEP_X),
-    dy: clamp(dy, headerBottom - anchor.top, window.innerHeight - anchor.top - KEEP_Y),
+    dy: clamp(dy, floor - anchor.top, window.innerHeight - anchor.top - KEEP_Y),
   };
 }
 
@@ -113,17 +124,43 @@ function wireDrag(el, name, p) {
   });
 }
 
+// What the gripper stores is a CAP, not a height: the card's height
+// stays `auto`, so folding a card open or shut re-sizes the panel by
+// itself, and the user's drag only says how far that may go. Dragging
+// past the content therefore leaves no dead space — the card snaps
+// back to its content once the gesture ends.
+const capOf = (el, h) =>
+  Math.max(MIN_HEIGHT, Math.min(h, el.parentElement?.clientHeight ?? window.innerHeight));
+
+// `min(cap, 100%)` rather than the bare cap: the dock's own bound has
+// to keep winning as the window or the repl drawer resizes, and an
+// inline max-height would otherwise override the stylesheet's.
+function applyCap(el, cap) {
+  el.style.maxHeight = `min(${cap}px, 100%)`;
+}
+
 // CSS `resize` gives the height affordance; there is no resize event
 // for it, so the observer is how we notice. An inline height is the
-// one signal that this height is the user's choice and not the
-// content's — content growth leaves the style empty.
+// one signal that a height is the user's doing and not the content's
+// — content growth leaves the style empty, and the conversion below
+// clears it again.
 function wireResize(el, name) {
-  let last = 0;
-  new ResizeObserver(() => {
+  let timer = 0;
+  const settle = () => {
     const h = Number.parseFloat(el.style.height);
-    if (!h || Math.abs(h - last) < 1) return;
-    last = h;
-    saveSize(name, h);
+    el.style.height = "";
+    if (!h) return;
+    const cap = capOf(el, h);
+    applyCap(el, cap);
+    saveSize(name, cap);
+  };
+  new ResizeObserver(() => {
+    if (!el.style.height) return;
+    // Let the card follow the pointer while the gesture runs: the old
+    // cap would otherwise pin it and the drag would look dead.
+    el.style.maxHeight = "";
+    clearTimeout(timer);
+    timer = setTimeout(settle, RESIZE_SETTLE);
   }).observe(el);
 }
 
@@ -154,23 +191,22 @@ function saveSize(name, h) {
   try {
     localStorage.setItem(SIZE_KEY_PREFIX + name, JSON.stringify({ h }));
   } catch (_) {
-    // Storage unavailable — the height just doesn't stick.
+    // Storage unavailable — the cap just doesn't stick.
   }
 }
 
 // Place the card as it opens: an unplaced one cascades off the panels
-// already open, a stored height is restored, and anything that would
-// leave the strip out of reach (a drag off-screen, a height from a
-// bigger window) is clamped back and the correction written through —
-// so a panel lost off the edge comes back on the next toggle.
+// already open, a stored cap is restored, and anything that would
+// leave the strip out of reach (a drag off-screen, a cap from a bigger
+// window) is clamped back and the correction written through — so a
+// panel lost off the edge comes back on the next toggle.
 function placePanel(p, name, order) {
   const { el } = p;
-  const h = loadSize(name);
-  if (h != null) {
-    const maxH = el.parentElement?.clientHeight ?? window.innerHeight;
-    const fitted = Math.max(MIN_HEIGHT, Math.min(h, maxH));
-    el.style.height = `${fitted}px`;
-    if (fitted !== h) saveSize(name, fitted);
+  const stored = loadSize(name);
+  if (stored != null) {
+    const cap = capOf(el, stored);
+    applyCap(el, cap);
+    if (cap !== stored) saveSize(name, cap);
   }
   if (p.cascade) p.pos = { dx: 0, dy: CASCADE_STEP * order };
   applyPos(el, p.pos);

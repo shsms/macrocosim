@@ -936,10 +936,13 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   right: 0;
   width: 420px;
   max-width: 100%;
-  /* Bounded by the dock (viewport minus chrome) rather than by the
-     content: a tall panel scrolls inside .panel-content. `resize`
-     lets the user shorten or lengthen it within that bound; the
-     inline height it writes is what side-panel.js persists. */
+  /* The card hugs its content — a fold opening or shutting re-sizes
+     it — up to the dock's bound (viewport minus chrome); past that
+     .panel-content scrolls. `resize` gives the gripper, but the
+     height it writes is converted into a persisted inline max-height
+     cap once the gesture ends (side-panel.js), so a card can never be
+     stretched past its own content. */
+  height: auto;
   max-height: 100%;
   min-height: 60px;
   resize: vertical;
