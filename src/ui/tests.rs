@@ -892,7 +892,7 @@ async fn control_drive_rejects_wrong_category() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
-/// Battery topology used by the explained-formula tests:
+/// Battery topology used by the formula tests:
 /// grid → meter → battery-inverter → battery, mg id 2200.
 const FORMULA_TOPOLOGY: &str = r#"(%make-grid-connection-point :id 1
      :successors
@@ -903,19 +903,20 @@ const FORMULA_TOPOLOGY: &str = r#"(%make-grid-connection-point :id 1
                      (list (%make-battery :id 4)))))))"#;
 
 #[tokio::test]
-async fn formula_endpoint_returns_ast_and_explanation() {
+async fn formula_endpoint_returns_formula() {
     let cfg = config_with(FORMULA_TOPOLOGY).await;
     let (status, body) = call(cfg, get("/api/mg/2200/formula?metric=battery")).await;
     assert_eq!(status, StatusCode::OK);
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(parsed["ok"], true, "body: {parsed}");
     assert_eq!(parsed["metric"], "battery");
-    // The rendered string, its `//`-commented twin, the AST, and the
-    // explanation tree all ride along.
+    // Just the rendered string now — parsing/highlighting live
+    // client-side in formula-ast.js, so ast/explanation/commented no
+    // longer ride along.
     assert!(parsed["formula"].as_str().unwrap().contains('#'));
-    assert!(parsed["commented"].as_str().unwrap().contains("//"));
-    assert!(parsed["ast"].is_object());
-    assert!(parsed["explanation"].is_object());
+    assert!(parsed.get("ast").is_none());
+    assert!(parsed.get("explanation").is_none());
+    assert!(parsed.get("commented").is_none());
 }
 
 #[tokio::test]

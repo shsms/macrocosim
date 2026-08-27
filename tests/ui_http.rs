@@ -171,7 +171,7 @@ async fn structural_evals_rewrite_the_managed_microgrid_file() {
 }
 
 /// The whole imported-site flow over HTTP: import a site export,
-/// then ask the new microgrid for an explained formula. The import
+/// then ask the new microgrid for its battery formula. The import
 /// populates the site through the per-mg eval path, so the formula
 /// engine sees the imported topology immediately.
 #[tokio::test(flavor = "multi_thread")]
@@ -230,7 +230,7 @@ async fn site_import_creates_microgrid_with_working_formulas() {
     .await;
     assert_eq!(formula["ok"], true, "body: {formula}");
     assert!(formula["formula"].as_str().unwrap().contains("#9103"));
-    assert!(formula["explanation"].is_object());
+    assert!(formula.get("explanation").is_none());
 
     // The microgrid's file carries the export's physical
     // parameters, so they come back at every boot.

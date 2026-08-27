@@ -1,18 +1,20 @@
-//! Explained-formula endpoint for the Formulas subview.
+//! Formula endpoint for the Formulas subview.
 //!
 //! Unlike `/api/mg/{id}/microgrid/formulas` (which reads rendered
 //! strings off the loopback client's logical meter), this endpoint
 //! builds its own [`ComponentGraph`] straight from the site via
 //! [`graph_adapter`], so it works even when the loopback slot is
 //! empty, and it can honor per-request engine options. Sites are
-//! small; a per-request build is cheap.
+//! small; a per-request build is cheap. The endpoint returns just the
+//! rendered formula string; parsing and highlighting live client-side
+//! in `formula-ast.js`.
 
 use std::collections::BTreeSet;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use frequenz_microgrid_component_graph::{ComponentGraphConfig, ErrorKind, ExplainedFormula};
+use frequenz_microgrid_component_graph::{ComponentGraphConfig, ErrorKind, Formula};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -43,7 +45,7 @@ pub(in crate::ui) struct FormulaQuery {
 }
 
 /// GET /api/mg/{mg_id}/formula?metric=grid[&ids=1,2][&prefer_meters=true…]
-/// — the formula, its AST, and the explanation tree.
+/// — the rendered formula string.
 pub(in crate::ui) async fn formula_for_mg(
     State(config): State<Config>,
     Path(mg_id): Path<u64>,
@@ -99,22 +101,22 @@ fn formula_body(
         Some(set) if set.len() == 1 => set.first().copied(),
         _ => None,
     };
-    let explained: Result<ExplainedFormula, _> = match query.metric.as_str() {
-        "grid" => graph.grid_formula_explained(),
-        "consumer" => graph.consumer_formula_explained(),
-        "producer" => graph.producer_formula_explained(),
-        "battery" => graph.battery_formula_explained(ids),
-        "pv" => graph.pv_formula_explained(ids),
-        "chp" => graph.chp_formula_explained(ids),
-        "wind_turbine" => graph.wind_turbine_formula_explained(ids),
-        "ev_charger" => graph.ev_charger_formula_explained(ids),
-        "steam_boiler" => graph.steam_boiler_formula_explained(ids),
-        "grid_coalesce" => graph.grid_coalesce_formula_explained(),
-        "battery_ac_coalesce" => graph.battery_ac_coalesce_formula_explained(ids),
-        "pv_ac_coalesce" => graph.pv_ac_coalesce_formula_explained(ids),
+    let formula: Result<Formula, _> = match query.metric.as_str() {
+        "grid" => graph.grid_formula(),
+        "consumer" => graph.consumer_formula(),
+        "producer" => graph.producer_formula(),
+        "battery" => graph.battery_formula(ids),
+        "pv" => graph.pv_formula(ids),
+        "chp" => graph.chp_formula(ids),
+        "wind_turbine" => graph.wind_turbine_formula(ids),
+        "ev_charger" => graph.ev_charger_formula(ids),
+        "steam_boiler" => graph.steam_boiler_formula(ids),
+        "grid_coalesce" => graph.grid_coalesce_formula(),
+        "battery_ac_coalesce" => graph.battery_ac_coalesce_formula(ids),
+        "pv_ac_coalesce" => graph.pv_ac_coalesce_formula(ids),
         metric @ ("component" | "component_ac_coalesce") => match single_id {
-            Some(id) if metric == "component" => graph.component_formula_explained(id),
-            Some(id) => graph.component_ac_coalesce_formula_explained(id),
+            Some(id) if metric == "component" => graph.component_formula(id),
+            Some(id) => graph.component_ac_coalesce_formula(id),
             None => {
                 return Ok(Json(json!({
                     "ok": false,
@@ -128,15 +130,11 @@ fn formula_body(
             ));
         }
     };
-    Ok(match explained {
-        Ok(explained) => Json(json!({
+    Ok(match formula {
+        Ok(formula) => Json(json!({
             "ok": true,
             "metric": query.metric,
-            "formula": explained.formula.to_string(),
-            // The formula with the reasons as `//` comments, for copying.
-            "commented": explained.to_commented_string(),
-            "ast": explained.formula.ast(),
-            "explanation": explained.explanation,
+            "formula": formula.to_string(),
         })),
         Err(e) => Json(json!({ "ok": false, "error": e.to_string(), "kind": kind_of(&e) })),
     })
