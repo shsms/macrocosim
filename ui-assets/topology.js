@@ -1,8 +1,8 @@
-// vis-network graph canvas, shared by the Topology and Formulas
-// subviews. createGraphCanvas builds one canvas instance around a
-// container element; the adapter argument supplies the mutation
-// hooks, so the Topology canvas can wire Ctrl-drag connect and the
-// edit context menu while the Formulas canvas stays read-only.
+// vis-network graph canvas. createGraphCanvas builds one canvas
+// instance around a container element; the adapter argument supplies
+// the mutation hooks, so the Topology canvas wires Ctrl-drag connect
+// and the edit context menu, while a read-only canvas can leave them
+// out.
 //
 // The default `topology` export is the Topology subview's instance,
 // with the same public API the rest of the SPA always drove:
@@ -1382,7 +1382,18 @@ export function createGraphCanvas(containerId, adapter = {}) {
     mainMeterId: () => mainMeterId,
     parentsOf: (id) => (network ? network.getConnectedNodes(id, "from") : []),
     childrenOf: (id) => (network ? network.getConnectedNodes(id, "to") : []),
-    selectedIds: () => (network ? network.getSelectedNodes() : []),
+    /// The USER's selection — still reported while highlight() has
+    /// borrowed the vis selection for a formula hover, so Delete,
+    /// Ctrl+C and the formula fetches act on what the user picked
+    /// rather than on whatever is lit up under the cursor. The stash
+    /// is filtered like unhighlight() restores it, so a topology
+    /// refresh mid-hover can't hand out ids that are already gone.
+    selectedIds() {
+      if (highlightStash !== null) {
+        return highlightStash.filter((id) => componentById.has(id));
+      }
+      return network ? network.getSelectedNodes() : [];
+    },
     allIds: () => Array.from(componentById.keys()),
     select(ids) {
       if (!network) return;

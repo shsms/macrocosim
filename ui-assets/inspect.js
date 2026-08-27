@@ -968,7 +968,7 @@ export const inspectorLive = {
 // async renders; an await that resolves after a newer call started
 // carries a stale generation and bails out (destroying any uPlots it
 // already built) — same last-STARTED-wins guard as dispatchesPanel's
-// render and explain's refreshFormula.
+// render and formula-panel's refreshFormula.
 let showGen = 0;
 
 export function showComponent(d) {

@@ -14,7 +14,6 @@ import {
   evRows,
   pvRows,
 } from "./dashboard.js";
-import { formulaCanvas, refreshFormula } from "./explain.js";
 import { refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { closeAllPanels } from "./side-panel.js";
@@ -95,16 +94,17 @@ export function setupDensityToggle() {
 
 // ─── Route state keys + read helpers ───────────────────────────────────────
 // The last /api/topology snapshot as {mg, data}, for catching the
-// Formulas canvas up when its subview becomes visible (it is not fed
-// while hidden). `mg` is the microgrid the fetch was for, so the
-// catch-up can refuse a stale snapshot after a microgrid switch.
+// Dashboard row modules up when their subview becomes visible (they
+// are not seeded while hidden). `mg` is the microgrid the fetch was
+// for, so the catch-up can refuse a stale snapshot after a microgrid
+// switch.
 let lastTopologySnapshot = null;
 
 const MODE_KEY = "switchyard-mode";
 const MG_SELECTED_KEY = "switchyard-selected-mg";
 const MG_SUBVIEW_KEY = "switchyard-mg-subview";
 const VALID_MODES = new Set(["microgrids", "scenarios"]);
-const VALID_SUBVIEWS = new Set(["dashboard", "topology", "formulas", "dispatches"]);
+const VALID_SUBVIEWS = new Set(["dashboard", "topology", "dispatches"]);
 
 export function readSelectedMg() {
   const raw = localStorage.getItem(MG_SELECTED_KEY);
@@ -158,6 +158,10 @@ function parseHash(hash) {
     return { mode: "scenarios", selectedMg: null, subview: "dashboard" };
   }
   const m = /^#microgrids\/(\d+)(?:\/(dashboard|topology|formulas|dispatches))?$/.exec(hash);
+  // `formulas` was its own subview before the formula explorer became
+  // a floating panel; old bookmarks land on Topology instead of a
+  // dead route.
+  if (m && m[2] === "formulas") m[2] = "topology";
   if (m) {
     return {
       mode: "microgrids",
@@ -229,7 +233,6 @@ function applyMode(mode) {
   // after switching back would dedup and never reopen the inspector.
   closeAllPanels();
   topology.resetNotify();
-  formulaCanvas().resetNotify();
   document.getElementById("add-panel").classList.remove("open");
   for (const btn of document.querySelectorAll("#mode-toggle .mode-btn")) {
     btn.classList.toggle("active", btn.dataset.mode === mode);
@@ -246,19 +249,6 @@ function applyMode(mode) {
     refitCharts();
     requestAnimationFrame(() => topology.fit());
     topology.flushLive();
-  }
-  if (mode === "microgrids" && selected != null && subview === "formulas") {
-    // The Formulas canvas is fed lazily: while its subview is hidden
-    // refreshTopology() only stashes the snapshot, so catch up now
-    // that the container is visible and measurable. Only a snapshot
-    // of THIS microgrid: a stale one from a previously viewed mg
-    // would render the wrong site (and leak its component ids into
-    // eval calls) until — or unless — the fresh fetch lands.
-    if (lastTopologySnapshot?.mg === selected) {
-      formulaCanvas().apply(lastTopologySnapshot.data);
-    }
-    requestAnimationFrame(() => formulaCanvas().fit());
-    refreshFormula();
   }
   if (mode === "microgrids" && selected != null && subview === "dashboard") {
     dashboardTiles.backfill();
@@ -388,8 +378,9 @@ export function setupModeToggle() {
 
 export async function refreshTopology() {
   // Stamp the stash with the microgrid the fetch was for: applyMode's
-  // catch-up must not paint one microgrid's snapshot into another's
-  // formula canvas (the user can switch mg before this fetch lands).
+  // catch-up must not seed the Dashboard row modules from one
+  // microgrid's snapshot while another is selected (the user can
+  // switch mg before this fetch lands).
   const mg = readSelectedMg();
   try {
     const res = await fetch(mgPath("topology"));
@@ -402,14 +393,7 @@ export async function refreshTopology() {
     // site's data.
     if (readSelectedMg() !== mg) return;
     topology.apply(data);
-    // The Formulas canvas renders the same snapshot, but only while
-    // its subview is showing — feeding a hidden (0×0) canvas would
-    // pay a full layout for invisible pixels and measure junk node
-    // sizes. The stash catches it up on subview enter (applyMode).
     lastTopologySnapshot = { mg, data };
-    if (visibleSubview() === "formulas") {
-      formulaCanvas().apply(data);
-    }
     // Pulse bar's health counters + graph pill read from the
     // same /api/topology fetch — one round-trip carries both
     // signals + a hot-reload's WS topology_changed nudge

@@ -143,8 +143,7 @@ function renderNumber(value) {
 //   .formula-subtracted (taken OUT of the measurement), odd→even is
 //   .formula-unsubtracted. The NEAREST wrapper therefore carries the
 //   true sign for every ref beneath it, which is exactly what a
-//   closest() reader resolves to (matching the old explain.js
-//   semantics for the un-nested case);
+//   closest() reader resolves to;
 // - calls with long arg lists break onto their own lines.
 export function formulaToHtml(node) {
   const wrap = (inner) => `<span class="formula-node">${inner}</span>`;

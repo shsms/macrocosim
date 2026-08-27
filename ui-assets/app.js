@@ -24,7 +24,11 @@ import {
   setupContextMenu,
   undoMgr,
 } from "./editor.js";
-import { formulaCanvas, refreshFormula, setupExplainPanel } from "./explain.js";
+import {
+  formulaSelectionChanged,
+  refreshFormula,
+  setupFormulaToggle,
+} from "./formula-panel.js";
 import { setupFormulaTileClicks } from "./formulas.js";
 import { setupInspectorChips, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
@@ -41,7 +45,7 @@ import {
   visibleSubview,
 } from "./routing.js";
 import { closePanel, closeTopPanel, isPanelOpen } from "./side-panel.js";
-import { setupDrawerSplitter, setupFormulaDrawerSplitter } from "./splitter.js";
+import { setupDrawerSplitter } from "./splitter.js";
 import { topology } from "./topology.js";
 
 // Re-export the routing helpers that other modules still pull
@@ -354,21 +358,30 @@ async function init() {
   setupFloatingPanels();
   setupInspectorChips();
   setupDrawerSplitter();
-  setupFormulaDrawerSplitter();
   setupSnapshotsDialog();
   backfillLogs();
   // The topology canvas calls back to showComponent (from inspect.js)
-  // / closePanel (from side-panel.js) on node click + canvas click.
+  // / closePanel (from side-panel.js) on node click + canvas click,
+  // and tells the formula explorer either way — with "limit to the
+  // selected components" on, the formula follows the selection.
   // Deselecting only dismisses the node panel — other open panels
   // (Defaults, Report, the formula explorer) are not about the
   // selection and stay put. Wire it up before the first apply so the
   // listeners are in place.
-  topology.setSelectionHandler(showComponent, () => closePanel("node"));
+  topology.setSelectionHandler(
+    (d) => {
+      showComponent(d);
+      formulaSelectionChanged();
+    },
+    () => {
+      closePanel("node");
+      formulaSelectionChanged();
+    },
+  );
   setupCanvasControls("topology-controls", topology);
   const valuesBtn = document.querySelector("#topology-controls .values-btn");
   if (valuesBtn) valuesBtn.classList.toggle("active", topology.valuesOn());
-  setupExplainPanel();
-  setupCanvasControls("formulas-controls", formulaCanvas());
+  setupFormulaToggle();
   // Editor-style keyboard shortcuts. All check that focus isn't in
   // a text editor (REPL textarea, dialog inputs) before firing, so
   // typing remains unaffected.
@@ -377,21 +390,12 @@ async function init() {
     if (inEditable) return;
     // The editing shortcuts drive the Topology canvas's selection.
     // Anywhere else they must stay inert — Delete pressed on the
-    // Formulas tab, the Scenarios mode, or the microgrid list must
-    // not remove whatever happens to be selected on the (hidden)
+    // Dashboard, the Scenarios mode, or the microgrid list must not
+    // remove whatever happens to be selected on the (hidden)
     // Topology canvas. visibleSubview() checks all three body flags.
     const visible = visibleSubview();
     if (visible !== "topology") {
-      if (e.key === "Escape") {
-        // Deselect on the raw subview flag, not visibleSubview():
-        // data-subview persists across mode switches, and a hidden
-        // formula canvas's surviving selection would re-apply (and
-        // re-fire the selection handlers) on subview re-entry.
-        if (document.body.dataset.subview === "formulas") {
-          formulaCanvas().select([]);
-        }
-        closeTopPanel();
-      }
+      if (e.key === "Escape") closeTopPanel();
       return;
     }
     const meta = e.metaKey || e.ctrlKey;
@@ -451,11 +455,10 @@ async function init() {
     refreshTopology();
     microgridsPanel.refresh();
     // The formula depends on the topology; re-derive it while the
-    // Formulas subview is showing (hidden, the subview-enter hook
-    // refreshes on the next visit anyway). Debounced: each formula
-    // refresh is a server-side graph build plus a full panel
-    // re-render.
-    if (visibleSubview() === "formulas") {
+    // formula explorer panel is open (closed, it refetches on its
+    // next open anyway). Debounced: each formula refresh is a
+    // server-side graph build plus a full panel re-render.
+    if (isPanelOpen("formula-btn")) {
       clearTimeout(formulaRefreshTimer);
       formulaRefreshTimer = setTimeout(refreshFormula, 300);
     }

@@ -2327,8 +2327,8 @@ dialog#dispatch-dialog { max-width: 640px; }
 }
 
 /* Floating canvas controls (top-right): layout picker + snap toggle.
-   Shared look between the Topology and Formulas canvases; each canvas
-   has its own strip, shown by its subview rule below. */
+   The Topology canvas owns the one strip, shown by its subview rule
+   below. */
 .canvas-controls {
   display: none;
   grid-area: topology;
@@ -2377,83 +2377,23 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   margin: 4px 0;
 }
 
-/* ─── Formulas subview ──────────────────────────────────────────────
-   Canvas on the left (read-and-arrange only), Metric + Formula cards
-   on the right, the Why drawer along the bottom. Default-hidden;
-   only its own subview shows it, so the per-subview display rules
-   above don't need to know about it. */
-#formulas {
-  display: none;
-  grid-area: topology;
-  background: var(--bg);
-  position: relative;
-  overflow: hidden;
-  min-width: 0;
-  min-height: 0;
-  grid-template-columns: 1fr 380px;
-  grid-template-rows: 1fr 5px minmax(160px, 28%);
-  grid-template-areas:
-    "fcanvas fside"
-    "fsplit fsplit"
-    "fwhy fwhy";
-}
-body[data-mode="microgrids"][data-mg-view="selected"][data-subview="formulas"] #formulas {
-  display: grid;
-}
-body[data-mode="microgrids"][data-mg-view="selected"][data-subview="formulas"] #dashboard,
-body[data-mode="microgrids"][data-mg-view="selected"][data-subview="formulas"] #topology,
-body[data-mode="microgrids"][data-mg-view="selected"][data-subview="formulas"] #dispatches {
-  display: none;
-}
-#formula-canvas-pane {
-  grid-area: fcanvas;
-  position: relative;
-  overflow: hidden;
-  min-width: 0;
-  min-height: 0;
-}
-/* Top inset reserves a band for the floating layout toolbar, so the
-   fitted graph can never render under it (the formulas pane is
-   short enough that a full-height fit otherwise collides). */
-#formula-topology { position: absolute; inset: 46px 0 0 0; }
-.fsplitter {
-  grid-area: fsplit;
-  background: var(--border);
-  cursor: row-resize;
-  transition: background 120ms;
-}
-.fsplitter:hover, .fsplitter.dragging { background: var(--accent); }
 /* Collapsed drawer: only the REPL input row stays; the log tail and
    eval output give their space back to the content panes. */
 body.drawer-collapsed #logs,
 body.drawer-collapsed #repl-output {
   display: none;
 }
-.canvas-controls.in-pane {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  display: flex;
-}
-#formula-side {
-  grid-area: fside;
-  background: var(--panel);
-  border-left: 1px solid var(--border);
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-}
 
-/* Cards: one bordered block per section of the side panel. */
+/* Cards: one bordered block per section of a floating panel. */
 .card {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
 }
+/* The cards used to be flex children of #formula-side, which supplied
+   the gap; inside a .panel-content they stack in normal flow. */
+.card + .card { margin-top: 12px; }
 .card h2 {
   margin: 0 0 8px;
   font-size: 12px;
@@ -2520,7 +2460,7 @@ body.drawer-collapsed #repl-output {
   white-space: pre-wrap;
 }
 
-/* Formula highlight states (cross-highlighting from the Why tree). */
+/* Formula highlight states (cross-highlighting from a formula hover). */
 .formula-ref.hl {
   background: var(--accent);
   color: var(--bg);
@@ -2531,150 +2471,36 @@ body.drawer-collapsed #repl-output {
   color: var(--bg);
 }
 /* Subtracted terms tint pastel red: they are removed from the
-   measurement, unlike the added (blue) sources. */
+   measurement, unlike the added (blue) sources. The renderer marks
+   each SIGN FLIP, so a subtracted region can hold an un-subtracted
+   one (`#2 - (#3 - #4)` adds #4 back) — the rules below restore the
+   normal palette there. This ladder covers three flips deep, one
+   deeper than the crate's own renderer tests go; a fourth flip would
+   tint cosmetically wrong here, while the canvas cross-highlight
+   (nearest wrapper via closest()) stays exact at any depth. */
 .formula-subtracted,
 .formula-subtracted .formula-num,
 .formula-subtracted .formula-call { color: var(--bad, #e58275); }
 .formula-subtracted .formula-ref:not(.hl) { color: var(--bad, #e58275); }
 .formula-subtracted .formula-ref:not(.hl):hover { color: var(--good, #6bd97b); }
+.formula-unsubtracted { color: var(--fg); }
+.formula-unsubtracted .formula-num { color: var(--muted); }
+.formula-unsubtracted .formula-call { color: var(--good, #6bd97b); }
+.formula-unsubtracted .formula-ref:not(.hl) { color: var(--accent); }
+.formula-unsubtracted .formula-ref:not(.hl):hover { color: var(--good, #6bd97b); }
+/* …and a flip back to subtracted inside one of those out-specifies
+   the restore again (`#2 - (#3 - (#4 - #5))`) — this rung wins on
+   specificity, not source order, and it is the ladder's last. */
+.formula-unsubtracted .formula-subtracted,
+.formula-unsubtracted .formula-subtracted .formula-num,
+.formula-unsubtracted .formula-subtracted .formula-call { color: var(--bad, #e58275); }
+.formula-unsubtracted .formula-subtracted .formula-ref:not(.hl) { color: var(--bad, #e58275); }
+.formula-unsubtracted .formula-subtracted .formula-ref:not(.hl):hover { color: var(--good, #6bd97b); }
 .formula-node.expr-hl {
   background: rgba(121, 184, 255, 0.14);
   border-radius: 3px;
   outline: 1px solid rgba(121, 184, 255, 0.35);
 }
-
-/* Why drawer: master (tree) + detail. */
-#why-drawer {
-  grid-area: fwhy;
-  display: grid;
-  grid-template-columns: minmax(240px, 380px) 1fr;
-  background: var(--panel);
-  border-top: 1px solid var(--border);
-  min-height: 0;
-  min-width: 0;
-}
-#why-tree {
-  overflow-y: auto;
-  border-right: 1px solid var(--border);
-  padding: 8px 6px;
-}
-.why-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.why-row:hover { background: var(--bg-elev); }
-/* display:flex above would override the hidden attribute. */
-.why-row[hidden] { display: none; }
-.why-toggle {
-  flex: 0 0 14px;
-  font-size: 10px;
-  color: var(--muted);
-  cursor: pointer;
-  user-select: none;
-  text-align: center;
-}
-.why-toggle:not(.leaf):hover { color: var(--accent); }
-.why-row.sel { background: var(--bg-deep, #1b1f27); outline: 1px solid var(--accent); }
-.exp-kind {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--accent);
-  white-space: nowrap;
-}
-.exp-kind-big { font-size: 14px; }
-.exp-code {
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--bg-deep, #1b1f27);
-  padding: 0 4px;
-  border-radius: 3px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.exp-silent {
-  font-size: 12px;
-  font-style: italic;
-  color: var(--muted);
-}
-#why-detail {
-  overflow-y: auto;
-  padding: 14px 22px;
-  min-width: 0;
-}
-.detail-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-.detail-code {
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 13px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: var(--bg-deep, #1b1f27);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 10px 12px;
-  margin: 0 0 10px;
-  max-width: 90ch;
-}
-.detail-rationale {
-  font-size: 14.5px;
-  line-height: 1.6;
-  max-width: 68ch;
-  margin: 0 0 12px;
-}
-.detail-chips, .detail-children {
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.chip {
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11.5px;
-  padding: 1px 8px;
-  border-radius: 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--accent);
-  cursor: pointer;
-}
-.chip:hover { border-color: var(--accent); }
-.chip-nav { color: var(--good, #6bd97b); }
-
-/* Formula tooltip (details on demand). */
-#formula-tip {
-  position: fixed;
-  z-index: 950;
-  max-width: 380px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-  padding: 8px 12px;
-  pointer-events: none;
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-#formula-tip p { margin: 4px 0; }
-.tip-hint { font-size: 10.5px; color: var(--muted); }
 
 /* Component palette in the ＋ Add panel: one button per category,
    with a color dot matching the node color on the canvas. */

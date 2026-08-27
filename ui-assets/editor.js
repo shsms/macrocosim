@@ -184,8 +184,8 @@ export function selectAllVisible() {
 }
 
 // One context-menu entry per ALIGN_MODES row; each group starts
-// with a separator. Shared between the Topology menu (below) and
-// the Formulas canvas's align-only menu, so the two cannot drift.
+// with a separator. Kept separate from the Topology menu (below) so
+// any other canvas can offer the same align section without drifting.
 export function alignMenuItems(canvas) {
   const items = [];
   let prevGroup = null;
@@ -242,8 +242,8 @@ export function showMenuItems(menu, items, x, y) {
 
 // Bulk operational-mode set: one progn over the whole selection, so
 // a single undo step covers the batch.
-// A config edit like the Formulas tab's telemetry toggle — it
-// persists and re-derives the runtime knobs server-side.
+// A config edit, not a runtime poke — it persists and re-derives the
+// runtime knobs server-side.
 async function setSelectionMode(ids, mode) {
   const sets = ids
     .map((id) => `(set-component-operational-mode ${id} '${mode})`)
@@ -257,8 +257,8 @@ async function setSelectionMode(ids, mode) {
   }
 }
 
-// Shared with the Formulas canvas's menu (explain.js), so both
-// screens offer the same operational-mode vocabulary.
+// The operational-mode section of the Topology canvas's right-click
+// menu, factored out so every caller offers the same vocabulary.
 export function modeMenuItems(ids) {
   return OPERATIONAL_MODES.map((m, i) => ({
     label: `Mode: ${m.value}`,

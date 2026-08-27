@@ -1,5 +1,5 @@
 // The pill node: one model builder (pure) and one canvas renderer,
-// shared by the Topology and Formulas canvases through vis-network's
+// driving the Topology canvas through vis-network's
 // `shape: "custom"`. The model says *what* a node shows; the
 // renderer (further down) says how it looks.
 
@@ -301,8 +301,8 @@ export function drawPill(ctx, x, y, model, state, lod = "full") {
   }
   if (lod === "marker") return;
   if (lod === "hero") {
-    // one centred row: the hero power only (Formulas canvas has no
-    // hero, so it shows the bare pill)
+    // one centred row: the hero power only (a node without a hero
+    // value shows the bare pill)
     if (!model.hero) return;
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";

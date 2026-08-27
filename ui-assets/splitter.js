@@ -58,39 +58,6 @@ function makeSplitter({ axis, splitter, getStart, apply, clamp }) {
   });
 }
 
-/// Horizontal splitter between the Formulas canvas row and the Why
-/// drawer. Updates #formulas' grid-template-rows to resize the
-/// drawer; the height persists so the arrangement survives reloads.
-export function setupFormulaDrawerSplitter() {
-  const pane = document.getElementById("formulas");
-  const drawer = document.getElementById("why-drawer");
-  const KEY = "switchyard-why-drawer-h";
-  const MIN_DRAWER = 100;
-  const MIN_TOP_FRAC = 0.25;
-  const applyH = (h) => {
-    // CSS min() keeps a persisted height from swallowing the pane on
-    // a smaller window than it was saved on: the drawer never takes
-    // more than 75% of the pane, whatever localStorage says.
-    pane.style.gridTemplateRows = `1fr 5px min(${h}px, 75%)`;
-  };
-  const saved = Number(localStorage.getItem(KEY));
-  if (Number.isFinite(saved) && saved >= MIN_DRAWER) applyH(saved);
-  makeSplitter({
-    axis: "y",
-    splitter: document.getElementById("formula-drawer-splitter"),
-    getStart: () => drawer.getBoundingClientRect().height,
-    apply: (h) => {
-      applyH(h);
-      localStorage.setItem(KEY, String(Math.round(h)));
-    },
-    clamp: (h, vh) => {
-      const paneH = pane.getBoundingClientRect().height;
-      void vh;
-      return Math.max(MIN_DRAWER, Math.min(paneH * (1 - MIN_TOP_FRAC), h));
-    },
-  });
-}
-
 /// Horizontal splitter between topology row and bottom drawer.
 /// Updates main's grid-template-rows to resize the drawer. The
 /// height persists; double-clicking the splitter collapses the
