@@ -351,8 +351,8 @@ dialog header button:hover { color: var(--fg); }
 
 main {
   display: grid;
-  /* Single content column: the topology/dashboard/dispatches panes
-     span the full width; the panel dock + add panel float over the
+  /* Single content column: the topology/dispatches panes span the
+     full width; the panel dock + add panel float over the
      `topology` area (same grid cell, pinned to a side) rather than
      occupying a docked column. mg-header is auto height (collapses to
      0 off a selection); the repl drawer's row size is JS-rewritten. */
@@ -374,38 +374,7 @@ main {
   min-height: 0;
 }
 
-/* On the Dashboard subview the panel dock keeps the old docked
-   column: tiles reflow beside it instead of hiding under it, and
-   there is no click-position gesture there for a resize to break.
-   The canvas subviews get the floating overlay instead — see
-   #panel-dock below. */
-body.panel-open[data-subview="dashboard"] main {
-  grid-template-columns: 1fr 420px;
-  grid-template-areas:
-    "mgheader        mgheader"
-    "topology        paneldock"
-    "drawer-splitter drawer-splitter"
-    "repl            repl";
-}
-body.panel-open[data-subview="dashboard"] #panel-dock {
-  grid-area: paneldock;
-  justify-self: stretch;
-  align-self: stretch;
-  max-height: none;
-  margin: 10px;
-  overflow-y: auto;
-  pointer-events: auto;
-}
-/* Docked panels stack full-width in the column; undo any drag offset. */
-body[data-subview="dashboard"] .float-panel {
-  transform: none !important;
-  width: auto;
-  max-height: none;
-}
-body[data-subview="dashboard"] .panel-drag { display: none; }
-
 #topology,
-#dashboard,
 #dispatches,
 #scenarios {
   grid-area: topology;
@@ -421,27 +390,21 @@ body[data-subview="dashboard"] .panel-drag { display: none; }
    secondary state (`data-mg-view = "list" | "selected"`) for
    whether the user is browsing the card grid or has drilled
    into a specific microgrid, plus a `data-subview` flag
-   (dashboard / topology) for the per-mg sub-tab. */
+   (topology / dispatches) for the per-mg sub-tab. */
 body[data-mode="scenarios"] #microgrid-list,
 body[data-mode="scenarios"] #mg-header,
-body[data-mode="scenarios"] #dashboard,
 body[data-mode="scenarios"] #dispatches,
 body[data-mode="scenarios"] #topology { display: none; }
 
 body[data-mode="microgrids"] #scenarios { display: none; }
 
 body[data-mode="microgrids"][data-mg-view="list"] #mg-header,
-body[data-mode="microgrids"][data-mg-view="list"] #dashboard,
 body[data-mode="microgrids"][data-mg-view="list"] #dispatches,
 body[data-mode="microgrids"][data-mg-view="list"] #topology { display: none; }
 
 body[data-mode="microgrids"][data-mg-view="selected"] #microgrid-list { display: none; }
 
-body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dashboard"] #topology,
-body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dashboard"] #dispatches { display: none; }
-body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"]  #dashboard,
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"]  #dispatches { display: none; }
-body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"] #dashboard,
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"] #topology { display: none; }
 
 #microgrid-list,
@@ -637,314 +600,6 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   color: var(--accent);
 }
 
-/* Dashboard layout. The pool tiles live in a wrapping flex row so a
-   partial last row stretches to fill the width instead of leaving an
-   orphan tile next to empty grid cells — at ~1800 px that's 5-6
-   tiles per row, on a 1200 px laptop 3-4, phone-width 1. Per-tile
-   minimum (280 px) is just wide enough to keep "−999.99 MW" + the
-   meta line from wrapping. Padding + scroll on the pane so
-   per-component drill-down rows don't push the page. */
-#dashboard {
-  padding: 16px;
-  overflow-y: auto;
-  /* The explicit display (ID specificity) is what beats the global
-     `[hidden] { display: none }` — visibility is controlled by the
-     body-state rules above, not the markup's `hidden` attribute. */
-  display: block;
-}
-.dash-tiles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.dash-tiles .dash-tile {
-  flex: 1 1 280px;
-}
-.dash-tile {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 14px 16px;
-}
-.dash-tile h2 {
-  margin: 0 0 4px 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  font-weight: 500;
-}
-.dash-value {
-  font-family: var(--font-mono);
-  font-size: 32px;
-  font-weight: 600;
-  color: var(--fg);
-  font-variant-numeric: tabular-nums;
-  /* Reserve a minimum width so the tile doesn't flicker between
-     "—" placeholder and a populated number. */
-  min-height: 38px;
-}
-.dash-spark {
-  display: block;
-  width: 100%;
-  height: 40px;
-  margin-top: 6px;
-  color: var(--accent);
-  overflow: visible;
-}
-.dash-spark .baseline { stroke: var(--border); stroke-width: 0.4; stroke-dasharray: 2 2; }
-.dash-spark .trace    { fill: none; stroke: currentColor; stroke-width: 0.7; }
-.dash-meta {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 6px;
-}
-.dash-envelope {
-  margin-top: 4px;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-}
-.dash-envelope .env-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.dash-envelope .env-lo { color: var(--bad, #d96b6b); }
-.dash-envelope .env-hi { color: var(--good, #6bd97b); }
-.dash-envelope .env-lo.muted,
-.dash-envelope .env-hi.muted { color: var(--muted); }
-body.compact .dash-envelope { font-size: 11px; margin-top: 2px; }
-
-/* A hairline + generous top margin makes each category read as its
-   own band when scanning down the page. */
-.dash-section {
-  margin-top: 28px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border);
-}
-.tier-heading {
-  font-size: 15px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--fg, #d5dbe3);
-  margin: 0 0 10px;
-}
-.tier-rows {
-  display: grid;
-  gap: 4px;
-  /* Rows flow into columns on wide screens instead of stretching a
-     single row across the whole pane — a battery pair at 3800 px is
-     unreadable on a 4K monitor. ~880 px keeps the envelope bar
-     usable; a laptop still gets one column. */
-  grid-template-columns: repeat(auto-fill, minmax(min(880px, 100%), 1fr));
-  column-gap: 24px;
-  align-items: start;
-}
-/* Battery + paired inverter render as two stacked sub-rows inside a
- * single .bat-pair wrapper. The inverter cell sits flush under the
- * battery cell with a subtle left rule so the pairing reads as one
- * unit on the canvas. */
-.bat-pair {
-  display: grid;
-  gap: 2px;
-  border-left: 2px solid var(--accent);
-  padding-left: 6px;
-}
-/* ── The shared dashboard row template ───────────────────────────────
-   Every dashboard row tier lays out on this ONE six-column track
-   list: name · subtype/category · health · wide slot · power ·
-   reactive power. Sharing it is what keeps the health pill in
-   column 3 at the same x on every row — most visibly between the
-   two stacked rows of a .bat-pair, where a battery (tier2) sits
-   above its inverter (tier3).
-
-   The track list is shared rather than per-tier because the fr
-   tracks make it a package deal: drop the 6th track from one tier
-   and column 1's 1.5fr absorbs the freed width, moving columns 2
-   and 3 on that row only. So a tier with no value for a slot
-   renders a muted `—` placeholder in it (batteries have no subtype
-   and no Q; EV/CHP rows have no Q) instead of leaving the track
-   out. Edit the list here, not in the per-tier blocks below. */
-.tier2-row,
-.tier3-row,
-.tier5-row {
-  grid-template-columns:
-    minmax(140px, 1.5fr) 80px 80px minmax(160px, 3fr) minmax(100px, 1fr) minmax(90px, 1fr);
-}
-/* Column 6 on every tier: the reactive-power readout, muted when
-   the row has no Q to show. */
-.tier-q { text-align: right; white-space: nowrap; }
-
-/* Standalone (non-paired) tier rows pick up an equivalent left
-   offset so their column origin matches the rows inside
-   .bat-pair, which are indented by the 2px border + 6px padding
-   above. */
-.dash-pv .tier-rows > .tier3-row,
-.dash-ev .tier-rows > .tier5-row,
-.dash-chp .tier-rows > .tier5-row {
-  margin-left: 8px;
-}
-.bat-pair-inv {
-  font-size: 13px;
-  opacity: 0.92;
-}
-.bat-pair-inv.muted {
-  font-style: italic;
-}
-.tier2-row {
-  display: grid;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  font-variant-numeric: tabular-nums;
-}
-.tier2-row:hover { border-color: var(--accent); }
-.tier2-name { font-weight: 500; }
-.tier2-subtype {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  text-align: center;
-}
-.tier2-health {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  text-align: center;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.tier2-health.health-ok  { background: rgba(96, 200, 120, 0.15); color: var(--good, #6bd97b); }
-.tier2-health.health-bad { background: rgba(217, 107, 107, 0.18); color: var(--bad, #d96b6b); }
-.tier2-soc-wrap {
-  position: relative;
-  height: 14px;
-  background: var(--bg-deep, #1b1f27);
-  border-radius: 3px;
-  overflow: hidden;
-}
-.tier2-soc-bar {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-}
-.tier2-soc-bar.soc-ok   { background: var(--accent); }
-.tier2-soc-bar.soc-warn { background: var(--warn, #d9c46b); }
-.tier2-soc-bar.muted    { background: var(--border); }
-.tier2-soc-text {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  /* White with a dark halo stays readable over both the filled
-     (light accent) and empty (dark track) parts of the bar —
-     blend-mode difference washed out against the accent fill. */
-  color: #fff;
-  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 0.9);
-}
-.tier2-power { text-align: right; white-space: nowrap; }
-body.compact .tier2-row { padding: 5px 10px; }
-body.compact .tier2-health { font-size: 10px; padding: 1px 6px; }
-body.compact .tier2-soc-wrap { height: 12px; }
-body.compact .tier2-soc-text { font-size: 10px; }
-
-.tier3-row {
-  display: grid;
-  /* Track list comes from the shared row template above. Inverter
-     rows have no separate power readout, so the envelope spans
-     columns 4-5 (see the .tier3-row .envelope rule below) and the
-     reactive readout takes column 6. */
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  font-variant-numeric: tabular-nums;
-}
-.tier3-row .envelope {
-  grid-column: 4 / span 2;
-}
-.tier3-row:hover { border-color: var(--accent); }
-.tier3-name { font-weight: 500; }
-.tier3-subtype { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-.tier3-health {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  text-align: center;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.tier3-health.health-ok  { background: rgba(96, 200, 120, 0.15); color: var(--good, #6bd97b); }
-.tier3-health.health-bad { background: rgba(217, 107, 107, 0.18); color: var(--bad, #d96b6b); }
-
-.envelope {
-  display: grid;
-  /* Wide enough for "-999.99 kW" on one line — with 80px, a value
-     crossing 100 kW wrapped to two lines and the row height jumped
-     with the live power. */
-  grid-template-columns: 1fr 100px;
-  align-items: center;
-  gap: 10px;
-}
-.envelope.muted { color: var(--muted); }
-.envelope-track {
-  position: relative;
-  height: 8px;
-  background: linear-gradient(
-    to right,
-    rgba(217, 107, 107, 0.25),
-    rgba(125, 132, 142, 0.18) 30%,
-    rgba(125, 132, 142, 0.18) 70%,
-    rgba(96, 200, 120, 0.25)
-  );
-  border-radius: 4px;
-}
-.envelope-marker {
-  position: absolute;
-  top: 50%;
-  width: 12px;
-  height: 12px;
-  margin-left: -6px;
-  margin-top: -6px;
-  background: var(--accent);
-  border: 2px solid var(--panel);
-  border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--accent);
-}
-/* Same neutrality at the marker: hitting either bound is "at the
-   limit", not good/bad — a PV inverter in full sun pins the lower
-   (generation) bound all afternoon. */
-.envelope-marker.pinned-hi,
-.envelope-marker.pinned-lo {
-  background: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent);
-}
-.envelope-current { text-align: right; font-weight: 500; white-space: nowrap; }
-body.compact .tier3-row { padding: 5px 10px; }
-body.compact .tier3-health { font-size: 10px; padding: 1px 6px; }
-body.compact .envelope-track { height: 6px; }
-body.compact .envelope-marker { width: 10px; height: 10px; margin-left: -5px; margin-top: -5px; }
-
-.dash-tile-interactive {
-  cursor: pointer;
-  transition: border-color 120ms;
-}
-.dash-tile-interactive:hover { border-color: var(--accent); }
 .formula-panel { padding: 8px 4px; }
 .formula-panel h2 { font-size: 14px; margin-bottom: 8px; }
 .formula-panel h2 code {
@@ -1237,63 +892,6 @@ body.compact .envelope-marker { width: 10px; height: 10px; margin-left: -5px; ma
   color: var(--accent, #79b8ff);
   font-family: var(--mono, ui-monospace, "Cascadia Mono", monospace);
 }
-
-.tier5-row {
-  display: grid;
-  /* Track list comes from the shared row template near .tier2-row,
-     which is what keeps the health pill in column 3 aligned with
-     the rows in the Batteries + PV sections above. EV/CHP rows
-     carry no Q, so column 6 renders a muted placeholder. */
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  font-variant-numeric: tabular-nums;
-}
-.tier5-row:hover { border-color: var(--accent); }
-.tier5-name { font-weight: 500; }
-.tier5-cat { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-.tier5-health {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  text-align: center;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.tier5-health.health-ok  { background: rgba(96, 200, 120, 0.15); color: var(--good, #6bd97b); }
-.tier5-health.health-bad { background: rgba(217, 107, 107, 0.18); color: var(--bad, #d96b6b); }
-.tier5-soc-wrap {
-  position: relative;
-  height: 14px;
-  background: var(--bg-deep, #1b1f27);
-  border-radius: 3px;
-  overflow: hidden;
-}
-.tier5-soc-wrap.muted { background: transparent; color: var(--muted); text-align: center; }
-.tier5-soc-bar {
-  position: absolute;
-  inset: 0 auto 0 0;
-  background: var(--accent);
-}
-.tier5-soc-text {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  color: #fff;
-  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 0.9);
-}
-.tier5-power { text-align: right; white-space: nowrap; }
-body.compact .tier5-row { padding: 5px 10px; }
-body.compact .tier5-health { font-size: 10px; padding: 1px 6px; }
-body.compact .tier5-soc-wrap { height: 12px; }
-body.compact .tier5-soc-text { font-size: 10px; }
 
 #drawer-splitter {
   grid-area: drawer-splitter;
@@ -2201,8 +1799,8 @@ pre {
    `body.compact` class — toggled via the pulse-bar density chip and
    localStorage-persisted. The 32" 4K target keeps the default layout
    roomy; compact mode is for power users on long soak runs who want
-   more tiles + more rows on screen at once. CSS-only — every panel
-   responds via class-scoped overrides below. */
+   more rows on screen at once. CSS-only — every pane responds via
+   class-scoped overrides below. */
 
 body.compact #pulse {
   height: 22px;
@@ -2210,25 +1808,18 @@ body.compact #pulse {
   font-size: 11px;
 }
 body.compact #pulse-spark { width: 64px; height: 12px; }
-body.compact .dash-tile { padding: 8px 10px; }
-body.compact .dash-tile h2 { font-size: 10px; margin-bottom: 2px; }
-body.compact .dash-value { font-size: 22px; min-height: 26px; }
-body.compact .dash-spark { height: 28px; margin-top: 3px; }
-body.compact .dash-meta { font-size: 10px; margin-top: 3px; }
-body.compact #dashboard { padding: 8px; }
-body.compact .dash-tiles { gap: 6px; }
 /* Re-tighten the main grid since the pulse bar shrank 6 px. */
 body.compact main { height: calc(100vh - 41px - 22px); }
 
 /* ─── Dispatches (per-microgrid) ─────────────────────────────────────────
    Read-only table of dispatches the dispatch API holds for the selected
-   microgrid; mirrors the dashboard pane (padding + its own scroll). */
+   microgrid; a padded pane with its own scroll. */
 #dispatches {
   /* `display: block` defeats the inline `hidden` attribute's
-     `[hidden] { display: none }` (same trick #dashboard uses with
-     `display: grid`); the body[data-subview] rules above re-hide it
-     when another sub-tab is active. Without this the pane never shows
-     and the Dispatches tab looks empty. */
+     `[hidden] { display: none }` (same trick #microgrid-list and
+     #scenarios use above); the body[data-subview] rules above re-hide
+     it when another sub-tab is active. Without this the pane never
+     shows and the Dispatches tab looks empty. */
   display: block;
   padding: 16px;
   overflow-y: auto;

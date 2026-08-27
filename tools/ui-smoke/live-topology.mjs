@@ -36,7 +36,7 @@ const unit = await page.evaluate(async () => {
   const eq = (name, got, want) =>
     out.push({ name, ok: Object.is(got, want) || JSON.stringify(got) === JSON.stringify(want), got: JSON.stringify(got), want: JSON.stringify(want) });
 
-  // formatScaled: the dashboard ladder, byte-identical
+  // formatScaled: the shared W → kW → MW ladder, byte-identical
   eq("fmt W", m.formatScaled(107.3, "W"), "107.3 W");
   eq("fmt kW", m.formatScaled(-24000, "W"), "-24.00 kW");
   eq("fmt MW", m.formatScaled(1500000, "W"), "1.50 MW");
@@ -201,19 +201,6 @@ const unit = await page.evaluate(async () => {
   eq("non-numeric command value stays raw", cmdText({ kind: "mode", value: "idle", ts: now - 1000, accepted: true, reason: "" }), "mode idle · 1 s ago · accepted");
   eq("augment_bounds shows no value", cmdText({ kind: "augment_bounds", value: 0, ts: now - 3000, accepted: true, reason: "" }), "augment bounds · 3 s ago · accepted");
   eq("augment_reactive_bounds shows no value either", cmdText({ kind: "augment_reactive_bounds", value: 0, ts: now - 3000, accepted: true, reason: "" }), "augment reactive bounds · 3 s ago · accepted");
-  // dashboard.js: the site-PF line under the grid reactive tile.
-  // Same sign convention as the hover card's PF (opposite signs read
-  // as leading), but the qualifier drops at the unity threshold here
-  // rather than inside a dead band.
-  const dash = await import("/assets/dashboard.js");
-  eq("site pf unity drops the qualifier", dash.sitePfText(10000, 200), "site PF 1.00");
-  eq("site pf lagging (same signs)", dash.sitePfText(8000, 6000), "site PF 0.80 lagging");
-  eq("site pf leading (opposite signs)", dash.sitePfText(8000, -6000), "site PF 0.80 leading");
-  eq("site pf leading with exported p", dash.sitePfText(-8000, 6000), "site PF 0.80 leading");
-  eq("site pf missing q", dash.sitePfText(8000, null), "site PF —");
-  eq("site pf NaN p", dash.sitePfText(Number.NaN, 100), "site PF —");
-  eq("site pf both zero", dash.sitePfText(0, 0), "site PF —");
-
   // palette comes from :root tokens; values unchanged
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   eq("token --pill-surface", css("--pill-surface"), "#242a33");
@@ -546,27 +533,6 @@ await waitFor(async () => {
   const s = await readCard();
   return s && !s.visible;
 }, 3000);
-
-// ── e2e: the dashboard's reactive tile ───────────────────────────
-// `grid_reactive_power` is its own aggregate stream off the loopback,
-// and the tile is plain markup on the generic per-stream machinery —
-// so the check is that the value paints in VArs and that the meta
-// line derives site PF from the two grid streams client-side.
-await page.click('#mg-subtoggle .mode-btn[data-subview="dashboard"]');
-const tile = await waitFor(async () => {
-  const t = await page.evaluate(() => document.querySelector('.dash-value[data-stream="grid_reactive_power"]')?.textContent);
-  return t && t !== "—" ? t : null;
-}, 20000);
-check("e2e: grid reactive tile paints a var value", /VAr|var/.test(tile), tile);
-// PF needs a sample from BOTH grid streams in the spark ring, and
-// only the WS frames push there — so it fills a tick or two after
-// the value above, which /microgrid/latest can paint on its own.
-const pfMeta = await waitFor(async () => {
-  const t = await page.evaluate(() => document.getElementById("site-pf")?.textContent);
-  return t && t !== "site PF —" ? t : null;
-}, 20000);
-check("e2e: site PF derives from the two grid streams", /^site PF \d\.\d\d( (lagging|leading))?$/.test(pfMeta), pfMeta);
-await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
 
 // ── e2e: the inspector's reactive knobs ──────────────────────────
 // Any visible meter that isn't the main one will do — the demo drives

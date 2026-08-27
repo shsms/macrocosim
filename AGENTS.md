@@ -53,9 +53,12 @@ is wiring the topology + animating the environment.
   - `state.rs` / `loopback.rs` / `events_ws.rs` — loopback client cache,
     gRPC loopback supervisor, WS event push
 - `ui-assets/` — the SPA as hand-rolled ES modules (`app.js` is the
-  entry; `topology.js`, `live.js`, `dashboard.js`, `inspect.js`,
-  `repl.js`, `routing.js`, `dialogs.js`, `editor.js`, … own one
-  concern each; `live.js` owns the live-overlay pure helpers: label
+  entry; `topology.js`, `live.js`, `metrics-store.js`,
+  `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
+  `dialogs.js`, `editor.js`, … own one concern each;
+  `metrics-store.js` holds the derived-stream rings + the PF helpers
+  and `metrics-panel.js` the floating charts panel that reads them;
+  `live.js` owns the live-overlay pure helpers: label
   text, number formatting, the dead band and edge flow; `pill.js`
   owns the node model and canvas renderer both graph canvases draw
   with, and the zoom tiers (full / hero / marker); `hovercard.js`
@@ -63,13 +66,13 @@ is wiring the topology + animating the environment.
   vendored IBM Plex faces (OFL))
   - Reactive power reads at parity with active power across the SPA:
     the hover card draws a Q envelope bar under the P one (same
-    `hovercard.js` `envelopeBar`, labelled in VAr); the Dashboard has
-    a Grid reactive power tile on the `grid_reactive_power` aggregate
-    stream, whose meta line derives site PF client-side from the
-    latest grid P and Q samples, and every dashboard row tier shares
-    a six-column template whose last column is a muted Q readout
-    (filled on inverter rows, `—` elsewhere); the inspector's knob
-    table offers
+    `hovercard.js` `envelopeBar`, labelled in VAr); the metrics
+    panel's Reactive power card charts the `grid_reactive_power`,
+    `pv_reactive_power` and `battery_reactive_power` aggregate
+    streams, with each chip reading out PF against its own P stream
+    and an optional dashed PF overlay on a right-hand scale (both
+    from `metrics-store.js` `pfValue` / `pfText`); the inspector's
+    knob table offers
     `set-reactive-power` on inverters and `set-meter-reactive-power`
     / `set-meter-power-factor` (with a `leading` checkbox) on meters.
 - `tools/ui-smoke/` — Playwright smoke scripts run by hand against a

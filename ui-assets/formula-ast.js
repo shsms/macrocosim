@@ -1,9 +1,9 @@
 // Shared parser + renderer for graph-crate-rendered formula strings
 // like `MAX(#2 - COALESCE(#1002, #1001, 0.0), 0.0)`. Used by the
-// dashboard's per-stream formula tree and the formula explorer
-// panel. DOM-free on purpose: tools/formula-ast-test.mjs imports it
-// under plain node, so it must not touch document/window (that is
-// also why it carries its own escapeHtml instead of app.js's).
+// formula explorer panel. DOM-free on purpose:
+// tools/formula-ast-test.mjs imports it under plain node, so it must
+// not touch document/window (that is also why it carries its own
+// escapeHtml instead of app.js's).
 const escapeHtml = (s) =>
   String(s).replace(
     /[<>&"']/g,

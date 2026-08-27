@@ -1,11 +1,11 @@
 // The floating panel shell. Each named panel — the node inspector
-// ("node"), the formula explorer ("formula-btn"), the Defaults editor,
-// the live Scenario report, the dashboard formula tree — is its own
-// concurrently-openable, draggable card inside #panel-dock. Re-opening
-// an open panel just re-renders it (running its teardown first);
-// closing runs teardown and hides the card. The shell never knows
-// what's inside a panel; each tenant supplies its own teardown since
-// only it knows what live resources (charts, timers) it owns.
+// ("node"), the formula explorer ("formula-btn"), the metrics panel
+// ("metrics-btn"), the Defaults editor, the live Scenario report — is
+// its own concurrently-openable, draggable card inside #panel-dock.
+// Re-opening an open panel just re-renders it (running its teardown
+// first); closing runs teardown and hides the card. The shell never
+// knows what's inside a panel; each tenant supplies its own teardown
+// since only it knows what live resources (charts, timers) it owns.
 
 // name → { el, contentEl, teardown }
 const panels = new Map();
@@ -46,15 +46,12 @@ function ensurePanel(name) {
 }
 
 // Drag-to-move via the grab strip; the offset is a transform on the
-// panel, persisted per panel so it sticks across sessions. Inert in
-// the dashboard subview, where the dock is a grid column (the CSS
-// there forces transform: none and hides the strips).
+// panel, persisted per panel so it sticks across sessions.
 function wireDrag(el, name) {
   const strip = el.querySelector(".panel-drag");
   let { dx, dy } = loadPos(name);
   if (dx || dy) el.style.transform = `translate(${dx}px, ${dy}px)`;
   strip.addEventListener("pointerdown", (e) => {
-    if (document.body.dataset.subview === "dashboard") return;
     e.preventDefault();
     strip.setPointerCapture(e.pointerId);
     const startX = e.clientX - dx;

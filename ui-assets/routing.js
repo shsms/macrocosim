@@ -7,13 +7,6 @@
 
 import { dispatchesPanel, setStatus } from "./app.js";
 import { gridFrequency, pulseBar } from "./chrome.js";
-import {
-  batteryPairs,
-  chpRows,
-  dashboardTiles,
-  evRows,
-  pvRows,
-} from "./dashboard.js";
 import { refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { closeAllPanels } from "./side-panel.js";
@@ -61,11 +54,11 @@ export const READ_ONLY_TITLE =
   "unmanaged file — structure is read-only (Adopt to edit)";
 
 // ─── Density toggle ────────────────────────────────────────────────────────
-// CSS-only mode that shrinks tile + pulse-bar paddings and fonts.
-// For power users on long soak runs who want more tiles + more
-// rows on screen at once. Default = normal (the 32" 4K target
-// keeps the comfortable layout the landing one). Preference
-// persists in localStorage so a refresh keeps you put.
+// CSS-only mode that shrinks pane + pulse-bar paddings and fonts.
+// For power users on long soak runs who want more rows on screen at
+// once. Default = normal (the 32" 4K target keeps the comfortable
+// layout the landing one). Preference persists in localStorage so a
+// refresh keeps you put.
 const DENSITY_KEY = "switchyard-density";
 
 function applyDensity(mode) {
@@ -93,18 +86,11 @@ export function setupDensityToggle() {
 }
 
 // ─── Route state keys + read helpers ───────────────────────────────────────
-// The last /api/topology snapshot as {mg, data}, for catching the
-// Dashboard row modules up when their subview becomes visible (they
-// are not seeded while hidden). `mg` is the microgrid the fetch was
-// for, so the catch-up can refuse a stale snapshot after a microgrid
-// switch.
-let lastTopologySnapshot = null;
-
 const MODE_KEY = "switchyard-mode";
 const MG_SELECTED_KEY = "switchyard-selected-mg";
 const MG_SUBVIEW_KEY = "switchyard-mg-subview";
 const VALID_MODES = new Set(["microgrids", "scenarios"]);
-const VALID_SUBVIEWS = new Set(["dashboard", "topology", "dispatches"]);
+const VALID_SUBVIEWS = new Set(["topology", "dispatches"]);
 
 export function readSelectedMg() {
   const raw = localStorage.getItem(MG_SELECTED_KEY);
@@ -115,7 +101,7 @@ export function readSelectedMg() {
 
 export function readSubview() {
   const v = localStorage.getItem(MG_SUBVIEW_KEY);
-  return VALID_SUBVIEWS.has(v) ? v : "dashboard";
+  return VALID_SUBVIEWS.has(v) ? v : "topology";
 }
 
 // The subview name, but only when the mode and mgView flags say the
@@ -152,21 +138,22 @@ function parseHash(hash) {
   // `routeToHash` emits when selectedMg is null.
   if (!hash || hash === "#") return null;
   if (hash === "#microgrids") {
-    return { mode: "microgrids", selectedMg: null, subview: "dashboard" };
+    return { mode: "microgrids", selectedMg: null, subview: "topology" };
   }
   if (hash === "#scenarios") {
-    return { mode: "scenarios", selectedMg: null, subview: "dashboard" };
+    return { mode: "scenarios", selectedMg: null, subview: "topology" };
   }
   const m = /^#microgrids\/(\d+)(?:\/(dashboard|topology|formulas|dispatches))?$/.exec(hash);
   // `formulas` was its own subview before the formula explorer became
-  // a floating panel; old bookmarks land on Topology instead of a
-  // dead route.
-  if (m && m[2] === "formulas") m[2] = "topology";
+  // a floating panel, and `dashboard` was retired for the metrics
+  // panel; the regex still matches both so old bookmarks land on
+  // Topology instead of a dead route.
+  if (m && (m[2] === "formulas" || m[2] === "dashboard")) m[2] = "topology";
   if (m) {
     return {
       mode: "microgrids",
       selectedMg: Number(m[1]),
-      subview: m[2] || "dashboard",
+      subview: m[2] || "topology",
     };
   }
   return null;
@@ -200,8 +187,8 @@ function setupRouterPopstate() {
     writeRouteToStorage(parsed);
     applyMode(parsed.mode);
     // Back/forward can land on a different microgrid; refetch so
-    // the canvas and row modules rebuild for it (the click path
-    // does this via selectMicrogrid).
+    // the canvas rebuilds for it (the click path does this via
+    // selectMicrogrid).
     if (parsed.selectedMg != null) refreshTopology();
   });
 }
@@ -270,23 +257,6 @@ function applyMode(mode) {
     requestAnimationFrame(() => topology.fit());
     topology.flushLive();
   }
-  if (mode === "microgrids" && selected != null && subview === "dashboard") {
-    dashboardTiles.backfill();
-    gridFrequency.backfill();
-    // Catch the row modules up on the seeds skipped while hidden —
-    // but only when their maps hold THIS microgrid's components.
-    // After a back/forward mg switch they still hold the previous
-    // mg's ids, and ids collide across mgs, so seeding them against
-    // the new mg's endpoints would mix two sites' values. The
-    // refreshTopology() for the new mg rebuilds the maps and seeds
-    // them itself.
-    if (lastTopologySnapshot?.mg === selected) {
-      batteryPairs.reseed();
-      pvRows.reseed();
-      evRows.reseed();
-      chpRows.reseed();
-    }
-  }
   if (mode === "microgrids" && selected != null && subview === "dispatches") {
     dispatchesPanel.render(selected);
   }
@@ -295,10 +265,9 @@ function applyMode(mode) {
 }
 
 // Jump to the topology subview within the current mode and select
-// `id` on the canvas. Used by dashboard tier rows, the dashboard
-// formula tree's chips and the formula explorer's #N refs. Pushes a
-// history entry so the back button returns the user to where they
-// clicked from.
+// `id` on the canvas. Used by the formula explorer's #N refs and the
+// metrics panel. Pushes a history entry so the back button returns
+// the user to where they clicked from.
 export function jumpToTopology(id) {
   navigateTo({ subview: "topology" });
   // An explicit jump always notifies, even when it lands on the node
@@ -408,10 +377,9 @@ export function setupModeToggle() {
 }
 
 export async function refreshTopology() {
-  // Stamp the stash with the microgrid the fetch was for: applyMode's
-  // catch-up must not seed the Dashboard row modules from one
-  // microgrid's snapshot while another is selected (the user can
-  // switch mg before this fetch lands).
+  // Remember the microgrid the fetch was for: the user can switch mg
+  // before it lands, and a response for a no-longer-selected site
+  // must not repaint this one's panels.
   const mg = readSelectedMg();
   try {
     const res = await fetch(mgPath("topology"));
@@ -420,25 +388,14 @@ export async function refreshTopology() {
     // The user can switch microgrid while the fetch is in flight
     // (selectMicrogrid fires a fresh one). A response for a mg that
     // is no longer selected must be dropped whole: applying it would
-    // repaint every panel — and clobber the stash — with the old
-    // site's data.
+    // repaint every panel with the old site's data.
     if (readSelectedMg() !== mg) return;
     topology.apply(data);
-    lastTopologySnapshot = { mg, data };
     // Pulse bar's health counters + graph pill read from the
     // same /api/topology fetch — one round-trip carries both
     // signals + a hot-reload's WS topology_changed nudge
     // already drives a refresh.
     pulseBar.applyTopology(data.components || [], data.graph_status);
-    // Keep the row modules' shape current on every refresh, but
-    // only pay the per-component latest-sample fetches while the
-    // Dashboard subview is actually showing — applyMode reseeds on
-    // subview enter.
-    const seed = visibleSubview() === "dashboard";
-    batteryPairs.refresh(data, { seed });
-    pvRows.refresh(data, { seed });
-    evRows.refresh(data, { seed });
-    chpRows.refresh(data, { seed });
     gridFrequency.applyTopology(data);
   } catch (err) {
     setStatus(`error: ${err.message}`, "error");

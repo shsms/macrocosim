@@ -1,10 +1,10 @@
 // The metrics panel: three foldable cards — Power, Reactive power,
 // Frequency — each one combined uPlot chart over the loopback's
 // aggregate streams plus a chip row that is legend, live readout,
-// and series toggle in one. Replaces the Dashboard subview's tiles;
-// the store (metrics-store.js) owns the data, this module owns the
-// DOM. Series colors follow the category palette so chart lines
-// mean what the canvas already means.
+// and series toggle in one. It took over from the retired Dashboard
+// subview's tiles; the store (metrics-store.js) owns the data, this
+// module owns the DOM. Series colors follow the category palette so
+// chart lines mean what the canvas already means.
 
 import { gridFrequency } from "./chrome.js";
 import { fmtValue, metricsStore, pfText, pfValue } from "./metrics-store.js";

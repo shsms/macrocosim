@@ -1,7 +1,7 @@
-// Chrome around the SPA's main views: grid-frequency tile feeder,
-// configurable-zone clock, and the always-on pulse bar.
+// Chrome around the SPA's main views: grid-frequency stream feeder
+// (metrics panel), configurable-zone clock, and the always-on pulse
+// bar.
 
-import { dashboardTiles } from "./dashboard.js";
 import { metricsStore } from "./metrics-store.js";
 import { mgPath, setupDensityToggle } from "./routing.js";
 
@@ -11,10 +11,10 @@ import { mgPath, setupDensityToggle } from "./routing.js";
 // formula.md), so the loopback can't drive a grid_frequency
 // microgrid_sample stream. Until upstream lands the fix, we read
 // the main meter's per-component frequency_hz history instead:
-// fetch the most recent sample on dashboard entry, then forward
+// fetch the most recent sample on panel open, then forward
 // every matching `kind: "sample"` WS frame as a synthetic
-// microgrid_sample so the existing dashboardTiles paint path
-// (with sparkline) handles it without a parallel renderer.
+// microgrid_sample so the metrics store's ordinary paint path
+// handles it without a parallel renderer.
 export const gridFrequency = (() => {
   let mainId = null;
   function setMainId(id) {
@@ -34,11 +34,9 @@ export const gridFrequency = (() => {
       );
       if (!r.ok) return;
       const j = await r.json();
-      // Fresh ring per backfill — re-entering the dashboard would
+      // Fresh ring per backfill — re-opening the metrics panel would
       // otherwise append the same history again and render a falsely
-      // repeated pattern. Both readers (Dashboard tiles, metrics
-      // panel store) keep their own ring, so both get reset and fed.
-      dashboardTiles.resetStream("grid_frequency");
+      // repeated pattern.
       metricsStore.resetStream("grid_frequency");
       for (const [ts_ms, value] of j.samples || []) {
         const sample = {
@@ -48,7 +46,6 @@ export const gridFrequency = (() => {
           ts_ms,
           value,
         };
-        dashboardTiles.applySample(sample);
         metricsStore.applySample(sample);
       }
     } catch (_) {}
@@ -62,7 +59,6 @@ export const gridFrequency = (() => {
       ts_ms: ev.ts_ms,
       value: ev.value,
     };
-    dashboardTiles.applySample(sample);
     metricsStore.applySample(sample);
   }
   return { applyTopology, applySample, backfill };

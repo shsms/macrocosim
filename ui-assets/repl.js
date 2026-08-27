@@ -1,17 +1,10 @@
 // REPL drawer: live syntax-highlighted Lisp input, autocomplete,
 // the log-line tap above it, and the WebSocket pump that fans out
-// /ws/events frames to liveCharts / dashboard rows / pulseBar /
+// /ws/events frames to liveCharts / the metrics store / pulseBar /
 // the log panel.
 
 import { dispatchesPanel, escapeHtml, notify, setStatus } from "./app.js";
 import { gridFrequency, pulseBar } from "./chrome.js";
-import {
-  batteryPairs,
-  chpRows,
-  dashboardTiles,
-  evRows,
-  pvRows,
-} from "./dashboard.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
 import { metricsStore } from "./metrics-store.js";
 import {
@@ -358,7 +351,7 @@ export function openWebSocket(onTopologyChanged) {
       delay = MIN_DELAY;
       if (everConnected) {
         // Catch up state the canvas and inspector cached from
-        // before the drop. Loopback pill + dashboard tiles also
+        // before the drop. Loopback pill + metrics panel also
         // self-heal via their next poll / WS frame.
         onTopologyChanged(0);
       }
@@ -383,7 +376,7 @@ export function openWebSocket(onTopologyChanged) {
       }
       // Per-microgrid events carry mg_id (post-D3); we filter out
       // anything from a microgrid other than the currently-selected
-      // one so the dashboard doesn't paint with samples from a
+      // one so the metrics panel doesn't paint with samples from a
       // neighbour. Enterprise-scoped events (log, lagged) ship
       // mg_id = undefined and pass through regardless.
       const selectedMg = readSelectedMg();
@@ -395,17 +388,10 @@ export function openWebSocket(onTopologyChanged) {
       }
       if (ev.kind === "sample") {
         liveCharts.pushSample(ev.id, ev.metric, ev.ts_ms, ev.value);
-        batteryPairs.applySample(ev);
-        pvRows.applySample(ev);
-        evRows.applySample(ev);
-        chpRows.applySample(ev);
         gridFrequency.applySample(ev);
         topology.applySample(ev);
         inspectorLive.applySample(ev);
       } else if (ev.kind === "microgrid_sample") {
-        // Double-feed while both readers live: the Dashboard's tiles
-        // and the metrics panel's store keep their own rings.
-        dashboardTiles.applySample(ev);
         metricsStore.applySample(ev);
       } else if (ev.kind === "topology_changed") {
         onTopologyChanged(ev.version);

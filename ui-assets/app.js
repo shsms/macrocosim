@@ -6,7 +6,6 @@
 // path so anything done in the UI is also scriptable from outside.
 
 import { clockState, pulseBar } from "./chrome.js";
-import { dashboardTiles } from "./dashboard.js";
 import {
   setupDefaultsToggle,
   setupHelpButton,
@@ -29,7 +28,6 @@ import {
   refreshFormula,
   setupFormulaToggle,
 } from "./formula-panel.js";
-import { setupFormulaTileClicks } from "./formulas.js";
 import { setupInspectorChips, showComponent } from "./inspect.js";
 import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
@@ -50,8 +48,8 @@ import { setupDrawerSplitter } from "./splitter.js";
 import { topology } from "./topology.js";
 
 // Re-export the routing helpers that other modules still pull
-// via `./app.js` so consumers (dashboard / formulas / panels /
-// chrome) keep working without rewiring every import site.
+// via `./app.js` so consumers (panels / chrome / the metrics and
+// formula panels) keep working without rewiring every import site.
 export {
   jumpToTopology,
   mgPath,
@@ -397,8 +395,8 @@ async function init() {
     if (inEditable && !escOnCheckbox) return;
     // The editing shortcuts drive the Topology canvas's selection.
     // Anywhere else they must stay inert — Delete pressed on the
-    // Dashboard, the Scenarios mode, or the microgrid list must not
-    // remove whatever happens to be selected on the (hidden)
+    // Dispatches sub-tab, the Scenarios mode, or the microgrid list
+    // must not remove whatever happens to be selected on the (hidden)
     // Topology canvas. visibleSubview() checks all three body flags.
     const visible = visibleSubview();
     if (visible !== "topology") {
@@ -448,7 +446,6 @@ async function init() {
   setupHelpButton();
   setupModeToggle();
   setupReplMgChip();
-  setupFormulaTileClicks();
   setupMetricsPanel();
   scenariosPanel.setup();
   dispatchesPanel.setup();
@@ -472,7 +469,7 @@ async function init() {
     }
     // The loopback supervisor debounces ~300ms and rebuilds the
     // Microgrid handle; /api/microgrid/latest + /formulas return
-    // 503 mid-rebuild. Delay the dashboard re-fetch so it lands
+    // 503 mid-rebuild. Delay the metrics-panel re-fetch so it lands
     // after the supervisor settles. At most one backfill timer is
     // armed at a time (each backfill refetches the full 15-min
     // history for every stream); events landing while it's armed
@@ -481,9 +478,9 @@ async function init() {
     // per 800 ms window (never starved), and the last event of a
     // burst always has a backfill land ≥ 800 ms after it — past the
     // supervisor's rebuild, so the final history refetch isn't the
-    // one that ate a 503. backfill() is 503-tolerant — an undershoot
-    // leaves the existing tooltip + values, and the next sample-flow
-    // tick overwrites the displayed numbers.
+    // one that ate a 503. The store's backfill() is 503-tolerant — an
+    // undershoot leaves the existing series in place, and the next
+    // sample-flow tick extends them again.
     if (topologyBackfillTimer == null) {
       armTopologyBackfill();
     } else {
@@ -493,7 +490,6 @@ async function init() {
   const armTopologyBackfill = () => {
     topologyBackfillTimer = setTimeout(() => {
       topologyBackfillTimer = null;
-      dashboardTiles.backfill();
       metricsTopologyRefresh();
       if (topologyBackfillPending) {
         topologyBackfillPending = false;
@@ -503,10 +499,10 @@ async function init() {
   };
   // A burst of edits (multi-step undo, scripted import, hot reload)
   // fires one topology_changed per accepted eval, and every refresh
-  // is a topology fetch (a server-side graph build) plus a reseed of
-  // all dashboard row modules. Leading-edge throttle with trailing
-  // catch-up: the first event refreshes immediately, the rest of the
-  // burst collapses into one refresh 300 ms later.
+  // is a topology fetch (a server-side graph build) plus a canvas
+  // repaint. Leading-edge throttle with trailing catch-up: the first
+  // event refreshes immediately, the rest of the burst collapses into
+  // one refresh 300 ms later.
   let topologyBurstTimer = null;
   let topologyBurstPending = false;
   openWebSocket((_v) => {
@@ -523,10 +519,6 @@ async function init() {
       }
     }, 300);
   });
-  // Periodically re-seed the dashboard tile values from the cached
-  // latest sample, so a dropped/throttled WS frame can't leave a tile
-  // frozen on a stale number between topology-driven backfills.
-  dashboardTiles.startAutoReseed();
   setupRepl();
 }
 

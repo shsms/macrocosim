@@ -52,7 +52,7 @@
       <div id="microgrid-list" hidden>
         <header class="mglist-header">
           <h2>Microgrids</h2>
-          <p class="hint">Pick a microgrid to drill into its dashboard + topology.</p>
+          <p class="hint">Pick a microgrid to drill into its topology + dispatches.</p>
         </header>
         <div id="mglist-grid" class="mglist-grid"></div>
         <input id="import-files" type="file" accept=".json,application/json" multiple hidden />
@@ -66,7 +66,6 @@
                 title="Write the live structure into this file so switchyard may rewrite it from now on"
                 hidden>Adopt</button>
         <nav id="mg-subtoggle" aria-label="microgrid view">
-          <button class="mode-btn" data-subview="dashboard">Dashboard</button>
           <button class="mode-btn" data-subview="topology">Topology</button>
           <button class="mode-btn" data-subview="dispatches">Dispatches</button>
         </nav>
@@ -102,74 +101,6 @@
           </div>
           <section id="sc-run-events" class="sc-run-events" aria-label="recent events"></section>
           <section id="sc-run-csv" class="sc-run-csv" aria-label="recorded csvs"></section>
-        </section>
-      </div>
-      <div id="dashboard" hidden>
-        <div class="dash-tiles">
-        <section class="dash-tile">
-          <h2>Grid power</h2>
-          <div class="dash-value muted" data-stream="grid_power">—</div>
-          <svg class="dash-spark" data-stream="grid_power" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
-          <div class="dash-meta muted">net flow at the connection point · <code>grid_formula</code></div>
-        </section>
-        <section class="dash-tile">
-          <h2>Grid reactive power</h2>
-          <div class="dash-value muted" data-stream="grid_reactive_power">—</div>
-          <svg class="dash-spark" data-stream="grid_reactive_power" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
-          <div class="dash-meta muted"><span id="site-pf">site PF —</span> · derived from the grid formula</div>
-        </section>
-        <section class="dash-tile">
-          <h2>Grid frequency</h2>
-          <div class="dash-value muted" data-stream="grid_frequency">—</div>
-          <svg class="dash-spark" data-stream="grid_frequency" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
-          <div class="dash-meta muted">main-meter <code>frequency_hz</code> (LM Frequency support pending upstream)</div>
-        </section>
-        <section class="dash-tile">
-          <h2>Battery pool</h2>
-          <div class="dash-value muted" data-stream="battery_pool_power">—</div>
-          <svg class="dash-spark" data-stream="battery_pool_power" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
-          <div class="dash-envelope" aria-label="battery pool active-power bounds">
-            <span class="env-label muted">envelope</span>
-            <span class="env-lo" data-stream="battery_pool_bounds_lower">—</span>
-            <span class="env-sep muted">→</span>
-            <span class="env-hi" data-stream="battery_pool_bounds_upper">—</span>
-          </div>
-          <div class="dash-meta muted">aggregated DC across batteries · <code>BatteryPool::power</code></div>
-        </section>
-        <section class="dash-tile">
-          <h2>PV</h2>
-          <div class="dash-value muted" data-stream="pv_power">—</div>
-          <svg class="dash-spark" data-stream="pv_power" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
-          <div class="dash-meta muted">solar generation · <code>pv_formula</code></div>
-        </section>
-        <section class="dash-tile">
-          <h2>Consumer</h2>
-          <div class="dash-value muted" data-stream="consumer_power">—</div>
-          <svg class="dash-spark" data-stream="consumer_power" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
-          <div class="dash-meta muted">aggregated load · <code>consumer_formula</code></div>
-        </section>
-        <section class="dash-tile">
-          <h2>Producer</h2>
-          <div class="dash-value muted" data-stream="producer_power">—</div>
-          <svg class="dash-spark" data-stream="producer_power" viewBox="0 0 100 30" preserveAspectRatio="none"></svg>
-          <div class="dash-meta muted">all generation (PV + CHP + …) · <code>producer_formula</code></div>
-        </section>
-        </div>
-        <section class="dash-section dash-batteries" hidden>
-          <h2 class="tier-heading">Batteries</h2>
-          <div id="battery-rows" class="tier-rows"></div>
-        </section>
-        <section class="dash-section dash-pv" hidden>
-          <h2 class="tier-heading">PV inverters</h2>
-          <div id="pv-rows" class="tier-rows"></div>
-        </section>
-        <section class="dash-section dash-ev" hidden>
-          <h2 class="tier-heading">EV chargers</h2>
-          <div id="ev-rows" class="tier-rows"></div>
-        </section>
-        <section class="dash-section dash-chp" hidden>
-          <h2 class="tier-heading">CHP</h2>
-          <div id="chp-rows" class="tier-rows"></div>
         </section>
       </div>
       <div id="dispatches" hidden>
@@ -239,9 +170,9 @@
         </p>
       </aside>
       <!-- Floating panels dock. Panels (inspector, formula explorer,
-           Defaults, Report, dashboard formula tree) stack here on the
-           right; each is independently closable and draggable. On the
-           Dashboard subview the dock becomes a docked grid column. -->
+           metrics, Defaults, Report) stack here on the right; each is
+           independently closable and draggable. The dock always
+           floats over the canvas — it never becomes a layout column. -->
       <div id="panel-dock">
         <aside id="inspector" class="float-panel" aria-label="inspector">
           <div id="inspector-drag" class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
@@ -490,21 +421,13 @@
         <ul class="help-list">
           <li>The <em>Microgrids</em> mode opens a card grid of every registered microgrid (one per <code>(make-microgrid …)</code> form, plus any added via the <em>+ New microgrid</em> card or <code>POST /api/microgrids/create</code>).</li>
           <li>The <em>⇪ Import site…</em> card creates a microgrid from a microgrid API site export: pick <code>components.json</code> and <code>connections.json</code> together (connections optional). Rated power bounds, battery capacity, SoC range and the grid's rated fuse current all carry over into the simulation.</li>
-          <li>Clicking a card drills into that microgrid's Dashboard + Topology sub-tabs. The <em>← Microgrids</em> button in the header returns to the list; a small <em>→ name</em> chip on the REPL form shows which microgrid the REPL's evals route to.</li>
+          <li>Clicking a card drills into that microgrid's Topology + Dispatches sub-tabs. The <em>← Microgrids</em> button in the header returns to the list; a small <em>→ name</em> chip on the REPL form shows which microgrid the REPL's evals route to.</li>
           <li>Each microgrid runs its own Microgrid gRPC server on <code>[::1]:&lt;port&gt;</code> (default 8800, 8810, 8820, …). PlatformAssets runs on a single shared port (default 9900).</li>
           <li>Component ids are <em>globally unique</em> across the enterprise — copying a selection from one microgrid and pasting into another (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>V</kbd>) re-creates the structure with fresh ids.</li>
         </ul>
-        <h4>Dashboard</h4>
-        <ul class="help-list">
-          <li><strong>Pool tiles</strong> (top row) — grid, battery pool, PV, consumer, producer. Each tile renders a 15-minute sparkline + the formula tree on click.</li>
-          <li><strong>Battery pool envelope</strong> — lower → upper bounds line under the pool reading, derived from <code>BatteryPool::power_bounds</code>.</li>
-          <li><strong>Battery rows</strong> — each battery row pairs with the inverter it's wired to (looked up via successor edges). Battery cell: name + health + SoC bar + DC W; inverter cell: name + subtype + health + envelope visual (lower / measured / upper). Sort by SoC ascending. Click either cell to flip to Topology with the node selected.</li>
-          <li><strong>PV rows</strong> — solar inverters only, same envelope shape as the inverter half of a battery row.</li>
-          <li><strong>EV / CHP rows</strong> — own section each: name + health + SoC (EV only) + power readout.</li>
-        </ul>
         <h4>Aggregations</h4>
         <ul class="help-list">
-          <li>Pool tiles read from the same <code>frequenz-microgrid</code> client a production control app would use. Click any tile to open the formula tree in its own floating panel — each <code>#N</code> is a link back to the topology canvas.</li>
+          <li>The <em>metrics</em> pill (top-right of the canvas) opens live site metrics — power, reactive power / PF, frequency — read from the same <code>frequenz-microgrid</code> client a production control app would use. The <em>formulas</em> pill next to it shows how each of those aggregates is derived from the topology; every <code>#N</code> in a formula is a link back to the canvas.</li>
           <li>Pulse-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>density</em> + <em>TZ</em> toggle visual options.</li>
         </ul>
         <h4>Snapshots</h4>
@@ -527,7 +450,7 @@
         </ul>
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
-          <li><strong>Inspector</strong> — one of the floating panels on the right, alongside the formula explorer, the metrics panel, Defaults, the Report and the Dashboard's formula tree; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
+          <li><strong>Inspector</strong> — one of the floating panels on the right, alongside the formula explorer, the metrics panel, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in its own floating panel; edits write to <code>enterprise.lisp</code>.</li>
