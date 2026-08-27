@@ -39,27 +39,25 @@ export const gridFrequency = (() => {
       // repeated pattern.
       metricsStore.resetStream("grid_frequency");
       for (const [ts_ms, value] of j.samples || []) {
-        const sample = {
+        metricsStore.applySample({
           stream: "grid_frequency",
           quantity: j.quantity,
           unit: j.unit,
           ts_ms,
           value,
-        };
-        metricsStore.applySample(sample);
+        });
       }
     } catch (_) {}
   }
   function applySample(ev) {
     if (mainId == null || ev.id !== mainId || ev.metric !== "frequency_hz") return;
-    const sample = {
+    metricsStore.applySample({
       stream: "grid_frequency",
       quantity: "Frequency",
       unit: "Hz",
       ts_ms: ev.ts_ms,
       value: ev.value,
-    };
-    metricsStore.applySample(sample);
+    });
   }
   return { applyTopology, applySample, backfill };
 })();

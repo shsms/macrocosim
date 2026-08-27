@@ -217,11 +217,11 @@ async fn rebuild(grpc_url: &str, slot: &SharedMicrogrid, site: &MicrogridSite) {
     build_microgrid(grpc_url, slot, site).await;
 }
 
-/// Build subscriptions for the active-power streams the Dashboard
-/// tier-1 (grid), tier-2 (battery pool), tier-3 (PV), and tier-4
-/// (consumer + producer aggregates) read from, and spawn one tokio
-/// task per surviving subscription to forward samples onto the
-/// MicrogridSite event bus.
+/// Build subscriptions for the aggregate streams the metrics panel
+/// charts — grid, consumer, producer and PV active power, site and
+/// per-source reactive power, and the battery pool's power plus its
+/// bounds envelope — and spawn one tokio task per surviving
+/// subscription to forward samples onto the MicrogridSite event bus.
 ///
 /// Each `formula.subscribe().await` is run on the caller's task so
 /// that, when this function returns, the new LM has already
@@ -232,8 +232,9 @@ async fn rebuild(grpc_url: &str, slot: &SharedMicrogrid, site: &MicrogridSite) {
 ///
 /// Streams whose underlying category is absent (no PV in the
 /// topology, etc.) emit a single `log::info!` and are silently
-/// dropped — the Dashboard's matching tile renders as "data
-/// unavailable" until that category appears.
+/// dropped — no forwarder, so nothing is ever published under that
+/// stream name and the metrics panel's card and chip for it read
+/// "—" until the category appears and a rebuild resubscribes.
 async fn subscribe_power_forwarders(
     microgrid: &mut Microgrid,
     site: &MicrogridSite,

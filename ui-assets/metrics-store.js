@@ -10,10 +10,14 @@ import { isPanelOpen } from "./side-panel.js";
 const PANEL = "metrics-btn";
 const SPARK_LEN = 900;
 
-// Power auto-scale: W → kW → MW etc. via the same ladder the rest of
-// the app reads in (live.js formatScaled, inlined here to keep this
-// module import-light for the node unit tests). The wire unit for
-// reactive power is SI "var"; every readout spells it "VAr".
+// Power auto-scale: W → kW → MW etc. on the same ladder as live.js
+// formatScaled, which cross-references this copy from its own header
+// — the two have to move together. Copied rather than imported for
+// the signature, not for load order: live.js imports nothing, so
+// reaching for it here would be cycle-free, but its helpers take a
+// display unit while every caller of this one holds a raw sample's
+// quantity + wire unit (SI "var", which every readout spells "VAr")
+// and non-power quantities that skip the ladder entirely.
 export function fmtValue(quantity, unit, value) {
   if (value == null || !Number.isFinite(value)) return "—";
   const shown = unit === "var" ? "VAr" : unit;

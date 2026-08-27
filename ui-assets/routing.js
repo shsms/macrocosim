@@ -265,9 +265,9 @@ function applyMode(mode) {
 }
 
 // Jump to the topology subview within the current mode and select
-// `id` on the canvas. Used by the formula explorer's #N refs and the
-// metrics panel. Pushes a history entry so the back button returns
-// the user to where they clicked from.
+// `id` on the canvas. Used by the formula explorer's #N refs.
+// Pushes a history entry so the back button returns the user to
+// where they clicked from.
 export function jumpToTopology(id) {
   navigateTo({ subview: "topology" });
   // An explicit jump always notifies, even when it lands on the node

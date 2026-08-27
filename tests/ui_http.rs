@@ -315,11 +315,11 @@ async fn grid_reactive_formula_converges_over_a_site_with_an_ev_charger() {
         "unexpected grid_reactive_energy stream: {snapshot}"
     );
 
-    // No PV in this site: unlike consumer/producer, the pv formula
-    // doesn't error at build time when the category is absent — the
+    // No PV in this site, and the stream appears anyway: the
     // empty-category formula renders to the literal "0.0" (see
-    // category.rs:182-184 upstream), so pv_reactive_power still shows
-    // up here, deterministically pinned at exactly 0.
+    // category.rs:182-184 upstream) rather than failing to build, so
+    // pv_reactive_power is deterministically pinned at exactly 0.
+    // What the other categories do on an empty site is untested here.
     let pv_entry = &snapshot["pv_reactive_power"];
     let pv_value = pv_entry["value"]
         .as_f64()

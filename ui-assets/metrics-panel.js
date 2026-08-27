@@ -338,7 +338,7 @@ function cardHtml(card) {
        </button>`
     : "";
   return `
-    <section class="mcard fold${open ? " open" : ""}" data-card="${card.key}">
+    <section class="mcard${open ? " open" : ""}" data-card="${card.key}">
       <h3 class="fold-toggle" data-fold-toggle>${card.title}
         <span class="fold-summary"><span data-summary="${card.key}">—</span><span class="fold-chevron">▾</span></span>
       </h3>
