@@ -387,7 +387,13 @@ async function init() {
   // typing remains unaffected.
   document.addEventListener("keydown", (e) => {
     const inEditable = e.target.matches?.("input, textarea, select, [contenteditable]");
-    if (inEditable) return;
+    // …except Esc pressed on a checkbox: the panels are full of them
+    // (the formula explorer is seven), and the in-app help promises
+    // Esc closes a panel. Text fields keep Esc for their own cancel
+    // (the REPL's completion popup, an inspector knob's revert).
+    const escOnCheckbox =
+      e.key === "Escape" && e.target.matches?.('input[type="checkbox"], input[type="radio"]');
+    if (inEditable && !escOnCheckbox) return;
     // The editing shortcuts drive the Topology canvas's selection.
     // Anywhere else they must stay inert — Delete pressed on the
     // Dashboard, the Scenarios mode, or the microgrid list must not

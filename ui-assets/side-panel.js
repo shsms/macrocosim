@@ -28,9 +28,12 @@ function ensurePanel(name) {
     el = document.createElement("aside");
     el.className = "float-panel";
     el.id = `panel-${name}`;
+    // Same landmark label + close hint the static inspector carries.
+    // The chrome-button names end in "-btn"; the label is the panel.
+    el.setAttribute("aria-label", name.replace(/-btn$/, ""));
     el.innerHTML = `
       <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
-      <button class="float-close" type="button" title="Close">×</button>
+      <button class="float-close" type="button" title="Close (Esc)">×</button>
       <div class="panel-content"></div>`;
     document.getElementById("panel-dock").appendChild(el);
     contentEl = el.querySelector(".panel-content");

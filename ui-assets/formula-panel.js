@@ -119,6 +119,9 @@ function teardown() {
   hovered = null;
   formulaText = "";
   lastSelectionKey = "";
+  // Reopening the panel starts back at the grid metric, like the
+  // checkboxes it reopens alongside.
+  metric = "grid";
 }
 
 function renderPanel(contentEl) {

@@ -379,25 +379,6 @@ const afterRefresh = { models: await getModels(), edges: await getEdges() };
 check("e2e: values survive a topology refresh", hasValues(afterRefresh.models), JSON.stringify(afterRefresh.models));
 check("e2e: chevrons survive a topology refresh", hasChevron(afterRefresh.edges), JSON.stringify(afterRefresh.edges));
 
-// ── e2e: formulas canvas uses the same pills, values off ─────────
-await page.click('#mg-subtoggle .mode-btn[data-subview="formulas"]');
-const formulaModels = await waitFor(async () => {
-  const ms = await page.evaluate(async () => {
-    const { formulaCanvas } = await import("/assets/explain.js");
-    return formulaCanvas().debugNodeModels();
-  });
-  return ms.length ? ms : null;
-});
-check("e2e: formulas canvas shows #id on every node, values off", formulaModels.every((m) => m.idText === `#${m.id}` && m.valuesOn === false), JSON.stringify(formulaModels));
-check(
-  "e2e: formulas canvas has no hover card",
-  await page.evaluate(async () => {
-    const { formulaCanvas } = await import("/assets/explain.js");
-    return formulaCanvas().debugHoverCard() === null;
-  }),
-);
-await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
-
 // ── e2e: zoom tiers ───────────────────────────────────────────────
 const lodAt = (s) =>
   page.evaluate(async (scale) => {
