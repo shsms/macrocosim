@@ -901,31 +901,27 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 #drawer-splitter:hover, #drawer-splitter.dragging { background: var(--accent); }
 
 /* ── Floating panels ─────────────────────────────────────────────────
-   The panel dock (right) and the Add-component panel (left) share the
-   `topology` grid cell with the active pane and pin to a side, so they
-   float over the content instead of occupying a docked column. Both
-   are inset cards with elevation; both are hidden until summoned. */
-/* The panel dock overlays the right side of the content cell instead
-   of taking a grid column of its own: opening or closing a panel must
-   never resize the canvas — a double-click's second click would land
-   on a re-fitted, shifted graph. The dock itself is click-through
-   (pointer-events: none); each panel card re-enables hits. The top
-   margin keeps the floating canvas controls clickable above it. */
+   The panel dock and the Add-component panel (left) share the
+   `topology` grid cell with the active pane, so they float over the
+   content instead of occupying a docked column. Both are inset cards
+   with elevation; both are hidden until summoned. */
+/* The panel dock overlays the content cell instead of taking a grid
+   column of its own: opening or closing a panel must never resize the
+   canvas — a double-click's second click would land on a re-fitted,
+   shifted graph. It is a bare positioning context, not a column: each
+   card is absolutely positioned against it, so panels never share a
+   height and one opening cannot shrink another. The dock itself is
+   click-through (pointer-events: none); each card re-enables hits.
+   The margins keep the floating canvas controls clickable above it
+   and give the cards' percentage max-height the viewport-minus-chrome
+   bound they size themselves against. */
 #panel-dock {
   grid-area: topology;
-  justify-self: end;
-  align-self: start;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-height: calc(100% - 58px);
-  max-width: calc(100% - 20px);
-  /* min-height: 0 keeps the dock out of the `topology` row's automatic
-     minimum: with `auto` the stacked cards' full height would grow the
-     1fr row, the percentage max-height would then resolve against the
-     grown row, and the cap would never bite (the panels would run off
-     the bottom of the window). */
+  /* min-height/min-width: 0 keep the dock out of the `topology` cell's
+     automatic minimum, so the percentage max-height below resolves
+     against the row's real size rather than a grown one. */
   min-height: 0;
+  min-width: 0;
   margin: 48px 10px 10px;
   z-index: 7;
   position: relative;
@@ -933,12 +929,25 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 }
 .float-panel {
   display: none;
+  /* Anchored top-right of the dock; side-panel.js cascades and drags
+     each card from there with a transform. */
+  position: absolute;
+  top: 0;
+  right: 0;
   width: 420px;
   max-width: 100%;
-  min-height: 0;
+  /* Bounded by the dock (viewport minus chrome) rather than by the
+     content: a tall panel scrolls inside .panel-content. `resize`
+     lets the user shorten or lengthen it within that bound; the
+     inline height it writes is what side-panel.js persists. */
+  max-height: 100%;
+  min-height: 60px;
+  resize: vertical;
+  /* border-box so the bound above and the height the user resizes to
+     are the card's real height — a content-box card overshoots the
+     dock by its border and reopens 2 px taller every time. */
+  box-sizing: border-box;
   pointer-events: auto;
-  /* The floating × is absolutely positioned inside its own card. */
-  position: relative;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 8px;
