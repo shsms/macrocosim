@@ -57,6 +57,10 @@ output to verify.
 Acceptance: =npm test= passes on a clean checkout in <30 s; one
 flake-free pass over 10 consecutive runs.
 
+Coverage note [2026-08-25]: include the redesigned component inspector
+(docs/superpowers/specs/2026-08-25-inspector-redesign-design.md) —
+its browser-side behaviour ships untested until this harness lands.
+
 *** TODO B2. Scenario flow + REPL interaction tests                 :testing:
 
 Build on B1 to cover the more state-ful flows.
@@ -1607,8 +1611,10 @@ the node-studies artifact) before fixing them. Hysteresis around
 each threshold so panning at the boundary doesn't flicker.
 (Medium. Requested 2026-08-20 after the pill redesign.)
 
-** TODO [#A] Inspector redesign for component selection           :ux:design:
+** DONE [#A] Inspector redesign for component selection           :ux:design:
 :LOGBOOK:
+- State "DONE"       from "INPROGRESS" [2026-08-26 Mi 13:58]
+- State "INPROGRESS" from "TODO"       [2026-08-25 Di 15:00]
 - State "TODO"       from              [2026-08-25 Di 12:14]
 :END:
 
@@ -1632,6 +1638,23 @@ charts, and the setpoint log. Three structural problems to own:
 
 Queue: after the B-section browser-test harness, before the formula
 overlay and dashboard rethink (2026-08-25 gap analysis).
+
+Progress note [2026-08-26]: implemented on branch =inspector-redesign=
+(worktree .worktrees/inspector-redesign) per
+docs/superpowers/specs/2026-08-25-inspector-redesign-design.md and
+docs/superpowers/plans/2026-08-26-inspector-redesign.md — /api/component
+snapshot + KnobChanged WS event server-side; side-panel shell with
+per-tenant teardown, sectioned inspector (Graph/Simulation chips,
+envelope bars with setpoint TTL, edit-in-place knobs, folded charts)
+client-side. cargo test green (481), biome clean. In-browser
+click-through sweep still pending (headless session); browser-test
+coverage parked on B1 as noted there.
+
+Closed [2026-08-26]: merged to main (commits through d8e32f7), plus
+two follow-ups after live use — the module-load TDZ boot fix
+(c6a43cf) and the hybrid state controls (c3cefec: health chips at
+13px, mode/telemetry/commands back to dropdowns). Design mocks
+updated to match.
 
 ** TODO [#A] Formula explorer as an overlay on the topology canvas :ux:design:
 :LOGBOOK:
@@ -1677,3 +1700,15 @@ needs attention", topology answers "browse everything".
 Deliberately LAST in the redesign queue: what belongs in the freed
 space depends on what the new inspector and the formula overlay
 absorb (2026-08-25 gap analysis).
+
+** TODO Site-level controls: site-wide sunlight%, and similar knobs      :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-25 Di 15:57]
+:END:
+
+Came up during the inspector redesign (2026-08-25): a control surface
+for site-wide knobs that today are per-component — e.g. sunlight% across
+all solar inverters at once. Separate from the component inspector;
+likely a site/dashboard panel plus site-level setters. Note the
+existing "Site-level runtime-knob setters accept unregistered ids"
+entry touches the same setter surface.
