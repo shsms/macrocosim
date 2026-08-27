@@ -220,3 +220,84 @@ new streams are additive.
   browser-test harness, as with the inspector and formula panels;
   until then, live verification via the Playwright tooling used for
   the formula-explorer branch.
+
+## Addendum — follow-up fixes (2026-08-27, same branch)
+
+Decisions from the post-implementation review session. Root causes
+were established live (Berlin demo vs the two-meters-under-grid
+formula-test sites) before any of these were designed.
+
+### A. `grid_frequency` becomes a real loopback stream
+
+frequenz-microgrid 0.6.0 — already the locked version — carries the
+Frequency sender arm (`TypedFormulaResponseSender::Frequency`;
+`AcFrequency` is a CoalesceFormula and the crate's own tests call
+`lm.grid::<AcFrequency>()`). The loopback comment claiming frequency
+can't stream is stale. So: a frequency forwarder on
+`lm.grid::<metric::AcFrequency>()` publishes `grid_frequency`
+(quantity "Frequency", unit "Hz", `as_hertz`) onto the same
+latest/history/WS paths as every other stream. Works on any site
+shape — the old `main_meter_id` path required exactly one
+grid → one meter and silently died on multi-feeder sites.
+
+Deleted outright: the chrome.js `gridFrequency` synthesis (backfill
+cap, WS forwarding, `applyTopology`), its call sites in routing.js /
+repl.js / metrics-panel.js, `metricsStore.resetStream` (that feeder
+was its only caller), and `main_meter_id` in the topology payload +
+its test assertion.
+
+### B. Scenario reporter consumes the grid formula streams
+
+The journal's main-meter metrics re-key onto the loopback's
+`grid_power` / `grid_reactive_power` samples, fed from the publish
+path via a site hook (the loopback already holds `&MicrogridSite`).
+`record_sample`'s `main_meter_id` parameter, history.rs's main-meter
+P/Q pass, and `MicrogridSite::main_meter_id()` (with its tests) are
+deleted. P/Q pairing for PF-at-peak keeps the last-seen P in the
+journal and evaluates on Q samples — the same convention the client
+uses.
+
+Report fields rename to match the new meaning: `peak_main_meter_w`
+→ `peak_grid_w`, `peak_main_meter_var` → `peak_grid_var`,
+`main_meter_window_averages` → `grid_window_averages`;
+`main_meter_id` leaves the report. `site_pf_at_peak_var` keeps its
+name. panels.js, swctl, and the scenario/ui_http tests follow.
+
+Accepted trade-offs (explicit): peaks now read the 1 Hz resampled
+formula stream instead of raw telemetry ticks; a ~300 ms
+loopback-rebuild blind window exists after mid-scenario topology
+edits; formula semantics (fabricated 0.0 on silent legs) now apply
+to scenario metrics too.
+
+### C. GCP inspector: Charts card only
+
+For the grid category the inspector renders only the Charts card —
+no Component, Power, or Setpoints cards — and its one chart is the
+site `grid_frequency` stream read from `metricsStore`
+(`backfill()` on build + `subscribe()` for live growth), not the
+GCP's own per-component history: the sim's Grid deliberately
+publishes no telemetry, which is why the old chart was always empty.
+
+### D. Panels are independent floats
+
+`#panel-dock`'s flex column made every open panel share the dock's
+height — opening a second panel shrank the first even when dragged
+elsewhere (drag is a transform; layout still stacked). Open panels
+become absolutely positioned floats in the dock's area: a small
+cascade offset staggers panels that have no stored position, each
+panel's height is viewport-bounded with its own internal scroll, and
+opening/closing one never resizes another.
+
+### E. Drag hygiene
+
+The live drag clamp keeps the grab strip below the header (it could
+previously be dragged under the fixed header and become
+unreachable), and every `openPanel` sanitizes the stored position —
+a position that would put the strip off-screen or under the header
+is clamped back into view and re-persisted.
+
+### F. PF: no change
+
+PF is calculated client-side (|P| / hypot(P, Q)) and works; "PF —"
+appears only at P = Q = 0 where PF is undefined — the idle state of
+the formula-test sites that prompted the report.
