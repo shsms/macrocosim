@@ -110,8 +110,17 @@ async fn scenario_endpoints_round_trip_via_eval() {
     let arr = events["events"].as_array().unwrap();
     assert_eq!(arr[0]["kind"], "note");
 
+    // The report is keyed on the grid formula streams now, so it
+    // carries no meter id at all — the retired main-meter concept.
     let report = json(&client, format!("{}/api/scenario/report", s.ui_url)).await;
-    assert_eq!(report["main_meter_id"], 2);
+    assert!(
+        report.get("main_meter_id").is_none(),
+        "main_meter_id should be retired from the report: {report}"
+    );
+    assert!(
+        report.get("peak_grid_w").is_some(),
+        "report should carry the grid peak: {report}"
+    );
 }
 
 /// A microgrid created over HTTP gets a managed file, and every

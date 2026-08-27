@@ -51,6 +51,25 @@ async fn topology(client: &reqwest::Client, s: &TestServer) -> Value {
         .unwrap()
 }
 
+/// Poll `/api/scenario/report` until `peak_grid_w` reaches `want`
+/// within `tol`, then return it. The peak now rides the microgrid
+/// loopback's `grid_power` formula stream, which resamples at ~1 Hz
+/// off the gRPC telemetry — so a value driven through `/api/eval`
+/// lands a beat later than the caller's manual snapshot, and the
+/// assertion has to wait for it rather than read once. The peak is
+/// monotonic within a run, so waiting can only ever turn a
+/// not-yet-arrived value into the expected one.
+async fn wait_for_peak(client: &reqwest::Client, s: &TestServer, want: f64, tol: f64) -> f64 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let peak = report(client, s).await["peak_grid_w"].as_f64().unwrap();
+        if (peak - want).abs() <= tol || tokio::time::Instant::now() >= deadline {
+            return peak;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn eval_or_panic(client: &reqwest::Client, s: &TestServer, body: &str) {
     let r = client
         .post(format!("{}/api/eval", s.ui_url))
@@ -69,8 +88,8 @@ async fn eval_or_panic(client: &reqwest::Client, s: &TestServer, body: &str) {
 /// `(set-meter-power id (lambda () N))` round-trips through the
 /// HTTP /api/eval boundary, the polymorphic Lisp setter installs
 /// a DynamicScalar source on the meter, and the next physics tick
-/// exposes the resolved value via /api/topology's main-meter peak
-/// once a snapshot fires. Mirrors what the dashboard does when a
+/// exposes the resolved value via the scenario report's grid peak
+/// once the loopback resamples it. Mirrors what the dashboard does when a
 /// scenario edits a curve from the side panel.
 #[tokio::test(flavor = "multi_thread")]
 async fn lambda_meter_power_resolves_through_http_eval() {
@@ -92,9 +111,8 @@ async fn lambda_meter_power_resolves_through_http_eval() {
 
     let topo = topology(&client, &s).await;
     // Telemetry isn't on /api/topology; assert via the report's
-    // main-meter peak instead.
-    let r = report(&client, &s).await;
-    let peak = r["peak_main_meter_w"].as_f64().unwrap();
+    // grid peak instead.
+    let peak = wait_for_peak(&client, &s, 1234.5, 1.0).await;
     assert!(
         (peak - 1234.5).abs() < 1.0,
         "expected ~1234.5 W peak via symbol curve, got {peak} (topo {topo})",
@@ -108,8 +126,7 @@ async fn lambda_meter_power_resolves_through_http_eval() {
         .site()
         .tick_once(now, std::time::Duration::from_millis(100));
     s.config.site().record_history_snapshot(now);
-    let r = report(&client, &s).await;
-    let peak = r["peak_main_meter_w"].as_f64().unwrap();
+    let peak = wait_for_peak(&client, &s, 4321.0, 1.0).await;
     assert!(
         (peak - 4321.0).abs() < 1.0,
         "expected ~4321.0 W peak after symbol mutation, got {peak}",
@@ -124,8 +141,7 @@ async fn lambda_meter_power_resolves_through_http_eval() {
         .site()
         .tick_once(now, std::time::Duration::from_millis(100));
     s.config.site().record_history_snapshot(now);
-    let r = report(&client, &s).await;
-    let peak = r["peak_main_meter_w"].as_f64().unwrap();
+    let peak = wait_for_peak(&client, &s, 9999.0, 1.0).await;
     assert!(
         (peak - 9999.0).abs() < 1.0,
         "expected ~9999 W peak via lambda, got {peak}",
@@ -164,14 +180,6 @@ async fn driver_run_aggregates_peak_charge_and_soc_stats() {
 
     let r = report(&client, &s).await;
 
-    // Peak through the main meter — the inverter is publishing
-    // 3600 W up the stack.
-    let peak = r["peak_main_meter_w"].as_f64().unwrap();
-    assert!(
-        (3000.0..=4000.0).contains(&peak),
-        "expected ~3600 W peak, got {peak}",
-    );
-
     // Battery energy charged ≈ 10 Wh. Tolerance for the seed
     // sample dt at scenario_start.
     let charged = r["total_battery_charged_wh"].as_f64().unwrap();
@@ -200,6 +208,19 @@ async fn driver_run_aggregates_peak_charge_and_soc_stats() {
     let per_battery = r["per_battery"].as_array().unwrap();
     assert_eq!(per_battery.len(), 1);
     assert_eq!(per_battery[0]["id"], 3);
+
+    // Peak through the grid connection point — the inverter is
+    // publishing 3600 W up the stack. Unlike everything above it, this
+    // is not read off `r`: the peak rides the loopback's ~1 Hz
+    // grid_power stream and can lag the already-captured snapshot, so
+    // it is polled fresh. Asserted last only so a failure in the
+    // deterministic energy/SoC checks surfaces without first burning
+    // the poll deadline — `r` is frozen and cannot drift while we wait.
+    let peak = wait_for_peak(&client, &s, 3600.0, 400.0).await;
+    assert!(
+        (3000.0..=4000.0).contains(&peak),
+        "expected ~3600 W peak, got {peak}",
+    );
 
     // Stop freezes elapsed.
     client

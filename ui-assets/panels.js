@@ -710,7 +710,7 @@ export const scenariosPanel = (() => {
     if (!el) return;
     if (!report) { el.innerHTML = ""; return; }
     const rows = [
-      ["peak import", `${(report.peak_main_meter_w / 1000).toFixed(1)} kW`],
+      ["peak import", `${(report.peak_grid_w / 1000).toFixed(1)} kW`],
       ["battery charged", `${report.total_battery_charged_wh.toFixed(0)} Wh`],
       ["battery discharged", `${report.total_battery_discharged_wh.toFixed(0)} Wh`],
       ["PV produced", `${report.total_pv_produced_wh.toFixed(0)} Wh`],

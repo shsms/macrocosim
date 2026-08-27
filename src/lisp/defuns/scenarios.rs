@@ -606,9 +606,9 @@ mod tests {
         );
     }
 
-    /// The report carries the main meter's peak |Q| and the power
-    /// factor at that instant, paired from the same sample — the Q
-    /// twin of `main_meter_peak_tracks_active_power` above.
+    /// The report carries the grid stream's peak |Q| and the power
+    /// factor at that instant, paired against the last P sample — the
+    /// Q twin of `grid_peak_tracks_active_power` above.
     #[test]
     fn report_carries_peak_q_and_pf_at_peak() {
         use chrono::Utc;
@@ -618,14 +618,13 @@ mod tests {
                :successors (list (%make-meter :id 2 :power 3000.0)))",
         );
         cfg.eval("(scenario-start \"pf\")").unwrap();
-        cfg.eval("(set-meter-power 2 3000.0)").unwrap();
-        cfg.eval("(set-meter-reactive-power 2 4000.0)").unwrap();
-        cfg.site().record_history_snapshot(Utc::now());
+        cfg.site().record_grid_power_sample(3000.0, Utc::now());
+        cfg.site().record_grid_reactive_sample(4000.0, Utc::now());
         let r = cfg.site().scenario_report(Utc::now());
         assert!(
-            (r.peak_main_meter_var - 4000.0).abs() < 1e-3,
+            (r.peak_grid_var - 4000.0).abs() < 1e-3,
             "expected peak |Q| ~4000, got {}",
-            r.peak_main_meter_var
+            r.peak_grid_var
         );
         // pf = |P| / sqrt(P^2 + Q^2) = 3000 / 5000 = 0.6.
         let expected_pf = 3000.0f64 / (3000.0f64.powi(2) + 4000.0f64.powi(2)).sqrt();
@@ -1110,46 +1109,39 @@ mod tests {
         assert_eq!(r.per_battery[0].id, 100);
     }
 
-    /// The meter fronting the grid connection point is the scenario
-    /// reporter's peak source — derived from the topology, no flag.
-    /// record_history_snapshot updates the journal's peak each tick;
-    /// scenario_start resets it.
+    /// The reporter's site peak comes from the loopback's grid_power
+    /// formula samples, handed in through the site hook. No loopback
+    /// runs in a stepped config, so the samples are fed directly —
+    /// what matters here is the journal's start/peak semantics.
     #[test]
-    fn main_meter_peak_tracks_active_power() {
+    fn grid_peak_tracks_active_power() {
         use chrono::Utc;
         let (cfg, _dir) = config_with(
             "(%make-grid-connection-point
                :id 1
                :successors (list (%make-meter :id 2 :power 1000.0)))",
         );
-        // Pre-start, sampling shouldn't update the peak — the
+        // Pre-start, samples shouldn't update the peak — the
         // scenario hasn't begun.
-        cfg.site().record_history_snapshot(Utc::now());
-        assert_eq!(
-            cfg.site().scenario_report(Utc::now()).peak_main_meter_w,
-            0.0,
-        );
+        cfg.site().record_grid_power_sample(1000.0, Utc::now());
+        assert_eq!(cfg.site().scenario_report(Utc::now()).peak_grid_w, 0.0);
 
         cfg.eval("(scenario-start \"power\")").unwrap();
-        cfg.eval("(set-meter-power 2 2500.0)").unwrap();
-        cfg.site().record_history_snapshot(Utc::now());
+        cfg.site().record_grid_power_sample(2500.0, Utc::now());
         let r = cfg.site().scenario_report(Utc::now());
-        assert!((r.peak_main_meter_w - 2500.0).abs() < 1e-3);
+        assert!((r.peak_grid_w - 2500.0).abs() < 1e-3);
 
         // A higher value lifts the peak; a later lower one
         // doesn't.
-        cfg.eval("(set-meter-power 2 7800.0)").unwrap();
-        cfg.site().record_history_snapshot(Utc::now());
-        cfg.eval("(set-meter-power 2 1100.0)").unwrap();
-        cfg.site().record_history_snapshot(Utc::now());
+        cfg.site().record_grid_power_sample(7800.0, Utc::now());
+        cfg.site().record_grid_power_sample(1100.0, Utc::now());
         let r = cfg.site().scenario_report(Utc::now());
-        assert!((r.peak_main_meter_w - 7800.0).abs() < 1e-3);
+        assert!((r.peak_grid_w - 7800.0).abs() < 1e-3);
 
         // scenario-start resets the peak.
         cfg.eval("(scenario-start \"again\")").unwrap();
-        cfg.eval("(set-meter-power 2 500.0)").unwrap();
-        cfg.site().record_history_snapshot(Utc::now());
-        assert!((cfg.site().scenario_report(Utc::now()).peak_main_meter_w - 500.0).abs() < 1e-3,);
+        cfg.site().record_grid_power_sample(500.0, Utc::now());
+        assert!((cfg.site().scenario_report(Utc::now()).peak_grid_w - 500.0).abs() < 1e-3,);
     }
 
     /// A second `(scenario-start)` clears the previous run's events

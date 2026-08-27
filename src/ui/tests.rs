@@ -343,24 +343,26 @@ async fn scenario_endpoints_round_trip_lifecycle_and_events() {
 }
 
 #[tokio::test]
-async fn scenario_report_endpoint_returns_main_meter_peak() {
+async fn scenario_report_endpoint_returns_grid_peak() {
     let cfg = config_with(
         "(%make-grid-connection-point
            :id 1
            :successors (list (%make-meter :id 2)))
-         (scenario-start \"smoke\")
-         (set-meter-power 2 4500.0)",
+         (scenario-start \"smoke\")",
     )
     .await;
-    // Drive the sampler so the reporter sees a peak.
-    cfg.site().record_history_snapshot(Utc::now());
+    // The peak rides the loopback's grid_power formula stream. This
+    // fixture serves HTTP without a microgrid loopback, so the sample
+    // is handed to the site hook directly — the same call the
+    // forwarder makes.
+    cfg.site().record_grid_power_sample(4500.0, Utc::now());
 
     let (status, body) = call(cfg, get("/api/scenario/report")).await;
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    // The grid meter (fronting the connection point) is derived as main.
-    assert_eq!(v["main_meter_id"], 2);
-    let peak = v["peak_main_meter_w"].as_f64().unwrap();
+    // No meter id: the main-meter concept is retired from the report.
+    assert!(v.get("main_meter_id").is_none(), "{v}");
+    let peak = v["peak_grid_w"].as_f64().unwrap();
     assert!((peak - 4500.0).abs() < 1e-3, "got peak {peak}");
 }
 

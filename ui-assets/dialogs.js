@@ -175,8 +175,8 @@ function renderScenarioCard(r) {
        ${r.soc_stats.median_pct.toFixed(1)} % median ·
        ${r.soc_stats.mode_pct ?? "—"} % mode`
     : "—";
-  const avgRows = r.main_meter_window_averages.length
-    ? r.main_meter_window_averages
+  const avgRows = r.grid_window_averages.length
+    ? r.grid_window_averages
         .slice(-6)
         .map((w) => {
           const ts = new Date(w.window_start).toISOString().slice(11, 16);
@@ -187,15 +187,15 @@ function renderScenarioCard(r) {
   return `
     <dl class="sc-report-dl">
       <dt>elapsed</dt><dd>${r.scenario_elapsed_s.toFixed(1)} s</dd>
-      <dt>main-meter peak</dt><dd>${fmt(r.peak_main_meter_w)}</dd>
-      <dt>main-meter Q peak</dt><dd>${fmt(r.peak_main_meter_var, "VAr")}</dd>
+      <dt>grid peak</dt><dd>${fmt(r.peak_grid_w)}</dd>
+      <dt>grid Q peak</dt><dd>${fmt(r.peak_grid_var, "VAr")}</dd>
       <dt>site PF at Q peak</dt><dd>${r.site_pf_at_peak_var == null ? "—" : r.site_pf_at_peak_var.toFixed(2)}</dd>
       <dt>battery charge</dt><dd>${fmt(r.total_battery_charged_wh, "Wh")}</dd>
       <dt>battery discharge</dt><dd>${fmt(r.total_battery_discharged_wh, "Wh")}</dd>
       <dt>PV produced</dt><dd>${fmt(r.total_pv_produced_wh, "Wh")}</dd>
       <dt>battery SoC</dt><dd>${soc}</dd>
     </dl>
-    <h3>15-min main-meter averages (last 6)</h3>
+    <h3>15-min grid averages (last 6)</h3>
     <table class="sc-report-tbl">
       <thead><tr><th>window</th><th>avg</th></tr></thead>
       <tbody>${avgRows}</tbody>

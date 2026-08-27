@@ -57,11 +57,6 @@ impl MicrogridSite {
         // not active_power_w) get integrated too.
         let mut battery_samples: Vec<(u64, f32)> = Vec::new();
         let mut pv_samples: Vec<(u64, f32)> = Vec::new();
-        // The main meter's paired (P, Q) sample this pass, fed to the
-        // journal's peak-|Q| tracker below. Computed up front (cheap,
-        // no lock held) so it's available while walking the snapshots.
-        let main_id = self.main_meter_id();
-        let mut main_meter_pq: Option<(f32, f32)> = None;
         // Collect every telemetry snapshot BEFORE taking the
         // histories / CSV write locks: `telemetry()` re-enters
         // `runtime` / `connections` reads, and holding the write
@@ -100,12 +95,6 @@ impl MicrogridSite {
                     }
                     _ => {}
                 }
-                if Some(c.id()) == main_id {
-                    main_meter_pq = Some((
-                        snap.active_power_w.unwrap_or(0.0),
-                        snap.reactive_power_var.unwrap_or(0.0),
-                    ));
-                }
                 if let Some(sink) = csv_sinks.get_mut(&c.id())
                     && let Err(e) = sink.write_row(now, snap)
                 {
@@ -136,25 +125,21 @@ impl MicrogridSite {
                 }
             }
         }
-        // Hand each new sample to the scenario reporter so the
-        // metrics endpoint stays current. Only meaningful while a
-        // scenario is running; the journal short-circuits for
-        // unflagged ids and unwatched metrics. Integrals advance
-        // the cursor at the end so the next snapshot's dt is
-        // measured from now.
+        // Hand the battery / PV integration samples to the scenario
+        // reporter so the metrics endpoint stays current. Only
+        // meaningful while a scenario is running; the journal
+        // short-circuits outside it. The site-level P/Q metrics do
+        // NOT come through here — they ride the UI loopback's grid
+        // formula streams and are fed from its publish path.
+        // Integrals advance the cursor at the end so the next
+        // snapshot's dt is measured from now.
         {
             let mut journal = self.inner.scenario.write();
-            for (id, metric, value) in &emitted {
-                journal.record_sample(*id, *metric, *value, main_id, now);
-            }
             for (id, dc_power_w) in &battery_samples {
                 journal.record_battery_sample(*id, *dc_power_w, now);
             }
             for (id, active_power_w) in &pv_samples {
                 journal.record_pv_sample(*id, *active_power_w, now);
-            }
-            if let Some((p, q)) = main_meter_pq {
-                journal.record_main_meter_pq(p, q);
             }
             journal.advance_sample_cursor(now);
         }

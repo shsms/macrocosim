@@ -17,8 +17,6 @@ use std::collections::{BTreeMap, VecDeque};
 
 use chrono::{DateTime, Utc};
 
-use crate::sim::history::Metric;
-
 /// Cap on the in-memory event ring. A typical scenario fires
 /// dozens of events per minute (component outages, setpoint
 /// responses, milestone markers); 4096 entries covers ~30 minutes
@@ -27,7 +25,7 @@ use crate::sim::history::Metric;
 /// `since=` cursor will see a gap.
 const SCENARIO_EVENT_CAPACITY: usize = 4096;
 
-/// Window length for the main-meter average ring (15 minutes in
+/// Window length for the grid-power average ring (15 minutes in
 /// seconds, UTC-aligned).
 pub(crate) const WINDOW_AVG_LENGTH_S: i64 = 15 * 60;
 
@@ -101,25 +99,32 @@ pub struct ScenarioJournal {
     pub ended_at: Option<DateTime<Utc>>,
     events: VecDeque<ScenarioEvent>,
     next_id: u64,
-    /// Maximum positive active power seen on the main meter since
-    /// the scenario started. Resets on `start`, freezes — like
+    /// Maximum positive active power seen on the loopback's
+    /// `grid_power` formula stream (the LM's site import/export)
+    /// since the scenario started. Resets on `start`, freezes — like
     /// elapsed — once `stop` lands, but keeps absorbing samples
     /// until then. Stored as f64 to match the units the integrals
     /// below use.
-    peak_main_meter_active_w: f64,
-    /// The main meter's (P, Q) pair at the instant of maximum |Q|
+    peak_grid_active_w: f64,
+    /// The grid streams' (P, Q) pair at the instant of maximum |Q|
     /// seen since the scenario started — a PAIRED sample, so the
     /// report can derive power-factor-at-peak-Q without mixing P and
     /// Q from different instants. `None` before `start` or before the
-    /// first main-meter PQ sample; resets on `start`, freezes on
-    /// `stop` like `peak_main_meter_active_w`.
-    peak_main_meter_pq: Option<(f64, f64)>,
+    /// first Q sample that follows a P sample; resets on `start`,
+    /// freezes on `stop` like `peak_grid_active_w`.
+    peak_grid_pq: Option<(f64, f64)>,
+    /// Last `grid_power` sample seen, held so the next
+    /// `grid_reactive_power` sample can be paired with it. P and Q
+    /// arrive on two independent formula streams, so "the same
+    /// instant" is the closest P before this Q. `None` until the
+    /// first P of the run.
+    last_grid_p: Option<f64>,
     /// Per-battery charge / discharge energy integrals since
     /// `scenario_start`. BTreeMap so report ordering is stable.
     per_battery: BTreeMap<u64, BatteryIntegrals>,
     /// Per-solar-inverter produced-energy integrals.
     per_pv: BTreeMap<u64, PvIntegrals>,
-    /// Average main-meter active-power per 15-minute UTC-aligned
+    /// Average grid active-power per 15-minute UTC-aligned
     /// window. Key is the window-start unix timestamp (seconds);
     /// value is `(sum_w, sample_count)` so the report derives the
     /// mean cheaply and additional samples accumulate without
@@ -156,8 +161,9 @@ impl ScenarioJournal {
         self.started_at = Some(now);
         self.ended_at = None;
         self.events.clear();
-        self.peak_main_meter_active_w = 0.0;
-        self.peak_main_meter_pq = None;
+        self.peak_grid_active_w = 0.0;
+        self.peak_grid_pq = None;
+        self.last_grid_p = None;
         self.per_battery.clear();
         self.per_pv.clear();
         self.window_avgs.clear();
@@ -170,64 +176,64 @@ impl ScenarioJournal {
         self.prev_sample_ts = Some(now);
     }
 
-    /// Hand a freshly-recorded telemetry sample to the reporter.
-    /// Skipped before `start` and after `stop`, so the metrics
+    /// Hand one loopback `grid_power` sample (the LM grid formula's
+    /// site import/export) to the reporter: peak-so-far, the
+    /// 15-minute window averages, and the P side of the PF-at-peak
+    /// pair. Skipped before `start` and after `stop`, so the metrics
     /// reflect only the active scenario window. `now` buckets the
-    /// value into a 15-minute UTC-aligned window for the per-
-    /// window average accumulator.
-    pub fn record_sample(
-        &mut self,
-        id: u64,
-        metric: Metric,
-        value: f32,
-        main_meter_id: Option<u64>,
-        now: DateTime<Utc>,
-    ) {
+    /// value into a 15-minute UTC-aligned window for the per-window
+    /// average accumulator. ~1 Hz resampled — coarser than the raw
+    /// telemetry the retired main-meter path read, accepted in the
+    /// spec addendum.
+    pub fn record_grid_power(&mut self, value: f32, now: DateTime<Utc>) {
         if !self.is_running() {
             return;
         }
-        if Some(id) == main_meter_id && metric == Metric::ActivePowerW {
-            let v = value as f64;
-            if v > self.peak_main_meter_active_w {
-                self.peak_main_meter_active_w = v;
-            }
-            let window_start = (now.timestamp() / WINDOW_AVG_LENGTH_S) * WINDOW_AVG_LENGTH_S;
-            let entry = self.window_avgs.entry(window_start).or_insert((0.0, 0));
-            entry.0 += v;
-            entry.1 += 1;
-            while self.window_avgs.len() > WINDOW_AVG_CAPACITY {
-                self.window_avgs.pop_first();
-            }
+        let v = value as f64;
+        if v > self.peak_grid_active_w {
+            self.peak_grid_active_w = v;
         }
+        let window_start = (now.timestamp() / WINDOW_AVG_LENGTH_S) * WINDOW_AVG_LENGTH_S;
+        let entry = self.window_avgs.entry(window_start).or_insert((0.0, 0));
+        entry.0 += v;
+        entry.1 += 1;
+        while self.window_avgs.len() > WINDOW_AVG_CAPACITY {
+            self.window_avgs.pop_first();
+        }
+        self.last_grid_p = Some(v);
     }
 
-    pub fn peak_main_meter_active_w(&self) -> f64 {
-        self.peak_main_meter_active_w
+    pub fn peak_grid_active_w(&self) -> f64 {
+        self.peak_grid_active_w
     }
 
-    /// Feed the main meter's (P, Q) pair from one snapshot pass. Kept
-    /// only while the peak-so-far updates by magnitude of Q, so the
-    /// stored pair is always the P alongside the largest |Q| seen —
-    /// exactly what a PF-at-peak-Q reading needs. No-op outside the
-    /// running window, matching `record_sample`.
-    pub fn record_main_meter_pq(&mut self, p: f32, q: f32) {
+    /// The Q twin: kept only while the |Q|-peak-so-far updates, so the
+    /// stored pair is the last-seen P alongside the largest |Q| —
+    /// exactly what a PF-at-peak-Q reading needs, and the same last-P
+    /// pairing the UI's PF chips use. Q samples arriving before any P
+    /// sample can't form a pair and are skipped. No-op outside the
+    /// running window, matching `record_grid_power`. `now` is taken
+    /// for symmetry with the P side; the pair carries no window of
+    /// its own.
+    pub fn record_grid_reactive(&mut self, value: f32, _now: DateTime<Utc>) {
         if !self.is_running() {
             return;
         }
-        let (p, q) = (p as f64, q as f64);
-        let is_new_peak = match self.peak_main_meter_pq {
+        let Some(p) = self.last_grid_p else { return };
+        let q = value as f64;
+        let is_new_peak = match self.peak_grid_pq {
             Some((_, prev_q)) => q.abs() > prev_q.abs(),
             None => true,
         };
         if is_new_peak {
-            self.peak_main_meter_pq = Some((p, q));
+            self.peak_grid_pq = Some((p, q));
         }
     }
 
     /// The (P, Q) pair at the instant of maximum |Q| since the
-    /// scenario started. `None` before any sample.
-    pub fn peak_main_meter_pq(&self) -> Option<(f64, f64)> {
-        self.peak_main_meter_pq
+    /// scenario started. `None` before any pairable sample.
+    pub fn peak_grid_pq(&self) -> Option<(f64, f64)> {
+        self.peak_grid_pq
     }
 
     /// Compute the integration window for this snapshot relative
@@ -534,19 +540,22 @@ mod tests {
         assert!(j.window_avgs().is_empty());
     }
 
-    /// Main-meter samples bucket into 15-minute UTC-aligned windows.
-    /// Each window accumulates a `(sum, count)` so the report layer
-    /// can derive the mean. First window: (3000+5000+4000)/3 = 4000.
-    /// Second window: (6000+9000)/2 = 7500.
+    /// Grid-power samples bucket into 15-minute UTC-aligned windows,
+    /// and the peak is the largest positive P seen. Each window
+    /// accumulates a `(sum, count)` so the report layer can derive
+    /// the mean. First window: (3000+5000+4000)/3 = 4000. Second
+    /// window: (6000+9000)/2 = 7500.
     #[test]
-    fn window_averages_accumulate_per_bucket() {
+    fn grid_peak_and_windows_track_grid_power_samples() {
         let mut j = ScenarioJournal::default();
         j.start("avg".into(), ts(0));
-        j.record_sample(7, Metric::ActivePowerW, 3000.0, Some(7), ts(100));
-        j.record_sample(7, Metric::ActivePowerW, 5000.0, Some(7), ts(300));
-        j.record_sample(7, Metric::ActivePowerW, 4000.0, Some(7), ts(800));
-        j.record_sample(7, Metric::ActivePowerW, 6000.0, Some(7), ts(900));
-        j.record_sample(7, Metric::ActivePowerW, 9000.0, Some(7), ts(1500));
+        j.record_grid_power(3000.0, ts(100));
+        j.record_grid_power(5000.0, ts(300));
+        j.record_grid_power(4000.0, ts(800));
+        j.record_grid_power(6000.0, ts(900));
+        j.record_grid_power(9000.0, ts(1500));
+
+        assert_eq!(j.peak_grid_active_w(), 9000.0);
 
         let avgs = j.window_avgs();
         assert_eq!(avgs.len(), 2);
@@ -558,17 +567,63 @@ mod tests {
         assert!((sum_b / n_b as f64 - 7500.0).abs() < 1e-6);
     }
 
-    /// Samples on non-main meters and non-active-power metrics
-    /// don't bump the window-average ring.
+    /// The window ring is bounded: past WINDOW_AVG_CAPACITY windows
+    /// the oldest key is evicted, so a multi-day run stays capped.
     #[test]
-    fn window_averages_ignore_non_main_meter() {
+    fn window_averages_evict_the_oldest_past_capacity() {
         let mut j = ScenarioJournal::default();
-        j.start("p".into(), ts(1700000000));
-        j.record_sample(99, Metric::ActivePowerW, 12345.0, Some(7), ts(1700000100));
-        j.record_sample(7, Metric::SocPct, 50.0, Some(7), ts(1700000100));
-        j.record_sample(7, Metric::ActivePowerW, 12345.0, None, ts(1700000100));
+        j.start("cap".into(), ts(0));
+        for w in 0..(WINDOW_AVG_CAPACITY as i64 + 5) {
+            j.record_grid_power(1000.0, ts(w * WINDOW_AVG_LENGTH_S));
+        }
+        let avgs = j.window_avgs();
+        assert_eq!(avgs.len(), WINDOW_AVG_CAPACITY);
+        // The first 5 windows aged out; the oldest retained starts at
+        // window 5.
+        assert_eq!(*avgs.keys().next().unwrap(), 5 * WINDOW_AVG_LENGTH_S);
+    }
 
+    /// The stored PF pair is the last-seen P alongside the largest
+    /// |Q| — a smaller-magnitude Q afterwards doesn't displace it.
+    #[test]
+    fn grid_pq_pairs_last_p_with_peak_q() {
+        let mut j = ScenarioJournal::default();
+        j.start("pf".into(), ts(0));
+        j.record_grid_power(8000.0, ts(100));
+        j.record_grid_reactive(6000.0, ts(101));
+        j.record_grid_power(2000.0, ts(200));
+        j.record_grid_reactive(-1000.0, ts(201)); // |Q| smaller: not a new peak
+        assert_eq!(j.peak_grid_pq(), Some((8000.0, 6000.0)));
+    }
+
+    /// A Q sample arriving before any P sample can't form a pair, so
+    /// it is skipped rather than pairing against a fabricated zero.
+    #[test]
+    fn grid_reactive_without_a_prior_p_forms_no_pair() {
+        let mut j = ScenarioJournal::default();
+        j.start("pf".into(), ts(0));
+        j.record_grid_reactive(6000.0, ts(100));
+        assert_eq!(j.peak_grid_pq(), None);
+    }
+
+    /// Samples outside the running window are dropped, matching the
+    /// integrals — the report covers only the active scenario.
+    #[test]
+    fn grid_samples_ignored_outside_the_running_window() {
+        let mut j = ScenarioJournal::default();
+        // Pre-start.
+        j.record_grid_power(9000.0, ts(100));
+        j.record_grid_reactive(9000.0, ts(101));
+        assert_eq!(j.peak_grid_active_w(), 0.0);
+        assert_eq!(j.peak_grid_pq(), None);
         assert!(j.window_avgs().is_empty());
+
+        j.start("s".into(), ts(200));
+        j.record_grid_power(1000.0, ts(210));
+        j.stop(ts(220));
+        // Post-stop.
+        j.record_grid_power(9000.0, ts(300));
+        assert_eq!(j.peak_grid_active_w(), 1000.0);
     }
 
     fn check(passed: bool, at: DateTime<Utc>) -> ScenarioCheck {

@@ -50,17 +50,21 @@ pub(crate) struct ScenarioReport {
     /// can never be silently attributed to the wrong scenario.
     pub name: Option<String>,
     pub scenario_elapsed_s: f64,
-    pub peak_main_meter_w: f64,
-    /// Maximum |reactive power| seen on the main meter since the
-    /// scenario started — the Q twin of `peak_main_meter_w`, tracked
-    /// by magnitude rather than signed max (Q swings both ways).
-    pub peak_main_meter_var: f64,
-    /// Power factor `|P| / sqrt(P^2 + Q^2)` on the main meter at the
-    /// instant `peak_main_meter_var` was recorded — a paired sample,
-    /// not independently-peaked P and Q. `None` before any main-meter
-    /// PQ sample, or when both P and Q were 0 at that instant.
+    /// Maximum active power seen on the loopback's `grid_power`
+    /// formula stream since the scenario started — the site's
+    /// import peak, resampled at ~1 Hz.
+    pub peak_grid_w: f64,
+    /// Maximum |reactive power| seen on the `grid_reactive_power`
+    /// stream since the scenario started — the Q twin of
+    /// `peak_grid_w`, tracked by magnitude rather than signed max
+    /// (Q swings both ways).
+    pub peak_grid_var: f64,
+    /// Power factor `|P| / sqrt(P^2 + Q^2)` at the grid connection
+    /// point at the instant `peak_grid_var` was recorded — paired
+    /// against the last P sample, not an independently-peaked P.
+    /// `None` before any pairable PQ sample, or when both P and Q
+    /// were 0 at that instant.
     pub site_pf_at_peak_var: Option<f64>,
-    pub main_meter_id: Option<u64>,
     pub total_battery_charged_wh: f64,
     pub total_battery_discharged_wh: f64,
     pub total_pv_produced_wh: f64,
@@ -70,9 +74,9 @@ pub(crate) struct ScenarioReport {
     /// Computed lazily on each report fetch — cheap O(N) over a
     /// handful of batteries. None when no batteries are registered.
     pub soc_stats: Option<SocStats>,
-    /// Per-15-minute UTC-aligned window average of main-meter
-    /// active power. Sorted oldest-first.
-    pub main_meter_window_averages: Vec<WindowAverageEntry>,
+    /// Per-15-minute UTC-aligned window average of grid active
+    /// power. Sorted oldest-first.
+    pub grid_window_averages: Vec<WindowAverageEntry>,
     /// Full-run `(scenario-expect …)` totals. Count every check
     /// even after the detail ring below starts evicting.
     pub checks_passed: u64,
@@ -313,7 +317,7 @@ impl MicrogridSite {
                 }
             })
             .collect();
-        let main_meter_window_averages: Vec<WindowAverageEntry> = g
+        let grid_window_averages: Vec<WindowAverageEntry> = g
             .window_avgs()
             .iter()
             .map(|(secs, (sum, count))| WindowAverageEntry {
@@ -335,13 +339,13 @@ impl MicrogridSite {
         // exists to prevent.
         let name = g.name.clone();
         let scenario_elapsed_s = g.elapsed_s(now);
-        let peak_main_meter_w = g.peak_main_meter_active_w();
-        // The peak-|Q| pair also carries the P at that instant, so PF
-        // is derived from ONE sample rather than independently-peaked
-        // P and Q (which could pair values from different instants).
-        let peak_pq = g.peak_main_meter_pq();
+        let peak_grid_w = g.peak_grid_active_w();
+        // The peak-|Q| pair also carries the P alongside it, so PF is
+        // derived from ONE pairing rather than independently-peaked P
+        // and Q (which could pair values from different instants).
+        let peak_pq = g.peak_grid_pq();
         drop(g);
-        let peak_main_meter_var = peak_pq.map(|(_, q)| q.abs()).unwrap_or(0.0);
+        let peak_grid_var = peak_pq.map(|(_, q)| q.abs()).unwrap_or(0.0);
         let site_pf_at_peak_var = peak_pq.and_then(|(p, q)| {
             let apparent = (p * p + q * q).sqrt();
             (apparent != 0.0).then(|| p.abs() / apparent)
@@ -363,17 +367,16 @@ impl MicrogridSite {
         ScenarioReport {
             name,
             scenario_elapsed_s,
-            peak_main_meter_w,
-            peak_main_meter_var,
+            peak_grid_w,
+            peak_grid_var,
             site_pf_at_peak_var,
-            main_meter_id: self.main_meter_id(),
             total_battery_charged_wh: total_charged,
             total_battery_discharged_wh: total_discharged,
             total_pv_produced_wh: total_pv,
             per_battery,
             per_pv,
             soc_stats,
-            main_meter_window_averages,
+            grid_window_averages,
             checks_passed,
             checks_failed,
             checks,

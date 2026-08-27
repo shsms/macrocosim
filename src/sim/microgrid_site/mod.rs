@@ -25,7 +25,7 @@ use tokio::sync::broadcast;
 
 use crate::sim::EnergyAccum;
 use crate::sim::component::OperationalMode;
-use crate::sim::component::{Category, ComponentHandle, FIRST_AUTO_ID, SimulatedComponent};
+use crate::sim::component::{ComponentHandle, FIRST_AUTO_ID, SimulatedComponent};
 use crate::sim::events::{EVENT_BUS_CAPACITY, SiteEvent};
 use crate::sim::history::ComponentHistory;
 use crate::sim::runtime::{CommandMode, ComponentRuntime, Health, TelemetryMode};
@@ -319,51 +319,19 @@ impl MicrogridSite {
         *self.inner.grid_frequency.write() = Some(freq);
     }
 
-    /// Id of the microgrid's main / point-of-common-coupling meter:
-    /// the meter fronting the grid connection point. Derived from the
-    /// topology — the sole visible child of the single grid connection
-    /// point, when that child is a meter — rather than a hand-set flag,
-    /// mirroring how the microgrid-rs formula engine locates the grid
-    /// meter, so it can never drift from the graph. `None` when the PCC
-    /// meter is absent or ambiguous: no grid, more than one grid, a grid
-    /// with no single child, or a child that isn't a meter (pure-PV /
-    /// pure-battery / off-grid topologies have no grid at all). Duplicate
-    /// edges collapse and hidden children are ignored — they aggregate
-    /// off-graph (`graph_adapter` excludes them) — so neither makes the
-    /// PCC ambiguous.
-    ///
-    /// The scenario reporter tracks this meter's active-power peak, and
-    /// the UI's frequency tile samples its `frequency_hz` history — the
-    /// latter a workaround for frequenz-microgrid 0.5.0's LogicalMeter
-    /// not carrying a `Sample<Frequency>` formula through its actor.
-    pub fn main_meter_id(&self) -> Option<u64> {
-        let by_id = self.inner.by_id.read();
-        let conns = self.inner.connections.read();
-        // Exactly one grid connection point (>1 is an ambiguous PCC).
-        let mut grids = by_id
-            .iter()
-            .filter(|(_, c)| c.category() == Category::Grid)
-            .map(|(id, _)| *id);
-        let grid = grids.next()?;
-        if grids.next().is_some() {
-            return None;
-        }
-        // Its children, distinct and visible: duplicate edges collapse
-        // to the same id, and hidden components don't count. Require
-        // exactly one, and that it's a meter.
-        let mut children = conns
-            .iter()
-            .filter(|(parent, _)| *parent == grid)
-            .map(|(_, child)| *child)
-            .filter(|child| by_id.get(child).is_some_and(|c| !c.is_hidden()));
-        let only = children.next()?;
-        if children.any(|child| child != only) {
-            return None;
-        }
-        by_id
-            .get(&only)
-            .filter(|c| c.category() == Category::Meter)
-            .map(|_| only)
+    /// Feed one loopback grid-formula active-power sample to the
+    /// scenario journal. Called from the UI loopback's publish path —
+    /// the reporter's site metrics read the same microgrid-rs streams
+    /// the metrics panel shows, not a raw meter. Lives on the site so
+    /// the `scenario` lock stays private to this module.
+    pub fn record_grid_power_sample(&self, value: f32, ts: DateTime<Utc>) {
+        self.inner.scenario.write().record_grid_power(value, ts);
+    }
+
+    /// The reactive twin of `record_grid_power_sample`, fed from the
+    /// loopback's `grid_reactive_power` stream.
+    pub fn record_grid_reactive_sample(&self, value: f32, ts: DateTime<Utc>) {
+        self.inner.scenario.write().record_grid_reactive(value, ts);
     }
 
     // ─── Setpoint timeouts ────────────────────────────────────────────
@@ -866,11 +834,10 @@ impl MicrogridSite {
     /// reloaded config sees the same ids the previous load saw,
     /// matching microsim's `(setq comp--id--counter 1000)` behaviour.
     ///
-    /// Reset *also* clears scenario-scoped state (the journal,
-    /// per-component CSV sinks, the main-meter flag) so a hot-reload
-    /// truly starts from scratch — leaving them in place leaked stale
-    /// integrals against gone-and-reborn ids and blocked a reload
-    /// from claiming a *different* meter as main.
+    /// Reset *also* clears scenario-scoped state (the journal and the
+    /// per-component CSV sinks) so a hot-reload truly starts from
+    /// scratch — leaving them in place leaked stale integrals against
+    /// gone-and-reborn ids.
     ///
     /// Grid state is environmental (set by the config's `every`
     /// timer); we deliberately keep it across reloads so the first
@@ -1637,28 +1604,12 @@ mod tests {
     struct Stub {
         id: u64,
         name: String,
-        category: Category,
-        hidden: bool,
     }
     impl Stub {
         fn new(id: u64) -> Self {
             Self {
                 id,
                 name: format!("stub-{id}"),
-                category: Category::Meter,
-                hidden: false,
-            }
-        }
-        fn with_category(id: u64, category: Category) -> Self {
-            Self {
-                category,
-                ..Self::new(id)
-            }
-        }
-        fn hidden(id: u64, category: Category) -> Self {
-            Self {
-                hidden: true,
-                ..Self::with_category(id, category)
             }
         }
     }
@@ -1672,10 +1623,7 @@ mod tests {
             self.id
         }
         fn category(&self) -> crate::sim::Category {
-            self.category
-        }
-        fn is_hidden(&self) -> bool {
-            self.hidden
+            crate::sim::Category::Meter
         }
         fn name(&self) -> &str {
             &self.name
@@ -1883,73 +1831,5 @@ mod tests {
             "scenario journal must reset",
         );
         assert_eq!(w.inner.scenario.read().event_count(), 0);
-    }
-
-    /// The main / point-of-common-coupling meter is derived from the
-    /// topology, not a hand-set flag: it's the sole visible child of the
-    /// grid connection point, and must itself be a meter. It follows the
-    /// graph and is ambiguous (None) if the grid has ≠ 1 distinct child.
-    #[test]
-    fn main_meter_id_is_sole_meter_child_of_grid() {
-        let w = MicrogridSite::new();
-        w.register(Stub::with_category(1, Category::Grid));
-        w.register(Stub::with_category(2, Category::Meter));
-        w.register(Stub::with_category(3, Category::Battery));
-        // No edges yet → nothing fronts the grid.
-        assert_eq!(w.main_meter_id(), None);
-        // grid(1) → meter(2), meter(2) → battery(3): grid's only child
-        // is meter 2, so it's the main meter.
-        w.connect(1, 2);
-        w.connect(2, 3);
-        assert_eq!(w.main_meter_id(), Some(2));
-        // A duplicate grid→meter edge collapses to one distinct child.
-        w.connect(1, 2);
-        assert_eq!(w.main_meter_id(), Some(2));
-        // A second distinct child of the grid makes the PCC ambiguous.
-        w.register(Stub::with_category(4, Category::Battery));
-        w.connect(1, 4);
-        assert_eq!(w.main_meter_id(), None);
-        // Remove the extra child → unambiguous single meter child again.
-        w.disconnect(1, 4);
-        assert_eq!(w.main_meter_id(), Some(2));
-        // Removing the grid re-derives to None with no explicit clearing.
-        w.remove_component(1);
-        assert_eq!(w.main_meter_id(), None);
-    }
-
-    /// A grid whose sole child is not a meter has no PCC meter.
-    #[test]
-    fn main_meter_id_none_when_sole_grid_child_isnt_a_meter() {
-        let w = MicrogridSite::new();
-        w.register(Stub::with_category(1, Category::Grid));
-        w.register(Stub::with_category(2, Category::Battery));
-        w.connect(1, 2);
-        assert_eq!(w.main_meter_id(), None);
-    }
-
-    /// A hidden component wired under the grid aggregates off-graph, so
-    /// it doesn't count as a sibling — the visible meter is still main.
-    #[test]
-    fn main_meter_id_ignores_hidden_grid_child() {
-        let w = MicrogridSite::new();
-        w.register(Stub::with_category(1, Category::Grid));
-        w.register(Stub::with_category(2, Category::Meter));
-        w.register(Stub::hidden(5, Category::Meter));
-        w.connect(1, 2);
-        w.connect(1, 5);
-        assert_eq!(w.main_meter_id(), Some(2));
-    }
-
-    /// More than one grid connection point is an ambiguous PCC → None.
-    #[test]
-    fn main_meter_id_none_with_multiple_grids() {
-        let w = MicrogridSite::new();
-        w.register(Stub::with_category(1, Category::Grid));
-        w.register(Stub::with_category(2, Category::Meter));
-        w.register(Stub::with_category(3, Category::Grid));
-        w.register(Stub::with_category(4, Category::Meter));
-        w.connect(1, 2);
-        w.connect(3, 4);
-        assert_eq!(w.main_meter_id(), None);
     }
 }

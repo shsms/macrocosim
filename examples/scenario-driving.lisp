@@ -17,7 +17,7 @@
 ;; Component ids referenced below match berlin-demo.lisp's pinned
 ;; topology:
 ;;
-;;   id 2    main meter (grid's sole child → derived for peak tracking)
+;;   id 2    main meter (the grid's sole child)
 ;;   id 100  hidden consumer meter (driven by its inline :power lambda)
 ;;   id 200  solar inverter
 ;;   id 1000 battery, 1001 battery-inverter

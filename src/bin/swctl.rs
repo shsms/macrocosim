@@ -1364,7 +1364,7 @@ fn print_report(r: &serde_json::Value, json: bool) {
         format!("{:.2} kWh", v / 1000.0)
     }
     let elapsed = r["scenario_elapsed_s"].as_f64().unwrap_or(0.0);
-    let peak = r["peak_main_meter_w"].as_f64().unwrap_or(0.0);
+    let peak = r["peak_grid_w"].as_f64().unwrap_or(0.0);
     let chg = r["total_battery_charged_wh"].as_f64().unwrap_or(0.0);
     let dchg = r["total_battery_discharged_wh"].as_f64().unwrap_or(0.0);
     let pv = r["total_pv_produced_wh"].as_f64().unwrap_or(0.0);
@@ -1386,7 +1386,7 @@ fn print_report(r: &serde_json::Value, json: bool) {
             }
         }
     }
-    println!("main meter peak      {}", kw(peak));
+    println!("grid peak            {}", kw(peak));
     println!("battery charged      {}", kwh(chg));
     println!("battery discharged   {}", kwh(dchg));
     println!("PV produced          {}", kwh(pv));
@@ -1399,10 +1399,10 @@ fn print_report(r: &serde_json::Value, json: bool) {
             .unwrap_or_else(|| "—".into());
         println!("SoC mean / median / mode  {mean:.1}% / {median:.1}% / {mode}%");
     }
-    if let Some(arr) = r["main_meter_window_averages"].as_array()
+    if let Some(arr) = r["grid_window_averages"].as_array()
         && !arr.is_empty()
     {
-        println!("\n15-min main-meter averages (last 6):");
+        println!("\n15-min grid averages (last 6):");
         for w in arr.iter().rev().take(6).collect::<Vec<_>>().iter().rev() {
             let ts = w["window_start"].as_str().unwrap_or("?");
             let avg = w["avg_w"].as_f64().unwrap_or(0.0);

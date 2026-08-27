@@ -67,7 +67,7 @@ Build on B1 to cover the more state-ful flows.
 
 - Drive a small scenario through =/api/eval= (=(scenario-start
   …)=, =(set-meter-power 100 (lambda () N))=), open the Report
-  panel, assert =peak_main_meter_w= updates within a few
+  panel, assert =peak_grid_w= updates within a few
   polling cycles.
 - REPL: type =(set=, assert the autocomplete popup shows
   =set-meter-power=, Tab inserts it. Type =(=, assert the

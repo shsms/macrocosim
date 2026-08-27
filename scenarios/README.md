@@ -13,7 +13,7 @@ The framework is two layers:
   `(every …)` and `(run-with-timer …)` plus a small set of
   scenario-specific defuns. See `examples/scenario-driving.lisp`.
 - **Reporter** (Rust observer, always running) — accumulates peak
-  main-meter power, battery charge / discharge integrals, PV
+  grid power, battery charge / discharge integrals, PV
   produced energy, SoC stats, and 15-minute window averages.
   Resets on `scenario-start`; freezes on `scenario-stop`.
 
@@ -123,34 +123,28 @@ unchanged.
 | Field                          | Meaning                                                   |
 |--------------------------------|-----------------------------------------------------------|
 | `scenario_elapsed_s`           | seconds since `scenario-start`; frozen on stop            |
-| `peak_main_meter_w`            | max active-power on the main meter so far                 |
-| `peak_main_meter_var`          | max \|reactive-power\| on the main meter so far (tracked by magnitude, not signed max — Q swings both ways) |
-| `site_pf_at_peak_var`          | power factor `\|P\| / sqrt(P² + Q²)` on the main meter at the instant `peak_main_meter_var` was recorded (a paired sample, not independently-peaked P and Q); `null` before any main-meter PQ sample, or when P and Q were both 0 at that instant |
-| `main_meter_id`                | id of the main meter (derived from the topology — see below), or `null` |
+| `peak_grid_w`                  | max active-power on the `grid_power` stream so far         |
+| `peak_grid_var`                | max \|reactive-power\| on the `grid_reactive_power` stream so far (tracked by magnitude, not signed max — Q swings both ways) |
+| `site_pf_at_peak_var`          | power factor `\|P\| / sqrt(P² + Q²)` at the grid connection point at the instant `peak_grid_var` was recorded (paired against the last P sample, not an independently-peaked P); `null` before any pairable PQ sample, or when P and Q were both 0 at that instant |
 | `total_battery_charged_wh`     | sum across batteries; positive DC power → charging        |
 | `total_battery_discharged_wh`  | sum across batteries; negative DC power → discharging     |
 | `total_pv_produced_wh`         | sum across solar inverters; negative active P → produced  |
 | `per_battery`                  | `[{ id, charge_wh, discharge_wh }]`                       |
 | `per_pv`                       | `[{ id, produced_wh }]`                                    |
 | `soc_stats`                    | `{ mean_pct, median_pct, mode_pct }` over current SoCs   |
-| `main_meter_window_averages`   | `[{ window_start, avg_w }]` — average main-meter power per 15-min UTC-aligned window, oldest first, ≤ 96 |
+| `grid_window_averages`         | `[{ window_start, avg_w }]` — average grid power per 15-min UTC-aligned window, oldest first, ≤ 96 |
 | `name`                         | name of the running scenario; `null` before any start     |
 | `checks_passed`                | count of passed `(scenario-expect …)` checks, full run    |
 | `checks_failed`                | count of failed checks, full run                          |
 | `checks`                       | recent check results, oldest first (bounded ring)         |
 
-Peak tracking needs a main / point-of-common-coupling meter, which
-is derived from the topology: the grid connection point's sole child,
-when that child is a meter.
-
-```lisp
-(make-grid-connection-point :id 1
-  :successors (list (make-meter :id 2 :successors …)))
-```
-
-The sample `examples/berlin-demo.lisp` already has this shape. If the grid has no
-child, more than one child, or a single non-meter child, there is no
-unambiguous main meter and peak tracking stays idle.
+The site P/Q metrics ride the microgrid loopback's `grid_power` and
+`grid_reactive_power` formula streams — the same aggregates the UI's
+metrics panel charts — so they follow whatever the microgrid-rs
+formula engine resolves as the grid connection point, on any topology
+shape. Two consequences: the samples are resampled at ~1 Hz rather
+than read off raw telemetry, and a headless stepped run with no
+loopback leaves peak tracking idle.
 
 ## Recording CSVs
 

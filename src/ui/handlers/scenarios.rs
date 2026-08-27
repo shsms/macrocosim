@@ -162,8 +162,8 @@ pub(in crate::ui) async fn scenario_csv_file(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
-/// Aggregate metrics for the running scenario (peak main-meter
-/// power so far, plus future B3/B4 fields). Independent of
+/// Aggregate metrics for the running scenario (peak grid power so
+/// far, energy integrals, SoC stats, checks). Independent of
 /// `/api/scenario/events` so a dashboard can poll metrics
 /// frequently without scanning the whole event log.
 pub(in crate::ui) async fn scenario_report(State(config): State<Config>) -> Json<ScenarioReport> {

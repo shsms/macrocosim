@@ -716,6 +716,21 @@ fn publish_scalar(
         }
         ring.push_back(HistorySample { ts_ms, value });
     }
+    // The scenario reporter's site metrics ride the same two grid
+    // formula streams the panel charts — fed here so the journal
+    // needs no main-meter special case. A gap sample (`None`) carries
+    // nothing to peak or average, and a timestamp outside chrono's
+    // range can't be bucketed, so both are skipped.
+    if let Some(v) = value
+        && matches!(stream, "grid_power" | "grid_reactive_power")
+        && let Some(ts) = chrono::DateTime::from_timestamp_millis(ts_ms)
+    {
+        if stream == "grid_power" {
+            site.record_grid_power_sample(v, ts);
+        } else {
+            site.record_grid_reactive_sample(v, ts);
+        }
+    }
     site.broadcast_microgrid_sample(stream, quantity, unit, ts_ms, value);
 }
 
@@ -829,5 +844,36 @@ mod tests {
     #[test]
     fn grid_reactive_power_has_no_energy_stream() {
         assert_eq!(energy_stream_for("grid_reactive_power"), None);
+    }
+
+    /// Only the two grid streams feed the scenario journal. `pv_power`
+    /// carries watts of the same shape and must leave the peak alone,
+    /// and a gap sample (`None`) on `grid_power` carries nothing to
+    /// record.
+    #[test]
+    fn publish_scalar_feeds_the_journal_from_grid_streams_only() {
+        let state = new_microgrid_slot();
+        let site = MicrogridSite::new();
+        let now = chrono::Utc::now();
+        let ts_ms = now.timestamp_millis();
+        site.scenario_start("filter".into(), now);
+
+        publish_scalar("pv_power", "Power", "W", Some(5000.0), ts_ms, &site, &state);
+        assert_eq!(site.scenario_report(now).peak_grid_w, 0.0);
+
+        publish_scalar("grid_power", "Power", "W", None, ts_ms, &site, &state);
+        assert_eq!(site.scenario_report(now).peak_grid_w, 0.0);
+
+        publish_scalar(
+            "grid_power",
+            "Power",
+            "W",
+            Some(1200.0),
+            ts_ms,
+            &site,
+            &state,
+        );
+        let peak = site.scenario_report(now).peak_grid_w;
+        assert!((peak - 1200.0).abs() < 1e-6, "{peak}");
     }
 }
