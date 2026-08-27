@@ -556,11 +556,31 @@ const reactiveSummary = await waitFor(async () => {
   return t && /VAr/.test(t) ? t : null;
 }, 15000);
 check("e2e: the folded reactive card's fold-summary paints a VAr value", /VAr/.test(reactiveSummary ?? ""), reactiveSummary);
+// The Frequency card is folded by default too (grid_frequency), and
+// the Berlin demo's grid connection point streams it every second.
+const frequencySummary = await waitFor(async () => {
+  const t = await page.evaluate(() => document.querySelector('[data-summary="frequency"]')?.textContent);
+  return t && /Hz/.test(t) ? t : null;
+}, 15000);
+check("e2e: the folded frequency card's fold-summary paints an Hz value", /Hz/.test(frequencySummary ?? ""), frequencySummary);
 const chip = page.locator("#panel-metrics-btn .mchip[data-chip]").first();
 await chip.click();
 check("e2e: clicking a series chip marks it off", await chip.evaluate((el) => el.classList.contains("off")));
 await chip.click();
 check("e2e: clicking it again clears off", await chip.evaluate((el) => !el.classList.contains("off")));
+// Panels are independent floats now, not a stacked column: opening
+// one must never resize a different panel that's already on screen.
+const metricsHeightBefore = await page.evaluate(() => document.getElementById("panel-metrics-btn").getBoundingClientRect().height);
+await page.click("#formula-btn");
+check("e2e: the formula panel opens", await page.evaluate(() => document.getElementById("panel-formula-btn")?.classList.contains("open") === true));
+const metricsHeightAfter = await page.evaluate(() => document.getElementById("panel-metrics-btn").getBoundingClientRect().height);
+check(
+  "e2e: opening the formula panel leaves the metrics panel's height alone",
+  Math.abs(metricsHeightAfter - metricsHeightBefore) <= 2,
+  `${metricsHeightBefore} → ${metricsHeightAfter}`,
+);
+await page.click("#formula-btn");
+check("e2e: the formula panel closes", await page.evaluate(() => document.getElementById("panel-formula-btn")?.classList.contains("open") === false));
 await page.click("#metrics-btn");
 check("e2e: metrics panel closes", await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === false));
 // Negative control: the Dashboard subview is gone outright, not just
@@ -569,6 +589,69 @@ check("e2e: no #dashboard element remains", await page.evaluate(() => document.q
 check(
   "e2e: the subtoggle has no dashboard entry",
   await page.evaluate(() => document.querySelector('#mg-subtoggle [data-subview="dashboard"]') === null),
+);
+
+// ── e2e: a poisoned panel position self-heals on open ──────────────
+// A stored offset from a bygone (larger) window can leave the strip
+// unreachable above the chrome. The stored dx/dy is only read once, when
+// a panel is first created (side-panel.js's ensurePanel/loadPos), so the
+// poison has to survive a reload to matter — same discipline as the
+// values-off persistence check below.
+await page.evaluate(() => localStorage.setItem("sw-panel-pos-metrics-btn", JSON.stringify({ dx: 0, dy: -999 })));
+await page.reload({ waitUntil: "networkidle" });
+await page.click(DEMO_CARD).catch(() => {});
+await page.click("#metrics-btn");
+check(
+  "e2e: the metrics panel reopens after a reload with a poisoned position",
+  await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === true),
+);
+const dockTop = await page.evaluate(() => document.getElementById("panel-dock").getBoundingClientRect().top);
+const stripTop = await page.evaluate(() => document.querySelector("#panel-metrics-btn .panel-drag").getBoundingClientRect().top);
+check(
+  "e2e: a poisoned panel position self-heals to at/below the dock's top edge",
+  stripTop >= dockTop - 1,
+  `strip ${stripTop} vs dock ${dockTop}`,
+);
+await page.click("#metrics-btn");
+await page.evaluate(() => localStorage.removeItem("sw-panel-pos-metrics-btn"));
+
+// ── e2e: the GCP inspector slims to Charts + Connections ───────────
+// The grid connection point (id 1 in the Berlin demo) takes no knobs,
+// no setpoints, and publishes no per-component telemetry — its
+// inspector renders only a Charts card (the site frequency stream,
+// open by default) and Connections, not Component/Power/Setpoints.
+await waitFor(async () => (await getModels()).length > 0, 15000);
+await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([1]);
+});
+await waitFor(async () => (await page.locator("#card-charts canvas").count()) > 0, 10000);
+const gcpCards = await page.evaluate(() => ({
+  charts: Boolean(document.getElementById("card-charts")),
+  component: Boolean(document.getElementById("card-component")),
+  power: Boolean(document.getElementById("card-power")),
+  setpoints: Boolean(document.getElementById("card-setpoints")),
+}));
+check(
+  "e2e: the GCP inspector shows only a Charts card (+ Connections)",
+  gcpCards.charts && !gcpCards.component && !gcpCards.power && !gcpCards.setpoints,
+  JSON.stringify(gcpCards),
+);
+check("e2e: the GCP Charts card mounts a canvas", (await page.locator("#card-charts canvas").count()) > 0);
+await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([]);
+});
+
+// ── e2e: main_meter_id is gone from the per-mg topology payload ────
+const topoPayload = await page.evaluate(async () => {
+  const r = await fetch("/api/mg/2200/topology");
+  return r.json();
+});
+check(
+  "e2e: the per-mg topology payload has no main_meter_id key",
+  !Object.hasOwn(topoPayload, "main_meter_id"),
+  JSON.stringify(Object.keys(topoPayload)),
 );
 
 // ── e2e: the inspector's reactive knobs ──────────────────────────
