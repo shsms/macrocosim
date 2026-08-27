@@ -50,6 +50,27 @@ crates.io, no git rev, no features. The lockfile's duplicate
 Server tests (`src/ui/tests.rs` explained-formula section) update to
 assert on the formula string + error kinds only.
 
+Two knock-on effects of leaving the fork, both accepted:
+
+- **Version unification.** `frequenz-microgrid` (the loopback client
+  whose logical meter feeds `/microgrid/formulas` and the dashboard)
+  requires component-graph `^0.6.0`; today it resolves to a separate
+  crates.io 0.6.0 copy alongside the fork. After the switch both
+  unify to one 0.6.2, so the dashboard's formulas and the explorer's
+  come from the same engine version — a consistency gain.
+- **Formula drift.** The fork's base and 0.6.2 differ beyond explain
+  removal (fallback emission was reworked — e.g.
+  `reached_below`/`outside_feeds` → `reaches_any_below`), so some
+  topologies will render different formula strings after the upgrade.
+  Existing tests assert loosely (`contains("#3")` etc.), so expected
+  churn is small; visible changes in example sites are the upgrade
+  working as intended, not regressions.
+
+Related work note: the unimplemented `formula-engine-versions` spec
+(branch of the same name, design-only) presumes the Formulas subview
+and the fork engine labeled `current` with explain. It needs revision
+before implementation; nothing here blocks on it.
+
 ## 2. One parser module: `ui-assets/formula-ast.js`
 
 `parseFormula` moves out of `formulas.js` into a new `formula-ast.js`,
@@ -72,6 +93,14 @@ The renderer produces, from the parsed AST:
   ports with renames only). Clicking a ref selects on canvas.
 - Call-argument line-breaking as today (short calls inline, long ones
   one arg per line).
+
+Two grammar additions the current parser lacks but 0.6.2 can emit
+(verified against its `Expr::render`): **unary negation** —
+`-(#10 + #11 + #12)` and `-#10` currently fall through to the
+`unknown` node — and the bare **`None`** literal (renders as an
+identifier today; should render as a value and count as "no
+components" for highlighting). Sign tracking treats a negated subtree
+like a subtracted one.
 
 Consumers: the dashboard formula panel (`formulas.js`, which keeps its
 fetch + panel code and drops its private parser/renderer) and the
