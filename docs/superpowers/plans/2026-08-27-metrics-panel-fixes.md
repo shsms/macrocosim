@@ -529,6 +529,75 @@ Signed-off-by: Sahas Subramanian <sahas.subramanian@proton.me>"
 
 ---
 
+### Task 6: Inverter Power card — stop the Q envelope flicker
+
+**Root cause (investigated live + by elimination):** the inspector's Q
+bar lo/hi are fed by WS `reactive_power_*_bound_var` samples (which
+can never be null — only recorded `Some` values are emitted), but
+`applySnapshot` overwrites them with `snap.envelope.reactive`, which
+is null for any component whose CHILDREN expose no Q bounds —
+`reactive_setpoint_envelope` short-circuits on `child_env?` before
+consulting the component's OWN `reactive_bounds()`. Every accepted
+setpoint triggers a snapshot re-fetch, so under a 1 Hz control loop
+the Q graduation (`.env-ends`) empties and refills once a second,
+resizing the panel. The graduation VALUES moving with P is correct
+physics (Q capability derives from P under a PF/apparent cap) and
+stays.
+
+**Files:**
+- Modify: `src/ui/handlers/component.rs` (~217–219: envelope derivation falls back to own bounds)
+- Modify: `ui-assets/inspect.js` (`applySnapshot` ~787–796: preserve live bounds when the snapshot has none)
+- Modify: `ui-assets/style.css` (`.env-ends` row keeps its height when empty)
+- Test: `src/ui/tests.rs` (component-snapshot envelope assertion)
+
+- [ ] **Step 1: Failing test** — in `src/ui/tests.rs`, find the existing `/api/component` snapshot test (grep `envelope`); add/extend: for a battery inverter configured with a reactive capability (e.g. `:reactive-apparent-va`), `envelope.reactive` is non-null and brackets 0 (lo < 0 < hi). Run it red.
+
+- [ ] **Step 2: Server fix** — in `component.rs`, the envelope population becomes "the effective window the UI should draw": setpoint envelope when one exists, else the component's own bounds:
+
+```rust
+        envelope: Envelope {
+            active: envelope_tuple(
+                site.active_setpoint_envelope(id)
+                    .or_else(|| site.get(id).and_then(|c| c.effective_active_bounds())),
+            ),
+            reactive: envelope_tuple(
+                site.reactive_setpoint_envelope(id)
+                    .or_else(|| site.get(id).and_then(|c| c.reactive_bounds())),
+            ),
+        },
+```
+
+(Match the real accessor names — `effective_active_bounds` / `reactive_bounds` per `src/sim/microgrid_site/mod.rs:761/825`; if `site.get` isn't reachable from the handler, add a small site helper instead of widening visibility. The setpoint GATES themselves are untouched — this only changes what the snapshot reports for drawing.)
+
+- [ ] **Step 3: Client hardening** — in `applySnapshot`, a null snapshot envelope must not clobber stream-fed bounds (same preservation the code already applies to `liveVal`):
+
+```js
+  const [rLo, rHi] = snap.envelope?.reactive ?? [null, null];
+  liveState.axes.reactive.lo = rLo ?? prevAxes?.reactive.lo ?? null;
+  liveState.axes.reactive.hi = rHi ?? prevAxes?.reactive.hi ?? null;
+```
+
+  (and the matching two lines on the active axis), updating the now-stale "envelope.reactive is null for every real topology" comment. In `style.css`, give `.env-ends` a `min-height` of one line so an empty ends row no longer changes the card's height (check the rule's current shape first; it may need `1em`/line-height units to match).
+
+- [ ] **Step 4: Verify** — the new test green; full Rust gate; JS gates; live check on a site with an inverter under a 1 Hz setpoint loop (drive one with `(set-active-power …)` from the REPL or a scenario): the Q graduation holds steady while its values track P, and the panel height stays constant across seconds.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/ui/handlers/component.rs src/ui/tests.rs ui-assets/inspect.js ui-assets/style.css
+git commit -m "Keep the inspector's Q envelope steady under setpoint refreshes" -m "The component snapshot now reports the component's own bounds when
+no child exposes any, so the accepted-setpoint re-fetch no longer
+clobbers the stream-fed Q window with null - which emptied and
+refilled the graduation once a second under a control loop and
+resized the panel. The snapshot-null preservation and a fixed-height
+ends row guard the remaining transients; the values still tracking P
+is the capability physics, unchanged.
+
+Signed-off-by: Sahas Subramanian <sahas.subramanian@proton.me>"
+```
+
+---
+
 ## Self-review notes (already applied)
 
 - Spec-addendum coverage: A → Task 1+3, B → Task 2, C → Task 3, D+E → Task 4, F → no task (documentation only); Task 5 pins A/C/D/E behavior.
