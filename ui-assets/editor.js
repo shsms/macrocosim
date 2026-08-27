@@ -81,7 +81,6 @@ export const undoMgr = (() => {
 })();
 
 function snapshotSelection(selectedIds) {
-  const mainId = topology.mainMeterId();
   const components = selectedIds
     .map((id) => topology.get(id))
     .filter(Boolean)
@@ -90,7 +89,6 @@ function snapshotSelection(selectedIds) {
       category,
       subtype,
       hidden: !!hidden,
-      main: id === mainId,
       operational_mode,
     }));
   if (!components.length) return null;
@@ -134,14 +132,14 @@ export async function pasteClipboard() {
   const bindings = snap.components
     .map((c) => {
       const flags = [];
-      // make-meter's `:hidden t` and `:main t` only apply to meters,
-      // but other categories ignore unknown kwargs gracefully — emit
-      // when set so the snapshot round-trips. Sticky for cut+paste
-      // and cross-mg copy+paste; same-mg copy+paste of an existing
-      // `:main` meter will surface a "main meter already set" error
-      // from make-meter, which is the expected guard.
+      // `:hidden t` is accepted by make-meter alone, and the make-*
+      // plists reject unknown keys outright — so emitting it at any
+      // other constructor would be a Lisp error, not a no-op. Safe
+      // unconditionally because a meter is the only component that
+      // can report hidden, so `c.hidden` already implies one. Emitted
+      // when set so the snapshot round-trips: sticky for cut+paste
+      // and cross-mg copy+paste.
       if (c.hidden) flags.push(":hidden t");
-      if (c.main) flags.push(":main t");
       // The operational mode is config, so a clone keeps it.
       if (c.operational_mode && c.operational_mode !== "unspecified") {
         flags.push(`:operational-mode '${c.operational_mode}`);

@@ -103,15 +103,6 @@ export const metricsStore = (() => {
       });
       notify();
     },
-    // Clear one stream's ring (the grid-frequency feeder re-backfills
-    // from outside the /microgrid/history map; without the reset each
-    // panel re-open would append the same history again). The latest
-    // entry stays — the value is still the latest known.
-    resetStream(stream) {
-      const b = buf(stream);
-      b.values.fill(NaN);
-      b.cursor = 0;
-    },
     async backfill() {
       // Past 15 min per stream, server-side, so charts show the
       // trend immediately on panel open instead of growing from

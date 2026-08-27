@@ -8,13 +8,17 @@
 import { escapeHtml, inspectEl } from "./app.js";
 import { evalQuoted, jsToLispString } from "./eval.js";
 import { deadBandW, formatScaled } from "./live.js";
+import { metricsStore } from "./metrics-store.js";
 import { powerColor, reactiveColor } from "./pill.js";
 import { mgPath, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
 import { topology } from "./topology.js";
 
+// Per-component history metrics, keyed by category. No `grid` entry:
+// the sim's Grid publishes no per-component telemetry by design, so
+// the GCP charts the site-wide grid_frequency stream instead — see
+// buildGridFrequencyChart below.
 const CHARTS_BY_CATEGORY = {
-  grid: ["frequency_hz"],
   meter: ["active_power_w", "reactive_power_var"],
   inverter: ["active_power_w", "reactive_power_var"],
   battery: ["soc_pct", "dc_power_w"],
@@ -30,7 +34,6 @@ const CHARTS_BY_CATEGORY = {
 const METRIC_TITLES = {
   active_power_w:     "Active Power",
   reactive_power_var: "Reactive Power",
-  frequency_hz:       "Frequency",
   soc_pct:            "SoC",
   dc_power_w:         "DC Power",
 };
@@ -58,7 +61,11 @@ function chooseScale(quantity, unit, values) {
 // session goes through this module so the surrounding code never
 // has to spell out the "is the right component selected, has the
 // metric been wired" preconditions for the live push paths.
-export const refitCharts = () => liveCharts.refit();
+export const refitCharts = () => {
+  liveCharts.refit();
+  const parent = gridChart?.plot.root.parentElement;
+  if (parent) gridChart.plot.setSize({ width: parent.clientWidth, height: 140 });
+};
 
 export const liveCharts = (() => {
   let active = null; // { id, charts: Map<metric, {plot, xs, ys, scale}> }
@@ -100,6 +107,32 @@ export const liveCharts = (() => {
     },
   };
 })();
+
+// The GCP's one chart is fed by the metrics store, not by the
+// per-component history liveCharts owns, so its cleanup (unsubscribe
+// + destroy) can't live in liveCharts.clear(). It parks here instead,
+// under the same one-active-selection slot discipline, and the node
+// panel's single teardown closure runs both. Read-and-null so a
+// teardown that runs twice — re-render then close — can't drop the
+// store subscription twice or double-destroy the plot.
+let gridChart = null; // { plot, destroy }
+function clearGridChart() {
+  const chart = gridChart;
+  gridChart = null;
+  chart?.destroy();
+}
+
+// Recency guard for the two deferred chart builds, orthogonal to
+// showComponent's `showGen` for the same reason snapshotAliveToken is
+// (see its comment below): closePanel("node") runs the node panel's
+// teardown WITHOUT bumping showGen. A build parked on its history
+// fetch / store backfill would then resolve after the close, pass the
+// unchanged gen check, and install itself with `p.teardown` already
+// null — a uPlot, and for the grid a live metricsStore subscription,
+// that nothing is registered to ever clear. The teardown closure
+// bumps this; each build captures it before its await and treats a
+// change as stale.
+let chartsAliveToken = 0;
 
 // The operational modes a component can be declared with, plus a
 // hover hint each — shared with the topology context menu's bulk
@@ -295,6 +328,14 @@ function renderInspect(d, parentIds, childIds) {
   // this dataset entry rather than a closure — see its comment.
   inspectEl.dataset.inspectId = d.id;
 
+  // The grid connection point is the one category with nothing to
+  // put in Component / Power / Setpoints: the sim's Grid takes no
+  // knobs, accepts no setpoints, and publishes no per-component
+  // telemetry to bound or plot. It gets Charts (the site frequency
+  // stream) + Connections and nothing else, rather than three cards
+  // that would each read blank.
+  const isGrid = d.category === "grid";
+
   // Rename and disconnect rewrite the microgrid's file; on an
   // unmanaged one they are shown but inert, with the reason on
   // hover. Everything below them — modes, health, knobs — is
@@ -352,9 +393,11 @@ function renderInspect(d, parentIds, childIds) {
   // Charts fold summary — just a metric count; the charts themselves
   // aren't fetched until first unfold (see renderNode/buildCharts).
   const metrics = CHARTS_BY_CATEGORY[d.category] || [];
-  const chartsSummary = metrics.length
-    ? `${metrics.length} metric${metrics.length === 1 ? "" : "s"}`
-    : "none";
+  const chartsSummary = isGrid
+    ? "site frequency"
+    : metrics.length
+      ? `${metrics.length} metric${metrics.length === 1 ? "" : "s"}`
+      : "none";
 
   inspectEl.innerHTML = `
     <h2><input id="rename" class="name-input" value="${escapeHtml(d.name)}"${lockAttrs} /></h2>
@@ -365,6 +408,7 @@ function renderInspect(d, parentIds, childIds) {
       <span class="insp-chip insp-augmented" id="insp-augmented" hidden>augmented</span>
     </div>
 
+    ${isGrid ? "" : `
     <div class="insp-card fold" id="card-component" data-card="component">
       <h3 class="fold-toggle" data-fold-toggle>Component<span class="fold-summary"><span class="fold-chevron">▾</span></span></h3>
       <div class="fold-body">
@@ -403,16 +447,19 @@ function renderInspect(d, parentIds, childIds) {
         </div>
       </div>
     </div>
+    `}
 
     <div class="insp-card fold" id="card-charts" data-card="charts">
       <h3 class="fold-toggle" data-fold-toggle>Charts<span class="fold-summary">${chartsSummary}<span class="fold-chevron">▾</span></span></h3>
       <div class="fold-body"><div id="charts"></div></div>
     </div>
 
+    ${isGrid ? "" : `
     <div class="insp-card fold" id="card-setpoints" data-card="setpoints">
       <h3 class="fold-toggle" data-fold-toggle>Setpoints<span class="fold-summary"><span class="fold-chevron">▾</span></span></h3>
       <div class="fold-body"><div id="setpoints-section"></div></div>
     </div>
+    `}
 
     <div class="fold" id="connections-fold">
       <h3 class="fold-toggle" data-fold-toggle>Connections<span class="fold-summary">${parentIds.length} parents · ${childIds.length} children<span class="fold-chevron">▾</span></span></h3>
@@ -508,8 +555,11 @@ function renderInspect(d, parentIds, childIds) {
   // card is open). The Charts card (persisted too, but with a
   // first-unfold chart build) is wired by renderNode below — it
   // needs the render's generation guard, which only renderNode has.
+  // A grid selection renders none of these three, so the lookup is
+  // allowed to come back empty rather than being asserted.
   for (const name of ["component", "power", "setpoints"]) {
     const card = document.getElementById(`card-${name}`);
+    if (!card) continue;
     card.classList.toggle("open", loadCardOpen(name));
     card.querySelector("[data-fold-toggle]").addEventListener("click", () => {
       const open = !card.classList.contains("open");
@@ -974,12 +1024,17 @@ let showGen = 0;
 export function showComponent(d) {
   if (!d) return;
   const gen = ++showGen;
-  // liveCharts.clear() + stopTtlTimer() is the node panel's teardown
-  // — side-panel.js runs the previously registered one before
+  // The three clears below are the node panel's whole teardown —
+  // side-panel.js runs the previously registered one before
   // renderNode paints, so re-selecting a node tears the old node's
-  // charts and timers down first.
+  // charts, store subscription, and timers down first.
   openPanel("node", () => renderNode(d, gen), () => {
+    // The bump IS the teardown for any chart build still parked on
+    // its await — closePanel never touches showGen, so it is the only
+    // signal such a build gets. See chartsAliveToken.
+    chartsAliveToken++;
     liveCharts.clear();
+    clearGridChart();
     stopTtlTimer();
   });
 }
@@ -997,17 +1052,31 @@ async function renderNode(d, gen) {
   // first unfold (folded by default; open state persists across
   // selections via localStorage). `built` guards against wiring the
   // charts twice if the card is folded/unfolded repeatedly.
+  const isGrid = d.category === "grid";
   const chartsFold = document.getElementById("card-charts");
   const chartsContainer = document.getElementById("charts");
   let built = false;
   const buildChartsOnce = async () => {
     if (built) return;
     built = true;
+    // Captured before the await: a reselect moves showGen, a panel
+    // close moves only the token, and either one makes this build's
+    // result stale (see chartsAliveToken).
+    const alive = chartsAliveToken;
+    const stale = () => gen !== showGen || alive !== chartsAliveToken;
+    if (isGrid) {
+      const chart = await buildGridFrequencyChart(chartsContainer);
+      // Destroy here rather than parking a live store subscription in
+      // a slot nothing will ever clear again.
+      if (stale()) chart.destroy();
+      else gridChart = chart;
+      return;
+    }
     const charts = await buildCharts(d, chartsContainer);
-    // A rapid reselect can land after this fetch resolves; bail
-    // without activating the live-push session so a stale node's
-    // charts can't clobber whatever the newer selection is showing.
-    if (gen !== showGen) {
+    // Same discipline: bail without activating the live-push session
+    // so a stale node's charts can't clobber whatever the newer
+    // selection is showing, or outlive a closed panel.
+    if (stale()) {
       for (const ch of charts.values()) ch.plot.destroy();
       return;
     }
@@ -1018,13 +1087,24 @@ async function renderNode(d, gen) {
     .addEventListener("click", () => {
       const open = !chartsFold.classList.contains("open");
       chartsFold.classList.toggle("open", open);
-      saveCardOpen("charts", open);
+      // The grid's fold state stays session-local: the key is shared
+      // across categories, so persisting a fold of the GCP's ONLY
+      // card would silently fold every other component's Charts too.
+      if (!isGrid) saveCardOpen("charts", open);
       if (open) buildChartsOnce();
     });
-  if (loadCardOpen("charts")) {
+  // The grid opens on arrival whatever the shared persisted state
+  // says — its Charts card is the panel's only card, and a GCP that
+  // renders as a single folded header reads as a broken panel.
+  if (isGrid || loadCardOpen("charts")) {
     chartsFold.classList.add("open");
     buildChartsOnce();
   }
+
+  // A grid selection has no Component / Power / Setpoints card to
+  // fill, and the sim's Grid takes neither knobs nor setpoints — so
+  // neither fetch below has anywhere to paint.
+  if (isGrid) return;
 
   // Setpoint events: list recent control-app requests + outcome.
   // Unlike charts this always runs on open — it's cheap, and the
@@ -1035,6 +1115,71 @@ async function renderNode(d, gen) {
   const snapshotP = fetchSnapshot(d.id, gen);
   await renderSetpoints(d.id, document.getElementById("setpoints-section"));
   await snapshotP;
+}
+
+// The grid connection point's single chart. It reads the site-wide
+// `grid_frequency` stream out of the metrics store rather than
+// /api/history, because the sim's Grid publishes no per-component
+// telemetry — the old per-component frequency_hz fetch is exactly
+// what drew an empty chart here. Same source as the metrics panel's
+// Frequency card, and the store is fed by repl.js on every
+// microgrid_sample frame regardless of that panel's open state, so
+// this chart grows live on its own.
+//
+// Returns { plot, destroy }; the caller owns the slot (see
+// gridChart / clearGridChart above).
+async function buildGridFrequencyChart(container) {
+  const slot = document.createElement("div");
+  slot.className = "chart";
+  container.appendChild(slot);
+  // Backfill first so the chart opens on the last 15 min of trend
+  // instead of growing from empty; it is a no-op-ish refresh when
+  // the metrics panel has already pulled it.
+  await metricsStore.backfill();
+  const series = () => {
+    const { xs, ys } = metricsStore.series("grid_frequency", 600);
+    return [xs, ys];
+  };
+  const opts = {
+    width: slot.clientWidth || 280,
+    height: 140,
+    title: "Frequency (site) (Hz)",
+    cursor: { drag: { x: false, y: false } },
+    legend: { show: false },
+    scales: { x: { time: true } },
+    axes: [
+      { stroke: "#7d848e", grid: { stroke: "#353a45", width: 0.5 } },
+      { stroke: "#7d848e", grid: { stroke: "#353a45", width: 0.5 }, size: 60 },
+    ],
+    series: [
+      {},
+      { stroke: "#79b8ff", width: 1.5, points: { show: false }, spanGaps: false },
+    ],
+  };
+  const plot = new uPlot(opts, series(), slot);
+  // The store notifies per sample; coalesce to one repaint a frame so
+  // a burst of streams can't schedule a redraw each. `dead` covers the
+  // frame already queued when teardown lands — unsubscribing stops new
+  // notifications but not a callback that is already in flight, and
+  // setData on a destroyed uPlot throws.
+  let queued = false;
+  let dead = false;
+  const unsub = metricsStore.subscribe(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      if (!dead) plot.setData(series());
+    });
+  });
+  return {
+    plot,
+    destroy() {
+      dead = true;
+      unsub();
+      plot.destroy();
+    },
+  };
 }
 
 // Build the per-metric uPlot charts for `d` into `container` and

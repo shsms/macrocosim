@@ -6,7 +6,7 @@
 // canvas + chrome pulse bar.
 
 import { dispatchesPanel, setStatus } from "./app.js";
-import { gridFrequency, pulseBar } from "./chrome.js";
+import { pulseBar } from "./chrome.js";
 import { refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { closeAllPanels } from "./side-panel.js";
@@ -396,7 +396,6 @@ export async function refreshTopology() {
     // signals + a hot-reload's WS topology_changed nudge
     // already drives a refresh.
     pulseBar.applyTopology(data.components || [], data.graph_status);
-    gridFrequency.applyTopology(data);
   } catch (err) {
     setStatus(`error: ${err.message}`, "error");
   }

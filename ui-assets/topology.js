@@ -11,7 +11,6 @@
 // - topology.fit()               — recenter on the current graph extent
 // - topology.get(id)             — lookup the component object by id
 // - topology.parentsOf / childrenOf / connections / allIds / selectedIds
-// - topology.mainMeterId()       — the meter flagged :main t (if any)
 // - topology.setSelectionHandler — wire showComponent / closePanel to the canvas
 // - topology.highlight(ids, subtractedIds) — temporary highlight (explanation hover)
 // - topology.resetLayout(name) / setSnap / alignSelection / scaleSelection
@@ -192,10 +191,6 @@ export function createGraphCanvas(containerId, adapter = {}) {
   let nodesDS = null;
   let edgesDS = null;
   const componentById = new Map();
-  // Id of the meter currently flagged `:main t` (per the snapshot's
-  // top-level `main_meter_id`). Captured here so copy/paste can
-  // mark the pasted copy as `:main t` when the source meter was.
-  let mainMeterId = null;
   let onSelect = null;
   let onDeselect = null;
   let selectionAtMousedown = [];
@@ -759,7 +754,6 @@ export function createGraphCanvas(containerId, adapter = {}) {
 
   function apply(data) {
     applyCount++;
-    mainMeterId = typeof data.main_meter_id === "number" ? data.main_meter_id : null;
     if (adapter.onApply) adapter.onApply(data);
     const prevIds = new Set(componentById.keys());
     syncLiveMg();
@@ -1379,7 +1373,6 @@ export function createGraphCanvas(containerId, adapter = {}) {
   return {
     apply,
     get: (id) => componentById.get(id),
-    mainMeterId: () => mainMeterId,
     parentsOf: (id) => (network ? network.getConnectedNodes(id, "from") : []),
     childrenOf: (id) => (network ? network.getConnectedNodes(id, "to") : []),
     /// The USER's selection — still reported while highlight() has

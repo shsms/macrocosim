@@ -6,7 +6,6 @@
 // module owns the DOM. Series colors follow the category palette so
 // chart lines mean what the canvas already means.
 
-import { gridFrequency } from "./chrome.js";
 import { fmtValue, metricsStore, pfText, pfValue } from "./metrics-store.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 
@@ -413,7 +412,6 @@ function render(contentEl) {
     for (const c of CARDS) rebuildCard(c.key);
     repaint(contentEl);
   });
-  gridFrequency.backfill();
 }
 
 function teardown() {

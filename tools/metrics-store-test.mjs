@@ -114,9 +114,6 @@ assert.deepEqual(s3.ys, [8, 9, null]);
 const wide = metricsStore.series("grid_power", 20);
 assert.equal(wide.ys.length, 20);
 assert.equal(wide.ys[0], null);
-// resetStream empties the ring but keeps no stale latest ghost.
-metricsStore.resetStream("grid_power");
-assert.deepEqual(metricsStore.series("grid_power", 5).ys, [null, null, null, null, null]);
 
 // ── subscribe ───────────────────────────────────────────────────
 let fired = 0;

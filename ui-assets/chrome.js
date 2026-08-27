@@ -1,66 +1,8 @@
-// Chrome around the SPA's main views: grid-frequency stream feeder
-// (metrics panel), configurable-zone clock, and the always-on pulse
-// bar.
+// Chrome around the SPA's main views: the configurable-zone clock
+// and the always-on pulse bar.
 
-import { metricsStore } from "./metrics-store.js";
 import { mgPath, setupDensityToggle } from "./routing.js";
 
-//
-// frequenz-microgrid 0.4.1's LogicalMeterActor can't carry a
-// Sample<Frequency> formula (see /vagrant/upstream-frequency-
-// formula.md), so the loopback can't drive a grid_frequency
-// microgrid_sample stream. Until upstream lands the fix, we read
-// the main meter's per-component frequency_hz history instead:
-// fetch the most recent sample on panel open, then forward
-// every matching `kind: "sample"` WS frame as a synthetic
-// microgrid_sample so the metrics store's ordinary paint path
-// handles it without a parallel renderer.
-export const gridFrequency = (() => {
-  let mainId = null;
-  function setMainId(id) {
-    mainId = id;
-  }
-  function applyTopology(topo) {
-    if (typeof topo?.main_meter_id === "number") setMainId(topo.main_meter_id);
-    else mainId = null;
-  }
-  async function backfill() {
-    if (mainId == null) return;
-    try {
-      // window_s=600 is the server ring's full depth (10 min) — the
-      // most a re-entry can restore toward the 15-min sparkline.
-      const r = await fetch(
-        `${mgPath("history")}?id=${mainId}&metric=frequency_hz&window_s=600`,
-      );
-      if (!r.ok) return;
-      const j = await r.json();
-      // Fresh ring per backfill — re-opening the metrics panel would
-      // otherwise append the same history again and render a falsely
-      // repeated pattern.
-      metricsStore.resetStream("grid_frequency");
-      for (const [ts_ms, value] of j.samples || []) {
-        metricsStore.applySample({
-          stream: "grid_frequency",
-          quantity: j.quantity,
-          unit: j.unit,
-          ts_ms,
-          value,
-        });
-      }
-    } catch (_) {}
-  }
-  function applySample(ev) {
-    if (mainId == null || ev.id !== mainId || ev.metric !== "frequency_hz") return;
-    metricsStore.applySample({
-      stream: "grid_frequency",
-      quantity: "Frequency",
-      unit: "Hz",
-      ts_ms: ev.ts_ms,
-      value: ev.value,
-    });
-  }
-  return { applyTopology, applySample, backfill };
-})();
 // ─── Clock + TZ toggle ─────────────────────────────────────────────────────
 //
 // switchyard's physics + gRPC boundary speak UTC. The UI displays

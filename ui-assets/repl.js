@@ -4,7 +4,7 @@
 // the log panel.
 
 import { dispatchesPanel, escapeHtml, notify, setStatus } from "./app.js";
-import { gridFrequency, pulseBar } from "./chrome.js";
+import { pulseBar } from "./chrome.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
 import { metricsStore } from "./metrics-store.js";
 import {
@@ -388,7 +388,6 @@ export function openWebSocket(onTopologyChanged) {
       }
       if (ev.kind === "sample") {
         liveCharts.pushSample(ev.id, ev.metric, ev.ts_ms, ev.value);
-        gridFrequency.applySample(ev);
         topology.applySample(ev);
         inspectorLive.applySample(ev);
       } else if (ev.kind === "microgrid_sample") {

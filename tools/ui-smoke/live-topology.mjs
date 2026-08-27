@@ -572,16 +572,15 @@ check(
 );
 
 // ── e2e: the inspector's reactive knobs ──────────────────────────
-// Any visible meter that isn't the main one will do — the demo drives
-// none of their reactive slots, so the knob is the only writer. Read
-// the id off the live topology rather than pinning one here.
+// Any visible meter will do — the demo drives no meter's reactive
+// slot, so the knob is the only writer. Read the id off the live
+// topology rather than pinning one here.
 const meterId = await page.evaluate(async () => {
   const { topology } = await import("/assets/topology.js");
-  const main = topology.mainMeterId();
   return topology
     .allIds()
     .map((id) => topology.get(id))
-    .filter((c) => c && c.category === "meter" && !c.hidden && c.id !== main)
+    .filter((c) => c && c.category === "meter" && !c.hidden)
     .map((c) => c.id)
     .sort((a, b) => a - b)[0];
 });
