@@ -31,10 +31,6 @@ pub(in crate::ui) struct TopologySnapshot {
     /// human-readable error string. The pulse-bar graph pill
     /// flips between ✓ and ⚠ on this field.
     graph_status: Option<String>,
-    /// Id of the derived main / PCC meter (the grid connection point's
-    /// sole meter child), if any. The SPA's Grid-frequency tile pulls
-    /// history from this id.
-    main_meter_id: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -111,6 +107,5 @@ fn topology_snapshot(site: &crate::sim::MicrogridSite) -> TopologySnapshot {
         // status can't answer for the microgrid actually being
         // viewed. Sites are small; the graph build is cheap.
         graph_status: crate::sim::graph_adapter::validation_error(site),
-        main_meter_id: site.main_meter_id(),
     }
 }

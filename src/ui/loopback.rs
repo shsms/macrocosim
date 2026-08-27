@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use frequenz_microgrid::{
     LogicalMeterConfig, LogicalMeterHandle, Microgrid, MicrogridClientHandle, Sample, metric,
-    quantity::{Power, ReactivePower},
+    quantity::{Frequency, Power, ReactivePower},
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
@@ -279,16 +279,21 @@ async fn subscribe_power_forwarders(
             handles.push(h);
         }
     }
-    // Grid frequency via `lm.grid::<metric::AcFrequency>()` would
-    // be the natural way to feed a "Grid frequency" tile, but the
-    // LogicalMeterActor's `TypedFormulaResponseSender` branches only
-    // on Power / Voltage / ReactivePower / Current — calling
-    // `.subscribe()` on the Frequency formula returns `Internal:
-    // Can't create TypedFormulaResponseSender for ...Frequency`.
-    // Still true as of frequenz-microgrid 0.5.0: it declares the
-    // `AcFrequency` metric (a CoalesceFormula) but never wires a
-    // Frequency sender arm. Until that lands, frequency stays on the
-    // per-component /api/history?metric=frequency_hz path.
+    // Site frequency via the grid Frequency formula — a COALESCE over
+    // the meters feeding the PCC, so any site shape works (the old
+    // main-meter workaround required exactly one grid → one meter).
+    // Wired since frequenz-microgrid 0.6.0 added the Frequency
+    // sender arm.
+    if let Some(h) = subscribe_frequency_forwarder(
+        "grid_frequency",
+        lm.grid::<metric::AcFrequency>(),
+        site,
+        state.clone(),
+    )
+    .await
+    {
+        handles.push(h);
+    }
     // BatteryPool takes &mut self for power() / power_bounds() (it
     // caches subscriber refs); build it once and let it go out of
     // scope after both subscriptions resolve.
@@ -501,6 +506,68 @@ fn publish_reactive(
     // No energy hook on purpose: reactive energy (varh) accumulation is
     // out of scope; energy_stream_for never maps this stream.
     publish_scalar(stream, "ReactivePower", "var", value, ts_ms, site, state);
+}
+
+/// Subscribe to the Frequency-valued grid formula and spawn a forwarder that
+/// pushes each `Sample<Frequency>` onto the MicrogridSite event bus as a
+/// `MicrogridSample { stream, quantity: "Frequency", unit: "Hz", ... }`
+/// event. Kept as a third parallel copy alongside `subscribe_power_forwarder`
+/// / `subscribe_reactive_forwarder` for the same reason as the reactive one:
+/// a generic-over-quantity helper would fight the type-level differences
+/// between `Power`, `ReactivePower` and `Frequency` for a single stream's
+/// worth of savings. The `formula.subscribe().await` runs on the caller's
+/// task so the LM has actually registered for the component samples by the
+/// time we return — see `build_microgrid` for why that ordering matters
+/// across rebuilds. Returns `None` (no spawn) if the formula errored at
+/// construction or the initial subscribe failed.
+async fn subscribe_frequency_forwarder(
+    stream: &'static str,
+    formula: Result<frequenz_microgrid::Formula<Frequency>, frequenz_microgrid::Error>,
+    site: &MicrogridSite,
+    state: SharedMicrogrid,
+) -> Option<JoinHandle<()>> {
+    let formula = match formula {
+        Ok(f) => f,
+        Err(e) => {
+            log::info!("microgrid loopback: skip {stream} ({e})");
+            return None;
+        }
+    };
+    let mut rx = match formula.subscribe().await {
+        Ok(rx) => rx,
+        Err(e) => {
+            log::warn!("microgrid loopback: subscribe {stream} failed: {e}");
+            return None;
+        }
+    };
+    let site = site.clone();
+    Some(tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(sample) => publish_frequency(stream, sample, &site, &state),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("microgrid loopback: {stream} lagged {n} samples");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    log::info!("microgrid loopback: {stream} closed; forwarder exiting");
+                    return;
+                }
+            }
+        }
+    }))
+}
+
+fn publish_frequency(
+    stream: &'static str,
+    sample: Sample<Frequency>,
+    site: &MicrogridSite,
+    state: &SharedMicrogrid,
+) {
+    let value = sample.value().map(|q| q.as_hertz());
+    let ts_ms = sample.timestamp().timestamp_millis();
+    // No energy hook: frequency has no cumulative companion stream;
+    // energy_stream_for never maps this stream.
+    publish_scalar(stream, "Frequency", "Hz", value, ts_ms, site, state);
 }
 
 /// The cumulative-energy companion stream for a metered power stream, or

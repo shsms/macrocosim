@@ -392,3 +392,76 @@ async fn per_source_reactive_streams_converge() {
         "unexpected varh stream: {snapshot}"
     );
 }
+
+/// grid_frequency streams via the logical meter's Frequency formula
+/// (a COALESCE over the PCC's meters) — usable since
+/// frequenz-microgrid 0.6.0 wired the Frequency sender arm. The
+/// topology here hangs TWO meters under the grid: the shape where
+/// the old main-meter workaround returned None and the frequency
+/// stream silently died. The topology payload also no longer
+/// carries the retired main_meter_id flag.
+#[tokio::test(flavor = "multi_thread")]
+async fn grid_frequency_streams_on_a_multi_feeder_site() {
+    let topology = r#"
+(%make-grid-connection-point :id 1
+    :successors
+    (list (%make-meter :id 2
+                        :successors
+                        (list (%make-solar-inverter :id 3)))
+          (%make-meter :id 4
+                       :successors
+                       (list (%make-battery-inverter :id 5
+                                                       :successors
+                                                       (list (%make-battery :id 6)))))))
+"#;
+    let s = TestServer::start(topology).await;
+    let client = reqwest::Client::new();
+
+    let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
+    let id = mgs
+        .as_array()
+        .expect("microgrids array")
+        .first()
+        .expect("one microgrid")["id"]
+        .as_u64()
+        .expect("microgrid id");
+
+    let topo = json(&client, format!("{}/api/mg/{id}/topology", s.ui_url)).await;
+    assert!(
+        topo.get("main_meter_id").is_none(),
+        "main_meter_id should be retired from the payload: {topo}"
+    );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let snapshot = loop {
+        let body = json(
+            &client,
+            format!("{}/api/mg/{id}/microgrid/latest", s.ui_url),
+        )
+        .await;
+        let converged = body["grid_frequency"]["value"]
+            .as_f64()
+            .is_some_and(|v| v.is_finite());
+        if converged || tokio::time::Instant::now() >= deadline {
+            break body;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    let entry = &snapshot["grid_frequency"];
+    let hz = entry["value"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("grid_frequency never converged: {snapshot}"));
+    // The OU frequency model mean-reverts around 50 Hz; anything in a
+    // generous grid band proves real data, not a fabricated zero.
+    assert!(
+        (45.0..=55.0).contains(&hz),
+        "implausible Hz {hz}: {snapshot}"
+    );
+    assert_eq!(entry["quantity"], "Frequency", "{snapshot}");
+    assert_eq!(entry["unit"], "Hz", "{snapshot}");
+    assert!(
+        snapshot.get("grid_frequency_energy").is_none(),
+        "unexpected energy companion: {snapshot}"
+    );
+}
