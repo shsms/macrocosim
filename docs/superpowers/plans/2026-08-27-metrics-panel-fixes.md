@@ -472,6 +472,7 @@ Signed-off-by: Sahas Subramanian <sahas.subramanian@proton.me>"
 3. **Drag clamp:** during drag, the grab strip cannot go under the fixed header — clamp `dy` so the strip's top stays at or below the header's bottom edge (measure the header at drag start, don't hardcode 48) — nor off the other three viewport edges (keep the existing 80 px horizontal margins).
 4. **Open-time sanitize:** `openPanel` measures the panel after render; if the strip would sit above the header's bottom, below the viewport, or horizontally off-screen, clamp the stored `(dx, dy)` back into view and persist the corrected value. A user who dragged a panel into an unreachable spot gets it back on the next toggle.
 5. The inspector's static `#inspector` panel participates identically (it is just another `.float-panel`).
+6. **Height resize (user request, added mid-run):** each panel's height is user-resizable — CSS `resize: vertical` on the panel (or a bottom drag edge if `resize` fights the layout), bounded by `min-height` (~drag strip + a row) and the viewport `max-height`. The chosen height persists per panel (`sw-panel-size-<name>`, same try/catch discipline as positions), is restored on open, and is sanitized with the position (a stored height taller than the viewport clamps down). Content keeps scrolling inside `.panel-content`.
 
 Keep the diff minimal — this is a layout change plus two clamps, not a shell rewrite. Update the side-panel.js header comment and the style.css dock comment (they describe the column dock).
 
