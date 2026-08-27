@@ -1,135 +1,15 @@
 // Formula side panel + dashboard tile tooltips. The graph crate's
 // `*_formula()` accessors return a rendered string like
 //   MAX(#2 - COALESCE(#1002, #1001, 0.0), 0.0)
-// — parseFormula chews that into an AST and formulaToHtml renders
-// nested HTML with each `#N` as a clickable link back to the
-// topology canvas. loadFormulas / setupFormulaTileClicks wire up
-// the dashboard tile titles + the click → openFormulaPanel
-// handoff.
+// — parseFormula (in formula-ast.js) chews that into an AST and
+// formulaToHtml renders nested HTML with each `#N` as a clickable
+// link back to the topology canvas. loadFormulas /
+// setupFormulaTileClicks wire up the dashboard tile titles + the
+// click → openFormulaPanel handoff.
 
-import { escapeHtml, inspectEl, jumpToTopology, mgPath } from "./app.js";
+import { inspectEl, jumpToTopology, mgPath } from "./app.js";
+import { formulaToHtml, parseFormula } from "./formula-ast.js";
 import { openPanel } from "./side-panel.js";
-
-// Parses a graph-crate-rendered formula like
-//   MAX(#2 - COALESCE(#1002, #1001, 0.0), 0.0)
-// into an AST: { kind: "op" | "call" | "ref" | "num", ... }. Used by
-// the formula inspector (F4 stage 2) to pretty-print the formula
-// with each #N as a clickable link to the topology canvas. Hand-
-// rolled recursive descent — the grammar is tiny (numbers, refs,
-// + - * /, function calls) and a parser library would dwarf it.
-function parseFormula(src) {
-  let i = 0;
-  const skipWs = () => {
-    while (i < src.length && /\s/.test(src[i])) i++;
-  };
-  const peek = () => {
-    skipWs();
-    return src[i];
-  };
-  const match = (re) => {
-    skipWs();
-    const m = src.slice(i).match(re);
-    if (m && m.index === 0) {
-      i += m[0].length;
-      return m[0];
-    }
-    return null;
-  };
-  function expr() {
-    let left = mul();
-    while (peek() === "+" || peek() === "-") {
-      const op = src[i++];
-      left = { kind: "op", op, left, right: mul() };
-    }
-    return left;
-  }
-  function mul() {
-    let left = atom();
-    while (peek() === "*" || peek() === "/") {
-      const op = src[i++];
-      left = { kind: "op", op, left, right: atom() };
-    }
-    return left;
-  }
-  function atom() {
-    skipWs();
-    if (src[i] === "(") {
-      i++;
-      const e = expr();
-      skipWs();
-      if (src[i] === ")") i++;
-      return { kind: "paren", inner: e };
-    }
-    if (src[i] === "#") {
-      i++;
-      const m = match(/^\d+/);
-      return { kind: "ref", id: Number(m) };
-    }
-    const num = match(/^-?\d+(\.\d+)?([eE][-+]?\d+)?/);
-    if (num != null) return { kind: "num", value: Number(num) };
-    const ident = match(/^[A-Za-z_][A-Za-z0-9_]*/);
-    if (ident) {
-      skipWs();
-      if (src[i] === "(") {
-        i++;
-        const args = [];
-        skipWs();
-        while (src[i] != null && src[i] !== ")") {
-          args.push(expr());
-          skipWs();
-          if (src[i] === ",") {
-            i++;
-            continue;
-          }
-          break;
-        }
-        if (src[i] === ")") i++;
-        return { kind: "call", name: ident, args };
-      }
-      return { kind: "ident", name: ident };
-    }
-    return { kind: "unknown", text: src.slice(i) };
-  }
-  return expr();
-}
-
-// Render a parsed formula AST as nested HTML. Each #N ref becomes a
-// .formula-ref span carrying data-id so a delegated click handler
-// can flip to Topology mode + select. Function calls (COALESCE /
-// MAX / MIN / etc.) break onto their own lines when they contain
-// more than two args, mirroring how prettier-style formatters wrap
-// long arg lists; everything else stays inline so a short formula
-// like `#2` doesn't expand to four lines for one ref.
-function formulaToHtml(node) {
-  function rec(n) {
-    switch (n.kind) {
-      case "ref":
-        return `<span class="formula-ref" data-id="${n.id}" title="select component ${n.id}">#${n.id}</span>`;
-      case "num":
-        return `<span class="formula-num">${n.value}</span>`;
-      case "ident":
-        return `<span class="formula-ident">${escapeHtml(n.name)}</span>`;
-      case "paren":
-        return `(${rec(n.inner)})`;
-      case "op":
-        return `${rec(n.left)} <span class="formula-op">${n.op}</span> ${rec(n.right)}`;
-      case "call": {
-        const args = n.args.map(rec);
-        const head = `<span class="formula-call">${escapeHtml(n.name)}</span>`;
-        if (args.length <= 2 && n.args.every((a) => a.kind === "ref" || a.kind === "num")) {
-          return `${head}(${args.join(", ")})`;
-        }
-        const indented = args
-          .map((a) => `  <div class="formula-arg">${a}</div>`)
-          .join("");
-        return `${head}(\n${indented})`;
-      }
-      default:
-        return `<span class="formula-raw">${escapeHtml(n.text || "")}</span>`;
-    }
-  }
-  return rec(node);
-}
 
 // Open the formula tree for the given stream in the inspector. Re-uses
 // the inspector (same pattern as
