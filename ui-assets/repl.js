@@ -13,6 +13,7 @@ import {
   pvRows,
 } from "./dashboard.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
+import { metricsStore } from "./metrics-store.js";
 import {
   COMPLETIONS,
   indentForNewline,
@@ -402,7 +403,10 @@ export function openWebSocket(onTopologyChanged) {
         topology.applySample(ev);
         inspectorLive.applySample(ev);
       } else if (ev.kind === "microgrid_sample") {
+        // Double-feed while both readers live: the Dashboard's tiles
+        // and the metrics panel's store keep their own rings.
         dashboardTiles.applySample(ev);
+        metricsStore.applySample(ev);
       } else if (ev.kind === "topology_changed") {
         onTopologyChanged(ev.version);
       } else if (ev.kind === "setpoint") {

@@ -31,6 +31,7 @@ import {
 } from "./formula-panel.js";
 import { setupFormulaTileClicks } from "./formulas.js";
 import { setupInspectorChips, showComponent } from "./inspect.js";
+import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { backfillLogs, openWebSocket, setupRepl } from "./repl.js";
 import {
@@ -448,6 +449,7 @@ async function init() {
   setupModeToggle();
   setupReplMgChip();
   setupFormulaTileClicks();
+  setupMetricsPanel();
   scenariosPanel.setup();
   dispatchesPanel.setup();
   await clockState.init();
@@ -492,6 +494,7 @@ async function init() {
     topologyBackfillTimer = setTimeout(() => {
       topologyBackfillTimer = null;
       dashboardTiles.backfill();
+      metricsTopologyRefresh();
       if (topologyBackfillPending) {
         topologyBackfillPending = false;
         armTopologyBackfill();

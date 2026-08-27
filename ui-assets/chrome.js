@@ -2,6 +2,7 @@
 // configurable-zone clock, and the always-on pulse bar.
 
 import { dashboardTiles } from "./dashboard.js";
+import { metricsStore } from "./metrics-store.js";
 import { mgPath, setupDensityToggle } from "./routing.js";
 
 //
@@ -35,28 +36,34 @@ export const gridFrequency = (() => {
       const j = await r.json();
       // Fresh ring per backfill — re-entering the dashboard would
       // otherwise append the same history again and render a falsely
-      // repeated pattern.
+      // repeated pattern. Both readers (Dashboard tiles, metrics
+      // panel store) keep their own ring, so both get reset and fed.
       dashboardTiles.resetStream("grid_frequency");
+      metricsStore.resetStream("grid_frequency");
       for (const [ts_ms, value] of j.samples || []) {
-        dashboardTiles.applySample({
+        const sample = {
           stream: "grid_frequency",
           quantity: j.quantity,
           unit: j.unit,
           ts_ms,
           value,
-        });
+        };
+        dashboardTiles.applySample(sample);
+        metricsStore.applySample(sample);
       }
     } catch (_) {}
   }
   function applySample(ev) {
     if (mainId == null || ev.id !== mainId || ev.metric !== "frequency_hz") return;
-    dashboardTiles.applySample({
+    const sample = {
       stream: "grid_frequency",
       quantity: "Frequency",
       unit: "Hz",
       ts_ms: ev.ts_ms,
       value: ev.value,
-    });
+    };
+    dashboardTiles.applySample(sample);
+    metricsStore.applySample(sample);
   }
   return { applyTopology, applySample, backfill };
 })();
