@@ -29,6 +29,7 @@ from .build import (
     meter,
     raw,
     solar_inverter,
+    steam_boiler,
     to_lisp_atom,
 )
 from .enums import CommandMode, Health, Metric, Schedule, TelemetryMode
@@ -88,6 +89,7 @@ __all__ = [
     "battery",
     "ev_charger",
     "chp",
+    "steam_boiler",
     "raw",
     "RawLisp",
     "to_lisp_atom",

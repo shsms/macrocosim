@@ -146,6 +146,7 @@ def test_public_constructors_exported() -> None:
         "battery",
         "ev_charger",
         "chp",
+        "steam_boiler",
         "raw",
         "Microgrid",
     ):
@@ -210,3 +211,19 @@ def test_builders_cover_every_server_arg() -> None:
     assert "rated" not in inspect.signature(sw.chp).parameters
     chp_lisp = sw.chp(id=7, stream_jitter_pct=Percentage.from_percent(2)).to_lisp()
     assert ":stream-jitter-pct 2.0" in chp_lisp
+
+
+def test_steam_boiler_renders_rated_and_physics_kwargs() -> None:
+    c = sw.steam_boiler(
+        id=7,
+        rated=(Power.from_watts(0), Power.from_watts(100_000)),
+        target_bar=6.0,
+        max_bar=9.0,
+        demand_kg_h=40.0,
+    )
+    text = c.to_lisp()
+    assert "make-steam-boiler" in text
+    assert ":rated-upper 100000.0" in text
+    assert ":target-bar 6.0" in text
+    assert ":max-bar 9.0" in text
+    assert ":demand 40.0" in text

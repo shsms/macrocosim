@@ -79,7 +79,7 @@ mg = sw.Microgrid(id=1, topology=sw.grid(id=1, successors=[
 ```
 
 Constructors: `grid`, `meter`, `battery_inverter`, `solar_inverter`,
-`battery`, `ev_charger`, `chp`. Kwargs mirror the plist keys
+`battery`, `ev_charger`, `chp`, `steam_boiler`. Kwargs mirror the plist keys
 (`snake_case` → `:kebab-case`): `rated=(lo, hi)` `Power` bounds, `capacity`
 an `Energy`, `initial_soc` / `sunlight` a `Percentage`; `sw.raw("(lambda () …)")`
 splices Lisp.

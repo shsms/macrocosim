@@ -112,7 +112,7 @@ def _normalize(kwargs: Mapping[str, Value | None]) -> dict[str, Value]:
     Only the convenience *key* renames live here; value conversion is
     :func:`to_lisp_atom`'s job, at emit time.
     """
-    renames = {"sunlight": "sunlight%"}
+    renames = {"sunlight": "sunlight%", "demand_kg_h": "demand"}
     out: dict[str, Value] = {}
     for key, value in kwargs.items():
         if value is None:
@@ -678,6 +678,48 @@ def chp(
         **extra,
     }
     return _component("make-chp", args, cls=Component)
+
+
+def steam_boiler(
+    *,
+    id: int | None = None,
+    name: str | None = None,
+    rated: tuple[Power, Power] | None = None,
+    target_bar: float | None = None,
+    max_bar: float | None = None,
+    initial_bar: float | None = None,
+    capacity_wh_per_bar: float | None = None,
+    wh_per_kg: float | None = None,
+    demand_kg_h: float | None = None,
+    stream_jitter_pct: Percentage | None = None,
+    health: Health | None = None,
+    telemetry_mode: TelemetryMode | None = None,
+    command_mode: CommandMode | None = None,
+    **extra: Value,
+) -> Component:
+    """A steam boiler (leaf). Pressure-driven: it holds a steam pressure in
+    bar between ``0`` and ``max_bar``, tracks toward ``target_bar``, and
+    ``demand_kg_h`` of steam draw converts to heat loss via ``wh_per_kg``.
+
+    ``capacity_wh_per_bar`` is the thermal mass expressed as watt-hours per
+    bar of pressure change; ``initial_bar`` seeds the starting pressure.
+    """
+    args = {
+        "id": id,
+        "name": name,
+        "target_bar": target_bar,
+        "max_bar": max_bar,
+        "initial_bar": initial_bar,
+        "capacity_wh_per_bar": capacity_wh_per_bar,
+        "wh_per_kg": wh_per_kg,
+        "demand_kg_h": demand_kg_h,
+        "stream_jitter_pct": stream_jitter_pct,
+        "health": health,
+        "telemetry_mode": telemetry_mode,
+        "command_mode": command_mode,
+        **extra,
+    }
+    return _component("make-steam-boiler", args, rated=rated, cls=Component)
 
 
 def _emit_topology(topology: Topology) -> str:
