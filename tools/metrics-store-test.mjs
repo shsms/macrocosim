@@ -48,7 +48,7 @@ globalThis.fetch = () => new Promise(() => {});
 // boot-smoke uses, so the cycle resolves in the same safe order.
 await import(new URL("../ui-assets/app.js", import.meta.url));
 
-const { metricsStore, fmtValue, pfValue, pfText } = await import(
+const { metricsStore, latestSecond, fmtValue, pfValue, pfText } = await import(
   new URL("../ui-assets/metrics-store.js", import.meta.url)
 );
 
@@ -76,7 +76,13 @@ assert.equal(fmtValue("Frequency", "Hz", 50.0171), "50.02 Hz");
 assert.equal(fmtValue("Power", "W", null), "—");
 
 // ── ring + series windowing ─────────────────────────────────────
+// The ring is keyed by each sample's own server second (second % 900),
+// not by a push cursor, so a window is a straight count of consecutive
+// seconds ending at an anchor: xs are always 1 s apart and absolute,
+// and a second with no sample reads as a null y rather than being
+// compacted away.
 const t0 = 1_700_000_000_000;
+const sec0 = t0 / 1000;
 for (let i = 0; i < 10; i++) {
   metricsStore.applySample({
     stream: "grid_power",
@@ -94,13 +100,15 @@ assert.deepEqual(metricsStore.latest("grid_power"), {
 const s5 = metricsStore.series("grid_power", 5);
 assert.equal(s5.xs.length, 5);
 assert.equal(s5.ys.length, 5);
-// Newest-last, values 5..9; older slots fell outside the window.
+// Newest-last, values 5..9; older seconds fell outside the window.
 assert.deepEqual(s5.ys, [5, 6, 7, 8, 9]);
-// xs are 1 Hz apart, monotonically increasing.
+// xs are the absolute seconds those samples carried: 1 s apart,
+// increasing, and ending on the newest second stored.
+assert.deepEqual(s5.xs, [sec0 + 5, sec0 + 6, sec0 + 7, sec0 + 8, sec0 + 9]);
 for (let i = 1; i < s5.xs.length; i++) {
-  assert.ok(Math.abs(s5.xs[i] - s5.xs[i - 1] - 1) < 1e-9);
+  assert.equal(s5.xs[i] - s5.xs[i - 1], 1);
 }
-// A null-value sample lands as a null gap.
+// A null-value sample still claims its second, and reads as a gap.
 metricsStore.applySample({
   stream: "grid_power",
   quantity: "Power",
@@ -110,10 +118,100 @@ metricsStore.applySample({
 });
 const s3 = metricsStore.series("grid_power", 3);
 assert.deepEqual(s3.ys, [8, 9, null]);
-// A window wider than the ring's fill pads the front with nulls.
+// A window wider than the stream's history pads the front with
+// nulls, and every x is still finite and 1 s-spaced — uPlot binary-
+// searches xs, so they have to be sorted and gap-free.
 const wide = metricsStore.series("grid_power", 20);
 assert.equal(wide.ys.length, 20);
 assert.equal(wide.ys[0], null);
+for (let i = 1; i < wide.xs.length; i++) {
+  assert.ok(Number.isFinite(wide.xs[i]));
+  assert.equal(wide.xs[i] - wide.xs[i - 1], 1);
+}
+
+// ── a wrapped slot is rejected by the second it remembers ────────
+// The ring is 900 slots wide, so s and s + 900 map to the same slot.
+// Anchoring a window a full ring later must not read the old sample
+// back as a fresh one: sec[i] still says s, so the column is null.
+metricsStore.applySample({
+  stream: "wrap_stream",
+  quantity: "Power",
+  unit: "W",
+  ts_ms: t0,
+  value: 7,
+});
+const wrapped = metricsStore.series("wrap_stream", 3, sec0 + 900);
+assert.deepEqual(wrapped.xs, [sec0 + 898, sec0 + 899, sec0 + 900]);
+assert.deepEqual(wrapped.ys, [null, null, null]);
+
+// ── a stall is a hole in ys, never a compacted x step ────────────
+// Two samples 4 s apart leave the three seconds between them empty:
+// they come back as null ys at their own xs, so the trace draws the
+// stall as a gap in place instead of as a continuous 1 Hz line.
+for (const [i, ts] of [t0, t0 + 4000].entries()) {
+  metricsStore.applySample({
+    stream: "gap_stream",
+    quantity: "Power",
+    unit: "W",
+    ts_ms: ts,
+    value: i,
+  });
+}
+const gap = metricsStore.series("gap_stream", 5);
+assert.deepEqual(gap.ys, [0, null, null, null, 1]);
+assert.deepEqual(gap.xs, [sec0, sec0 + 1, sec0 + 2, sec0 + 3, sec0 + 4]);
+
+// ── one anchor keeps two streams positionally aligned ────────────
+// Same seconds fed to both, different frames dropped on each. Read at
+// a shared endSec, column k of one is the same second as column k of
+// the other — which is what a multi-series chart needs, and what
+// per-stream anchoring broke.
+for (const s of [0, 1, 2, 4]) {
+  metricsStore.applySample({
+    stream: "align_a",
+    quantity: "Power",
+    unit: "W",
+    ts_ms: t0 + s * 1000,
+    value: 10 + s,
+  });
+}
+for (const s of [0, 3, 4]) {
+  metricsStore.applySample({
+    stream: "align_b",
+    quantity: "Power",
+    unit: "W",
+    ts_ms: t0 + s * 1000,
+    value: 20 + s,
+  });
+}
+const shared = latestSecond(["align_a", "align_b"]);
+assert.equal(shared, sec0 + 4);
+const a = metricsStore.series("align_a", 5, shared);
+const b = metricsStore.series("align_b", 5, shared);
+assert.deepEqual(a.xs, b.xs);
+assert.deepEqual(a.ys, [10, 11, 12, null, 14]);
+assert.deepEqual(b.ys, [20, null, null, 23, 24]);
+// A stream that stopped two seconds ago keeps its trailing gap under
+// the shared anchor instead of re-anchoring its last point to it.
+const stalled = metricsStore.series("align_a", 5, shared + 2);
+assert.deepEqual(stalled.xs, [sec0 + 2, sec0 + 3, sec0 + 4, sec0 + 5, sec0 + 6]);
+assert.deepEqual(stalled.ys, [12, null, 14, null, null]);
+
+// ── empty ring, and samples with no server timestamp ─────────────
+assert.deepEqual(metricsStore.series("never_sampled", 5), { xs: [], ys: [] });
+assert.equal(latestSecond(["never_sampled"]), null);
+assert.equal(latestSecond([]), null);
+// No ts_ms means no home second: the sample is dropped rather than
+// stamped with the browser clock, which used to file browser time
+// into a server-time ring and throw x years out of the window.
+metricsStore.applySample({
+  stream: "no_ts",
+  quantity: "Power",
+  unit: "W",
+  value: 5,
+});
+assert.deepEqual(metricsStore.series("no_ts", 5), { xs: [], ys: [] });
+assert.equal(metricsStore.latest("no_ts"), null);
 
 // ── subscribe ───────────────────────────────────────────────────
 let fired = 0;

@@ -3,6 +3,18 @@
 // the latest sample per stream and a subscriber list the panel
 // renderer hangs off. DOM-free: the renderer (metrics-panel.js)
 // subscribes and reads; nothing here touches elements.
+//
+// Slots are not a push cursor: a sample lands in the slot its own
+// server second maps to (`second % 900`), and the slot remembers that
+// second. So every stream shares one absolute slot ↔ second mapping,
+// and reading two streams over the same second window returns
+// positionally aligned rows by construction — no cross-stream
+// realignment pass, and a stream that stalls grows a trailing gap
+// where a cursor ring would have slid its old trace rightward under
+// uPlot's clock axis. Samples arriving without a server timestamp are
+// dropped rather than stamped with the browser clock (see
+// applySample); the two clocks are unrelated and mixing them threw
+// the x-axis years off.
 
 import { mgPath } from "./routing.js";
 import { isPanelOpen } from "./side-panel.js";
@@ -49,7 +61,7 @@ export function pfText(p, q) {
 }
 
 export const metricsStore = (() => {
-  const sparkBuf = new Map(); // stream -> { values: Float32Array, cursor }
+  const sparkBuf = new Map(); // stream -> { values, sec, maxSec }
   const latestMap = new Map(); // stream -> { value, quantity, unit }
   const listeners = new Set();
   let reseedTimer = null;
@@ -58,10 +70,30 @@ export const metricsStore = (() => {
   function buf(stream) {
     let b = sparkBuf.get(stream);
     if (!b) {
-      b = { values: new Float32Array(SPARK_LEN).fill(NaN), cursor: 0 };
+      b = {
+        values: new Float32Array(SPARK_LEN).fill(NaN),
+        // The absolute server second each slot currently holds,
+        // parallel to `values`. NaN marks a slot no sample has landed
+        // in; a slot the ring has since wrapped past keeps its old
+        // second, which reads as a miss for every other second.
+        sec: new Float64Array(SPARK_LEN).fill(NaN),
+        maxSec: null,
+      };
       sparkBuf.set(stream, b);
     }
     return b;
+  }
+  // Absolute-second placement, shared by the live and backfill paths.
+  // Returns false for a sample with no usable server timestamp — see
+  // the header: there is no browser-clock fallback.
+  function place(b, tsMs, value) {
+    if (!Number.isFinite(tsMs)) return false;
+    const s = Math.floor(tsMs / 1000);
+    const i = ((s % SPARK_LEN) + SPARK_LEN) % SPARK_LEN;
+    b.values[i] = value ?? Number.NaN;
+    b.sec[i] = s;
+    b.maxSec = b.maxSec === null ? s : Math.max(b.maxSec, s);
+    return true;
   }
   function notify() {
     for (const cb of listeners) cb();
@@ -75,27 +107,47 @@ export const metricsStore = (() => {
     latest(stream) {
       return latestMap.get(stream) ?? null;
     },
-    // Last `windowS` slots, oldest first, xs synthesized at 1 Hz
-    // ending now — the ring is positional (one slot per second), so
-    // per-slot timestamps are honest without storing them. NaN slots
-    // (no sample) come back as null, which uPlot renders as a gap.
-    series(stream, windowS) {
-      const b = buf(stream);
+    // The newest second this stream holds, or null while its ring is
+    // empty. `latestSecond` below folds this across streams; charts
+    // want the fold, not this.
+    maxSecond(stream) {
+      return sparkBuf.get(stream)?.maxSec ?? null;
+    },
+    // One second per x, oldest first, over the `windowS` seconds
+    // ending at `endSec` — or at this stream's own newest second when
+    // the caller passes none. xs are in SECONDS (uPlot's time scale
+    // reads seconds, and it binary-searches them, so they have to
+    // come out sorted — here they do by construction: a straight
+    // count of consecutive seconds). A second whose slot holds some
+    // other second's sample, or no sample, comes back as a null y,
+    // which uPlot renders as a gap; that is what a stalled or
+    // frame-dropping stream looks like, and it stays put under the
+    // clock axis instead of sliding. Passing one shared `endSec`
+    // across streams is what makes column k of every series mean the
+    // same second. An empty ring has no anchor and returns nothing
+    // for the caller to pad or skip.
+    series(stream, windowS, endSec = null) {
+      const b = sparkBuf.get(stream);
+      if (!b || b.maxSec === null) return { xs: [], ys: [] };
+      const end = endSec ?? b.maxSec;
       const n = Math.min(windowS, SPARK_LEN);
-      const now = Date.now() / 1000;
       const xs = new Array(n);
       const ys = new Array(n);
-      for (let i = 0; i < n; i++) {
-        const v = b.values[(b.cursor - n + i + SPARK_LEN * 2) % SPARK_LEN];
-        xs[i] = now - (n - 1 - i);
-        ys[i] = Number.isNaN(v) ? null : v;
+      for (let k = 0; k < n; k++) {
+        const s = end - (n - 1 - k);
+        const i = ((s % SPARK_LEN) + SPARK_LEN) % SPARK_LEN;
+        xs[k] = s;
+        ys[k] = b.sec[i] === s && !Number.isNaN(b.values[i]) ? b.values[i] : null;
       }
       return { xs, ys };
     },
     applySample(ev) {
-      const b = buf(ev.stream);
-      b.values[b.cursor] = ev.value == null ? NaN : ev.value;
-      b.cursor = (b.cursor + 1) % SPARK_LEN;
+      // A sample with no server timestamp has no home second, and
+      // stamping it with Date.now() would file browser time into a
+      // server-time ring — an offset clock filed samples years out of
+      // the window. Drop it; the server stamps every Sample frame it
+      // sends, and reseedLatest still refreshes the chips.
+      if (!place(buf(ev.stream), ev.ts_ms, ev.value)) return;
       latestMap.set(ev.stream, {
         value: ev.value ?? null,
         quantity: ev.quantity,
@@ -114,14 +166,14 @@ export const metricsStore = (() => {
           const hmap = await hres.json();
           for (const [stream, samples] of Object.entries(hmap)) {
             const b = buf(stream);
-            b.values.fill(NaN);
-            const slice = samples.slice(-SPARK_LEN);
-            const start = SPARK_LEN - slice.length;
-            for (let i = 0; i < slice.length; i++) {
-              const v = slice[i]?.value;
-              b.values[start + i] = v == null ? NaN : v;
-            }
-            b.cursor = 0;
+            b.values.fill(Number.NaN);
+            b.sec.fill(Number.NaN);
+            b.maxSec = null;
+            // Each history sample carries its own ts_ms, so it lands
+            // in the same slot a live frame for that second would —
+            // no right-alignment, and a later WS frame for a second
+            // already backfilled simply overwrites it in place.
+            for (const smp of samples.slice(-SPARK_LEN)) place(b, smp?.ts_ms, smp?.value);
           }
         }
       } catch (_) {
@@ -178,3 +230,18 @@ export const metricsStore = (() => {
     },
   };
 })();
+
+// The one anchor second a multi-stream chart should read every column
+// at: the newest second any of `streams` holds, or null when none of
+// them holds a sample at all (nothing to draw). Feeding it back into
+// series(stream, windowS, end) is what keeps a stalled stream's last
+// point under the same x as its live sibling's, instead of each
+// series ending at its own newest second.
+export function latestSecond(streams) {
+  let end = null;
+  for (const s of streams) {
+    const m = metricsStore.maxSecond(s);
+    if (m !== null && (end === null || m > end)) end = m;
+  }
+  return end;
+}
