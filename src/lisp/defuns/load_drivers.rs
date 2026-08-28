@@ -174,7 +174,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // friends from scenarios or the UI. Per-tick `min-avail =
     // rated-lower × sunlight%/100` clamp picks up the new value on
     // the next refresh + tick pair.
-    let r = router;
+    let r = router.clone();
     ctx.defun(
         "set-solar-sunlight",
         move |id: i64, value: TulispObject| -> Result<bool, Error> {
@@ -208,6 +208,80 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-solar-sunlight: expected a number, lambda, or symbol — got {value}"
                 )));
             }
+            Ok(true)
+        },
+    );
+
+    // Steam boiler analogue of set-meter-power / set-solar-sunlight:
+    // drive the `:demand` (kg/h) input from Lisp. Same numeric /
+    // dynamic dispatch — a number installs a constant, a lambda or
+    // symbol installs a DynamicScalar the scheduler re-resolves each
+    // refresh tick. Gated on takes_steam_demand() since (unlike the
+    // meter/solar setters) a non-boiler must reject here, not
+    // silently no-op — this is a first-class inspector knob.
+    let r = router.clone();
+    ctx.defun(
+        "set-boiler-demand",
+        move |id: i64, value: TulispObject| -> Result<bool, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "set-boiler-demand: component {id} not found"
+                )));
+            };
+            if !c.takes_steam_demand() {
+                return Err(Error::invalid_argument(format!(
+                    "set-boiler-demand: component {id} is not a steam boiler"
+                )));
+            }
+            if value.numberp() {
+                let kg_h = f64::try_from(&value)?;
+                let _ = c.set_steam_demand_kg_h(kg_h as f32);
+                w.note_knob_changed(id as u64, "boiler-demand", Some(kg_h as f32), None, None);
+            } else if let Some(scalar) =
+                crate::sim::dynamic_scalar::DynamicScalar::from_lisp(&value, 0.0)
+            {
+                // Printed source and the cached value right after
+                // construction — same pattern as set-meter-power above.
+                let printed = value.to_string();
+                let resolved_now = scalar.get();
+                c.set_steam_demand_source(scalar);
+                w.note_knob_changed(
+                    id as u64,
+                    "boiler-demand",
+                    Some(resolved_now),
+                    Some(printed),
+                    None,
+                );
+            } else {
+                return Err(Error::invalid_argument(format!(
+                    "set-boiler-demand: expected a number, lambda, or symbol — got {value}"
+                )));
+            }
+            Ok(true)
+        },
+    );
+
+    // Steam boiler pressure override — numeric only (unlike demand,
+    // pressure has no dynamic-source door on the trait). Gated on
+    // takes_pressure_bar() for the same reason as set-boiler-demand.
+    let r = router;
+    ctx.defun(
+        "set-boiler-pressure",
+        move |id: i64, bar: f64| -> Result<bool, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "set-boiler-pressure: component {id} not found"
+                )));
+            };
+            if !c.takes_pressure_bar() {
+                return Err(Error::invalid_argument(format!(
+                    "set-boiler-pressure: component {id} is not a steam boiler"
+                )));
+            }
+            let _ = c.set_pressure_bar(bar as f32);
+            w.note_knob_changed(id as u64, "boiler-pressure", Some(bar as f32), None, None);
             Ok(true)
         },
     );
@@ -539,5 +613,55 @@ mod tests {
         let site = cfg.site();
         let r = site.get(4).unwrap().sunlight_reading().expect("reading");
         assert_eq!(r.value, 63.0);
+    }
+
+    /// `(set-boiler-demand id N)` installs a constant kg/h demand,
+    /// read back immediately through `demand_reading` (no tick
+    /// needed — it reads the source directly).
+    #[test]
+    fn set_boiler_demand_accepts_a_number() {
+        let (cfg, _dir) = config_with("(%make-steam-boiler :id 9)");
+        cfg.eval("(set-boiler-demand 9 40.0)").unwrap();
+        let site = cfg.site();
+        let r = site.get(9).unwrap().demand_reading().expect("reading");
+        assert_eq!(r.value, 40.0);
+    }
+
+    /// `(set-boiler-demand id (lambda () X))` installs a dynamic
+    /// source, re-resolved on refresh — mirrors
+    /// `set_solar_sunlight_accepts_a_lambda` above.
+    #[test]
+    fn set_boiler_demand_accepts_a_lambda() {
+        let (cfg, _dir) = config_with("(%make-steam-boiler :id 9)");
+        cfg.eval("(set-boiler-demand 9 (lambda () 25.0))").unwrap();
+        cfg.refresh_once();
+        cfg.site()
+            .tick_once(chrono::Utc::now(), std::time::Duration::from_millis(100));
+        let site = cfg.site();
+        let r = site.get(9).unwrap().demand_reading().expect("reading");
+        assert!((r.value - 25.0).abs() < 1e-6, "{}", r.value);
+    }
+
+    /// `(set-boiler-pressure id BAR)` overwrites the pressure state,
+    /// reflected immediately in telemetry.
+    #[test]
+    fn set_boiler_pressure_moves_state() {
+        let (cfg, _dir) = config_with("(%make-steam-boiler :id 9)");
+        cfg.eval("(set-boiler-pressure 9 9.0)").unwrap();
+        let site = cfg.site();
+        let r = site.get(9).unwrap().pressure_reading().expect("reading");
+        assert_eq!(r.value, 9.0);
+    }
+
+    /// Both boiler defuns error on a non-boiler component instead of
+    /// silently no-opping — they're first-class inspector knobs, so
+    /// this door is strict (unlike e.g. `set-battery-soc`).
+    #[test]
+    fn set_boiler_defuns_error_on_non_boiler() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        let err = cfg.eval("(set-boiler-demand 7 40.0)").unwrap_err();
+        assert!(err.to_string().contains("not a steam boiler"), "{err}");
+        let err = cfg.eval("(set-boiler-pressure 7 9.0)").unwrap_err();
+        assert!(err.to_string().contains("not a steam boiler"), "{err}");
     }
 }

@@ -49,6 +49,10 @@ pub(in crate::ui) struct DriveRequest {
     /// With `power_factor`, capacitive (leading) instead of the
     /// default inductive (lagging). Meaningless without `power_factor`.
     leading: Option<bool>,
+    /// Steam demand for a steam boiler (kg/h), if driving.
+    steam_demand_kg_h: Option<f64>,
+    /// Constant pressure override for a steam boiler (bar), if driving.
+    pressure_bar: Option<f64>,
 }
 
 /// Empty JSON on success; the error text on any rejection.
@@ -221,6 +225,18 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
             format!("component {id}: leading requires power_factor in the same request"),
         ));
     }
+    if req.steam_demand_kg_h.is_some() && !component.takes_steam_demand() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} does not take steam_demand_kg_h (not a steam boiler)"),
+        ));
+    }
+    if req.pressure_bar.is_some() && !component.takes_pressure_bar() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} does not take pressure_bar (not a steam boiler)"),
+        ));
+    }
     // Value sanity, same validate-first contract. The f64→f32 cast
     // turns any JSON number beyond f32 range into ±inf, and the meter
     // override installs whatever it's given — an inf/NaN would poison
@@ -231,6 +247,8 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         ("sunlight_pct", req.sunlight_pct),
         ("soc_pct", req.soc_pct),
         ("reactive_var", req.reactive_var),
+        ("steam_demand_kg_h", req.steam_demand_kg_h),
+        ("pressure_bar", req.pressure_bar),
     ] {
         if let Some(v) = v
             && !(v as f32).is_finite()
@@ -305,6 +323,20 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
             );
         }
     }
+    if let Some(kg_h) = req.steam_demand_kg_h {
+        let applied = component.set_steam_demand_kg_h(kg_h as f32);
+        debug_assert!(applied, "takes_steam_demand disagrees with setter");
+        if applied {
+            site.note_knob_changed(id, "boiler-demand", Some(kg_h as f32), None, None);
+        }
+    }
+    if let Some(bar) = req.pressure_bar {
+        let applied = component.set_pressure_bar(bar as f32);
+        debug_assert!(applied, "takes_pressure_bar disagrees with setter");
+        if applied {
+            site.note_knob_changed(id, "boiler-pressure", Some(bar as f32), None, None);
+        }
+    }
     Ok(Json(serde_json::json!({})))
 }
 
@@ -367,11 +399,119 @@ mod tests {
             reactive_var: None,
             power_factor: None,
             leading: None,
+            steam_demand_kg_h: None,
+            pressure_bar: None,
         };
         assert!(apply_drive(&site, 5, &req).is_err());
 
         // The meter's power override must not have been installed.
         let meter = site.get(5).unwrap();
         assert!(meter.aggregate_power_w(&site).abs() < 1e-6);
+    }
+
+    fn register_boiler(site: &MicrogridSite, id: u64) {
+        site.register(crate::sim::steam_boiler::SteamBoiler::new(
+            id,
+            Duration::from_secs(1),
+            crate::sim::steam_boiler::SteamBoilerConfig::default(),
+        ));
+    }
+
+    /// `steam_demand_kg_h` on a steam boiler applies immediately — no
+    /// tick needed, `demand_reading` reads the source directly.
+    #[test]
+    fn drive_accepts_steam_demand_on_boiler() {
+        let site = MicrogridSite::new();
+        register_boiler(&site, 6);
+
+        let req = DriveRequest {
+            power_w: None,
+            sunlight_pct: None,
+            soc_pct: None,
+            reactive_var: None,
+            power_factor: None,
+            leading: None,
+            steam_demand_kg_h: Some(40.0),
+            pressure_bar: None,
+        };
+        assert!(apply_drive(&site, 6, &req).is_ok());
+
+        let boiler = site.get(6).unwrap();
+        let r = boiler.demand_reading().expect("demand reading");
+        assert!((r.value - 40.0).abs() < 1e-6, "{}", r.value);
+    }
+
+    /// `pressure_bar` on a steam boiler moves the pressure state.
+    #[test]
+    fn drive_accepts_pressure_on_boiler() {
+        let site = MicrogridSite::new();
+        register_boiler(&site, 6);
+
+        let req = DriveRequest {
+            power_w: None,
+            sunlight_pct: None,
+            soc_pct: None,
+            reactive_var: None,
+            power_factor: None,
+            leading: None,
+            steam_demand_kg_h: None,
+            pressure_bar: Some(9.0),
+        };
+        assert!(apply_drive(&site, 6, &req).is_ok());
+
+        let boiler = site.get(6).unwrap();
+        let r = boiler.pressure_reading().expect("pressure reading");
+        assert!((r.value - 9.0).abs() < 1e-6, "{}", r.value);
+    }
+
+    /// Either boiler field on a non-boiler component is a 4xx
+    /// rejection, not a silent no-op.
+    #[test]
+    fn drive_rejects_boiler_fields_on_non_boiler() {
+        let site = MicrogridSite::new();
+        site.register(Meter::new(
+            5,
+            Duration::from_secs(1),
+            None,
+            None,
+            0.0,
+            false,
+        ));
+
+        let req = DriveRequest {
+            power_w: None,
+            sunlight_pct: None,
+            soc_pct: None,
+            reactive_var: None,
+            power_factor: None,
+            leading: None,
+            steam_demand_kg_h: Some(40.0),
+            pressure_bar: None,
+        };
+        assert!(apply_drive(&site, 5, &req).is_err());
+
+        let req = DriveRequest {
+            power_w: None,
+            sunlight_pct: None,
+            soc_pct: None,
+            reactive_var: None,
+            power_factor: None,
+            leading: None,
+            steam_demand_kg_h: None,
+            pressure_bar: Some(9.0),
+        };
+        assert!(apply_drive(&site, 5, &req).is_err());
+    }
+
+    /// A JSON number that's finite as f64 but overflows to infinity
+    /// on the f64→f32 cast (see the finiteness array's comment) is
+    /// rejected before it ever reaches the boiler's demand source.
+    #[test]
+    fn drive_rejects_non_finite_steam_demand() {
+        let site = MicrogridSite::new();
+        register_boiler(&site, 6);
+
+        let req: DriveRequest = serde_json::from_str(r#"{"steam_demand_kg_h": 1e40}"#).unwrap();
+        assert!(apply_drive(&site, 6, &req).is_err());
     }
 }

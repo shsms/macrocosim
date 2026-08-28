@@ -35,6 +35,10 @@ pub(in crate::ui) struct ComponentStateResponse {
     setpoints: Vec<ActiveSetpoint>,
     augmented: AxisFlags,
     envelope: Envelope,
+    /// Thermostat pressure target (bar) for a steam boiler, for chart
+    /// annotation. `None` for any other category.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pressure_target_bar: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -146,6 +150,14 @@ fn knobs_for(c: &dyn crate::sim::SimulatedComponent) -> Vec<KnobState> {
                 knobs.push(knob("reactive-apparent-va", cap.apparent_va, None, None));
             }
         }
+        Category::SteamBoiler => {
+            if let Some(r) = c.demand_reading() {
+                knobs.push(scalar_knob("boiler-demand", r));
+            }
+            if let Some(r) = c.pressure_reading() {
+                knobs.push(scalar_knob("boiler-pressure", r));
+            }
+        }
         _ => {}
     }
     knobs
@@ -235,5 +247,6 @@ fn component_state(
                     .or_else(|| c.reactive_bounds()),
             ),
         },
+        pressure_target_bar: c.pressure_target_bar(),
     })
 }
