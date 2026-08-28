@@ -245,6 +245,33 @@
         </p>
       </div>
     </dialog>
+    <dialog id="import-mg-dialog">
+      <header>
+        <h3>Import microgrid</h3>
+        <button id="import-mg-close" type="button">×</button>
+      </header>
+      <div id="import-mg-content">
+        <form id="import-mg-form">
+          <label class="dlg-field">
+            <span>name</span>
+            <input class="dlg-input" type="text" id="import-mg-name"
+                   placeholder="Berlin site" autocomplete="off" required />
+          </label>
+          <label class="dlg-field">
+            <span>microgrid id</span>
+            <input class="dlg-input" type="number" id="import-mg-id" min="1" step="1"
+                   autocomplete="off" />
+          </label>
+          <p id="import-mg-error" class="dialog-error" hidden></p>
+          <button type="submit" class="hdr-btn primary">Import</button>
+        </form>
+        <p class="hint">
+          The export's component ids are kept verbatim; this id names
+          the microgrid itself, and has to be one no other microgrid
+          holds. Leave it blank for the next free one.
+        </p>
+      </div>
+    </dialog>
     <dialog id="snapshots-dialog">
       <header>
         <h3>Snapshots</h3>

@@ -351,11 +351,112 @@ export const microgridsPanel = (() => {
       });
   }
 
+  // The import dialog's answer, handed back to importSiteFiles. The
+  // submit handler parks it here just before closing the dialog, so
+  // the single `close` listener settles every way out — Escape, ×,
+  // the backdrop and submit alike — and a cancel is simply the value
+  // staying null.
+  let importAnswer = null;
+  let settleImport = null;
+
+  // Ask for the imported microgrid's name and id. Resolves to
+  // `{ name, mid }` — `mid` null for "let the server allocate" — or
+  // null if the user backed out.
+  //
+  // `seed` re-opens the dialog after a refused import: the previous
+  // answer back in the fields, the server's wording in the error
+  // paragraph. Without one the dialog starts fresh.
+  function askImportDetails(seed = null) {
+    const dlg = document.getElementById("import-mg-dialog");
+    if (!dlg) return Promise.resolve(null);
+    const err = document.getElementById("import-mg-error");
+    err.textContent = seed?.error || "";
+    err.hidden = !seed?.error;
+    document.getElementById("import-mg-name").value = seed?.name || "";
+    // Pre-filled the way the create dialog pre-fills its id — the
+    // lowest free one — and just as editable: the server re-checks
+    // under the create lock, and a taken one comes back as a 409.
+    document.getElementById("import-mg-id").value = seed
+      ? seed.mid == null
+        ? ""
+        : String(seed.mid)
+      : String(nextFreeId());
+    return new Promise((resolve) => {
+      importAnswer = null;
+      settleImport = resolve;
+      dlg.showModal();
+    });
+  }
+
+  function setupImportMgDialog() {
+    const dlg = document.getElementById("import-mg-dialog");
+    if (!dlg) return;
+    document
+      .getElementById("import-mg-close")
+      .addEventListener("click", () => dlg.close());
+    dlg.addEventListener("click", (e) => {
+      if (e.target === dlg) dlg.close();
+    });
+    dlg.addEventListener("close", () => {
+      const settle = settleImport;
+      settleImport = null;
+      if (settle) settle(importAnswer);
+    });
+    document.getElementById("import-mg-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const err = document.getElementById("import-mg-error");
+      const name = document.getElementById("import-mg-name").value.trim();
+      if (!name) return;
+      // A blank id field means "let the server allocate" — the same
+      // bargain the create dialog offers, and the only way to reach
+      // the import endpoint's auto-assign path from the UI. A filled
+      // one has to be a positive whole number; whether it is FREE is
+      // the server's half of the answer, and comes back as the
+      // dialog's inline error on the next pass.
+      const raw = document.getElementById("import-mg-id").value.trim();
+      let mid = null;
+      if (raw !== "") {
+        mid = Number(raw);
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(mid) || mid < 1) {
+          err.textContent = "Microgrid id must be a positive whole number.";
+          err.hidden = false;
+          return;
+        }
+      }
+      importAnswer = { name, mid };
+      dlg.close();
+    });
+  }
+
+  // One import flow at a time. The dialog's resolver is module-scoped
+  // and an import spans two awaits it does not own the screen for —
+  // the POST, and any retry after a refusal — so a second file pick
+  // landing in between would clobber the first flow's resolver and
+  // then call showModal() on an already-open dialog: an
+  // InvalidStateError thrown after the damage, leaving the second
+  // dialog open and settling nothing while the first flow dies as an
+  // unhandled rejection. Guarding the whole flow makes the resolver
+  // single-owner by construction, so nothing below has to juggle it.
+  let importInFlight = false;
+
+  async function importSiteFiles(files) {
+    if (importInFlight) {
+      notify("An import is already in progress.");
+      return;
+    }
+    importInFlight = true;
+    try {
+      await runImport(files);
+    } finally {
+      importInFlight = false;
+    }
+  }
+
   // The site-export files are identified by content — the object key
   // names — not by their file names, so renamed downloads still
   // import. A file that parses but matches neither key is an error;
   // a file that doesn't parse at all is too.
-  async function importSiteFiles(files) {
+  async function runImport(files) {
     let components = null;
     let connections = null;
     for (const file of files) {
@@ -391,22 +492,30 @@ export const microgridsPanel = (() => {
       notify("Pick the components.json file (connections.json is optional).");
       return;
     }
-    const name = prompt("Name for the imported microgrid:");
-    if (!name) return;
-    try {
-      const res = await mutate("POST", "/api/microgrids/import", {
-        name,
-        components,
-        connections,
-      });
-      const m = await res.json();
-      notify(
-        `Imported ${m.components} components, ${m.connections} connections.`,
-        "success",
-      );
-      selectMicrogrid(m.id);
-    } catch (e) {
-      notify(`Import failed: ${e.message}`);
+    // The parsed exports stay in scope across retries: a refused id
+    // reopens the dialog rather than ending the import, so correcting
+    // it costs one edit instead of another trip through the file
+    // picker (the input was cleared the moment it fired). Cancelling
+    // from the reopened dialog still abandons the whole thing.
+    let seed = null;
+    for (;;) {
+      const chosen = await askImportDetails(seed);
+      if (!chosen) return;
+      const body = { name: chosen.name, components, connections };
+      // Omitted entirely when blank, so the server allocates.
+      if (chosen.mid !== null) body.mid = chosen.mid;
+      try {
+        const res = await mutate("POST", "/api/microgrids/import", body);
+        const m = await res.json();
+        notify(
+          `Imported ${m.components} components, ${m.connections} connections.`,
+          "success",
+        );
+        selectMicrogrid(m.id);
+        return;
+      } catch (e) {
+        seed = { ...chosen, error: `Import failed: ${e.message}` };
+      }
     }
   }
 
@@ -524,6 +633,7 @@ export const microgridsPanel = (() => {
 
   setupLoadScriptDialog();
   setupCreateMgDialog();
+  setupImportMgDialog();
   // The header button is static markup, so one listener outlives
   // every renderBreadcrumb (which only flips its hidden flag).
   document.getElementById("mg-adopt-btn")?.addEventListener("click", adoptCurrent);
