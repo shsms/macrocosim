@@ -875,5 +875,40 @@ mod tests {
         );
         let peak = site.scenario_report(now).peak_grid_w;
         assert!((peak - 1200.0).abs() < 1e-6, "{peak}");
+
+        publish_scalar(
+            "grid_reactive_power",
+            "ReactivePower",
+            "var",
+            Some(1600.0),
+            ts_ms,
+            &site,
+            &state,
+        );
+        let r = site.scenario_report(now);
+        assert!(
+            (r.peak_grid_var - 1600.0).abs() < 1e-6,
+            "{}",
+            r.peak_grid_var
+        );
+        // P=1200, Q=1600 → PF = 1200/2000 = 0.6, paired off the P above.
+        let pf = r.site_pf_at_peak_var.expect("pf after a paired PQ sample");
+        assert!((pf - 0.6).abs() < 1e-6, "{pf}");
+
+        publish_scalar(
+            "pv_reactive_power",
+            "ReactivePower",
+            "var",
+            Some(9000.0),
+            ts_ms,
+            &site,
+            &state,
+        );
+        let r = site.scenario_report(now);
+        assert!(
+            (r.peak_grid_var - 1600.0).abs() < 1e-6,
+            "sibling Q stream reached the journal: {}",
+            r.peak_grid_var
+        );
     }
 }

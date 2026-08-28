@@ -121,6 +121,16 @@ async fn scenario_endpoints_round_trip_via_eval() {
         report.get("peak_grid_w").is_some(),
         "report should carry the grid peak: {report}"
     );
+    for key in ["peak_grid_var", "site_pf_at_peak_var"] {
+        assert!(
+            report.get(key).is_some(),
+            "report should carry {key}: {report}"
+        );
+    }
+    assert!(
+        report["grid_window_averages"].is_array(),
+        "report should carry grid_window_averages as an array: {report}"
+    );
 }
 
 /// A microgrid created over HTTP gets a managed file, and every

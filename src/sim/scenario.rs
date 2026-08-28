@@ -107,11 +107,16 @@ pub struct ScenarioJournal {
     /// below use.
     peak_grid_active_w: f64,
     /// The grid streams' (P, Q) pair at the instant of maximum |Q|
-    /// seen since the scenario started — a PAIRED sample, so the
-    /// report can derive power-factor-at-peak-Q without mixing P and
-    /// Q from different instants. `None` before `start` or before the
-    /// first Q sample that follows a P sample; resets on `start`,
-    /// freezes on `stop` like `peak_grid_active_w`.
+    /// seen since the scenario started, so the report can derive
+    /// power-factor-at-peak-Q. P and Q ride two independent formula
+    /// streams, so the pair is the peak Q against the last-seen P
+    /// (see `last_grid_p`); both streams are driven by the LM's
+    /// shared 1 Hz tick, so the two are normally at most one sample
+    /// apart — nothing here enforces it, and a forwarder that lags or
+    /// exits can widen the pairing.
+    /// `None` before `start` or before the first Q sample that
+    /// follows a P sample; resets on `start`, freezes on `stop` like
+    /// `peak_grid_active_w`.
     peak_grid_pq: Option<(f64, f64)>,
     /// Last `grid_power` sample seen, held so the next
     /// `grid_reactive_power` sample can be paired with it. P and Q
