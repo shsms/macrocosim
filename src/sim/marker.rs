@@ -1,9 +1,9 @@
-//! Marker components: CHP, wind turbine, steam boiler, power
-//! transformer, breaker. They carry no physics of their own — they
-//! exist so the topology is complete and so the formula engine can
-//! classify the meters around them (a meter feeding a wind turbine
-//! is a wind meter). Power is set directly on the neighboring meter
-//! via `(set-meter-power …)`.
+//! Marker components: CHP, wind turbine, power transformer, breaker.
+//! They carry no physics of their own — they exist so the topology
+//! is complete and so the formula engine can classify the meters
+//! around them (a meter feeding a wind turbine is a wind meter).
+//! Power is set directly on the neighboring meter via
+//! `(set-meter-power …)`.
 
 use std::{fmt, time::Duration};
 
@@ -23,7 +23,6 @@ impl Marker {
         let prefix = match category {
             Category::Chp => "chp",
             Category::WindTurbine => "wind",
-            Category::SteamBoiler => "boiler",
             Category::PowerTransformer => "transformer",
             Category::Breaker => "breaker",
             // The constructor is only reached from the %make-*
@@ -74,7 +73,6 @@ impl SimulatedComponent for Marker {
         match self.category {
             Category::Chp => "%make-chp",
             Category::WindTurbine => "%make-wind-turbine",
-            Category::SteamBoiler => "%make-steam-boiler",
             Category::PowerTransformer => "%make-power-transformer",
             Category::Breaker => "%make-breaker",
             other => unreachable!("Marker::make_fn with non-marker category {other:?}"),
@@ -114,10 +112,6 @@ mod tests {
         assert_eq!(
             Marker::new(2, Category::WindTurbine, 0.0).make_fn(),
             "%make-wind-turbine"
-        );
-        assert_eq!(
-            Marker::new(3, Category::SteamBoiler, 0.0).make_fn(),
-            "%make-steam-boiler"
         );
         assert_eq!(
             Marker::new(4, Category::PowerTransformer, 0.0).make_fn(),

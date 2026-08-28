@@ -111,8 +111,9 @@ pub(crate) const DEFAULT_CATEGORIES: &[&str] = &[
     "battery-inverter",
     "solar-inverter",
     "ev-charger",
+    "steam-boiler",
     // One shared plist for all marker categories (chp, wind turbine,
-    // steam boiler, power transformer, breaker).
+    // power transformer, breaker).
     "marker",
 ];
 

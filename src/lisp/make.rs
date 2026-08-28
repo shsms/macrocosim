@@ -17,13 +17,14 @@ use tulisp::{AsPlist, Error, Plist, TulispContext};
 use crate::lisp::value::LispValue;
 use crate::sim::{
     Battery, BatteryInverter, Category, ComponentHandle, EvCharger, Grid, Marker, Meter,
-    MicrogridSite, OperationalMode, ReactiveSource, SolarInverter,
+    MicrogridSite, OperationalMode, ReactiveSource, SolarInverter, SteamBoiler,
     battery::BatteryConfig,
     dynamic_scalar::DynamicScalar,
     ev_charger::EvChargerConfig,
     inverter::battery_inverter::BatteryInverterConfig,
     inverter::solar_inverter::SolarInverterConfig,
     runtime::{CommandMode, Health, TelemetryMode},
+    steam_boiler::SteamBoilerConfig,
 };
 
 // -----------------------------------------------------------------------------
@@ -197,8 +198,37 @@ AsPlist! {
 }
 
 // -----------------------------------------------------------------------------
-// the marker categories (chp, wind turbine, steam boiler, power
-// transformer, breaker)
+// make-steam-boiler
+// -----------------------------------------------------------------------------
+
+AsPlist! {
+    pub struct SteamBoilerArgs {
+        id: Option<i64> {= None},
+        name: Option<String> {= None},
+        interval: Option<i64> {= None},
+        /// kg/h; number seeds a constant, lambda/symbol installs a
+        /// dynamic source resolved each tick.
+        demand<":demand">: Option<LispValue> {= None},
+        rated_lower<":rated-lower">: Option<f64> {= None},
+        rated_upper<":rated-upper">: Option<f64> {= None},
+        target_bar<":target-bar">: Option<f64> {= None},
+        max_bar<":max-bar">: Option<f64> {= None},
+        initial_bar<":initial-bar">: Option<f64> {= None},
+        capacity_wh_per_bar<":capacity-wh-per-bar">: Option<f64> {= None},
+        wh_per_kg<":wh-per-kg">: Option<f64> {= None},
+        command_delay_ms<":command-delay-ms">: Option<i64> {= None},
+        ramp_rate<":ramp-rate">: Option<f64> {= None},
+        stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        operational_mode<":operational-mode">: Option<OperationalMode> {= None},
+        health<":health">: Option<Health> {= None},
+        telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
+        command_mode<":command-mode">: Option<CommandMode> {= None},
+    }
+}
+
+// -----------------------------------------------------------------------------
+// the marker categories (chp, wind turbine, power transformer,
+// breaker)
 // -----------------------------------------------------------------------------
 
 AsPlist! {
@@ -534,6 +564,83 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         },
     );
 
+    let r = router.clone();
+    ctx.defun(
+        "%make-steam-boiler",
+        move |_ctx: &mut TulispContext, args: Plist<SteamBoilerArgs>| {
+            let w = r.site();
+            let a = args.into_inner();
+            let id = id_or_next(&r, &w, a.id)?;
+            let interval = ms_to_duration(a.interval, 1000);
+            let mut cfg = SteamBoilerConfig::default();
+            if let Some(v) = a.rated_lower {
+                cfg.rated_lower_w = v as f32;
+            }
+            if let Some(v) = a.rated_upper {
+                cfg.rated_upper_w = v as f32;
+            }
+            if let Some(v) = a.target_bar {
+                cfg.target_bar = v as f32;
+            }
+            if let Some(v) = a.max_bar {
+                cfg.max_bar = v as f32;
+            }
+            if let Some(v) = a.initial_bar {
+                cfg.initial_bar = Some(v as f32);
+            }
+            if let Some(v) = a.capacity_wh_per_bar {
+                cfg.capacity_wh_per_bar = v as f32;
+            }
+            if let Some(v) = a.wh_per_kg {
+                cfg.wh_per_kg = v as f32;
+            }
+            if let Some(v) = a.command_delay_ms {
+                cfg.command_delay = Duration::from_millis(v.max(0) as u64);
+            }
+            if let Some(v) = a.ramp_rate {
+                cfg.ramp_rate_w_per_s = checked_ramp_rate(":ramp-rate", v)?;
+            }
+            if let Some(v) = a.stream_jitter_pct {
+                cfg.stream_jitter_pct = v as f32;
+            }
+            if !(cfg.max_bar >= cfg.target_bar && cfg.target_bar > 0.0) {
+                return Err(Error::invalid_argument(
+                    "%make-steam-boiler: :max-bar must be >= :target-bar > 0",
+                ));
+            }
+            // :demand may be a number, a lambda, or a symbol. The
+            // wrapper-expanded category default lands in `a.demand`
+            // when no per-component value was passed; otherwise the
+            // per-component value overrides via AsPlist's last-wins.
+            let mut dynamic_demand: Option<DynamicScalar> = None;
+            if let Some(v) = a.demand.as_ref() {
+                let raw = v.as_inner();
+                if raw.numberp() {
+                    if let Ok(kg_h) = f64::try_from(raw) {
+                        cfg.demand_kg_h = kg_h as f32;
+                    }
+                } else {
+                    dynamic_demand = DynamicScalar::from_lisp(raw, cfg.demand_kg_h);
+                    cfg.demand_dynamic = true;
+                }
+            }
+            let boiler = SteamBoiler::new(id, interval, cfg);
+            if let Some(scalar) = dynamic_demand {
+                boiler.set_steam_demand_source(scalar);
+            }
+            let h = register_with_modes(
+                &w,
+                boiler,
+                a.operational_mode,
+                a.health,
+                a.telemetry_mode,
+                a.command_mode,
+            )?;
+            apply_initial_name(&w, id, a.name);
+            Ok::<_, Error>(h)
+        },
+    );
+
     // The marker categories: no physics of their own — they
     // complete the topology and classify the meters around them;
     // power is set on the neighboring meter. One registration loop
@@ -541,7 +648,6 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
     for (form, category) in [
         ("%make-chp", Category::Chp),
         ("%make-wind-turbine", Category::WindTurbine),
-        ("%make-steam-boiler", Category::SteamBoiler),
         ("%make-power-transformer", Category::PowerTransformer),
         ("%make-breaker", Category::Breaker),
     ] {
@@ -1153,5 +1259,29 @@ mod tests {
             .eval_string("(%make-meter :id 8 :operational-mode 'inactive :telemetry-mode 'normal)")
             .unwrap_err();
         assert!(format!("{err:?}").contains("streams no telemetry"));
+    }
+
+    /// The boiler constructor takes physics kwargs, keeps every marker
+    /// kwarg valid (bare :id forms in existing worlds must load), and a
+    /// dynamic :demand installs a source instead of a constant.
+    #[test]
+    fn make_steam_boiler_kwargs_and_marker_compat() {
+        let site = run(r#"(%make-steam-boiler :id 41 :rated-upper 100000.0
+                                  :target-bar 6.0 :demand 40.0
+                                  :operational-mode 'control-only)"#);
+        let b = site.get(41).unwrap();
+        assert_eq!(b.category().as_str(), "steam-boiler");
+        assert_eq!(b.rated_active_bounds(), Some((0.0, 100_000.0)));
+        assert_eq!(b.pressure_target_bar(), Some(6.0));
+
+        // Bare marker-style form — existing worlds' `(%make-steam-boiler
+        // :id 1642)` must keep loading now that SteamBoilerArgs is a
+        // strict superset of MarkerArgs.
+        let site = run("(%make-steam-boiler :id 42)");
+        assert!(site.get(42).is_some());
+
+        let site = run("(%make-steam-boiler :id 43 :demand (lambda () 25.0))");
+        let b = site.get(43).unwrap();
+        assert!(b.has_unrenderable_source());
     }
 }

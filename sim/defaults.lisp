@@ -53,8 +53,15 @@
         :ramp-rate           3000.0
         :stream-jitter-pct   10.0))
 
-;; The marker categories (chp, wind turbine, steam boiler, power
-;; transformer, breaker) carry no physics — one shared default plist.
+;; Steam boiler: hybrid gas/electric — the electric side ramps and
+;; delays like the EV charger.
+(setq steam-boiler-defaults
+      '(:command-delay-ms 500
+        :ramp-rate 50000.0
+        :stream-jitter-pct 10.0))
+
+;; The marker categories (chp, wind turbine, power transformer,
+;; breaker) carry no physics — one shared default plist.
 (setq marker-defaults
       '(:stream-jitter-pct 0.0))
 
@@ -78,6 +85,6 @@
 (defun make-ev-charger       (&rest p) (apply '%make-ev-charger       (append ev-charger-defaults       p)))
 (defun make-chp              (&rest p) (apply '%make-chp              (append marker-defaults           p)))
 (defun make-wind-turbine     (&rest p) (apply '%make-wind-turbine     (append marker-defaults           p)))
-(defun make-steam-boiler     (&rest p) (apply '%make-steam-boiler     (append marker-defaults           p)))
+(defun make-steam-boiler (&rest p) (apply '%make-steam-boiler (append steam-boiler-defaults p)))
 (defun make-power-transformer (&rest p) (apply '%make-power-transformer (append marker-defaults         p)))
 (defun make-breaker          (&rest p) (apply '%make-breaker          (append marker-defaults           p)))
