@@ -870,12 +870,23 @@ function applySnapshot(id, snap) {
   startTtlTimer();
 }
 
-async function fetchSnapshot(id, gen) {
+// The raw /api/component GET, factored out so a single in-flight
+// fetch can be shared by fetchSnapshot (knob read-back) and, for a
+// steam boiler, buildCharts's pressure-target title suffix — both
+// want the same snapshot in the same render pass, and issuing it
+// twice would double the GETs every time a boiler is selected with
+// the Charts card pinned open.
+function fetchComponentSnapshot(id) {
+  return fetch(`${mgPath("component")}?id=${id}`).then(async (res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  });
+}
+
+async function fetchSnapshot(id, gen, snapshotJsonP) {
   const token = beginSnapshotFetch();
   try {
-    const res = await fetch(`${mgPath("component")}?id=${id}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const snap = await res.json();
+    const snap = await snapshotJsonP;
     // gen !== showGen: a newer selection has started. snapshotFetchStale:
     // the tenant was torn down (closePanel / switched tenants) or a
     // more-recent snapshot fetch (reselect or an applySetpoint
@@ -1062,6 +1073,12 @@ async function renderNode(d, gen) {
   // selections via localStorage). `built` guards against wiring the
   // charts twice if the card is folded/unfolded repeatedly.
   const isGrid = d.category === "grid";
+  // One /api/component fetch per selection — shared by the knob
+  // read-back below (fetchSnapshot) and buildCharts's pressure-target
+  // title suffix — kicked off here so it's already in flight by the
+  // time either consumer wants it, whichever runs first. The grid has
+  // no knobs/setpoints and no pressure chart, so it never asks.
+  const snapshotJsonP = isGrid ? null : fetchComponentSnapshot(d.id);
   const chartsFold = document.getElementById("card-charts");
   const chartsContainer = document.getElementById("charts");
   let built = false;
@@ -1081,7 +1098,7 @@ async function renderNode(d, gen) {
       else gridChart = chart;
       return;
     }
-    const charts = await buildCharts(d, chartsContainer);
+    const charts = await buildCharts(d, chartsContainer, snapshotJsonP);
     // Same discipline: bail without activating the live-push session
     // so a stale node's charts can't clobber whatever the newer
     // selection is showing, or outlive a closed panel.
@@ -1121,7 +1138,7 @@ async function renderNode(d, gen) {
   // events keep accumulating via appendSetpointEvent. The read-back
   // snapshot (knobs, envelope bars, TTL row) fetches concurrently —
   // same generation guard, its own failure path (fetchSnapshot).
-  const snapshotP = fetchSnapshot(d.id, gen);
+  const snapshotP = fetchSnapshot(d.id, gen, snapshotJsonP);
   await renderSetpoints(d.id, document.getElementById("setpoints-section"));
   await snapshotP;
 }
@@ -1198,22 +1215,20 @@ async function buildGridFrequencyChart(container) {
 // Doesn't touch `liveCharts` itself or check the render generation —
 // the caller (renderNode) owns both, since only it knows this
 // render's `gen` and whether a newer selection has since started.
-async function buildCharts(d, container) {
+async function buildCharts(d, container, snapshotJsonP) {
   const metrics = CHARTS_BY_CATEGORY[d.category] || [];
   const charts = new Map(); // metric → { plot, xs, ys }
 
   // A steam boiler's pressure chart annotates the controller's
   // thermostat target in its title — no cheap reference-line idiom
-  // in this hand-rolled uPlot setup, so a second small fetch (run
-  // alongside the history fetches below, not blocking on them) pulls
-  // it off the /api/component snapshot. `null` on any failure just
-  // means no suffix, same degrade-quietly discipline as the history
-  // fetches below.
+  // in this hand-rolled uPlot setup, so this reads it off the
+  // /api/component snapshot the caller already has in flight
+  // (fetchComponentSnapshot, shared with fetchSnapshot's knob
+  // read-back) rather than issuing its own fetch. `null` on any
+  // failure just means no suffix, same degrade-quietly discipline as
+  // the history fetches below.
   const targetP = metrics.includes("pressure_bar")
-    ? fetch(`${mgPath("component")}?id=${d.id}`)
-        .then((res) => (res.ok ? res.json() : null))
-        .then((snap) => snap?.pressure_target_bar ?? null)
-        .catch(() => null)
+    ? snapshotJsonP.then((snap) => snap?.pressure_target_bar ?? null).catch(() => null)
     : Promise.resolve(null);
 
   // All metric histories fetched concurrently — inspector open
