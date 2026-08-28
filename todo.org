@@ -1741,3 +1741,21 @@ all solar inverters at once. Separate from the component inspector;
 likely a site/dashboard panel plus site-level setters. Note the
 existing "Site-level runtime-knob setters accept unregistered ids"
 entry touches the same setter surface.
+
+* Review backlog — 2026-08-28
+** TODO Window resize can strand a floating panel under the header   :bug:ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-28 Fr 09:54]
+:END:
+
+Maximizing the browser window or shrinking it back (exact trigger
+unclear, intermittent) can sometimes move a floating panel above its
+allowed range, underneath the header, where the drag strip is covered
+and the panel can't be dragged back out.
+
+Likely angle when picking this up: the drag clamp and the open-time
+sanitize both floor at the dock's LIVE top edge, but a window resize
+moves that edge without re-running the clamp on already-open panels -
+their applied translate survives the reflow unchecked. A resize
+listener re-running the sanitize on open panels would probably cover
+it. Not investigated yet - recorded from live use on 2026-08-28.
