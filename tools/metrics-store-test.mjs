@@ -197,6 +197,70 @@ const stalled = metricsStore.series("align_a", 5, shared + 2);
 assert.deepEqual(stalled.xs, [sec0 + 2, sec0 + 3, sec0 + 4, sec0 + 5, sec0 + 6]);
 assert.deepEqual(stalled.ys, [12, null, 14, null, null]);
 
+// ── the fold is a plain max over the streams it is handed ────────
+// No outlier policy in the store: whichever stream holds the newest
+// second wins, in any argument order, including one stamped an hour
+// ahead. Any stream in the fold can therefore take the window with
+// it — read at that anchor, a sibling whose samples are all a ring
+// behind comes back all-null. That is not a bug to be guessed at
+// here; it is why the CALLER picks the fold's inputs (metrics-panel
+// folds its visible traces only, and reads bounds/PF partners at the
+// result). A guess got it wrong both ways: it inverted onto a merely
+// stalled sibling, and a clock jump that moved several streams at
+// once slipped past it anyway.
+metricsStore.applySample({
+  stream: "jump_b",
+  quantity: "Power",
+  unit: "W",
+  ts_ms: t0 + 3_600_000,
+  value: 999,
+});
+assert.equal(latestSecond(["align_a", "jump_b"]), sec0 + 3600);
+assert.equal(latestSecond(["jump_b", "align_a"]), sec0 + 3600);
+assert.equal(latestSecond(["jump_b"]), sec0 + 3600);
+assert.equal(latestSecond(["align_a"]), sec0 + 4);
+assert.deepEqual(metricsStore.series("align_a", 5, latestSecond(["align_a", "jump_b"])).ys, [
+  null,
+  null,
+  null,
+  null,
+  null,
+]);
+
+// ── narrowing the fold is the whole policy (the panel's rule) ────
+// The panel's shape, at store level: fold ONLY the live stream, then
+// read both streams at that one anchor. The stalled stream — a
+// change-only bounds stream on an idle site, or a trace that stopped
+// — keeps its place in the data array as trailing nulls under the
+// live edge, and the live stream still reads its full window. Under
+// the old policy the stalled stream could win the fold instead, and
+// then it was the live trace that came back blank.
+for (let i = 0; i < 5; i++) {
+  metricsStore.applySample({
+    stream: "fold_live",
+    quantity: "Power",
+    unit: "W",
+    ts_ms: t0 + i * 1000,
+    value: i,
+  });
+}
+for (const [i, s] of [0, 1].entries()) {
+  metricsStore.applySample({
+    stream: "fold_stalled",
+    quantity: "Power",
+    unit: "W",
+    ts_ms: t0 + s * 1000,
+    value: 100 + i,
+  });
+}
+const foldAnchor = latestSecond(["fold_live"]);
+assert.equal(foldAnchor, sec0 + 4);
+const liveRow = metricsStore.series("fold_live", 5, foldAnchor);
+const stalledRow = metricsStore.series("fold_stalled", 5, foldAnchor);
+assert.deepEqual(liveRow.xs, stalledRow.xs);
+assert.deepEqual(liveRow.ys, [0, 1, 2, 3, 4]);
+assert.deepEqual(stalledRow.ys, [100, 101, null, null, null]);
+
 // ── empty ring, and samples with no server timestamp ─────────────
 assert.deepEqual(metricsStore.series("never_sampled", 5), { xs: [], ys: [] });
 assert.equal(latestSecond(["never_sampled"]), null);

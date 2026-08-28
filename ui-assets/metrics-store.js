@@ -237,11 +237,21 @@ export const metricsStore = (() => {
 // series(stream, windowS, end) is what keeps a stalled stream's last
 // point under the same x as its live sibling's, instead of each
 // series ending at its own newest second.
+//
+// A plain max, with no outlier policy of its own: the CALLER chooses
+// which streams may steer the anchor, and that choice is the whole
+// policy (metrics-panel.js hands over its visible traces only, never
+// its annotation streams). Nothing here tries to spot a clock jump —
+// a guard that dropped a stream sitting far beyond its siblings both
+// mis-fired on a legitimately stalled sibling and lost to a jump that
+// hit several streams at once. maxSecond is monotonic with no reset
+// path, so a future-stamped sample leaves that stream's anchor
+// pinned ahead of its siblings permanently, until a reload clears it.
 export function latestSecond(streams) {
-  let end = null;
+  let max = null;
   for (const s of streams) {
     const m = metricsStore.maxSecond(s);
-    if (m !== null && (end === null || m > end)) end = m;
+    if (m !== null && (max === null || m > max)) max = m;
   }
-  return end;
+  return max;
 }

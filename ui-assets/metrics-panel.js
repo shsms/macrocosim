@@ -6,7 +6,7 @@
 // module owns the DOM. Series colors follow the category palette so
 // chart lines mean what the canvas already means.
 
-import { fmtValue, metricsStore, pfText, pfValue } from "./metrics-store.js";
+import { fmtValue, latestSecond, metricsStore, pfText, pfValue } from "./metrics-store.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 
 const PANEL = "metrics-btn";
@@ -89,7 +89,12 @@ const cssColor = (v) => getComputedStyle(document.documentElement).getPropertyVa
 
 // One live uPlot per unfolded card; rebuilt (not re-dataed) on any
 // config change — window, series toggle, PF overlay, unfold — and
-// destroyed on fold/close. plots: card key → { plot, assemble }.
+// destroyed on fold/close. plots: card key → { plot, unit, div,
+// activeKeys, hasBand, withPf }: the axis-label, y-scale and
+// data-shape decisions frozen at build time. repaint() re-derives the
+// first three to notice when they have gone stale, and feeds the last
+// two back so the data it hands setData() keeps the shape the plot was
+// built with.
 let plots = new Map();
 let unsubscribe = null;
 let repaintQueued = false;
@@ -101,11 +106,21 @@ function destroyPlots() {
 
 // Scale choice across every visible series of a card so they share
 // one y-axis honestly (the inspector's chooseScale, multi-series).
-function chooseDiv(values) {
-  const max = Math.max(0, ...values.map((v) => Math.abs(v)));
-  if (max >= 1e6) return { div: 1e6, prefix: "M" };
-  if (max >= 1e3) return { div: 1e3, prefix: "k" };
-  return { div: 1, prefix: "" };
+// Hysteresis, because changing the divisor here costs a full chart
+// rebuild: step UP the moment the max reaches a threshold, but step
+// back DOWN only once it has fallen a clear 10% below the threshold
+// that earned the current divisor. A site idling either side of
+// 1 kW (or 1 MW) would otherwise flip W ↔ kW between ticks and
+// rebuild the card on every single repaint.
+function chooseDiv(values, currentDiv = 1) {
+  let max = 0;
+  for (const v of values) {
+    const a = Math.abs(v);
+    if (a > max) max = a;
+  }
+  const up = max >= 1e6 ? 1e6 : max >= 1e3 ? 1e3 : 1;
+  const div = currentDiv > up && max >= 0.9 * currentDiv ? currentDiv : up;
+  return { div, prefix: div === 1e6 ? "M" : div === 1e3 ? "k" : "" };
 }
 
 // The spec's dashed y=0 line: the import/export divide, drawn only
@@ -143,27 +158,81 @@ function drawZeroLine(u) {
   ctx.restore();
 }
 
-function buildChart(card, slot) {
-  const active = card.series.filter(seriesOn);
-  if (!active.length) {
-    slot.innerHTML = '<p class="hint">all series toggled off</p>';
-    return;
-  }
-  // Scale + shape decisions are made once per build; assemble() then
-  // regenerates the full data array — active series, envelope-band
-  // series, PF series — in exactly the built shape, so the repaint
-  // path can setData() without ever guessing whether shapes match.
-  const secs = windowSecs();
-  const all = [];
+// Every stream a card READS: its visible traces, the envelope bounds
+// behind the battery trace, and — while the PF overlay is on — the
+// active-power partner each reactive trace derives its PF against.
+// They all have to share one time anchor, so they are gathered here
+// once rather than reached for one call site at a time.
+function cardStreams(card, active) {
+  const out = new Set();
+  const withPf = card.pfOverlay === true && pfOn();
   for (const s of active) {
-    for (const v of metricsStore.series(s.stream, secs).ys) if (v != null) all.push(v);
+    out.add(s.stream);
+    if (s.band) for (const b of s.band) out.add(b);
+    if (withPf && s.p) out.add(s.p);
   }
+  return [...out];
+}
+
+// The streams allowed to STEER the anchor: the card's active traces,
+// and only those. Band bounds and PF `p` partners are annotations —
+// they are still read at whatever anchor the traces settle on, like
+// every other column, they just don't get a vote in where the window
+// ends. The bounds forwarder is change-only, so on an idle site
+// `battery_pool_bounds_*` can sit unpublished for the full 15 min ring
+// while the traces keep sampling; letting it into the fold put the
+// anchor on a dead stream and blanked every live trace on the card.
+// A TRACE that stalls behind its siblings is a different thing and
+// stays in: it should read as trailing gaps under the live edge,
+// which is exactly what the shared anchor gives it.
+const anchorStreams = (active) => active.map((s) => s.stream);
+
+// The identity of a card's visible series set, for pinning it on the
+// plots entry: same streams in the same order is the same data shape.
+const activeKeysOf = (active) => anchorStreams(active).join();
+
+// One read of the store per card per tick: the build-time decisions
+// that outlive the build — the axis unit (the headline stream's, so
+// "" until the first sample lands) and the shared y divisor over
+// everything currently visible — together with the uPlot data array
+// those decisions scale. A panel opened before the loopback's first
+// samples bakes in unit "" and div 1, and only a rebuild can relabel
+// an axis or rescale a trace, so repaint() re-derives both from this
+// same frame and compares before re-dataing with its `data`.
+//
+// Every column is read at ONE anchor second — the newest second any
+// of the card's active TRACES holds (see anchorStreams; the band and
+// PF streams are read at it, they don't set it) — so column k of the
+// traces, of the band edges and of the PF overlay all mean the same
+// second. Reading each stream at its own newest second is what let a
+// stalled stream slide out from under its live siblings. `data` is
+// null when there is nothing to draw yet (no trace has a sample);
+// `shape` pins the band/PF layout to what the live plot was built
+// with, and deriving it (null) is the build-time path.
+function cardFrame(card, secs, currentDiv = 1, shape = null) {
+  const active = card.series.filter(seriesOn);
+  const streams = cardStreams(card, active);
+  const end = latestSecond(anchorStreams(active));
   const unit = metricsStore.latest(card.headline)?.unit ?? "";
-  const shown = unit === "var" ? "VAr" : unit;
+  if (!active.length || end === null) return { active, unit, div: 1, data: null };
+  const raw = new Map();
+  for (const stream of streams) raw.set(stream, metricsStore.series(stream, secs, end));
+  // Whichever trace fixed the anchor is non-empty, and every
+  // non-empty read at one anchor returns the same xs.
+  const anchor = [...raw.values()].find((r) => r.xs.length > 0);
+  if (!anchor) return { active, unit, div: 1, data: null };
+  const xs = anchor.xs;
+  // A stream still empty at this anchor reads as an all-null column,
+  // so it keeps its place in the data array instead of shortening it.
+  const ysOf = (stream) => {
+    const r = raw.get(stream);
+    return r && r.ys.length === xs.length ? r.ys : new Array(xs.length).fill(null);
+  };
+  const all = [];
+  for (const s of active) for (const v of ysOf(s.stream)) if (v != null) all.push(v);
   const isPower = unit === "W" || unit === "var";
-  const { div, prefix } = isPower ? chooseDiv(all) : { div: 1, prefix: "" };
-  const scaled = (stream) =>
-    metricsStore.series(stream, secs).ys.map((v) => (v == null ? null : v / div));
+  const { div, prefix } = isPower ? chooseDiv(all, currentDiv) : { div: 1, prefix: "" };
+  const scaled = (stream) => ysOf(stream).map((v) => (v == null ? null : v / div));
   // Battery envelope: lower/upper bounds as invisible series with a
   // translucent band between them, behind the battery trace. Both
   // edges need two samples in the window before the band earns its
@@ -173,24 +242,48 @@ function buildChart(card, slot) {
   // republishes only when the envelope moves, so on an idle site
   // that is exactly what the window holds.
   const bandCfg = active.find((s) => s.band);
-  const bandPoints = (b) => metricsStore.series(b, secs).ys.filter((v) => v != null).length;
-  const hasBand = bandCfg?.band.every((b) => bandPoints(b) >= 2) === true;
-  const withPf = card.pfOverlay === true && pfOn();
-  const assemble = () => {
-    const data = [metricsStore.series(active[0].stream, secs).xs];
-    for (const s of active) data.push(scaled(s.stream));
-    if (hasBand) {
-      data.push(scaled(bandCfg.band[1]), scaled(bandCfg.band[0]));
+  const bandPoints = (b) => ysOf(b).filter((v) => v != null).length;
+  // If the band-owning trace was toggled off out-of-band, bandCfg is gone
+  // even though the pinned shape still expects a band; fall through so the
+  // frame survives this tick and the activeKeys check right after rebuilds.
+  const hasBand = shape
+    ? shape.hasBand && !!bandCfg
+    : bandCfg?.band.every((b) => bandPoints(b) >= 2) === true;
+  const withPf = shape ? shape.withPf : card.pfOverlay === true && pfOn();
+  const data = [xs];
+  for (const s of active) data.push(scaled(s.stream));
+  if (hasBand) data.push(scaled(bandCfg.band[1]), scaled(bandCfg.band[0]));
+  if (withPf) {
+    for (const s of active) {
+      const p = ysOf(s.p);
+      const q = ysOf(s.stream);
+      data.push(q.map((qv, i) => pfValue(p[i], qv)));
     }
-    if (withPf) {
-      for (const s of active) {
-        const p = metricsStore.series(s.p, secs).ys;
-        const q = metricsStore.series(s.stream, secs).ys;
-        data.push(q.map((qv, i) => pfValue(p[i], qv)));
-      }
-    }
-    return data;
-  };
+  }
+  return { active, unit, div, prefix, hasBand, withPf, data };
+}
+
+function buildChart(card, slot) {
+  // Scale + shape decisions are made once per build and stored on the
+  // plots entry: the band/PF layout, which repaint() feeds back into
+  // cardFrame() so the array it hands setData() matches the built shape
+  // exactly, and the set of active streams, which fixes how many
+  // columns that array has. Both are pinned rather than re-derived per
+  // tick, so neither side has to guess the shape — and repaint() can
+  // tell a plot built against a different series set from a live one.
+  const secs = windowSecs();
+  const { active, unit, div, prefix, hasBand, withPf, data } = cardFrame(card, secs);
+  if (!active.length) {
+    slot.innerHTML = '<p class="hint">all series toggled off</p>';
+    return;
+  }
+  if (data === null) {
+    // Nothing sampled yet — no anchor second to draw a time axis
+    // against. repaint() builds the card the moment one lands.
+    slot.innerHTML = '<p class="hint">waiting for samples</p>';
+    return;
+  }
+  const shown = unit === "var" ? "VAr" : unit;
   const series = [
     {},
     ...active.map((s) => ({
@@ -259,7 +352,14 @@ function buildChart(card, slot) {
     bands,
     hooks: { draw: [drawZeroLine] },
   };
-  plots.set(card.key, { plot: new uPlot(opts, assemble(), slot), assemble });
+  plots.set(card.key, {
+    plot: new uPlot(opts, data, slot),
+    unit,
+    div,
+    activeKeys: activeKeysOf(active),
+    hasBand,
+    withPf,
+  });
 }
 
 // Chips + fold summaries repaint on every store notify (rAF-
@@ -288,11 +388,54 @@ function repaint(contentEl) {
       }
     }
   }
-  // Charts re-data in place: assemble() regenerates the exact data
-  // shape each plot was built with, so no shape checks are needed.
-  // Scale (kW vs MW) and band presence refresh on the next rebuild
-  // (window / toggle / unfold), not per tick.
-  for (const { plot, assemble } of plots.values()) plot.setData(assemble());
+  // Charts re-data in place from the same frame the staleness check
+  // reads: cardFrame() walks each of the card's streams once and
+  // returns both the re-derived unit/divisor and the data array built
+  // in the shape the plot was created with, so a tick costs one pass
+  // over the window per stream — not the two it cost when the probe
+  // and the data assembly each did their own reads. Band presence
+  // still refreshes on the next rebuild (window / toggle / unfold)
+  // rather than per tick, but the axis unit and the kW-vs-MW divisor
+  // cannot wait for one: a card built before its stream had any
+  // samples would otherwise keep raw watts under a blank axis label
+  // for as long as the panel stays open. A rebuild only on a real
+  // change — and chooseDiv's hysteresis is what keeps "real" from
+  // meaning "the max wobbled across 1e3 again".
+  const secs = windowSecs();
+  for (const [key, entry] of [...plots]) {
+    const card = CARDS.find((c) => c.key === key);
+    if (!card) continue;
+    const frame = cardFrame(card, secs, entry.div, entry);
+    // The visible series set is read from localStorage every tick, so a
+    // second tab toggling a chip rewrites `sw-metrics-series-*` under a
+    // live plot and the next frame carries a different column count —
+    // setData() would then hand uPlot an array its series list doesn't
+    // index. A changed series set is as stale as a changed unit.
+    // Same class of pin, same failure: the PF overlay flag is read
+    // from localStorage too, so a second tab flipping `sw-metrics-pf`
+    // changes the column count under a live plot. The in-panel toggle
+    // rebuilds on its own click, but an out-of-band change would
+    // otherwise leave the pinned `withPf` shape in force forever —
+    // PF series built but fed nothing, or dropped and never built.
+    const wantPf = card.pfOverlay === true && pfOn();
+    if (activeKeysOf(frame.active) !== entry.activeKeys || wantPf !== entry.withPf) {
+      rebuildCard(key);
+      continue;
+    }
+    if (frame.data === null) continue;
+    if (frame.unit !== entry.unit || frame.div !== entry.div) rebuildCard(key);
+    else entry.plot.setData(frame.data);
+  }
+  // A card unfolded before any of its traces had a sample holds a
+  // placeholder instead of a plot; the first sample to land is its
+  // build trigger. Same fold as cardFrame's, or the two would
+  // disagree: a bounds sample alone gives no anchor, so building on
+  // one would draw the placeholder straight back.
+  for (const card of CARDS) {
+    if (plots.has(card.key) || !cardOpen(card)) continue;
+    const active = card.series.filter(seriesOn);
+    if (active.length && latestSecond(anchorStreams(active)) !== null) rebuildCard(card.key);
+  }
 }
 
 function scheduleRepaint(contentEl) {
