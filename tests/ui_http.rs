@@ -238,6 +238,10 @@ async fn site_import_creates_microgrid_with_working_formulas() {
         .unwrap();
     assert_eq!(resp["components"], 4);
     let id = resp["id"].as_u64().unwrap();
+    // No `mid` in the body — the pre-dialog behaviour, kept: the
+    // server allocates the lowest free id, one above the bootstrap
+    // microgrid this fixture registers.
+    assert_eq!(id, 2201, "a no-mid import must still auto-assign: {resp}");
 
     let topo = json(&client, format!("{}/api/mg/{id}/topology", s.ui_url)).await;
     assert_eq!(topo["components"].as_array().unwrap().len(), 4);
@@ -257,6 +261,126 @@ async fn site_import_creates_microgrid_with_working_formulas() {
         .unwrap();
     assert!(saved.contains(":capacity 40000.0"), "{saved}");
     assert!(saved.contains(":rated-fuse-current 125"), "{saved}");
+}
+
+/// A one-component site export — the smallest thing the importer
+/// accepts, enough to watch where the new microgrid's id lands.
+/// Component ids are enterprise-unique, so every call needs its own.
+fn tiny_export(name: &str, mid: Option<u64>, component_id: u64) -> Value {
+    let mut body = serde_json::json!({
+        "name": name,
+        "components": {"electricalComponents": [
+            {"id": component_id.to_string(), "name": "grid",
+             "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"}
+        ]}
+    });
+    if let Some(mid) = mid {
+        body["mid"] = serde_json::json!(mid);
+    }
+    body
+}
+
+/// The import dialog asks the user for the microgrid id, so the
+/// import body carries a `mid` — and the microgrid registers under
+/// exactly that one, not the next free one.
+#[tokio::test(flavor = "multi_thread")]
+async fn site_import_claims_the_requested_microgrid_id() {
+    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let client = reqwest::Client::new();
+
+    // Well clear of the lowest free id (2201), so landing on it can
+    // only be the requested id being honoured.
+    let wanted = 2317;
+    let resp: Value = client
+        .post(format!("{}/api/microgrids/import", s.ui_url))
+        .json(&tiny_export("chosen id", Some(wanted), 9201))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resp["id"], wanted, "{resp}");
+
+    let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
+    let entry = mgs
+        .as_array()
+        .expect("microgrids array")
+        .iter()
+        .find(|m| m["id"] == wanted)
+        .unwrap_or_else(|| panic!("microgrid {wanted} not registered: {mgs}"));
+    assert_eq!(entry["name"], "chosen id", "{entry}");
+}
+
+/// A requested id that is already taken is refused, and the refusal
+/// names the id so the UI can put it in a toast. Nothing is created:
+/// the collision is caught before the file is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn site_import_refuses_a_taken_microgrid_id() {
+    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let client = reqwest::Client::new();
+
+    let wanted = 2318;
+    client
+        .post(format!("{}/api/microgrids/import", s.ui_url))
+        .json(&tiny_export("first", Some(wanted), 9301))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    let resp = client
+        .post(format!("{}/api/microgrids/import", s.ui_url))
+        .json(&tiny_export("second", Some(wanted), 9302))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::CONFLICT,
+        "a taken id must be refused"
+    );
+    let text = resp.text().await.unwrap();
+    assert!(
+        text.contains(&wanted.to_string()),
+        "the refusal must name the id: {text}"
+    );
+
+    // The refused import left nothing behind — no second microgrid,
+    // and the file for the id it asked for is still the FIRST
+    // import's, untouched (the refusal happens before any write).
+    let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
+    assert_eq!(
+        mgs.as_array()
+            .expect("microgrids array")
+            .iter()
+            .filter(|m| m["id"] == wanted)
+            .count(),
+        1,
+        "{mgs}"
+    );
+    let path = s
+        .config
+        .state_dir()
+        .join(format!("microgrids/{wanted}.lisp"));
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        saved.contains("9301") && !saved.contains("9302"),
+        "the refused import must not have touched {}: {saved}",
+        path.display()
+    );
+
+    // And no file was written under any OTHER id on the way out —
+    // the refusal is not a silent fallback to the next free one.
+    let mut files: Vec<String> = std::fs::read_dir(s.config.state_dir().join("microgrids"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(files, vec![format!("{wanted}.lisp")], "stray file written");
 }
 
 /// SP1's final review deferred the formula-convergence E2E to SP3
