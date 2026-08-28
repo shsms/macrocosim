@@ -280,6 +280,10 @@ mod tests {
             ComponentCategory::EvCharger(EvChargerType::Dc)
         );
         assert_eq!(lift_category(Category::Chp, None), ComponentCategory::Chp);
+        assert_eq!(
+            lift_category(Category::SteamBoiler, None),
+            ComponentCategory::SteamBoiler
+        );
     }
 
     /// A minimal valid topology: grid → meter → battery_inverter → battery.
@@ -323,6 +327,34 @@ mod tests {
         let edges = vec![edge(1, 2), edge(2, 3), edge(3, 4), edge(4, 5)];
         let graph = build_from(nodes, edges).expect("valid topology should accept");
         let f = graph.battery_formula(None).expect("battery formula");
+        let s = format!("{f}");
+        assert!(
+            s.contains("#3"),
+            "expected formula to use the fronting meter (#3), got {s}"
+        );
+    }
+
+    /// Steam-boiler formula resolves through a fronting meter, same
+    /// topology shape as `battery_formula_prefers_fronting_meter`
+    /// above — and the category lifts to `ComponentCategory::SteamBoiler`.
+    #[test]
+    fn steam_boiler_formula_resolves_behind_a_meter() {
+        assert_eq!(
+            lift_category(Category::SteamBoiler, None),
+            ComponentCategory::SteamBoiler
+        );
+
+        let nodes = vec![
+            node(1, ComponentCategory::GridConnectionPoint),
+            node(2, ComponentCategory::Meter), // main meter
+            node(3, ComponentCategory::Meter), // boiler-fronting meter
+            node(4, ComponentCategory::SteamBoiler),
+        ];
+        let edges = vec![edge(1, 2), edge(2, 3), edge(3, 4)];
+        let graph = build_from(nodes, edges).expect("valid topology should accept");
+        let f = graph
+            .steam_boiler_formula(None)
+            .expect("steam boiler formula should resolve");
         let s = format!("{f}");
         assert!(
             s.contains("#3"),

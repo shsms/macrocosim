@@ -367,6 +367,7 @@ fn category_from_alias(token: &str) -> Option<i32> {
         "inverter" => Cat::Inverter,
         "ev_charger" | "ev-charger" | "evcharger" => Cat::EvCharger,
         "chp" => Cat::Chp,
+        "steam_boiler" | "steam-boiler" | "steamboiler" => Cat::SteamBoiler,
         _ => return None,
     };
     Some(cat as i32)
@@ -408,7 +409,8 @@ pub fn parse_target(spec: &str) -> Result<pb::TargetComponents, String> {
             None => {
                 return Err(format!(
                     "unknown target {token:?}; expected component ids (e.g. \"1,2\") or \
-                     categories (battery, grid, meter, inverter, ev_charger, chp)"
+                     categories (battery, grid, meter, inverter, ev_charger, chp, \
+                     steam_boiler)"
                 ));
             }
         }
@@ -693,6 +695,28 @@ mod tests {
         }
         assert!(parse_target("").is_err());
         assert!(parse_target("nonsense").is_err());
+    }
+
+    #[test]
+    fn category_from_alias_accepts_all_steam_boiler_spellings() {
+        use crate::proto::common::microgrid::electrical_components::ElectricalComponentCategory;
+
+        for alias in ["steam_boiler", "steam-boiler", "steamboiler"] {
+            assert_eq!(
+                category_from_alias(alias),
+                Some(ElectricalComponentCategory::SteamBoiler as i32),
+                "alias {alias:?} should resolve to SteamBoiler"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_target_error_mentions_steam_boiler() {
+        let err = parse_target("nonsense").unwrap_err();
+        assert!(
+            err.contains("steam_boiler"),
+            "expected error to mention steam_boiler, got {err:?}"
+        );
     }
 
     #[test]

@@ -224,7 +224,8 @@ enum DispatchCmd {
     },
     /// Create a dispatch. TARGET is a comma-separated list of either
     /// component categories (battery, grid, meter, inverter,
-    /// ev_charger, chp) or numeric component ids (e.g. "1,2,3").
+    /// ev_charger, chp, steam_boiler) or numeric component ids
+    /// (e.g. "1,2,3").
     Create {
         /// Microgrid id.
         microgrid_id: u64,
@@ -406,6 +407,7 @@ enum Category {
     Battery,
     EvCharger,
     Chp,
+    SteamBoiler,
 }
 
 impl Category {
@@ -417,6 +419,7 @@ impl Category {
             Self::Battery => ElectricalComponentCategory::Battery,
             Self::EvCharger => ElectricalComponentCategory::EvCharger,
             Self::Chp => ElectricalComponentCategory::Chp,
+            Self::SteamBoiler => ElectricalComponentCategory::SteamBoiler,
         }
     }
 }
@@ -1779,6 +1782,7 @@ fn short_category(cat: i32) -> &'static str {
         Ok(ElectricalComponentCategory::Battery) => "battery",
         Ok(ElectricalComponentCategory::EvCharger) => "ev",
         Ok(ElectricalComponentCategory::Chp) => "chp",
+        Ok(ElectricalComponentCategory::SteamBoiler) => "boiler",
         _ => "?",
     }
 }
