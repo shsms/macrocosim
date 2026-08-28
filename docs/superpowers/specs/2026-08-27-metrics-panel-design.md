@@ -301,3 +301,37 @@ is clamped back into view and re-persisted.
 PF is calculated client-side (|P| / hypot(P, Q)) and works; "PF —"
 appears only at P = Q = 0 where PF is undefined — the idle state of
 the formula-test sites that prompted the report.
+
+### G. Panel sizing and drag floor (revised during user testing)
+
+Two revisions to §D/§E after live acceptance:
+
+- **Height is a cap, not a setting.** The native resize gripper sets
+  a persisted max-height cap (`sw-panel-size-<name>`) while the
+  panel's height stays content-hugging (`height: auto`): a panel can
+  never be stretched past its content (the manual height converts to
+  the cap when the gesture settles and the card snaps to content
+  size), and expanding/collapsing a card auto-grows/shrinks the
+  panel up to min(cap, dock). Shrinking below content scrolls
+  `.panel-content`.
+- **The drag floor is the dock's top edge**, not the header's bottom
+  — the pulse bar and microgrid header sit below the header and
+  could still cover a dragged strip. The dock's top clears all
+  chrome by construction; both the live drag clamp and the open-time
+  sanitize floor there, measured live.
+
+### H. Inverter Q-envelope flicker
+
+The inspector's Power card flickered its Q graduation once a second
+under a setpoint loop: every accepted setpoint re-fetches the
+component snapshot, whose reactive envelope was null for any
+component whose children expose no Q bounds
+(`reactive_setpoint_envelope` short-circuits before consulting the
+component's OWN bounds), clobbering the stream-fed window. Fixed in
+three layers: the snapshot's envelope falls back to the component's
+own bounds (reporting only — the setpoint gates are untouched);
+`applySnapshot` preserves stream-fed bounds over snapshot nulls (the
+same preservation liveVal already had); and `.env-ends` keeps one
+line of height when empty so transients can't resize the panel. The
+graduation's VALUES tracking P is the capability physics (Q window
+derives from P under a PF/apparent cap) and stays.
