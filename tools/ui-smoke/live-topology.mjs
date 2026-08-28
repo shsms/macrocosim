@@ -618,6 +618,57 @@ check(
 await page.click("#panel-metrics-btn .float-close");
 await page.evaluate(() => localStorage.removeItem("sw-panel-pos-metrics-btn"));
 
+// ── e2e: the canvas controls collapse ─────────────────────────────
+// The chevron folds the layout / drag / show groups away so the strip
+// stops eating the canvas's top-right corner. The `panels` pills are
+// deliberately outside the fold — collapsed still opens the metrics
+// and formula panels — and the choice persists like the other UI
+// preferences (localStorage, read back on the next load).
+await page.click("#ctl-collapse");
+check(
+  "e2e: the chevron collapses the canvas controls",
+  await page.evaluate(() => {
+    const strip = document.getElementById("topology-controls");
+    const layout = document.querySelector(".layout-btn");
+    return (
+      strip.classList.contains("collapsed") &&
+      layout.offsetParent === null &&
+      document.getElementById("metrics-btn").offsetParent !== null
+    );
+  }),
+);
+await page.reload({ waitUntil: "networkidle" });
+await page.click(DEMO_CARD).catch(() => {});
+check(
+  "e2e: the collapsed controls survive a reload",
+  await page.evaluate(
+    () =>
+      document.getElementById("topology-controls").classList.contains("collapsed") &&
+      document.querySelector(".layout-btn").offsetParent === null,
+  ),
+);
+// Collapsed is not a dead strip: the panel pills still toggle their
+// panels and light up (side-panel.js's syncButton paints .primary).
+await page.click("#metrics-btn");
+check(
+  "e2e: the metrics pill still works while collapsed",
+  await page.evaluate(
+    () =>
+      document.getElementById("panel-metrics-btn")?.classList.contains("open") === true &&
+      document.getElementById("metrics-btn").classList.contains("primary"),
+  ),
+);
+await page.click("#metrics-btn");
+await page.click("#ctl-collapse");
+check(
+  "e2e: the chevron expands the canvas controls again",
+  await page.evaluate(
+    () =>
+      !document.getElementById("topology-controls").classList.contains("collapsed") &&
+      document.querySelector(".layout-btn").offsetParent !== null,
+  ),
+);
+
 // ── e2e: the GCP inspector slims to Charts + Connections ───────────
 // The grid connection point (id 1 in the Berlin demo) takes no knobs,
 // no setpoints, and publishes no per-component telemetry — its

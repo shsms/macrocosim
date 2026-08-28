@@ -96,14 +96,53 @@ export function notify(message, kind = "error") {
   setTimeout(() => t.remove(), 5000);
 }
 
+// Whether the strip's layout / drag / show groups are folded away
+// behind the chevron, leaving the `panels` pills. Persisted like the
+// other UI preferences — in a try/catch, since private-mode and
+// quota-exceeded storage throw — and falling back to expanded.
+const CTL_COLLAPSED_KEY = "sw-controls-collapsed";
+function loadCtlCollapsed() {
+  try {
+    return localStorage.getItem(CTL_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function saveCtlCollapsed(collapsed) {
+  try {
+    localStorage.setItem(CTL_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Storage unavailable — the fold still works for this session,
+    // it just won't remember next time.
+  }
+}
+// Paint the fold: the class the CSS keys off, plus a chevron that
+// points the way the click goes — ‹ folds left, › unfolds right.
+function applyCtlCollapsed(strip, collapsed) {
+  strip.classList.toggle("collapsed", collapsed);
+  const btn = strip.querySelector("#ctl-collapse");
+  if (!btn) return;
+  btn.textContent = collapsed ? "›" : "‹";
+  btn.title = collapsed ? "Show the layout controls" : "Collapse the layout controls";
+  btn.setAttribute("aria-expanded", String(!collapsed));
+}
+
 // Layout picker + snap toggle wiring for one canvas-controls strip.
 // Clicking an algorithm applies it (and drops any manual
 // arrangement); clicking the active one re-runs it. The snap toggle
 // is the magnetic grid for node drags; Alt-drag locks the movement
-// to one axis, with snap on or off.
+// to one axis, with snap on or off. The chevron folds those three
+// groups away; the `panels` pills stay put in either state.
 export function setupCanvasControls(stripId, canvas) {
   const strip = document.getElementById(stripId);
+  applyCtlCollapsed(strip, loadCtlCollapsed());
   strip.addEventListener("click", (ev) => {
+    if (ev.target.closest("#ctl-collapse")) {
+      const collapsed = !strip.classList.contains("collapsed");
+      applyCtlCollapsed(strip, collapsed);
+      saveCtlCollapsed(collapsed);
+      return;
+    }
     const layoutBtn = ev.target.closest(".layout-btn");
     if (layoutBtn) {
       for (const b of strip.querySelectorAll(".layout-btn")) {

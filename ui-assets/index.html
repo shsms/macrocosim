@@ -118,23 +118,30 @@
         </header>
         <div id="dispatches-body"></div>
       </div>
-      <!-- Floating right: layout picker + drag-snap toggle (topology only). -->
+      <!-- Floating right: layout picker + drag-snap toggle (topology only).
+           Everything up to the `panels` label collapses behind the
+           chevron, so the strip can shrink out of the canvas's way
+           while the panel pills stay one click from reach. -->
       <div id="topology-controls" class="canvas-controls">
-        <span class="ctl-label">layout</span>
-        <button type="button" class="pill layout-btn active" data-layout="lanes"
-                title="Subtree blocks; a big fan-out splits into two lanes">lanes</button>
-        <button type="button" class="pill layout-btn" data-layout="columns"
-                title="Classic strict depth columns">columns</button>
-        <button type="button" class="pill layout-btn" data-layout="topdown"
-                title="Tree from top to bottom">top-down</button>
-        <button type="button" class="pill layout-btn" data-layout="radial"
-                title="Root in the middle, one ring per depth">radial</button>
-        <span class="ctl-label">drag</span>
-        <button type="button" class="pill snap-btn active"
-                title="Dragged nodes snap to a grid, relative to where the drag started. Hold Alt while dragging to move along one axis only.">snap</button>
-        <span class="ctl-label">show</span>
-        <button type="button" class="pill values-btn active"
-                title="Show live power, reactive power / SoC on nodes and flow chevrons on edges. Off: name and id only.">values</button>
+        <button type="button" id="ctl-collapse" class="pill"
+                title="Collapse the layout controls">&lsaquo;</button>
+        <span class="ctl-collapsible">
+          <span class="ctl-label">layout</span>
+          <button type="button" class="pill layout-btn active" data-layout="lanes"
+                  title="Subtree blocks; a big fan-out splits into two lanes">lanes</button>
+          <button type="button" class="pill layout-btn" data-layout="columns"
+                  title="Classic strict depth columns">columns</button>
+          <button type="button" class="pill layout-btn" data-layout="topdown"
+                  title="Tree from top to bottom">top-down</button>
+          <button type="button" class="pill layout-btn" data-layout="radial"
+                  title="Root in the middle, one ring per depth">radial</button>
+          <span class="ctl-label">drag</span>
+          <button type="button" class="pill snap-btn active"
+                  title="Dragged nodes snap to a grid, relative to where the drag started. Hold Alt while dragging to move along one axis only.">snap</button>
+          <span class="ctl-label">show</span>
+          <button type="button" class="pill values-btn active"
+                  title="Show live power, reactive power / SoC on nodes and flow chevrons on edges. Off: name and id only.">values</button>
+        </span>
         <span class="ctl-label">panels</span>
         <button type="button" id="formula-btn" class="pill"
                 title="Formula explorer: how each derived metric is computed from the topology">formulas</button>

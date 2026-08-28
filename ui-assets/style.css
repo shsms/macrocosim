@@ -2087,6 +2087,14 @@ dialog#dispatch-dialog { max-width: 640px; }
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #topology-controls {
   display: flex;
 }
+/* The collapsible half of the strip (layout / drag / show). `display:
+   contents` dissolves the wrapper so its labels and pills stay direct
+   flex items of the strip — expanded, the row is byte-identical to
+   the ungrouped one. Collapsed, the strip keeps only the chevron and
+   the `panels` group, so the formula / metrics pills (and the
+   `.primary` lit state side-panel.js paints on them) never leave. */
+.ctl-collapsible { display: contents; }
+#topology-controls.collapsed .ctl-collapsible { display: none; }
 .ctl-label {
   font-size: 10.5px;
   text-transform: uppercase;
