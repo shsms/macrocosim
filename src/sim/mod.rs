@@ -27,6 +27,7 @@ pub mod scenarios;
 pub mod setpoints;
 pub mod sim_clock;
 pub mod site_import;
+pub mod steam_boiler;
 
 pub use battery::Battery;
 pub use component::{
@@ -39,3 +40,4 @@ pub use inverter::{BatteryInverter, SolarInverter};
 pub use marker::Marker;
 pub use meter::{Meter, ReactiveSource};
 pub use microgrid_site::MicrogridSite;
+pub use steam_boiler::{SteamBoiler, SteamBoilerConfig};

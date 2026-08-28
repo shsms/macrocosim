@@ -476,6 +476,15 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
         false
     }
 
+    /// Steam boiler: overwrite the pressure state (bar). `false`
+    /// for components without a pressure notion.
+    fn set_pressure_bar(&self, _bar: f32) -> bool {
+        false
+    }
+    fn takes_pressure_bar(&self) -> bool {
+        false
+    }
+
     /// Replace the meter's `:power` source with a Lisp expression
     /// that the scheduler's `refresh_inputs` pass re-resolves each
     /// tick. Used by `(set-meter-power id (lambda () …))` and by
@@ -539,6 +548,18 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// used by `(set-solar-sunlight id (lambda () …))`. Default
     /// no-op for non-solar components.
     fn set_sunlight_source(&self, _scalar: DynamicScalar) {}
+
+    /// Steam boiler: constant steam demand in kg/h. Collapses any
+    /// prior dynamic source, like `set_sunlight_pct`.
+    fn set_steam_demand_kg_h(&self, _kg_h: f32) -> bool {
+        false
+    }
+    fn takes_steam_demand(&self) -> bool {
+        false
+    }
+    /// Steam boiler: install a Lisp-driven demand source that
+    /// `refresh_inputs` re-resolves each tick.
+    fn set_steam_demand_source(&self, _scalar: DynamicScalar) {}
 
     // ── bounds telemetry ─────────────────────────────────────────────
 
@@ -632,6 +653,19 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// solar inverter exists (it defaults to a constant), so `None`
     /// here just means "not a solar inverter".
     fn sunlight_reading(&self) -> Option<ScalarReading> {
+        None
+    }
+
+    /// Resolved demand + source text for the inspector knob.
+    fn demand_reading(&self) -> Option<ScalarReading> {
+        None
+    }
+    /// Live pressure for the inspector knob prefill (expr always None).
+    fn pressure_reading(&self) -> Option<ScalarReading> {
+        None
+    }
+    /// The boiler's thermostat target, for chart annotation.
+    fn pressure_target_bar(&self) -> Option<f32> {
         None
     }
 
