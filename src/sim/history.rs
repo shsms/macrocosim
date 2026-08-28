@@ -25,6 +25,11 @@ pub enum Metric {
     ReactivePowerVar,
     FrequencyHz,
     SocPct,
+    /// Steam pressure (bar) — the steam boiler's SoC-analog state.
+    /// Pinned to the boiler's target in steady state (the implied
+    /// gas burner holds it); moves on perturbation and decays back
+    /// at the steam-demand rate.
+    PressureBar,
     /// DC-side active power, set by batteries / EV chargers /
     /// solar inverters that report a DC bus reading distinct from
     /// their AC `ActivePowerW`. Same units as ActivePowerW (`W`,
@@ -58,6 +63,7 @@ impl Metric {
             Self::ReactivePowerVar => "reactive_power_var",
             Self::FrequencyHz => "frequency_hz",
             Self::SocPct => "soc_pct",
+            Self::PressureBar => "pressure_bar",
             Self::DcPowerW => "dc_power_w",
             Self::EnergyWh => "energy_wh",
             Self::ActivePowerLowerBoundW => "active_power_lower_bound_w",
@@ -85,6 +91,9 @@ impl Metric {
             Self::FrequencyHz => "Frequency",
             Self::SocPct => "Percentage",
             Self::EnergyWh => "Energy",
+            // New quantity string; the UI treats unknown quantities as
+            // fixed-unit, which is right for bar.
+            Self::PressureBar => "Pressure",
         }
     }
 
@@ -103,6 +112,7 @@ impl Metric {
             Self::FrequencyHz => "Hz",
             Self::SocPct => "%",
             Self::EnergyWh => "Wh",
+            Self::PressureBar => "bar",
         }
     }
 }
@@ -122,6 +132,7 @@ impl std::str::FromStr for Metric {
             Metric::ReactivePowerVar,
             Metric::FrequencyHz,
             Metric::SocPct,
+            Metric::PressureBar,
             Metric::DcPowerW,
             Metric::EnergyWh,
             Metric::ActivePowerLowerBoundW,
@@ -231,6 +242,9 @@ impl ComponentHistory {
         if let Some(v) = snapshot.soc_pct {
             record(self, Metric::SocPct, v);
         }
+        if let Some(v) = snapshot.pressure_bar {
+            record(self, Metric::PressureBar, v);
+        }
         if let Some(v) = snapshot.dc_power_w {
             record(self, Metric::DcPowerW, v);
         }
@@ -299,6 +313,29 @@ mod tests {
 
     fn t(secs: i64) -> DateTime<Utc> {
         Utc.timestamp_opt(secs, 0).unwrap()
+    }
+
+    /// pressure_bar must round-trip the full metric plumbing: parse from
+    /// the query-string name, carry quantity/unit for the UI scale
+    /// picker, and get recorded by push_snapshot from a Telemetry that
+    /// carries it (the returned pairs drive the WS fan-out).
+    #[test]
+    fn pressure_bar_metric_round_trips() {
+        use std::str::FromStr;
+        let m = Metric::from_str("pressure_bar").expect("parses");
+        assert_eq!(m, Metric::PressureBar);
+        assert_eq!(m.as_str(), "pressure_bar");
+        assert_eq!(m.quantity(), "Pressure");
+        assert_eq!(m.unit(), "bar");
+
+        let mut h = ComponentHistory::new(10);
+        let t = crate::sim::Telemetry {
+            id: 7,
+            pressure_bar: Some(8.25),
+            ..Default::default()
+        };
+        let pushed = h.push_snapshot(chrono::Utc::now(), &t);
+        assert!(pushed.contains(&(Metric::PressureBar, 8.25)));
     }
 
     #[test]

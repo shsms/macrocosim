@@ -193,6 +193,8 @@ pub struct Telemetry {
     pub frequency_hz: Option<f32>,
 
     pub soc_pct: Option<f32>,
+    /// Steam pressure (bar); steam boilers only.
+    pub pressure_bar: Option<f32>,
     pub soc_lower_pct: Option<f32>,
     pub soc_upper_pct: Option<f32>,
     pub capacity_wh: Option<f32>,
@@ -229,6 +231,7 @@ impl Telemetry {
             Metric::ReactivePowerVar => self.reactive_power_var,
             Metric::FrequencyHz => self.frequency_hz,
             Metric::SocPct => self.soc_pct,
+            Metric::PressureBar => self.pressure_bar,
             Metric::DcPowerW => self.dc_power_w,
             // Cumulative — integrated on the physics tick and held in the
             // site's per-component energy accumulator, not on the
