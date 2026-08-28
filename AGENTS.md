@@ -21,10 +21,9 @@ is wiring the topology + animating the environment.
     the SoC lifecycle helpers shared by battery/EV (`SocProtect`,
     `sanitize_soc_pct`, `integrate_soc_pct`)
   - `battery.rs`, `meter.rs`, `grid.rs`, `ev_charger.rs`,
-    `inverter/{battery,solar}_inverter.rs`
-  - `marker.rs` — no-physics categories (chp, wind turbine, steam
-    boiler, power transformer, breaker); they classify the meters
-    around them
+    `inverter/{battery,solar}_inverter.rs`, `steam_boiler.rs`
+  - `marker.rs` — no-physics categories (chp, wind turbine, power
+    transformer, breaker); they classify the meters around them
   - `site_import.rs` — microgrid API site-export JSON → `(make-* …)` /
     `(connect …)` forms for `/api/microgrids/import`
   - `graph_adapter.rs` — lifts a site into

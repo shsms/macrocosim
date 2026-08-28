@@ -1,9 +1,10 @@
 # switchyard
 
 A microgrid simulator for testing downstream control apps. Components
-(grid, meter, battery, inverters, EV charger, CHP) are Rust types
-behind a single `SimulatedComponent` trait; the topology + animation
-script is Lisp via [`tulisp`](https://github.com/shsms/tulisp).
+(grid, meter, battery, inverters, EV charger, CHP, steam boiler — a
+controllable gas/electric hybrid) are Rust types behind a single
+`SimulatedComponent` trait; the topology + animation script is Lisp
+via [`tulisp`](https://github.com/shsms/tulisp).
 
 The simulator exposes three surfaces:
 

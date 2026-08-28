@@ -993,6 +993,128 @@ await page.evaluate(async () => {
   topology.select([]);
 });
 
+// ── e2e: the steam boiler end to end ───────────────────────────────
+// A controllable gas/electric hybrid: :demand (kg/h) is the base
+// load, an active-power setpoint allots how much of it is actually
+// drawn (min(allotment, demand-equivalent) at the target pressure —
+// 100 kg/h ≈ 62.7 kW here), and the boiler's own pressure state can
+// decline the allotment back toward zero once it drifts above the
+// 8 bar target. Fresh fixture ids (9901/9902), clear of the demo's
+// (1, 2, 100, 1000, 1001) and the import section's (9801/9802,
+// 99401-99405). Connected the way the demo wires a branch meter: a
+// new meter hangs off the site's main meter (2), the boiler hangs off
+// that meter — same (connect parent child) shape as berlin-demo.lisp.
+const BOILER_ID = 9901;
+const BOILER_METER_ID = 9902;
+const boilerSetupOk = await page.evaluate(
+  async ({ meterId, boilerId }) => {
+    const r = await fetch("/api/mg/2200/eval", {
+      method: "POST",
+      body: `(make-meter :id ${meterId}) (make-steam-boiler :id ${boilerId} :demand 100.0) (connect 2 ${meterId}) (connect ${meterId} ${boilerId})`,
+    });
+    return (await r.json()).ok;
+  },
+  { meterId: BOILER_METER_ID, boilerId: BOILER_ID },
+);
+check("e2e: boiler fixture created behind its own meter", boilerSetupOk === true, String(boilerSetupOk));
+await waitFor(async () => (await getModels()).some((m) => m.id === BOILER_ID), 15000);
+
+await page.evaluate(async (id) => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([id]);
+}, BOILER_ID);
+const boilerKnobDefuns = await waitFor(async () => {
+  const ds = await page.evaluate(() => [...document.querySelectorAll(".knob-input")].map((i) => i.dataset.defun));
+  return ds.includes("set-boiler-demand") && ds.includes("set-boiler-pressure") ? ds : null;
+});
+check(
+  "e2e: the boiler inspector shows its demand and pressure knobs",
+  boilerKnobDefuns.includes("set-boiler-demand") && boilerKnobDefuns.includes("set-boiler-pressure"),
+  JSON.stringify(boilerKnobDefuns),
+);
+// Command mode: steam-boiler is in inspect.js's ACCEPTS_SETPOINTS, so
+// the commands selector renders alongside health/telemetry.
+check(
+  "e2e: the command-mode selector renders for the boiler",
+  (await page.locator('select[data-knob="command-mode"]').count()) === 1,
+);
+// Knobs are prefilled from the live reading: demand from the constant
+// installed at construction, pressure from the boiler's own state —
+// which starts pinned to the 8 bar target (no :initial-bar given).
+const demandKnob = await waitFor(async () => {
+  const v = await page.inputValue('.knob-input[data-defun="set-boiler-demand"]');
+  return v || null;
+}, 10000);
+check("e2e: the demand knob is prefilled from construction", demandKnob === "100", demandKnob);
+const pressureKnob = await waitFor(async () => {
+  const v = await page.inputValue('.knob-input[data-defun="set-boiler-pressure"]');
+  return v || null;
+}, 10000);
+check("e2e: the pressure knob is prefilled from the live target", pressureKnob === "8", pressureKnob);
+
+// Charts fold: steam-boiler is the only category with a pressure_bar
+// chart (CHARTS_BY_CATEGORY), titled "Steam pressure" (METRIC_TITLES).
+// Folded by default like every category's Charts card, so it has to
+// be opened before the title paints.
+await page.click("#card-charts [data-fold-toggle]");
+const boilerChartTitles = await waitFor(async () => {
+  const t = await page.evaluate(() => [...document.querySelectorAll("#charts .u-title")].map((e) => e.textContent));
+  return t.length ? t : null;
+}, 10000);
+check(
+  "e2e: the boiler's Charts fold lists a Steam pressure chart",
+  boilerChartTitles.some((t) => /Steam pressure/.test(t)),
+  JSON.stringify(boilerChartTitles),
+);
+
+// Allotment flow: demand was set at construction, BEFORE this
+// setpoint — with demand 0 the dynamic band is [0, 0] and nothing
+// flows no matter what set-active-power asks for.
+const boilerPowerOk = await page.evaluate(async (id) => {
+  const r = await fetch("/api/mg/2200/eval", { method: "POST", body: `(set-active-power ${id} 50000.0)` });
+  return (await r.json()).ok;
+}, BOILER_ID);
+check("e2e: the boiler's active-power setpoint is accepted", boilerPowerOk === true, String(boilerPowerOk));
+const boilerDrawing = await waitFor(async () => {
+  const e = await page.evaluate(async (id) => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugLiveEntry(id);
+  }, BOILER_ID);
+  return e && Number.isFinite(e.p) && Math.abs(e.p) > 1000 ? e : null;
+}, 15000);
+check(
+  "e2e: consumption follows the allotment while demand is set",
+  Boolean(boilerDrawing) && Math.abs(boilerDrawing.p) > 1000,
+  JSON.stringify(boilerDrawing),
+);
+
+// A pressure poke above the 8 bar target: the boiler declines
+// electricity, so consumption decays back toward zero. Decay back to
+// the target takes ~14 min at this demand — far outside the smoke's
+// timescale, so "declined" is stable for this assertion.
+const boilerPressureOk = await page.evaluate(async (id) => {
+  const r = await fetch("/api/mg/2200/eval", { method: "POST", body: `(set-boiler-pressure ${id} 9.5)` });
+  return (await r.json()).ok;
+}, BOILER_ID);
+check("e2e: the pressure poke is accepted", boilerPressureOk === true, String(boilerPressureOk));
+const boilerDeclined = await waitFor(async () => {
+  const e = await page.evaluate(async (id) => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugLiveEntry(id);
+  }, BOILER_ID);
+  return e && Number.isFinite(e.p) && Math.abs(e.p) < 500 ? e : null;
+}, 15000);
+check(
+  "e2e: an above-target pressure declines consumption back to ~0",
+  Boolean(boilerDeclined) && Math.abs(boilerDeclined.p) < 500,
+  JSON.stringify(boilerDeclined),
+);
+
+await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([]);
+});
+
 // ── e2e: live toggle ──────────────────────────────────────────────
 // Geometry as vis applied it, not just the models: a custom shape
 // binds its ctxRenderer once, so a model update that never reaches
