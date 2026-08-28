@@ -1,7 +1,8 @@
 //! gRPC loopback supervisor that mirrors switchyard's own gRPC
 //! service back through `frequenz-microgrid`'s client + logical-
-//! meter actors. Every dashboard formula tile reads from there, so
-//! the SPA exercises exactly the same path a downstream EMS would.
+//! meter actors. The metrics panel's charts and chips read from
+//! there, so the SPA exercises exactly the same path a downstream
+//! EMS would.
 //!
 //! `spawn_microgrid_loopback` kicks the supervisor task; the
 //! supervisor watches `MicrogridSite` events and rebuilds the
@@ -25,12 +26,12 @@ use super::state::{
 
 /// Spawn a tokio task that constructs a [`Microgrid`] pointed at
 /// `grpc_url`, kicks off forwarders for the aggregated streams the
-/// Dashboard cares about, and stores the handle in `slot` once the
-/// connection succeeds. `Microgrid::try_new` already retries lazily
-/// until the gRPC server is reachable; this wrapper exists so the
-/// UI's `serve` doesn't block on the gRPC server coming up — UI
-/// startup proceeds, and dashboard endpoints return 503 until the
-/// slot fills.
+/// metrics panel cares about, and stores the handle in `slot` once
+/// the connection succeeds. `Microgrid::try_new` already retries
+/// lazily until the gRPC server is reachable; this wrapper exists so
+/// the UI's `serve` doesn't block on the gRPC server coming up — UI
+/// startup proceeds, and the microgrid endpoints return 503 until
+/// the slot fills.
 ///
 /// `site` is the sink the forwarders publish to via
 /// [`MicrogridSite::broadcast_microgrid_sample`]; the existing `/ws/events`
@@ -54,7 +55,7 @@ pub fn spawn_microgrid_loopback(grpc_url: String, slot: SharedMicrogrid, site: M
         // mutates; rebuilding picks up the new shape. Entered even
         // when the initial build failed: a transient failure (gRPC
         // transport hiccup) heals on the next topology event
-        // instead of leaving the dashboard 503 forever.
+        // instead of leaving the microgrid endpoints 503 forever.
         run_supervisor(grpc_url, slot, site, events).await;
     });
 }
@@ -98,7 +99,8 @@ async fn build_microgrid(grpc_url: &str, slot: &SharedMicrogrid, site: &Microgri
         }
     };
     // 1 Hz sample cadence matches the existing history sampler;
-    // dashboard tiles refresh at this rate. LogicalMeterHandle's
+    // the metrics panel's charts and chips refresh at this rate.
+    // LogicalMeterHandle's
     // try_new internally loops on the graph build until it
     // succeeds, so a topology mid-mutation just delays this call
     // rather than returning Err.
@@ -705,8 +707,8 @@ fn publish_scalar(
         value,
     };
     state.latest.write().insert(stream, snapshot);
-    // Append to the rolling history ring so the Dashboard tile
-    // sparklines have past data to backfill from on page load.
+    // Append to the rolling history ring so the metrics panel's
+    // charts have past data to backfill from on panel open.
     // Drop the oldest entry when the ring is full.
     {
         let mut history = state.history.write();

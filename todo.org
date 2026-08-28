@@ -18,7 +18,7 @@ DONE entries for the record.
 
 The Rust integration tests in =tests/= cover the HTTP and gRPC
 boundaries but stop at the JSON shape — none of them exercise the
-SPA. The dashboard panel, the topology canvas's drag / connect
+SPA. The metrics panel, the topology canvas's drag / connect
 gestures, the REPL's autocomplete + electric-pair + rainbow
 overlay, and the chart-update path through the WebSocket are all
 unverified by anything other than manual smoke. The plan below
@@ -1702,8 +1702,9 @@ red subtracted), #N jump + inspector side-by-side, battery metric with
 deletion updating the formula via WS event, dashboard-subview panel
 docking, and Esc-closes-newest-first all verified passing.
 
-** TODO [#A] Dashboard space rethink: attention panel over tier rows :ux:design:
+** DONE [#A] Dashboard space rethink: attention panel over tier rows :ux:design:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-28 Fr 07:07]
 - State "TODO"       from              [2026-08-25 Di 12:14]
 :END:
 
@@ -1721,6 +1722,13 @@ needs attention", topology answers "browse everything".
 Deliberately LAST in the redesign queue: what belongs in the freed
 space depends on what the new inspector and the formula overlay
 absorb (2026-08-25 gap analysis).
+
+Resolved by the metrics-panel branch: the Dashboard subview was
+removed outright (spec:
+=docs/superpowers/specs/2026-08-27-metrics-panel-design.md=). The tier
+rows were dropped without an attention panel taking their place —
+that remains a possible future panel rather than something this
+branch delivered.
 
 ** TODO Site-level controls: site-wide sunlight%, and similar knobs      :ux:
 :LOGBOOK:
