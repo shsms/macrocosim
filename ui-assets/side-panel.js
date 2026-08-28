@@ -35,6 +35,10 @@ const KEEP_Y = 40;
 // fight the browser's own resize, which keeps sizing from the height
 // it started with.
 const RESIZE_SETTLE = 280;
+// Same idea for the window's own resize: a maximize or a drag of the
+// window edge arrives as a burst of events, and re-fitting the open
+// cards on each one would measure geometry that is still moving.
+const REFIT_SETTLE = 180;
 
 // Every card lives in the dock, and the dock's box is both the drag
 // floor and the height bound.
@@ -96,6 +100,23 @@ function clampOffset(anchor, dx, dy) {
     dx: clamp(dx, -(anchor.left + anchor.width - KEEP_X), window.innerWidth - anchor.left - KEEP_X),
     dy: clamp(dy, floor - anchor.top, window.innerHeight - anchor.top - KEEP_Y),
   };
+}
+
+// The clamp a card gets when nobody is holding it. A drag may leave a
+// card hanging off an edge on purpose — the pointer is on the strip,
+// so the user can always pull it back, and KEEP_X is all that has to
+// survive. A card the geometry moved under has nobody holding it and
+// no way back, so wherever the card still fits across the window, put
+// the whole of it on screen rather than settle for that sliver. It is
+// the same story vertically, but clampOffset's floor and KEEP_Y
+// already leave the whole strip in reach there.
+function fitOffset(anchor, dx, dy) {
+  const fit = clampOffset(anchor, dx, dy);
+  if (anchor.width > window.innerWidth) return fit;
+  const over = anchor.left + fit.dx + anchor.width - window.innerWidth;
+  if (over > 0) fit.dx -= over;
+  if (anchor.left + fit.dx < 0) fit.dx = -anchor.left;
+  return fit;
 }
 
 function applyPos(el, pos) {
@@ -203,29 +224,70 @@ function saveSize(name, h) {
   }
 }
 
-// Place the card as it opens: an unplaced one cascades off the panels
-// already open, a stored cap is restored, and anything that would
-// leave the strip out of reach (a drag off-screen, a cap from a bigger
-// window) is clamped back and the correction written through — so a
-// panel lost off the edge comes back on the next toggle.
-function placePanel(p, name, order) {
+// Fit a visible card to the geometry it currently finds itself in: a
+// stored cap re-measured against the dock, and the offset clamped so
+// the grab strip stays reachable. Anything that would leave the strip
+// out of reach (a drag off-screen, a cap from a bigger window) is
+// pulled back. The card has to be visible to be measured, so every
+// caller runs this on an open panel.
+//
+// `persist` says whether the correction is the user's new intent or
+// just this window's arithmetic. An open is their own toggle, so what
+// gets clamped there is their new cap and placement, written through.
+// A correction the window forced is transient: the live `p.pos` and
+// the applied cap follow the new geometry either way — that is what
+// keeps the card reachable — but storage keeps saying what the user
+// last chose, so widening the window gives the height and the
+// placement back instead of ratcheting them away. Storage going stale
+// against a much-changed window costs nothing: the next open sanitizes
+// it again, with `persist` on.
+function sanitizePanel(p, name, persist = true) {
   const { el } = p;
   const stored = loadSize(name);
   if (stored != null) {
     const cap = capOf(el, stored);
     applyCap(el, cap);
-    if (cap !== stored) saveSize(name, cap);
+    if (persist && cap !== stored) saveSize(name, cap);
   }
-  if (p.cascade) p.pos = { dx: 0, dy: CASCADE_BASE + CASCADE_STEP * order };
   applyPos(el, p.pos);
-  const clamped = clampOffset(anchorOf(el, p.pos), p.pos.dx, p.pos.dy);
+  const clamped = fitOffset(anchorOf(el, p.pos), p.pos.dx, p.pos.dy);
   if (clamped.dx === p.pos.dx && clamped.dy === p.pos.dy) return;
   p.pos = clamped;
   applyPos(el, p.pos);
   // Only a position the user chose is worth correcting on disk; a
   // clamped cascade is this open's arithmetic, not their placement.
-  if (!p.cascade) savePos(name, p.pos);
+  if (persist && !p.cascade) savePos(name, p.pos);
 }
+
+// Place the card as it opens: an unplaced one cascades off the panels
+// already open, then the same sanitize every open card gets.
+function placePanel(p, name, order) {
+  if (p.cascade) p.pos = { dx: 0, dy: CASCADE_BASE + CASCADE_STEP * order };
+  sanitizePanel(p, name);
+}
+
+// Sanitizing at open time only sees the geometry of that moment. The
+// window moves it afterwards: a narrower viewport takes the card's
+// edge off screen, wrapping chrome pushes the dock's top edge down,
+// and a shorter window shrinks the height the cap is measured against.
+// Nothing re-clamped for that, so an open card could be left stranded
+// — its strip past the window edge, unreachable and unrecoverable
+// short of closing the panel. Re-fit every open card once the gesture
+// settles — a transient fit, since the window forced it and the user
+// gets their own placement back when the window comes back. Installed
+// once, at module scope: the listener outlives any one panel, and does
+// nothing while none are open.
+let refitTimer = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(refitTimer);
+  if (openStack.length === 0) return;
+  refitTimer = setTimeout(() => {
+    for (const name of openStack) {
+      const p = panels.get(name);
+      if (p) sanitizePanel(p, name, false);
+    }
+  }, REFIT_SETTLE);
+});
 
 // The matching chrome toggle lights up while its panel is open, so
 // its state tracks the actual panel instead of a private flag.

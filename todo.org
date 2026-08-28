@@ -1743,8 +1743,9 @@ existing "Site-level runtime-knob setters accept unregistered ids"
 entry touches the same setter surface.
 
 * Review backlog — 2026-08-28
-** TODO Window resize can strand a floating panel under the header   :bug:ux:
+** DONE Window resize can strand a floating panel under the header   :bug:ux:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-28 Fr 10:56]
 - State "TODO"       from              [2026-08-28 Fr 09:54]
 :END:
 

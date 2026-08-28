@@ -618,6 +618,57 @@ check(
 await page.click("#panel-metrics-btn .float-close");
 await page.evaluate(() => localStorage.removeItem("sw-panel-pos-metrics-btn"));
 
+// ── e2e: shrinking the window re-fits the open panels ─────────────
+// A resize moves the geometry out from under an open card: the dock
+// narrows past the card's right edge, wrapping chrome pushes its top
+// edge down. Sanitizing at open time cannot see that, so without a
+// re-clamp on resize the card is stranded — grab strip off the window,
+// nothing to click, no way back short of Esc. The refit is debounced,
+// so the assertions wait for the gesture to settle.
+await page.click("#metrics-btn");
+const stripBox = await page.locator("#panel-metrics-btn .panel-drag").boundingBox();
+await page.mouse.move(stripBox.x + stripBox.width / 2, stripBox.y + stripBox.height / 2);
+await page.mouse.down();
+await page.mouse.move(stripBox.x + stripBox.width / 2, 0, { steps: 8 });
+await page.mouse.up();
+await page.setViewportSize({ width: 500, height: 700 });
+// The last geometry the poll saw, kept so a timeout reports which
+// bound broke instead of a bare null.
+let refitSeen = null;
+const refit = await waitFor(async () => {
+  const g = await page.evaluate(() => {
+    const s = document.querySelector("#panel-metrics-btn .panel-drag").getBoundingClientRect();
+    const hit = document.elementFromPoint(s.left + s.width / 2, s.top + s.height / 2);
+    return {
+      box: { l: Math.round(s.left), t: Math.round(s.top), r: Math.round(s.right), b: Math.round(s.bottom) },
+      vw: window.innerWidth,
+      vh: window.innerHeight,
+      strip: hit?.closest(".panel-drag") != null,
+      dockTop: Math.round(document.getElementById("panel-dock").getBoundingClientRect().top),
+    };
+  });
+  refitSeen = g;
+  return g.strip && g.box.l >= 0 && g.box.t >= 0 && g.box.r <= g.vw && g.box.b <= g.vh ? g : null;
+}, 5000).catch(() => null);
+check("e2e: a narrowed window re-fits the open panel's strip into view", refit != null, JSON.stringify(refitSeen));
+check(
+  "e2e: the re-fitted strip stays at/below the dock's top edge",
+  refit != null && refit.box.t >= refit.dockTop - 1,
+  JSON.stringify(refitSeen),
+);
+// Back to the size the rest of the suite runs at, and the panel it
+// left open is still open — the refit moves cards, never closes them.
+await page.setViewportSize({ width: 1600, height: 950 });
+await waitFor(async () => (await page.locator("#panel-metrics-btn .panel-drag").boundingBox()) != null, 5000).catch(
+  () => null,
+);
+check(
+  "e2e: the metrics panel is still open after the window is restored",
+  await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === true),
+);
+await page.click("#panel-metrics-btn .float-close");
+await page.evaluate(() => localStorage.removeItem("sw-panel-pos-metrics-btn"));
+
 // ── e2e: the canvas controls collapse ─────────────────────────────
 // The chevron folds the layout / drag / show groups away so the strip
 // stops eating the canvas's top-right corner. The `panels` pills are
