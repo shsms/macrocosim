@@ -209,6 +209,10 @@ a symbol, or a dynamic source like `timeline`). Compiles to
 LEADING non-nil for capacitive. Compiles to `set-meter-power-factor`."
   (list :kind 'drive-meter-pf :target id :pf pf :leading leading))
 
+(defun drive-boiler (target source)
+  "Drive TARGET boiler's steam demand (kg/h) from SOURCE."
+  (list :kind 'drive-boiler :target target :source source))
+
 (defun controller (id &rest args)
   "Agents section: an in-sim controller named ID firing :every TIME
 (default \"100ms\"), running the trailing LAMBDA each tick. Compiles to
@@ -257,16 +261,18 @@ inside `at`, e.g. (at \"60s\" (event 'clouds \"rolling in\"))."
 
 (defun scenario--drive (d)
   "Install one drive item D — a `drive-meter` / `drive-solar` /
-`drive-meter-reactive` / `drive-meter-pf` plist."
+`drive-meter-reactive` / `drive-meter-pf` / `drive-boiler` plist."
   (let ((target (plist-get d :target))
         (source (plist-get d :source))
         (kind (plist-get d :kind)))
     (cond
+     ((eq kind 'drive-meter) (set-meter-power target source))
      ((eq kind 'drive-solar) (set-solar-sunlight target source))
      ((eq kind 'drive-meter-reactive) (set-meter-reactive-power target source))
      ((eq kind 'drive-meter-pf)
       (set-meter-power-factor target (plist-get d :pf) (plist-get d :leading)))
-     (t (set-meter-power target source)))))
+     ((eq kind 'drive-boiler) (set-boiler-demand target source))
+     (t (error (format "scenario: unknown drive kind %s" kind))))))
 
 (defun scenario--agent (a)
   "Install one agent A — a `controller` plist — as an in-sim controller."

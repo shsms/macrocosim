@@ -241,3 +241,27 @@ async fn driver_run_aggregates_peak_charge_and_soc_stats() {
         "elapsed should freeze after scenario-stop",
     );
 }
+
+const BOILER_TOPOLOGY: &str = r#"(%make-steam-boiler :id 9)"#;
+
+/// `(drive-boiler ID SOURCE)` compiles through `scenario--drive` to
+/// `set-boiler-demand`, the same path `drive-solar` takes to
+/// `set-solar-sunlight` — asserts the compiled item lands on the
+/// boiler's demand knob, read back via `demand_reading()`.
+#[tokio::test(flavor = "multi_thread")]
+async fn drive_boiler_sets_demand_via_scenario_compile() {
+    let s = TestServer::start(BOILER_TOPOLOGY).await;
+    let client = reqwest::Client::new();
+
+    eval_or_panic(&client, &s, "(scenario-start \"boiler-drive\")").await;
+    eval_or_panic(&client, &s, "(scenario--drive (drive-boiler 9 40.0))").await;
+
+    let r = s
+        .config
+        .site()
+        .get(9)
+        .expect("boiler component")
+        .demand_reading()
+        .expect("demand reading");
+    assert_eq!(r.value, 40.0, "drive-boiler should set constant demand");
+}
