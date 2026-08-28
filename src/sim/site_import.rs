@@ -28,9 +28,11 @@
 //! - `categorySpecificInfo.battery.type` (chemistry) is dropped: the
 //!   simulator's battery carries no chemistry yet.
 //!
-//! Wind turbines, steam boilers, power transformers and breakers
-//! import as marker components (see [`crate::sim::marker`]): present
-//! in the topology, no physics.
+//! Wind turbines, power transformers and breakers import as marker
+//! components (see [`crate::sim::marker`]): present in the topology,
+//! no physics. Steam boilers carry their electric rating —
+//! `metricConfigBounds[METRIC_AC_POWER_ACTIVE]` → `:rated-lower` /
+//! `:rated-upper`, same as an EV charger.
 
 use serde::Deserialize;
 
@@ -310,12 +312,15 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
             rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
             "make-ev-charger"
         }
+        "STEAM_BOILER" => {
+            rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
+            "make-steam-boiler"
+        }
         // CHP and the marker categories have no physics of their
         // own: they complete the topology and classify the meters
         // around them; power is set on the neighboring meter.
         "CHP" => "make-chp",
         "WIND_TURBINE" => "make-wind-turbine",
-        "STEAM_BOILER" => "make-steam-boiler",
         "POWER_TRANSFORMER" => "make-power-transformer",
         "BREAKER" => "make-breaker",
         other => {
@@ -568,14 +573,17 @@ mod tests {
         assert!(err.contains("self-edge"), "{err}");
     }
 
-    /// Wind turbines, steam boilers, power transformers and breakers
-    /// import as marker components.
+    /// Wind turbines, power transformers and breakers import as
+    /// marker components; steam boilers carry their electric rating.
     #[test]
     fn import_lifts_marker_categories() {
         let file: ComponentsFile = serde_json::from_str(
             r#"{"electricalComponents": [
                 {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_WIND_TURBINE"},
-                {"id": "2", "category": "ELECTRICAL_COMPONENT_CATEGORY_STEAM_BOILER"},
+                {"id": "2", "category": "ELECTRICAL_COMPONENT_CATEGORY_STEAM_BOILER",
+                 "metricConfigBounds": [
+                   {"metric": "METRIC_AC_POWER_ACTIVE", "configBounds": {"lower": 0, "upper": 500000}}
+                 ]},
                 {"id": "3", "category": "ELECTRICAL_COMPONENT_CATEGORY_POWER_TRANSFORMER"},
                 {"id": "4", "category": "ELECTRICAL_COMPONENT_CATEGORY_BREAKER"}
             ]}"#,
@@ -583,7 +591,7 @@ mod tests {
         .unwrap();
         let forms = parse(file, None).unwrap().forms();
         assert!(forms.contains("(make-wind-turbine :id 1)"));
-        assert!(forms.contains("(make-steam-boiler :id 2)"));
+        assert!(forms.contains("(make-steam-boiler :id 2 :rated-lower 0.0 :rated-upper 500000.0)"));
         assert!(forms.contains("(make-power-transformer :id 3)"));
         assert!(forms.contains("(make-breaker :id 4)"));
     }
