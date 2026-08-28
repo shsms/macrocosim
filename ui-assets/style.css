@@ -912,9 +912,16 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
    card is absolutely positioned against it, so panels never share a
    height and one opening cannot shrink another. The dock itself is
    click-through (pointer-events: none); each card re-enables hits.
-   The margins keep the floating canvas controls clickable above it
-   and give the cards' percentage max-height the viewport-minus-chrome
-   bound they size themselves against. */
+   The dock reaches the same top inset as the floating canvas controls
+   (10px), so a card can be dragged all the way up to that row: the
+   dock itself stays click-through, and only a card actually dragged
+   over the controls covers them (the dock outranks them in z-order).
+   Cards nobody has placed still cascade in below the row, off
+   side-panel.js's CASCADE_BASE. The margins give the dock the
+   viewport-minus-chrome box that spans the canvas cell; cards spawn
+   CASCADE_BASE (40px) down into it and, per .float-panel below, bound
+   their own height 40px short of it, so a full-height card ends flush
+   with the dock's bottom edge instead of overhanging it. */
 #panel-dock {
   grid-area: topology;
   /* min-height/min-width: 0 keep the dock out of the `topology` cell's
@@ -922,7 +929,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
      against the row's real size rather than a grown one. */
   min-height: 0;
   min-width: 0;
-  margin: 48px 10px 10px;
+  margin: 10px;
   z-index: 7;
   position: relative;
   pointer-events: none;
@@ -943,7 +950,14 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
      cap once the gesture ends (side-panel.js), so a card can never be
      stretched past its own content. */
   height: auto;
-  max-height: 100%;
+  /* Cards spawn CASCADE_BASE (40px, side-panel.js) below the dock's
+     top edge, so a max-height resolved against the dock's own 100%
+     would let a full card overhang the dock's bottom by that same
+     40px. Shorting the bound by the spawn offset keeps a full card
+     flush with the dock bottom instead. Keep this paired with
+     side-panel.js's applyCap(), which has to shave the same 40px off
+     its inline max-height or the inline value would win and undo it. */
+  max-height: calc(100% - 40px);
   min-height: 60px;
   resize: vertical;
   /* border-box so the bound above and the height the user resizes to

@@ -612,7 +612,10 @@ check(
   stripTop >= dockTop - 1,
   `strip ${stripTop} vs dock ${dockTop}`,
 );
-await page.click("#metrics-btn");
+// Closed by its own ×, not the chrome pill: the dock's top edge is
+// level with the canvas controls now, so a card healed all the way up
+// to the floor sits over that strip and swallows the pill's clicks.
+await page.click("#panel-metrics-btn .float-close");
 await page.evaluate(() => localStorage.removeItem("sw-panel-pos-metrics-btn"));
 
 // ── e2e: the GCP inspector slims to Charts + Connections ───────────

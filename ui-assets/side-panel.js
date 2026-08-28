@@ -16,9 +16,12 @@ const openStack = [];
 
 const POS_KEY_PREFIX = "sw-panel-pos-";
 const SIZE_KEY_PREFIX = "sw-panel-size-";
-// Vertical stagger for a panel opening without a stored position, so
-// two panels summoned in a row never land perfectly on top of each
-// other and each keeps a grabbable strip.
+// Where a panel nobody has placed lands. The dock's top edge is level
+// with the floating canvas controls, so that row is draggable-to but
+// not spawned-on: BASE clears the controls strip, and STEP staggers
+// panels summoned in a row so no card lands perfectly on another's
+// grab strip.
+const CASCADE_BASE = 40;
 const CASCADE_STEP = 32;
 // A capped panel must stay tall enough to grab and re-open: the drag
 // strip plus a row of content.
@@ -83,7 +86,9 @@ function anchorOf(el, pos) {
 // the chrome, nor off the other three edges. The floor is the dock's
 // own top edge, measured live — the dock starts below every piece of
 // chrome (header, pulse bar, microgrid header) by construction, so
-// there is nothing left to measure or hardcode separately.
+// there is nothing left to measure or hardcode separately. That edge
+// is level with the canvas controls row, so a card can be dragged up
+// beside (and over) the controls, which is as high as it goes.
 function clampOffset(anchor, dx, dy) {
   const floor = dockEl()?.getBoundingClientRect().top ?? 0;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -132,11 +137,14 @@ function wireDrag(el, name, p) {
 const capOf = (el, h) =>
   Math.max(MIN_HEIGHT, Math.min(h, el.parentElement?.clientHeight ?? window.innerHeight));
 
-// `min(cap, 100%)` rather than the bare cap: the dock's own bound has
-// to keep winning as the window or the repl drawer resizes, and an
-// inline max-height would otherwise override the stylesheet's.
+// `min(cap, 100% - CASCADE_BASE)` rather than the bare cap: the
+// dock's own bound has to keep winning as the window or the repl
+// drawer resizes, and an inline max-height would otherwise override
+// the stylesheet's — including the stylesheet's own 40px shave (kept
+// in sync with CASCADE_BASE here), which a bare `100%` would silently
+// undo for every capped panel.
 function applyCap(el, cap) {
-  el.style.maxHeight = `min(${cap}px, 100%)`;
+  el.style.maxHeight = `min(${cap}px, calc(100% - ${CASCADE_BASE}px))`;
 }
 
 // CSS `resize` gives the height affordance; there is no resize event
@@ -208,7 +216,7 @@ function placePanel(p, name, order) {
     applyCap(el, cap);
     if (cap !== stored) saveSize(name, cap);
   }
-  if (p.cascade) p.pos = { dx: 0, dy: CASCADE_STEP * order };
+  if (p.cascade) p.pos = { dx: 0, dy: CASCADE_BASE + CASCADE_STEP * order };
   applyPos(el, p.pos);
   const clamped = clampOffset(anchorOf(el, p.pos), p.pos.dx, p.pos.dy);
   if (clamped.dx === p.pos.dx && clamped.dy === p.pos.dy) return;
