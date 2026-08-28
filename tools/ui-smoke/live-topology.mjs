@@ -247,6 +247,185 @@ check("e2e: load dialog lists that directory's entries", listed.length > 0, JSON
 check("e2e: the collision bar starts hidden", await page.locator("#load-script-collision").isHidden());
 await page.click("#load-script-close");
 
+// ── e2e: the import dialog asks for the microgrid id ──────────────
+// Importing a site export used to fire a bare prompt() for a name and
+// let the server pick the id silently. It now opens a dialog with a
+// name field and an id pre-filled by the same free-id walk the create
+// dialog uses, and the whole flow is driven here through the real
+// hidden file input: chosen id, collision, seeded retry, the busy
+// guard, and the blank-means-auto-assign path.
+//
+// There is no delete-microgrid endpoint, so whatever this section
+// imports stays in the registry for the rest of the run. It therefore
+// claims ids far ABOVE the demo's range and names nothing "Berlin
+// demo", leaving the later sections' card and id lookups untouched.
+// The blank-id check is the one exception — it lands on the lowest
+// free id by definition — and nothing below depends on that id being
+// free.
+const IMPORT_ID_A = 9801;
+const IMPORT_ID_B = 9802;
+// A one-component site export, as the file input receives it. Built
+// in memory rather than through a temp file, so the smoke leaves
+// nothing on disk. Component ids are enterprise-unique, so every
+// fixture takes its own, clear of the demo's (1, 2, 100, 1000, 1001).
+const exportFixture = (componentId) => [
+  {
+    name: "components.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(
+      JSON.stringify({
+        electricalComponents: [
+          {
+            id: String(componentId),
+            name: "grid",
+            category: "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT",
+          },
+        ],
+      }),
+    ),
+  },
+];
+const mgIds = () =>
+  page.evaluate(async () => (await (await fetch("/api/microgrids")).json()).map((m) => m.id));
+// What the dialog should pre-fill: the lowest free id from 2200 up,
+// the walk both nextFreeId() and the server's next_free_id_in do.
+const lowestFreeMgId = async () => {
+  const taken = new Set(await mgIds());
+  let id = 2200;
+  while (taken.has(id)) id += 1;
+  return id;
+};
+const importDialogOpen = () =>
+  page.evaluate(() => document.getElementById("import-mg-dialog").open);
+const importErrorText = () =>
+  page.evaluate(() => {
+    const el = document.getElementById("import-mg-error");
+    return el && !el.hidden && el.textContent ? el.textContent : null;
+  });
+// A successful import selects the microgrid it just made, which hides
+// the list the file input lives in — so come back to the list first,
+// the way a user starting a second import would. Via the header's
+// back button, not location.hash: the router moves on popstate, which
+// a hash write does not raise.
+const backToMgList = async () => {
+  if (await page.locator("#microgrid-list").isHidden()) await page.click("#mg-back");
+  await waitFor(async () => !(await page.locator("#microgrid-list").isHidden()), 8000);
+};
+const openImport = async (componentId) => {
+  await backToMgList();
+  await page.setInputFiles("#import-files", exportFixture(componentId));
+  await waitFor(importDialogOpen, 5000);
+};
+
+check("e2e: import dialog exists", (await page.locator("#import-mg-dialog").count()) === 1);
+const wantPrefill = await lowestFreeMgId();
+await openImport(99401);
+check("e2e: picking a site export opens the import dialog", await importDialogOpen());
+const importPrefill = await page.inputValue("#import-mg-id");
+check(
+  "e2e: import dialog pre-fills the lowest free microgrid id",
+  importPrefill === String(wantPrefill),
+  `${importPrefill} vs ${wantPrefill}`,
+);
+
+// A chosen id is honoured verbatim, not treated as a hint.
+await page.fill("#import-mg-name", "smoke import A");
+await page.fill("#import-mg-id", String(IMPORT_ID_A));
+await page.click("#import-mg-form button[type=submit]");
+await waitFor(async () => (await mgIds()).includes(IMPORT_ID_A), 15000).catch(() => {});
+check(
+  "e2e: the import registers under the id the dialog asked for",
+  (await mgIds()).includes(IMPORT_ID_A),
+  JSON.stringify(await mgIds()),
+);
+
+// A taken id is the server's call. The dialog reopens carrying its
+// wording and what was typed, so the files never have to be re-picked.
+await openImport(99402);
+await page.fill("#import-mg-name", "smoke import collides");
+await page.fill("#import-mg-id", String(IMPORT_ID_A));
+await page.click("#import-mg-form button[type=submit]");
+const seededError = await waitFor(
+  async () => ((await importDialogOpen()) ? await importErrorText() : null),
+  10000,
+).catch(() => null);
+check(
+  "e2e: a taken id reopens the import dialog with the server's message",
+  seededError?.includes(String(IMPORT_ID_A)) === true,
+  String(seededError),
+);
+check(
+  "e2e: the reopened import dialog keeps what was typed",
+  (await page.inputValue("#import-mg-name")) === "smoke import collides" &&
+    (await page.inputValue("#import-mg-id")) === String(IMPORT_ID_A),
+);
+
+// The dialog's resolver is module-scoped, so two flows may never
+// overlap: a pick landing mid-retry would strand this one on a
+// promise nobody settles. It is turned away with a toast instead.
+const openDialogCount = () => page.evaluate(() => document.querySelectorAll("dialog[open]").length);
+const dialogsBefore = await openDialogCount();
+await page.setInputFiles("#import-files", exportFixture(99403));
+const busyToast = await waitFor(
+  async () =>
+    (await page.evaluate(() => [...document.querySelectorAll(".toast")].map((t) => t.textContent)))
+      .find((t) => /already in progress/i.test(t)) || null,
+  5000,
+).catch(() => null);
+check("e2e: a second import mid-flow is refused with a toast", busyToast !== null, String(busyToast));
+check("e2e: the refused second import opens no dialog", (await openDialogCount()) === dialogsBefore);
+check(
+  "e2e: the in-flight import's dialog survives the refused one",
+  (await page.inputValue("#import-mg-name")) === "smoke import collides" &&
+    (await importErrorText()) !== null,
+);
+
+// Same flow, same parsed export, corrected id — no second file pick.
+await page.fill("#import-mg-id", String(IMPORT_ID_B));
+await page.click("#import-mg-form button[type=submit]");
+await waitFor(async () => (await mgIds()).includes(IMPORT_ID_B), 15000).catch(() => {});
+check(
+  "e2e: correcting the id imports without re-picking the files",
+  (await mgIds()).includes(IMPORT_ID_B),
+  JSON.stringify(await mgIds()),
+);
+check("e2e: the import dialog closes once the import lands", !(await importDialogOpen()));
+
+// Blank means "let the server allocate", exactly as in create: the
+// field is dropped from the request rather than sent as 0 or null.
+const wantAuto = await lowestFreeMgId();
+await openImport(99404);
+await page.fill("#import-mg-name", "smoke import auto");
+await page.fill("#import-mg-id", "");
+const importPost = page.waitForRequest(
+  (r) => r.url().endsWith("/api/microgrids/import") && r.method() === "POST",
+);
+await page.click("#import-mg-form button[type=submit]");
+const postedKeys = Object.keys(JSON.parse((await importPost).postData()));
+check("e2e: a blank id omits mid from the import request", !postedKeys.includes("mid"), JSON.stringify(postedKeys));
+await waitFor(async () => (await mgIds()).includes(wantAuto), 15000).catch(() => {});
+check(
+  "e2e: a blank id auto-assigns the lowest free microgrid id",
+  (await mgIds()).includes(wantAuto),
+  `${wantAuto} in ${JSON.stringify(await mgIds())}`,
+);
+
+// Escape settles the dialog's promise as a cancel — nothing posted.
+const idsBeforeCancel = (await mgIds()).length;
+await openImport(99405);
+await page.keyboard.press("Escape");
+await waitFor(async () => !(await importDialogOpen()), 5000).catch(() => {});
+check("e2e: Escape closes the import dialog", !(await importDialogOpen()));
+check(
+  "e2e: a cancelled import registers nothing",
+  (await mgIds()).length === idsBeforeCancel,
+  `${(await mgIds()).length} vs ${idsBeforeCancel}`,
+);
+
+// Back to the list: the sections below start by clicking a card.
+await backToMgList();
+await waitFor(async () => (await page.locator('.mglist-card:has-text("Berlin demo")').count()) > 0, 8000);
+
 // ── e2e: live pill models on the canvas ───────────────────────────
 const DEMO_CARD = '.mglist-card:has-text("Berlin demo")';
 const getModels = () =>
