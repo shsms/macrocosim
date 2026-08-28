@@ -85,6 +85,13 @@ function socAux(soc) {
   return { kind: "soc", pct, text: `${pct}%` };
 }
 
+// Text-only readout, no gauge — a boiler's pressure isn't a 0–100%
+// quantity like SoC, so it just prints the bar value.
+function pressureAux(pressure) {
+  if (!finite(pressure)) return null;
+  return { kind: "text", text: `${pressure.toFixed(1)} bar` };
+}
+
 // component: an /api/topology component; live: { p, q, soc, dc } or
 // null; options: { valuesOn, catColor, deadBand }.
 export function pillModel(c, live, { valuesOn, catColor, deadBand }) {
@@ -95,6 +102,8 @@ export function pillModel(c, live, { valuesOn, catColor, deadBand }) {
     power = c.category === "battery" ? live.dc : live.p;
     if (c.category === "battery" || c.category === "ev-charger") {
       aux = socAux(live.soc);
+    } else if (c.category === "steam-boiler") {
+      aux = pressureAux(live.pressure);
     } else if (finite(live.q)) {
       aux = { kind: "reactive", text: formatScaled(live.q, "VAr"), color: reactiveColor(live.q, deadBand) };
     }
@@ -348,6 +357,12 @@ export function drawPill(ctx, x, y, model, state, lod = "full") {
       ctx.fill();
     }
     tx += GEOM.socBarW + GEOM.socGap;
+    ctx.font = FONT_AUX;
+    ctx.fillStyle = COLORS.fg;
+    ctx.fillText(model.aux.text, tx, row2Y);
+  } else if (model.aux.kind === "text") {
+    // Plain readout, no gauge and no signed-value colouring — a
+    // boiler's pressure bar (or any future non-power aux).
     ctx.font = FONT_AUX;
     ctx.fillStyle = COLORS.fg;
     ctx.fillText(model.aux.text, tx, row2Y);

@@ -24,6 +24,7 @@ const CHARTS_BY_CATEGORY = {
   battery: ["soc_pct", "dc_power_w"],
   "ev-charger": ["soc_pct", "dc_power_w"],
   chp: ["active_power_w"],
+  "steam-boiler": ["pressure_bar", "active_power_w"],
 };
 
 // Display-only labels per metric. Scaling, units, and the
@@ -36,6 +37,7 @@ const METRIC_TITLES = {
   reactive_power_var: "Reactive Power",
   soc_pct:            "SoC",
   dc_power_w:         "DC Power",
+  pressure_bar:       "Steam pressure",
 };
 
 // Pick a display scale from a typed quantity + base unit. Power-
@@ -153,7 +155,7 @@ export const OPERATIONAL_MODES = [
 // Categories whose components accept setpoint commands. Shared with
 // the dispatch dialog's target pickers, so "controllable" means the
 // same thing in both places.
-export const ACCEPTS_SETPOINTS = new Set(["battery", "inverter", "ev-charger", "chp"]);
+export const ACCEPTS_SETPOINTS = new Set(["battery", "inverter", "ev-charger", "chp", "steam-boiler"]);
 
 // Per-category runtime knobs the inspector exposes as numeric
 // inputs. Each one binds to an existing Lisp setter — so this is
@@ -195,6 +197,10 @@ const KNOBS_BY_CATEGORY = {
   inverter: [
     { label: "reactive PF limit", defun: "set-reactive-pf-limit", group: "config" },
     { label: "reactive apparent (VA)", defun: "set-reactive-apparent-va", group: "config" },
+  ],
+  "steam-boiler": [
+    { label: "demand (kg/h or expr)", defun: "set-boiler-demand", dynamic: true, unit: "kg/h" },
+    { label: "pressure (bar)", defun: "set-boiler-pressure", unit: "bar" },
   ],
 };
 
@@ -1196,6 +1202,20 @@ async function buildCharts(d, container) {
   const metrics = CHARTS_BY_CATEGORY[d.category] || [];
   const charts = new Map(); // metric → { plot, xs, ys }
 
+  // A steam boiler's pressure chart annotates the controller's
+  // thermostat target in its title — no cheap reference-line idiom
+  // in this hand-rolled uPlot setup, so a second small fetch (run
+  // alongside the history fetches below, not blocking on them) pulls
+  // it off the /api/component snapshot. `null` on any failure just
+  // means no suffix, same degrade-quietly discipline as the history
+  // fetches below.
+  const targetP = metrics.includes("pressure_bar")
+    ? fetch(`${mgPath("component")}?id=${d.id}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((snap) => snap?.pressure_target_bar ?? null)
+        .catch(() => null)
+    : Promise.resolve(null);
+
   // All metric histories fetched concurrently — inspector open
   // latency is the slowest round-trip, not the sum. Errors settle
   // into the result slot so a stale-generation return can't leak an
@@ -1219,6 +1239,7 @@ async function buildCharts(d, container) {
         ),
     ),
   );
+  const target = await targetP;
   for (const [i, { metric, slot }] of slots.entries()) {
     const { resp, err } = results[i];
     if (err) {
@@ -1232,7 +1253,15 @@ async function buildCharts(d, container) {
     const samples = resp.samples || [];
     const xs = samples.map(([t]) => t / 1000);
     const ys = samples.map(([, v]) => v);
-    const { plot, scale } = makePlot(slot, metric, resp.quantity, resp.unit, xs, ys);
+    const { plot, scale } = makePlot(
+      slot,
+      metric,
+      resp.quantity,
+      resp.unit,
+      xs,
+      ys,
+      metric === "pressure_bar" ? target : null,
+    );
     // Stored ys are pre-scaled (already divided by scale.div) so the
     // live push path can append by dividing each new sample once.
     charts.set(metric, { plot, xs, ys: ys.map((y) => y / scale.div), scale });
@@ -1293,14 +1322,17 @@ async function renderSetpoints(id, container) {
   }
 }
 
-function makePlot(container, metric, quantity, unit, xs, ys) {
+function makePlot(container, metric, quantity, unit, xs, ys, target = null) {
   const title = METRIC_TITLES[metric] || metric;
   const scale = chooseScale(quantity, unit, ys);
   const scaledYs = ys.map((y) => y / scale.div);
+  const baseTitle = scale.unit ? `${title} (${scale.unit})` : title;
+  const fullTitle =
+    target != null ? `${baseTitle} — target ${target} ${scale.unit || unit}` : baseTitle;
   const opts = {
     width: container.clientWidth || 280,
     height: 140,
-    title: scale.unit ? `${title} (${scale.unit})` : title,
+    title: fullTitle,
     cursor: { drag: { x: false, y: false } },
     legend: { show: false },
     scales: { x: { time: true } },

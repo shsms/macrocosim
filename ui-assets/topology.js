@@ -479,7 +479,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
   function liveEntry(id) {
     let e = liveValues.get(id);
     if (!e) {
-      e = { p: null, q: null, soc: null, dc: null, energy: null, pLo: null, pHi: null, qLo: null, qHi: null, ts: null, hist: [] };
+      e = { p: null, q: null, soc: null, dc: null, energy: null, pressure: null, pLo: null, pHi: null, qLo: null, qHi: null, ts: null, hist: [] };
       liveValues.set(id, e);
     }
     return e;
@@ -1478,6 +1478,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         case "reactive_power_var": e.q = ev.value; break;
         case "soc_pct": e.soc = ev.value; break;
         case "dc_power_w": e.dc = ev.value; break;
+        case "pressure_bar": e.pressure = ev.value; break;
         case "energy_wh": e.energy = ev.value; drawn = false; break;
         case "active_power_lower_bound_w": e.pLo = ev.value; drawn = false; break;
         case "active_power_upper_bound_w": e.pHi = ev.value; drawn = false; break;

@@ -59,6 +59,8 @@ export function hoverCardModel({ component: c, live, parents, children, lastComm
   const hasLive = Boolean(live);
   const showSoc = battery || c.category === "ev-charger";
   const soc = hasLive && showSoc && finite(live.soc) ? { pct: Math.round(live.soc), text: `${Math.round(live.soc)}%` } : null;
+  const showPressure = c.category === "steam-boiler";
+  const pressure = hasLive && showPressure && finite(live.pressure) ? { text: `${live.pressure.toFixed(1)} bar` } : null;
   const energy = hasLive && finite(live.energy) ? { text: `${formatScaled(live.energy, "Wh")} since start` } : null;
   let freshness;
   if (!hasLive || !finite(live.ts)) freshness = { text: "no data yet", stale: true };
@@ -92,6 +94,7 @@ export function hoverCardModel({ component: c, live, parents, children, lastComm
     pf: hasLive && !battery ? powerFactor(live.p, live.q, deadBand) : null,
     energy,
     soc,
+    pressure,
     dc: hasLive && battery ? powerSection("DC power", live.dc, null, null, deadBand) : null,
     spark: hasLive ? live.hist.slice() : [],
     lastCommand: command,
@@ -146,6 +149,9 @@ function render(m) {
     ? `<div class="hc-row"><span class="hc-label">SoC</span><span class="hc-value">${esc(m.soc.text)}</span></div>
        <div class="hc-bar hc-soc"><div class="hc-soc-fill" style="width:${m.soc.pct}%"></div></div>`
     : "";
+  const pressure = m.pressure
+    ? `<div class="hc-row"><span class="hc-label">Pressure</span><span class="hc-value">${esc(m.pressure.text)}</span></div>`
+    : "";
   const row = (label, value, cls = "") => `<div class="hc-row"><span class="hc-label">${esc(label)}</span><span class="hc-value ${cls}">${esc(value)}</span></div>`;
   return `
     <div class="hc-head"><span class="hc-title">${esc(m.title)}</span>${healthChip}</div>
@@ -155,6 +161,7 @@ function render(m) {
     ${envelopeBar(m.reactive, "VAr")}
     ${m.pf ? `<div class="hc-row hc-pf">${esc(m.pf.text)}</div>` : ""}
     ${soc}
+    ${pressure}
     ${m.energy ? row("Energy", m.energy.text) : ""}
     ${m.lastCommand ? row("Last command", m.lastCommand.text, "hc-cmd") : ""}
     ${row("Parents", m.wiring.parents)}
