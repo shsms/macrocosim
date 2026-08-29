@@ -294,9 +294,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             }
             // Unlike clear-meter-power, the cleared slot is not
             // "nothing" — a `Follow` source has a live percentage of
-            // its own (the seeded full sun until the first tick
-            // resolves the sky), so the inspector gets that value
-            // rather than a blanked input.
+            // its own (the last sky the inverter resolved, which is
+            // full sun until its first tick), so the inspector gets
+            // that value rather than a blanked input.
             let now_pct = c.sunlight_reading().map(|r| r.value);
             w.note_knob_changed(
                 id as u64,

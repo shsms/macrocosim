@@ -25,19 +25,32 @@ use crate::sim::{
     runtime::Health,
 };
 
+/// What a PV inverter's sunlight cache starts at, and what a
+/// weather-following inverter therefore reads before its first tick:
+/// full sun, so an inverter that has never ticked reads bright rather
+/// than dark.
+const SUNLIGHT_SEED_PCT: f32 = 100.0;
+
 /// Where a PV inverter's cloud-cover percentage comes from.
 ///
 /// Two shapes, and the split is about *who* produces the number:
 ///
 /// - [`Self::Follow`] — the site's own [`Weather`] does, sampled at
-///   `now - lag` (a lag models thermal/irradiance inertia between the
-///   sky and the array) and optionally roughened by a per-tick
-///   `±jitter_pct` factor. Nobody has driven this inverter's knob;
-///   it just tracks the sky.
+///   `now - cfg.weather_lag` (a lag models thermal/irradiance inertia
+///   between the sky and the array) and optionally roughened by a
+///   per-tick `±cfg.weather_jitter_pct` factor. Nobody has driven
+///   this inverter's knob; it just tracks the sky.
 /// - [`Self::Manual`] — something drove it: a `:sunlight%` kwarg, a
 ///   `(set-solar-sunlight …)` poke, a scenario, the UI. The
 ///   [`DynamicScalar`] underneath covers both a plain constant and a
 ///   Lisp expression re-resolved by `refresh_inputs`.
+///
+/// This is a plain tag: it says which of the two shapes a slot is in
+/// and nothing else. The lag and jitter that shape a `Follow` sample
+/// live on [`SolarInverterConfig`] (their only writer), and the value
+/// `tick` resolves lives in [`SolarInverter`]'s own `sunlight_cache`
+/// — so `Clone` is just a derive, and a snapshot of this enum carries
+/// the *shape* of the slot, never a copy of the sky.
 ///
 /// `Follow` resolves in [`SimulatedComponent::tick`] because that is
 /// the only door handed both the site (which owns the weather) and
@@ -47,68 +60,21 @@ use crate::sim::{
 /// — get the same answer without re-deriving it.
 ///
 /// [`Weather`]: crate::sim::weather::Weather
+#[derive(Clone)]
 pub enum SunlightSource {
-    /// Track the site's weather at `now - lag`, jittered by a uniform
-    /// `±jitter_pct` factor when that is nonzero. `cached` holds the
-    /// last value `tick` resolved (as `f32` bits), seeded at 100% so
-    /// an inverter that has never ticked reads as full sun rather
-    /// than dark.
-    Follow {
-        lag: Duration,
-        jitter_pct: f32,
-        cached: AtomicU32,
-    },
+    /// Track the site's weather, at the lag and jitter the inverter's
+    /// config carries. Read back through
+    /// [`SolarInverter::sunlight_pct`], which serves the cache.
+    Follow,
     /// A driven value: a constant, or a Lisp expression re-resolved
     /// each `refresh_inputs`.
     Manual(DynamicScalar),
 }
 
-/// Hand-written for the same reason [`DynamicScalar`]'s is: an
-/// `AtomicU32` is not `Clone`, and the snapshot taken for scenario
-/// teardown needs a standalone copy of the cached percentage — not a
-/// second handle that the live inverter's ticks keep updating out
-/// from under the baseline. Loads the bits with `Acquire`, pairing
-/// with the `Release` store `tick` makes.
-impl Clone for SunlightSource {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Follow {
-                lag,
-                jitter_pct,
-                cached,
-            } => Self::Follow {
-                lag: *lag,
-                jitter_pct: *jitter_pct,
-                cached: AtomicU32::new(cached.load(Ordering::Acquire)),
-            },
-            Self::Manual(scalar) => Self::Manual(scalar.clone()),
-        }
-    }
-}
-
 impl SunlightSource {
-    /// A weather-tracking source, cache seeded at full sun.
-    pub fn follow(lag: Duration, jitter_pct: f32) -> Self {
-        Self::Follow {
-            lag,
-            jitter_pct,
-            cached: AtomicU32::new(100.0f32.to_bits()),
-        }
-    }
-
     /// A driven source wrapping `scalar`.
     pub fn manual(scalar: DynamicScalar) -> Self {
         Self::Manual(scalar)
-    }
-
-    /// The live percentage: `Manual`'s resolved scalar, or the value
-    /// the last `tick` cached for `Follow`. Never blocks, never needs
-    /// a site.
-    pub fn get(&self) -> f32 {
-        match self {
-            Self::Follow { cached, .. } => f32::from_bits(cached.load(Ordering::Acquire)),
-            Self::Manual(scalar) => scalar.get(),
-        }
     }
 }
 
@@ -142,10 +108,13 @@ pub struct SolarInverterConfig {
     pub sunlight_follow: bool,
     /// How far behind the sky a `Follow` source samples — the array
     /// sees `weather_pct_at(now - weather_lag)`. Zero by default.
+    /// This is the only copy of the number: `resolve_sunlight` reads
+    /// it from here on every tick.
     pub weather_lag: Duration,
     /// Per-tick uniform `±pct` roughening applied to a `Follow`
     /// sample, in percent of the value. Zero by default, and zero
-    /// skips the RNG entirely.
+    /// skips the RNG entirely. Read from here on every tick, like
+    /// [`Self::weather_lag`].
     pub weather_jitter_pct: f32,
     /// The array's peak DC output (Wp), positive — not an
     /// instantaneous power. Defaults to |rated-lower|: a matched
@@ -189,6 +158,18 @@ pub struct SolarInverter {
     /// source — dynamic or weather-following — to a constant;
     /// [`Self::clear_sunlight`] is the way back to `Follow`.
     sunlight_source: RwLock<SunlightSource>,
+    /// The last cloud-cover percentage `tick` resolved for a
+    /// [`SunlightSource::Follow`] slot, as `f32` bits, seeded at
+    /// [`SUNLIGHT_SEED_PCT`]. Unread while the slot is `Manual` — a
+    /// driven source answers from its own scalar — and left alone by
+    /// the setters, so a slot that goes back to `Follow` reads the
+    /// last sky until the next tick refreshes it.
+    ///
+    /// It sits here rather than inside the variant so that reading it
+    /// needs no lock on the source, which is what lets
+    /// [`Self::resolve_sunlight`] drop the source guard before it
+    /// touches the site's weather.
+    sunlight_cache: AtomicU32,
     /// Active (P) control path: rated band + TTL augmentations,
     /// command delay, slew ramp. Its `published` slot is unused — PV
     /// has no children to clip P, so telemetry reads `actual()`.
@@ -202,14 +183,18 @@ pub struct SolarInverter {
 impl SolarInverter {
     pub fn new(id: u64, interval: Duration, cfg: SolarInverterConfig) -> Self {
         let source = if cfg.sunlight_follow {
-            SunlightSource::follow(cfg.weather_lag, cfg.weather_jitter_pct)
+            SunlightSource::Follow
         } else {
             SunlightSource::manual(DynamicScalar::constant(cfg.sunlight_pct))
         };
         // Whatever the slot starts at, not `cfg.sunlight_pct` blindly:
-        // a `Follow` slot starts at its seeded full sun, which need not
-        // be the (unused) `sunlight_pct` fallback.
-        let init_pct = source.get();
+        // a `Follow` slot starts at the cache's full-sun seed, which
+        // need not be the (unused) `sunlight_pct` fallback.
+        let init_pct = if cfg.sunlight_follow {
+            SUNLIGHT_SEED_PCT
+        } else {
+            cfg.sunlight_pct
+        };
         let active = PowerAxis::new(AxisConfig {
             rated: Some((cfg.rated_lower_w, cfg.rated_upper_w)),
             caps: None,
@@ -238,6 +223,7 @@ impl SolarInverter {
             interval,
             cfg,
             sunlight_source: RwLock::new(source),
+            sunlight_cache: AtomicU32::new(SUNLIGHT_SEED_PCT.to_bits()),
             active,
             reactive,
         }
@@ -268,52 +254,57 @@ impl SolarInverter {
     /// following the site's weather — the way back from
     /// `set_sunlight_pct` / `set_sunlight_source`, mirroring the
     /// meter's `clear_active_power_source`. The `Follow` it installs
-    /// is built from the configured lag and jitter, so a cleared
-    /// inverter behaves exactly like a freshly-constructed
-    /// weather-following one.
+    /// reads the configured lag and jitter at resolve time, so a
+    /// cleared inverter tracks the sky exactly like a
+    /// freshly-constructed weather-following one. Until the next tick
+    /// resolves it, the knob reads whatever the cache last held.
     pub fn clear_sunlight(&self) {
-        *self.sunlight_source.write() =
-            SunlightSource::follow(self.cfg.weather_lag, self.cfg.weather_jitter_pct);
+        *self.sunlight_source.write() = SunlightSource::Follow;
+    }
+
+    /// The live percentage for `src`: `Manual`'s resolved scalar, or
+    /// the value the last `tick` cached for `Follow`. Never blocks,
+    /// never needs a site.
+    fn pct_of(&self, src: &SunlightSource) -> f32 {
+        match src {
+            SunlightSource::Follow => f32::from_bits(self.sunlight_cache.load(Ordering::Acquire)),
+            SunlightSource::Manual(scalar) => scalar.get(),
+        }
     }
 
     pub fn sunlight_pct(&self) -> f32 {
-        self.sunlight_source.read().get()
+        self.pct_of(&self.sunlight_source.read())
     }
 
     /// Resolve a `Follow` source against the site's weather and cache
     /// the result. No-op for `Manual`. Called from `tick`, the only
     /// door with both the site and `now`.
     ///
-    /// **Lock order: sunlight source → weather.** This is the one site
-    /// that takes both, and it takes them in that order — the source
-    /// read guard is still held across `weather_pct_at`, which takes
-    /// the site's weather lock. Holding it is deliberate: `cached`
-    /// lives *inside* the `Follow` variant, so the guard is what keeps
-    /// the variant alive between the sample and the store, and
-    /// dropping it early would let a concurrent `set_sunlight_pct`
-    /// swap the slot out from under the write. Any future code that
-    /// takes the weather lock must therefore NOT hold it while taking
-    /// a sunlight source lock, or the two orders deadlock.
+    /// Holds ONE lock at a time: the source guard is dropped before
+    /// the site's weather lock is taken. There is no cross-lock hold
+    /// here and so no lock-order invariant to respect — the cache is
+    /// the inverter's own field, not something living inside the
+    /// `Follow` variant, so nothing needs the slot pinned across the
+    /// sample. A concurrent `set_sunlight_pct` may land between the
+    /// check and the store; that is harmless, because a `Manual` slot
+    /// never reads the cache, and a slot put back to `Follow`
+    /// re-resolves on the next tick anyway.
     fn resolve_sunlight(&self, world: &MicrogridSite, now: DateTime<Utc>) {
-        let src = self.sunlight_source.read();
-        let SunlightSource::Follow {
-            lag,
-            jitter_pct,
-            cached,
-        } = &*src
-        else {
+        let following = matches!(&*self.sunlight_source.read(), SunlightSource::Follow);
+        if !following {
             return;
-        };
-        let at =
-            now - chrono::Duration::from_std(*lag).unwrap_or_else(|_| chrono::Duration::zero());
+        }
+        let at = now
+            - chrono::Duration::from_std(self.cfg.weather_lag)
+                .unwrap_or_else(|_| chrono::Duration::zero());
         // No weather on the site at all → full sun, which is what a
         // weatherless site has always given a PV inverter.
         let mut pct = world.weather_pct_at(at).unwrap_or(100.0);
-        if *jitter_pct != 0.0 {
-            let j = jitter_pct.abs();
+        if self.cfg.weather_jitter_pct != 0.0 {
+            let j = self.cfg.weather_jitter_pct.abs();
             pct *= 1.0 + rand::thread_rng().gen_range(-j..=j) / 100.0;
         }
-        cached.store(pct.to_bits(), Ordering::Release);
+        self.sunlight_cache.store(pct.to_bits(), Ordering::Release);
     }
 
     fn min_avail_w(&self) -> f32 {
@@ -582,13 +573,13 @@ impl SimulatedComponent for SolarInverter {
     fn sunlight_reading(&self) -> Option<ScalarReading> {
         let s = self.sunlight_source.read();
         Some(ScalarReading {
-            value: s.get(),
+            value: self.pct_of(&s),
             // `Follow` has no Lisp source text, but it is not a plain
             // constant either — the inspector shows the "weather"
             // marker in the same slot a lambda's printed form goes,
             // so a reader can tell a tracked sky from a driven number.
             expr: match &*s {
-                SunlightSource::Follow { .. } => Some("weather".into()),
+                SunlightSource::Follow => Some("weather".into()),
                 SunlightSource::Manual(scalar) => scalar.source_text(),
             },
         })
@@ -626,7 +617,7 @@ impl SimulatedComponent for SolarInverter {
             // later cleared back to `Follow` no longer has any
             // expression to lose, so reporting it unrenderable would
             // block a save over a slot that renders perfectly.
-            SunlightSource::Follow { .. } => false,
+            SunlightSource::Follow => false,
             // A dynamic sunlight source has no static number to
             // write. Both spellings count: constructed dynamic (which
             // `constructor_kwargs` already omits `:sunlight%` for)
@@ -1180,7 +1171,15 @@ mod tests {
     }
 
     /// Setting the knob overrides weather with a Manual constant;
-    /// clearing returns to Follow.
+    /// clearing returns to Follow. The step between the two is the
+    /// cache contract the clear door documents: `clear_sunlight`
+    /// leaves the cache alone, so the knob reads the last sky the
+    /// tick resolved — here the night's 0 — from the instant of the
+    /// clear, not the 42 it was just driven at and not the
+    /// never-ticked full-sun seed. A clear that reset the cache, or
+    /// one that left the Manual value showing, fails on that reading
+    /// rather than surviving to the next tick where both spellings
+    /// converge on 0.
     #[test]
     fn manual_override_and_clear_round_trip() {
         use crate::sim::weather::{Weather, WeatherConfig};
@@ -1197,10 +1196,27 @@ mod tests {
         w.set_weather(Some(Weather::new(WeatherConfig::default())));
         let inv = w.get(1).unwrap();
         let night = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 2, 0, 0).unwrap();
+
+        // One Follow tick first, so the cache holds a genuinely
+        // RESOLVED sky (the night's 0) rather than the construction
+        // seed — otherwise the reading after the clear below proves
+        // nothing about what the cache last held.
+        w.tick_once(night, Duration::from_millis(100));
+        assert_eq!(
+            inv.sunlight_reading().unwrap().value,
+            0.0,
+            "the Follow tick resolves the night sky into the cache"
+        );
+
         assert!(inv.set_sunlight_pct(42.0));
         w.tick_once(night, Duration::from_millis(100));
         assert!((inv.sunlight_reading().unwrap().value - 42.0).abs() < 0.01);
         assert!(inv.clear_sunlight_source(), "solar takes the clear");
+        assert_eq!(
+            inv.sunlight_reading().unwrap().value,
+            0.0,
+            "the clear reads the last resolved sky at once, before any tick"
+        );
         w.tick_once(night, Duration::from_millis(100));
         assert_eq!(
             inv.sunlight_reading().unwrap().value,
@@ -1304,7 +1320,7 @@ mod tests {
         assert!(inv.restore_knob(snap));
         assert!(matches!(
             &*inv.sunlight_source.read(),
-            SunlightSource::Follow { .. }
+            SunlightSource::Follow
         ));
     }
 
