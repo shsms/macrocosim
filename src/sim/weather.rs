@@ -1,0 +1,513 @@
+//! Site-wide weather: a parametric clear-sky day plus discrete cloud
+//! events layered on top.
+//!
+//! ```text
+//! site Weather:  clear_sky(t) x cloud_attenuation(t)  ->  site sunlight%
+//! ```
+//!
+//! Cloud cover comes from two producers that both just push
+//! [`CloudEvent`]s onto the same list: an ambient Poisson-arrival
+//! generator (driven by [`Weather::advance`], when
+//! `cloud_rate_per_h` is configured) and a scripted door
+//! ([`Weather::pass_cloud`]) for scenarios and the weather panel.
+//! [`Weather::pct_at`] multiplies every event's transmission
+//! together, so overlapping clouds compound.
+//!
+//! Evaluation is a pure function of `(config, event list)` — times
+//! are UTC throughout, and everything below is stated in UTC.
+
+use std::time::Duration;
+
+use chrono::{DateTime, Timelike, Utc};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
+
+use crate::sim::sim_clock::parse_time_of_day;
+
+/// How long an expired [`CloudEvent`] is kept in the list after it
+/// ends, so a lagged reader (an inverter reading `pct_at(now -
+/// lag)`) still finds it. Also the bound `advance` measures a forward
+/// clock jump against: `advance` is called once per tick (100 ms
+/// live; dt-sized steps in a stepped scenario run), so any single
+/// call spanning more than an hour is a clock anomaly (suspended VM,
+/// wall-clock correction), not real elapsed simulation time — instead
+/// of grinding through a potentially huge ambient backlog one arrival
+/// at a time, `advance` just re-anchors to `now`.
+fn retention_margin() -> chrono::Duration {
+    chrono::Duration::hours(1)
+}
+
+/// `Duration::from_secs_f32` panics on a negative, NaN, or overflowing
+/// input. The doors validate their inputs (`validate::secs_range`,
+/// `validate::cloud_rate`) before they ever reach here, but `Weather`
+/// itself has no way to enforce that a caller went through a door —
+/// direct construction (tests, a future embedder) can hand it anything
+/// — so every conversion on the `advance` hot path saturates to `cap`
+/// instead of trusting the door. A degraded cloud is a wrong number;
+/// a panicked physics task is the whole site going dark.
+fn saturating_secs_to_duration(v: f32, cap: Duration) -> Duration {
+    Duration::try_from_secs_f32(v).unwrap_or(cap)
+}
+
+/// Config for one [`Weather`] instance: the clear-sky window and the
+/// ambient cloud generator's rates and ranges.
+#[derive(Clone, Debug)]
+pub struct WeatherConfig {
+    /// Time of day (UTC) the clear-sky curve turns on.
+    pub sunrise: Duration,
+    /// Time of day (UTC) the clear-sky curve turns off.
+    pub sunset: Duration,
+    /// Clear-sky output at solar noon, in percent.
+    pub peak_pct: f32,
+    /// Ambient cloud arrival rate, events per hour. `None` disables
+    /// the ambient generator — only scripted [`Weather::pass_cloud`]
+    /// events appear.
+    pub cloud_rate_per_h: Option<f32>,
+    /// Uniform (min, max) range an ambient cloud's depth is drawn
+    /// from, in percent.
+    pub cloud_depth: (f32, f32),
+    /// Uniform (min, max) range an ambient cloud's total duration is
+    /// drawn from, in seconds.
+    pub cloud_duration: (f32, f32),
+    /// Uniform (min, max) range an ambient cloud's ramp-in/ramp-out
+    /// time is drawn from, in seconds.
+    pub cloud_ramp: (f32, f32),
+    /// Seed for the ambient generator's RNG. `Some` makes the event
+    /// stream reproducible run to run; `None` seeds from entropy.
+    pub seed: Option<u64>,
+}
+
+impl Default for WeatherConfig {
+    fn default() -> Self {
+        Self {
+            sunrise: parse_time_of_day("06:00").expect("valid literal"),
+            sunset: parse_time_of_day("20:00").expect("valid literal"),
+            peak_pct: 100.0,
+            cloud_rate_per_h: None,
+            cloud_depth: (20.0, 70.0),
+            cloud_duration: (60.0, 600.0),
+            cloud_ramp: (10.0, 60.0),
+            seed: None,
+        }
+    }
+}
+
+/// One discrete cloud passing overhead. Its attenuation envelope is a
+/// trapezoid: ramps linearly up to `depth_pct` over `ramp_in`, holds
+/// for `plateau`, then ramps back down over `ramp_out`. Outside
+/// `[start, end())` it contributes no attenuation at all.
+#[derive(Clone, Debug)]
+pub struct CloudEvent {
+    /// When the cloud begins arriving (the start of `ramp_in`), UTC.
+    pub start: DateTime<Utc>,
+    /// How long attenuation takes to ramp linearly from zero up to
+    /// `depth_pct`, right after `start`.
+    pub ramp_in: Duration,
+    /// How long attenuation holds steady at `depth_pct`, between
+    /// `ramp_in` and `ramp_out`.
+    pub plateau: Duration,
+    /// How long attenuation takes to ramp linearly back down to zero,
+    /// right after the plateau. The event ends (see [`Self::end`])
+    /// once this finishes.
+    pub ramp_out: Duration,
+    /// Attenuation depth at the plateau, in percent (0..=100).
+    pub depth_pct: f32,
+}
+
+impl CloudEvent {
+    /// When the event's attenuation returns to zero.
+    pub fn end(&self) -> DateTime<Utc> {
+        let span = self.ramp_in + self.plateau + self.ramp_out;
+        self.start + chrono::Duration::from_std(span).unwrap_or(chrono::Duration::zero())
+    }
+
+    /// Fractional attenuation (`0..=depth_pct/100`) at `t`.
+    pub fn attenuation_at(&self, t: DateTime<Utc>) -> f32 {
+        if t < self.start || t >= self.end() {
+            return 0.0;
+        }
+        let depth = (self.depth_pct / 100.0).clamp(0.0, 1.0);
+        let elapsed = (t - self.start).to_std().unwrap_or(Duration::ZERO);
+        if elapsed < self.ramp_in {
+            let frac = elapsed.as_secs_f32() / self.ramp_in.as_secs_f32().max(f32::EPSILON);
+            depth * frac
+        } else if elapsed < self.ramp_in + self.plateau {
+            depth
+        } else {
+            let into_ramp_out = elapsed - (self.ramp_in + self.plateau);
+            let frac = into_ramp_out.as_secs_f32() / self.ramp_out.as_secs_f32().max(f32::EPSILON);
+            depth * (1.0 - frac)
+        }
+    }
+}
+
+/// Site-wide sunlight model: a clear-sky curve modulated by whatever
+/// cloud events are currently in the list. Not `Clone` — it owns an
+/// RNG stream that shouldn't be duplicated.
+pub struct Weather {
+    cfg: WeatherConfig,
+    events: Vec<CloudEvent>,
+    rng: SmallRng,
+    /// The last `now` passed to `advance` (or set implicitly by
+    /// `pass_cloud`'s fallback) — the reference point new scripted
+    /// events start from, and the watermark `advance` measures clock
+    /// steps against.
+    anchor: Option<DateTime<Utc>>,
+    /// When the ambient generator's next arrival lands, once primed.
+    next_arrival: Option<DateTime<Utc>>,
+}
+
+impl Weather {
+    pub fn new(cfg: WeatherConfig) -> Self {
+        let rng = match cfg.seed {
+            Some(seed) => SmallRng::seed_from_u64(seed),
+            None => SmallRng::from_entropy(),
+        };
+        Self {
+            cfg,
+            events: Vec::new(),
+            rng,
+            anchor: None,
+            next_arrival: None,
+        }
+    }
+
+    pub fn config(&self) -> &WeatherConfig {
+        &self.cfg
+    }
+
+    pub fn config_mut(&mut self) -> &mut WeatherConfig {
+        &mut self.cfg
+    }
+
+    pub fn events(&self) -> &[CloudEvent] {
+        &self.events
+    }
+
+    pub fn anchor(&self) -> Option<DateTime<Utc>> {
+        self.anchor
+    }
+
+    /// Clear-sky output at `t`: zero outside `[sunrise, sunset]`,
+    /// else a sine arch peaking at `peak_pct` at solar noon (the
+    /// window's midpoint).
+    pub fn clear_sky_pct(&self, t: DateTime<Utc>) -> f32 {
+        let secs = t.time().num_seconds_from_midnight() as u64;
+        let sunrise = self.cfg.sunrise.as_secs();
+        let sunset = self.cfg.sunset.as_secs();
+        if secs < sunrise || secs > sunset || sunset <= sunrise {
+            return 0.0;
+        }
+        let day_len = (sunset - sunrise) as f32;
+        let frac = (secs - sunrise) as f32 / day_len;
+        self.cfg.peak_pct * (std::f32::consts::PI * frac).sin()
+    }
+
+    /// Sunlight at `t`: clear-sky attenuated by every currently
+    /// tracked cloud event, multiplied together (`Π (1 -
+    /// attenuation_i(t))`), so overlapping clouds compound.
+    pub fn pct_at(&self, t: DateTime<Utc>) -> f32 {
+        let transmission: f32 = self
+            .events
+            .iter()
+            .map(|e| 1.0 - e.attenuation_at(t))
+            .product();
+        self.clear_sky_pct(t) * transmission
+    }
+
+    /// Draw one exponential inter-arrival duration for a Poisson
+    /// process at `rate` events/hour.
+    fn exp_sample(rng: &mut SmallRng, rate: f32) -> Duration {
+        let u: f32 = rng.gen_range(1e-6..1.0f32);
+        // Capped at the re-anchor bound: a gap that long is already
+        // past what `advance` will ever walk one arrival at a time
+        // (it re-anchors instead), so there is no behavioral
+        // difference between this and the true, unrepresentable gap —
+        // just the difference between saturating and panicking.
+        saturating_secs_to_duration(
+            -u.ln() / rate * 3600.0,
+            retention_margin()
+                .to_std()
+                .unwrap_or(Duration::from_secs(3600)),
+        )
+    }
+
+    /// Draw a value uniformly from `(lo, hi)` (order-independent).
+    fn uniform(rng: &mut SmallRng, range: (f32, f32)) -> f32 {
+        let (lo, hi) = (range.0.min(range.1), range.0.max(range.1));
+        if hi <= lo { lo } else { rng.gen_range(lo..hi) }
+    }
+
+    /// Materialize ambient cloud events (if `cloud_rate_per_h` is
+    /// configured) up to `now`, then prune events that expired more
+    /// than an hour ago.
+    ///
+    /// Tolerates clock steps: a backward `now` (an NTP correction)
+    /// is a no-op that leaves the anchor untouched. A forward jump
+    /// past [`retention_margin`] (a suspended VM resuming) re-anchors
+    /// to `now` instead of grinding through a potentially huge
+    /// ambient backlog one arrival at a time.
+    pub fn advance(&mut self, now: DateTime<Utc>) {
+        let mut base = self.anchor.unwrap_or(now);
+        if let Some(a) = self.anchor {
+            if now < a {
+                return;
+            }
+            if now - a > retention_margin() {
+                self.next_arrival = None;
+                base = now;
+            }
+        }
+        if let Some(rate) = self.cfg.cloud_rate_per_h
+            && rate > 0.0
+        {
+            if self.next_arrival.is_none() {
+                self.next_arrival = Some(base + Self::exp_sample(&mut self.rng, rate));
+            }
+            while let Some(arrival) = self.next_arrival {
+                if arrival > now {
+                    break;
+                }
+                let depth = Self::uniform(&mut self.rng, self.cfg.cloud_depth).clamp(0.0, 100.0);
+                let duration_s = Self::uniform(&mut self.rng, self.cfg.cloud_duration).max(0.0);
+                let ramp_s = Self::uniform(&mut self.rng, self.cfg.cloud_ramp).max(0.0);
+                // Capped at a day: a cloud longer than that is already
+                // outside anything `validate::secs_range` will admit
+                // through a door, so a direct (unvalidated) caller
+                // just gets clamped physics instead of a killed tick.
+                let duration = saturating_secs_to_duration(duration_s, Duration::from_secs(86_400));
+                let ramp = saturating_secs_to_duration(ramp_s, Duration::from_secs(86_400));
+                let plateau = duration.saturating_sub(ramp.saturating_mul(2));
+                self.events.push(CloudEvent {
+                    start: arrival,
+                    ramp_in: ramp,
+                    plateau,
+                    ramp_out: ramp,
+                    depth_pct: depth,
+                });
+                self.next_arrival = Some(arrival + Self::exp_sample(&mut self.rng, rate));
+            }
+        } else {
+            // The ambient generator is off, so its arrival clock stops
+            // with it. Keeping a stale `next_arrival` while the anchor
+            // kept advancing would make the first `advance` after a
+            // re-enable grind the ENTIRE disabled gap through the loop
+            // above one arrival at a time, materializing a backlog of
+            // clouds that all started in the past. Clearing it
+            // re-anchors on the next enabled advance instead — the
+            // same thing the >1 h leap above does, for the same reason.
+            self.next_arrival = None;
+        }
+        self.anchor = Some(now);
+        let margin = retention_margin();
+        self.events.retain(|e| e.end() + margin >= now);
+    }
+
+    /// Insert one deterministic, scripted cloud event starting at
+    /// the current anchor (or `Utc::now()` if `advance` has never
+    /// been called). Used by scenarios and the weather panel — a
+    /// scripted cloud is an ordinary event that expires on its own.
+    pub fn pass_cloud(&mut self, depth_pct: f32, duration: Duration, ramp: Duration) {
+        let start = self.anchor.unwrap_or_else(Utc::now);
+        let plateau = duration.saturating_sub(ramp.saturating_mul(2));
+        self.events.push(CloudEvent {
+            start,
+            ramp_in: ramp,
+            plateau,
+            ramp_out: ramp,
+            depth_pct: depth_pct.clamp(0.0, 100.0),
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn at(h: u32, m: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 6, 1, h, m, 0).unwrap()
+    }
+
+    /// Clear sky: zero outside daylight, peak at solar noon, sine
+    /// in between (sin(π/4) ≈ 0.7071 a quarter-day in).
+    #[test]
+    fn clear_sky_is_a_sine_between_sunrise_and_sunset() {
+        let w = Weather::new(WeatherConfig::default()); // 06:00–20:00, peak 100
+        assert_eq!(w.clear_sky_pct(at(3, 0)), 0.0);
+        assert_eq!(w.clear_sky_pct(at(22, 0)), 0.0);
+        assert_eq!(w.clear_sky_pct(at(6, 0)), 0.0);
+        assert!(
+            (w.clear_sky_pct(at(13, 0)) - 100.0).abs() < 0.01,
+            "solar noon"
+        );
+        let quarter = w.clear_sky_pct(at(9, 30)); // 3.5 h of 14 h in
+        assert!((quarter - 100.0 * (std::f32::consts::PI * 0.25).sin()).abs() < 0.01);
+    }
+
+    /// A cloud's attenuation ramps linearly to depth, holds, ramps out.
+    #[test]
+    fn cloud_event_is_a_trapezoid() {
+        let e = CloudEvent {
+            start: at(12, 0),
+            ramp_in: Duration::from_secs(60),
+            plateau: Duration::from_secs(120),
+            ramp_out: Duration::from_secs(60),
+            depth_pct: 50.0,
+        };
+        assert_eq!(e.attenuation_at(at(11, 59)), 0.0);
+        assert!((e.attenuation_at(at(12, 0) + chrono::Duration::seconds(30)) - 0.25).abs() < 1e-4);
+        assert!((e.attenuation_at(at(12, 2)) - 0.5).abs() < 1e-4); // plateau
+        assert_eq!(
+            e.attenuation_at(e.end() + chrono::Duration::seconds(1)),
+            0.0
+        );
+    }
+
+    /// Overlapping clouds multiply transmissions: 50% and 40% deep
+    /// clouds together leave 0.5 × 0.6 = 30% of clear sky.
+    #[test]
+    fn overlapping_clouds_multiply() {
+        let mut w = Weather::new(WeatherConfig::default());
+        w.advance(at(13, 0));
+        w.pass_cloud(50.0, Duration::from_secs(600), Duration::ZERO);
+        w.pass_cloud(40.0, Duration::from_secs(600), Duration::ZERO);
+        let clear = w.clear_sky_pct(at(13, 1));
+        assert!((w.pct_at(at(13, 1)) - clear * 0.5 * 0.6).abs() < 0.01);
+    }
+
+    /// Same seed ⇒ same ambient event stream; different seeds diverge.
+    /// Steps in 5-minute increments — matching real usage, where
+    /// `advance` is called once per tick, not in one giant jump.
+    #[test]
+    fn seeded_generator_is_reproducible() {
+        let mk = |seed| {
+            let mut w = Weather::new(WeatherConfig {
+                cloud_rate_per_h: Some(30.0),
+                seed,
+                ..Default::default()
+            });
+            let mut t = at(10, 0);
+            let end = at(14, 0);
+            while t <= end {
+                w.advance(t);
+                t += chrono::Duration::minutes(5);
+            }
+            w.events()
+                .iter()
+                .map(|e| (e.start, e.depth_pct))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(mk(Some(7)), mk(Some(7)));
+        assert!(!mk(Some(7)).is_empty(), "4 h at 30/h must produce events");
+        assert_ne!(mk(Some(7)), mk(Some(8)));
+    }
+
+    /// Clock tolerance: a backward `now` generates nothing and keeps
+    /// the anchor; a forward leap past the bound re-anchors instead
+    /// of materializing hours of events.
+    #[test]
+    fn generator_tolerates_clock_steps() {
+        let mut w = Weather::new(WeatherConfig {
+            cloud_rate_per_h: Some(60.0),
+            seed: Some(1),
+            ..Default::default()
+        });
+        w.advance(at(12, 0));
+        let anchor = w.anchor();
+        w.advance(at(11, 0)); // NTP step backward
+        assert_eq!(w.anchor(), anchor, "backward now must not move the anchor");
+        let before = w.events().len();
+        w.advance(at(12, 0) + chrono::Duration::hours(6)); // suspended VM resumes
+        let gained = w.events().len() - before;
+        assert_eq!(gained, 0, "a >1 h leap re-anchors instead of backfilling");
+    }
+
+    /// Turning `cloud_rate_per_h` off stops the arrival clock with
+    /// it. Without that, `next_arrival` stays pinned at the moment
+    /// the rate went off while the anchor keeps advancing, and the
+    /// first `advance` after a re-enable walks the whole disabled gap
+    /// one arrival at a time — a day off at 30/h is ~720 loop
+    /// iterations, one cloud each, all started back in the gap (most
+    /// then immediately pruned, so the only visible trace is a burst
+    /// of retroactive attenuation).
+    #[test]
+    fn disabling_the_cloud_rate_re_anchors_the_next_arrival() {
+        let mut w = Weather::new(WeatherConfig {
+            cloud_rate_per_h: Some(30.0),
+            seed: Some(3),
+            ..Default::default()
+        });
+        let start = at(10, 0);
+        w.advance(start);
+        w.advance(start + chrono::Duration::minutes(10));
+
+        // Rate off, then a simulated day of ordinary ticks — each one
+        // well inside the re-anchor bound, so nothing else clears
+        // `next_arrival` on the way through.
+        w.config_mut().cloud_rate_per_h = None;
+        let gap_end = start + chrono::Duration::days(1);
+        let mut t = start + chrono::Duration::minutes(15);
+        while t <= gap_end {
+            w.advance(t);
+            t += chrono::Duration::minutes(5);
+        }
+        assert!(
+            w.events().is_empty(),
+            "a disabled rate produces no clouds at all"
+        );
+
+        // Re-enabled: one advance re-anchors rather than backfilling.
+        w.config_mut().cloud_rate_per_h = Some(30.0);
+        let resume = gap_end + chrono::Duration::minutes(1);
+        w.advance(resume);
+        assert!(
+            w.events().len() <= 10,
+            "re-enabling must not backfill the disabled gap, got {} events",
+            w.events().len()
+        );
+        for e in w.events() {
+            assert!(
+                e.start >= gap_end,
+                "no arrival may land back in the disabled gap: {} < {gap_end}",
+                e.start
+            );
+        }
+    }
+
+    /// Expired events are pruned, but only past the 1 h lag margin.
+    #[test]
+    fn events_prune_past_the_lag_margin() {
+        let mut w = Weather::new(WeatherConfig::default());
+        w.advance(at(10, 0));
+        w.pass_cloud(50.0, Duration::from_secs(60), Duration::ZERO);
+        w.advance(at(10, 30));
+        assert_eq!(w.events().len(), 1, "expired but inside the margin");
+        w.advance(at(12, 0));
+        assert!(w.events().is_empty(), "past the margin");
+    }
+
+    /// Direct construction bypasses the doors — nothing stops a test
+    /// or a future embedder from handing `Weather::new` a config the
+    /// validators would have rejected. `advance` must degrade rather
+    /// than panic even then: an absurd `cloud_duration` upper bound
+    /// and a vanishing `cloud_rate_per_h` (which blows up
+    /// `exp_sample`'s `-ln(u)/rate` the same way) must not kill the
+    /// physics tick that calls this.
+    #[test]
+    fn advance_does_not_panic_on_absurd_config_bypassing_the_doors() {
+        let mut w = Weather::new(WeatherConfig {
+            cloud_rate_per_h: Some(1e-30),
+            cloud_duration: (1e30, 1e30),
+            cloud_ramp: (1e30, 1e30),
+            seed: Some(1),
+            ..Default::default()
+        });
+        let mut t = at(0, 0);
+        let end = at(23, 0);
+        while t <= end {
+            w.advance(t); // must not panic
+            t += chrono::Duration::minutes(30);
+        }
+    }
+}

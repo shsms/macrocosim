@@ -28,6 +28,7 @@ pub mod setpoints;
 pub mod sim_clock;
 pub mod site_import;
 pub mod steam_boiler;
+pub mod weather;
 
 pub use battery::Battery;
 pub use component::{
