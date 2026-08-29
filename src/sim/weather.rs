@@ -320,6 +320,154 @@ impl Weather {
     }
 }
 
+/// Pure numeric validators shared by the Lisp weather doors
+/// (`src/lisp/defuns/weather.rs`) and the HTTP weather routes
+/// (`src/ui/handlers/weather.rs`), so both surfaces enforce
+/// identical rules even though each phrases its error text around
+/// its own field vocabulary (`:cloud-rate` vs `cloud_rate_per_h`).
+/// Every fn here is a pure check — no `WeatherConfig`, no site, no
+/// error type tied to either caller's framework.
+pub mod validate {
+    use std::time::Duration;
+
+    /// A cloud longer than a day is a config error, not a real cloud
+    /// — and without a cap here, a magnitude like `1e30` would sail
+    /// through the sign-only check below and later overflow
+    /// `Duration::from_secs_f32` inside `Weather::advance`, on the
+    /// physics task, with nothing catching it.
+    pub const MAX_SECS: f32 = 86_400.0;
+
+    /// Both ends of a `(lo, hi)` seconds range must be finite and
+    /// within `[0, MAX_SECS]` — a NaN would poison every `uniform`
+    /// draw, a negative would panic `Duration::from_secs_f32`
+    /// downstream, and an absurd magnitude (e.g. `1e30`) would too.
+    pub fn secs_range(range: (f32, f32)) -> Result<(), String> {
+        if !range.0.is_finite()
+            || !range.1.is_finite()
+            || range.0 < 0.0
+            || range.1 < 0.0
+            || range.0 > MAX_SECS
+            || range.1 > MAX_SECS
+        {
+            return Err(format!(
+                "must be a non-negative number of seconds no greater than {MAX_SECS} (one day), got ({}, {})",
+                range.0, range.1
+            ));
+        }
+        Ok(())
+    }
+
+    /// The longest lag a `Follow` solar inverter may read the sky at,
+    /// in seconds — the same hour `Weather::advance`'s
+    /// `retention_margin` keeps an expired [`CloudEvent`] around for.
+    /// Past that the lagged sample lands in pruned history, where
+    /// every cloud has already been dropped from the list, so
+    /// `pct_at` returns unattenuated clear sky: the array silently
+    /// never clouds over, with nothing anywhere to say why.
+    ///
+    /// [`CloudEvent`]: super::CloudEvent
+    pub const MAX_LAG_S: f64 = 3_600.0;
+
+    /// A `Follow` inverter's weather lag: finite, non-negative, and
+    /// no longer than the cloud history [`MAX_LAG_S`] bounds. Returns
+    /// the `Duration` the caller stores, so the fallible conversion
+    /// happens once, here — `Duration::from_secs_f64` PANICS on a
+    /// non-finite or overflowing value, which would abort a whole
+    /// config load over one typo'd kwarg.
+    pub fn weather_lag_s(v: f64) -> Result<Duration, String> {
+        if !(v.is_finite() && v >= 0.0) {
+            return Err(format!("must be a non-negative number of seconds, got {v}"));
+        }
+        if v > MAX_LAG_S {
+            return Err(format!(
+                "must be no more than {MAX_LAG_S} s: cloud events are pruned an hour after they \
+                 end, so a longer lag reads a sky with no clouds left in it; got {v}"
+            ));
+        }
+        Duration::try_from_secs_f64(v).map_err(|e| format!("is not a usable duration: {e}"))
+    }
+
+    /// A depth percentage range: a negative depth would brighten the
+    /// array and >100 would drive `pct_at` negative.
+    pub fn depth_range(range: (f32, f32)) -> Result<(), String> {
+        if !(0.0..=100.0).contains(&range.0) || !(0.0..=100.0).contains(&range.1) {
+            return Err(format!(
+                "must be within [0, 100], got ({}, {})",
+                range.0, range.1
+            ));
+        }
+        Ok(())
+    }
+
+    /// A negative peak inverts the clear-sky arch, which drives
+    /// `min_avail` positive — parking every following array at 0
+    /// with nothing in telemetry to say why.
+    pub fn peak_pct(v: f32) -> Result<(), String> {
+        if !(v.is_finite() && v >= 0.0) {
+            return Err(format!("must be a non-negative percentage, got {v}"));
+        }
+        Ok(())
+    }
+
+    /// More than one cloud a second is not a sky, it's a typo — and
+    /// without an upper bound, a tiny positive rate near the other
+    /// end (e.g. `1e-30`) blows up `exp_sample`'s `-ln(u) / rate` the
+    /// same way an absurd `:cloud-duration` blows up the trapezoid.
+    pub const MAX_PER_H: f32 = 3_600.0;
+
+    /// Ambient cloud arrival rate: 0 is the natural "no ambient
+    /// clouds" spelling, but a NEGATIVE rate is a mistake, not a
+    /// second spelling of "off". Returns the config slot's own
+    /// `Option<f32>` shape: `Some` above zero, `None` at zero.
+    pub fn cloud_rate(v: f32) -> Result<Option<f32>, String> {
+        if !(v.is_finite() && v >= 0.0) {
+            return Err(format!("must be a non-negative rate (0 disables), got {v}"));
+        }
+        if v > MAX_PER_H {
+            return Err(format!(
+                "must be no more than {MAX_PER_H} (one cloud a second), got {v}"
+            ));
+        }
+        Ok(if v > 0.0 { Some(v) } else { None })
+    }
+
+    /// Checked after both land, so a form/request moving the whole
+    /// window is judged on the pair it produces rather than the half
+    /// set first.
+    pub fn sunrise_before_sunset(sunrise: Duration, sunset: Duration) -> Result<(), String> {
+        if sunrise >= sunset {
+            return Err(format!(
+                "sunrise must be before sunset, got {}s and {}s",
+                sunrise.as_secs(),
+                sunset.as_secs()
+            ));
+        }
+        Ok(())
+    }
+
+    /// One scripted cloud's args: depth in range, duration/ramp
+    /// non-negative and representable as a `Duration`. Shared by
+    /// `(pass-cloud)` and the HTTP `pass_cloud` sub-object.
+    pub fn pass_cloud_args(
+        depth_pct: f64,
+        duration_s: f64,
+        ramp_s: f64,
+    ) -> Result<(f32, Duration, Duration), String> {
+        if !(0.0..=100.0).contains(&depth_pct) {
+            return Err(format!("depth must be within [0, 100], got {depth_pct}"));
+        }
+        if duration_s < 0.0 || ramp_s < 0.0 {
+            return Err(format!(
+                "duration and ramp must be non-negative, got {duration_s} and {ramp_s}"
+            ));
+        }
+        let duration =
+            Duration::try_from_secs_f64(duration_s).map_err(|e| format!("bad duration: {e}"))?;
+        let ramp = Duration::try_from_secs_f64(ramp_s).map_err(|e| format!("bad ramp: {e}"))?;
+        Ok((depth_pct as f32, duration, ramp))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

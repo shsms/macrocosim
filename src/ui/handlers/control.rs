@@ -66,6 +66,13 @@ pub(in crate::ui) struct DriveRequest {
     /// bool for the same reason as `clear_power`.
     #[serde(default)]
     clear_reactive: bool,
+    /// Drop whatever is driving a solar inverter's sunlight% (a
+    /// poke or a Lisp source), returning it to following the site's
+    /// weather. The HTTP twin of `(clear-solar-sunlight id)`.
+    /// Mutually exclusive with `sunlight_pct` in the same request.
+    /// Plain bool for the same reason as `clear_power`.
+    #[serde(default)]
+    clear_sunlight: bool,
 }
 
 /// Empty JSON on success; the error text on any rejection.
@@ -76,11 +83,14 @@ pub(in crate::ui) struct ControlError {
 
 type ControlResult = Result<Json<serde_json::Value>, (StatusCode, Json<ControlError>)>;
 
-fn reject(status: StatusCode, error: String) -> (StatusCode, Json<ControlError>) {
+/// `pub(super)`: the weather routes (`weather.rs`, a sibling handler
+/// module) reuse this to shape their own 4xx bodies in the same
+/// `{"error": "..."}` style as every other control endpoint.
+pub(super) fn reject(status: StatusCode, error: String) -> (StatusCode, Json<ControlError>) {
     (status, Json(ControlError { error }))
 }
 
-fn site_for(
+pub(super) fn site_for(
     config: &Config,
     mg_id: Option<u64>,
 ) -> Result<MicrogridSite, (StatusCode, Json<ControlError>)> {
@@ -286,6 +296,21 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
             format!("component {id} does not take clear_reactive (not a meter)"),
         ));
     }
+    if req.clear_sunlight && !component.takes_sunlight_pct() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!("component {id} does not take clear_sunlight (not a solar inverter)"),
+        ));
+    }
+    if req.clear_sunlight && req.sunlight_pct.is_some() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "component {id}: clear_sunlight and sunlight_pct are mutually exclusive; \
+                 send one or the other"
+            ),
+        ));
+    }
     if req.clear_power && req.power_w.is_some() {
         return Err(reject(
             StatusCode::BAD_REQUEST,
@@ -385,6 +410,23 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         // until the next full snapshot.
         site.note_knob_changed(id, "meter-reactive-power", None, None, None);
         site.note_knob_changed(id, "meter-power-factor", None, None, None);
+    }
+    if req.clear_sunlight {
+        site.scenario_snapshot_knob(id, KnobKind::Sunlight);
+        if !component.clear_sunlight_source() {
+            return Err(reject(
+                StatusCode::BAD_REQUEST,
+                format!("component {id} does not take clear_sunlight (not a solar inverter)"),
+            ));
+        }
+        // Unlike clear_power/clear_reactive, the cleared slot is not
+        // "nothing" — a `Follow` source has a live percentage of its
+        // own (the seeded full sun until the first tick resolves the
+        // sky), so the inspector gets that value rather than a
+        // blanked input. Mirrors `(clear-solar-sunlight)` in
+        // load_drivers.rs.
+        let now_pct = component.sunlight_reading().map(|r| r.value);
+        site.note_knob_changed(id, "solar-sunlight", now_pct, Some("weather".into()), None);
     }
     // The debug_asserts catch a takes_* predicate drifting from its
     // setter: predicate true + setter false would be a 200 that did
@@ -523,6 +565,7 @@ mod tests {
             pressure_bar: None,
             clear_power: false,
             clear_reactive: false,
+            clear_sunlight: false,
         };
         assert!(apply_drive(&site, 5, &req).is_err());
 
@@ -557,6 +600,7 @@ mod tests {
             pressure_bar: None,
             clear_power: false,
             clear_reactive: false,
+            clear_sunlight: false,
         };
         assert!(apply_drive(&site, 6, &req).is_ok());
 
@@ -582,6 +626,7 @@ mod tests {
             pressure_bar: Some(9.0),
             clear_power: false,
             clear_reactive: false,
+            clear_sunlight: false,
         };
         assert!(apply_drive(&site, 6, &req).is_ok());
 
@@ -615,6 +660,7 @@ mod tests {
             pressure_bar: None,
             clear_power: false,
             clear_reactive: false,
+            clear_sunlight: false,
         };
         assert!(apply_drive(&site, 5, &req).is_err());
 
@@ -629,6 +675,7 @@ mod tests {
             pressure_bar: Some(9.0),
             clear_power: false,
             clear_reactive: false,
+            clear_sunlight: false,
         };
         assert!(apply_drive(&site, 5, &req).is_err());
     }

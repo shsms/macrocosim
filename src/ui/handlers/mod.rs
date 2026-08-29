@@ -23,6 +23,7 @@ pub(in crate::ui) mod scripts;
 pub(in crate::ui) mod snapshots;
 pub(in crate::ui) mod topology;
 pub(in crate::ui) mod undo;
+pub(in crate::ui) mod weather;
 
 /// Look up the site for `mg_id` in the registry. Per-microgrid
 /// handlers call this at the start; a miss returns 404 verbatim

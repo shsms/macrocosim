@@ -10,7 +10,7 @@ use tulisp::{Error, TulispContext, TulispObject};
 use crate::lisp::value::LispValue;
 use crate::sim::microgrids::SharedSiteRouter;
 use crate::sim::sim_clock::parse_time_of_day;
-use crate::sim::weather::{Weather, WeatherConfig};
+use crate::sim::weather::{self as weather, Weather, WeatherConfig};
 
 tulisp::AsPlist! {
     /// Plist payload shared by `(make-weather …)` and
@@ -77,14 +77,12 @@ fn range_arg(kw: &str, v: &LispValue) -> Result<(f32, f32), Error> {
 /// non-negative number of seconds. Same guard `pass-cloud` applies to
 /// the same two quantities — a NaN would poison every `uniform` draw
 /// and a negative would make `Duration::from_secs_f32` panic downstream.
+/// Delegates to [`crate::sim::weather::validate::secs_range`], shared
+/// with the HTTP weather routes.
 fn checked_secs_range(kw: &str, range: (f32, f32)) -> Result<(f32, f32), Error> {
-    if !range.0.is_finite() || !range.1.is_finite() || range.0 < 0.0 || range.1 < 0.0 {
-        return Err(Error::invalid_argument(format!(
-            "{kw} must be a non-negative number of seconds, got ({}, {})",
-            range.0, range.1
-        )));
-    }
-    Ok(range)
+    crate::sim::weather::validate::secs_range(range)
+        .map(|()| range)
+        .map_err(|e| Error::invalid_argument(format!("{kw} {e}")))
 }
 
 /// A time-of-day kwarg: an `"HH:MM"` string, or a bare number of
@@ -111,14 +109,12 @@ fn time_of_day_arg(kw: &str, v: &LispValue) -> Result<Duration, Error> {
 /// Depth is a percentage of the sky blocked, so both ends of the
 /// range have to be a real percentage — a negative depth would
 /// *brighten* the array and >100 would drive `pct_at` negative.
+/// Delegates to [`crate::sim::weather::validate::depth_range`],
+/// shared with the HTTP weather routes.
 fn checked_depth(range: (f32, f32)) -> Result<(f32, f32), Error> {
-    if !(0.0..=100.0).contains(&range.0) || !(0.0..=100.0).contains(&range.1) {
-        return Err(Error::invalid_argument(format!(
-            ":cloud-depth must be within [0, 100], got ({}, {})",
-            range.0, range.1
-        )));
-    }
-    Ok(range)
+    crate::sim::weather::validate::depth_range(range)
+        .map(|()| range)
+        .map_err(|e| Error::invalid_argument(format!(":cloud-depth {e}")))
 }
 
 /// Fold the plist over `cfg`, validating as it goes. Takes a working
@@ -136,23 +132,15 @@ fn apply_args(door: &str, cfg: &mut WeatherConfig, a: &WeatherArgs) -> Result<()
     // ("06:00"→"21:00" over a 05:00–20:00 config) is judged on the
     // pair it produces rather than on the half it happens to set
     // first.
-    if cfg.sunrise >= cfg.sunset {
-        return Err(Error::invalid_argument(format!(
-            "{door}: :sunrise must be before :sunset, got {}s and {}s",
-            cfg.sunrise.as_secs(),
-            cfg.sunset.as_secs()
-        )));
-    }
+    weather::validate::sunrise_before_sunset(cfg.sunrise, cfg.sunset)
+        .map_err(|e| Error::invalid_argument(format!("{door}: :sunrise/:sunset — {e}")))?;
     if let Some(v) = a.peak_pct {
         // A negative peak inverts the clear-sky arch, which drives
         // `min_avail` positive — the band collapses and every
         // following array parks at 0 instead of generating, with
         // nothing in the telemetry to say why.
-        if !(v.is_finite() && v >= 0.0) {
-            return Err(Error::invalid_argument(format!(
-                "{door}: :peak% must be a non-negative percentage, got {v}"
-            )));
-        }
+        weather::validate::peak_pct(v as f32)
+            .map_err(|e| Error::invalid_argument(format!("{door}: :peak% {e}")))?;
         cfg.peak_pct = v as f32;
     }
     if let Some(v) = a.cloud_rate {
@@ -160,12 +148,8 @@ fn apply_args(door: &str, cfg: &mut WeatherConfig, a: &WeatherArgs) -> Result<()
         // where `None` has no keyword of its own — but a NEGATIVE
         // rate is a mistake, not a second spelling of "off", so it
         // says so rather than silently disabling the generator.
-        if !(v.is_finite() && v >= 0.0) {
-            return Err(Error::invalid_argument(format!(
-                "{door}: :cloud-rate must be a non-negative rate (0 disables), got {v}"
-            )));
-        }
-        cfg.cloud_rate_per_h = if v > 0.0 { Some(v as f32) } else { None };
+        cfg.cloud_rate_per_h = weather::validate::cloud_rate(v as f32)
+            .map_err(|e| Error::invalid_argument(format!("{door}: :cloud-rate {e}")))?;
     }
     if let Some(v) = a.cloud_depth.as_ref() {
         cfg.cloud_depth = checked_depth(range_arg(":cloud-depth", v)?)?;
@@ -238,23 +222,11 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     ctx.defun(
         "pass-cloud",
         move |depth_pct: f64, duration_s: f64, ramp_s: Option<f64>| -> Result<bool, Error> {
-            if !(0.0..=100.0).contains(&depth_pct) {
-                return Err(Error::invalid_argument(format!(
-                    "pass-cloud: depth must be within [0, 100], got {depth_pct}"
-                )));
-            }
-            if duration_s < 0.0 || ramp_s.is_some_and(|r| r < 0.0) {
-                return Err(Error::invalid_argument(format!(
-                    "pass-cloud: duration and ramp must be non-negative, got {duration_s} and {}",
-                    ramp_s.unwrap_or(0.0)
-                )));
-            }
-            let duration = Duration::try_from_secs_f64(duration_s)
-                .map_err(|e| Error::invalid_argument(format!("pass-cloud: bad duration: {e}")))?;
-            let ramp = Duration::try_from_secs_f64(ramp_s.unwrap_or(0.0))
-                .map_err(|e| Error::invalid_argument(format!("pass-cloud: bad ramp: {e}")))?;
+            let (depth_pct, duration, ramp) =
+                weather::validate::pass_cloud_args(depth_pct, duration_s, ramp_s.unwrap_or(0.0))
+                    .map_err(|e| Error::invalid_argument(format!("pass-cloud: {e}")))?;
             r.site()
-                .with_weather(|w| w.pass_cloud(depth_pct as f32, duration, ramp))
+                .with_weather(|w| w.pass_cloud(depth_pct, duration, ramp))
                 .ok_or_else(|| {
                     Error::invalid_argument(
                         "pass-cloud: no weather on this site — call (make-weather …) first"
@@ -430,6 +402,35 @@ mod tests {
             .unwrap();
         // 0 stays the "no ambient clouds" spelling.
         cfg.eval("(set-weather :cloud-rate 0)").unwrap();
+        cfg.site()
+            .with_weather(|w| assert_eq!(w.config().cloud_rate_per_h, None))
+            .unwrap();
+    }
+
+    /// The exact repro from the final review: a magnitude the sign-only
+    /// checks above would have waved through (`1e30` is finite and
+    /// non-negative) is rejected at the door instead of surviving to
+    /// panic `Duration::from_secs_f32` inside `Weather::advance` on the
+    /// physics task. Same for a vanishing `:cloud-rate`, which blows up
+    /// `exp_sample`'s `-ln(u)/rate` the same way, and for a rate above
+    /// "one cloud a second".
+    #[test]
+    fn absurd_magnitude_cloud_config_is_rejected_at_the_door() {
+        let (cfg, _dir) = config_with("");
+        cfg.eval("(make-weather)").unwrap();
+        for (form, needle) in [
+            (
+                "(set-weather :cloud-rate 1 :cloud-duration '(1e30 1e30))",
+                ":cloud-duration",
+            ),
+            ("(set-weather :cloud-ramp '(1e30 1e30))", ":cloud-ramp"),
+            ("(set-weather :cloud-rate 1e30)", ":cloud-rate"),
+        ] {
+            let err = cfg.eval(form).unwrap_err();
+            assert!(err.contains(needle), "{form} → {err}");
+        }
+        // The live weather survived every rejection — no ambient
+        // generator was ever armed with the absurd config.
         cfg.site()
             .with_weather(|w| assert_eq!(w.config().cloud_rate_per_h, None))
             .unwrap();

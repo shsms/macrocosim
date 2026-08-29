@@ -2035,3 +2035,102 @@ async fn control_drive_broadcasts_knob_changed() {
         "no matching KnobChanged on the bus; saw: {seen:?}"
     );
 }
+
+/// `clear_sunlight: true` on the typed drive door must broadcast the
+/// "weather" marker in `expr`, not `None` — otherwise the instant
+/// after a clear, the inspector renders a bare, markerless number
+/// (the opposite of the `Follow` mode the clear just installed) until
+/// the component is re-selected. Mirrors
+/// `clear_solar_sunlight_returns_to_following_weather` in
+/// `lisp/defuns/load_drivers.rs`, driven over HTTP instead of `eval`.
+#[tokio::test]
+async fn control_drive_clear_sunlight_broadcasts_weather_marker() {
+    use crate::sim::events::SiteEvent;
+
+    let cfg = config_with("(%make-solar-inverter :id 8 :sunlight% 40)").await;
+    call(
+        cfg.clone(),
+        post_json("/api/component/8/drive", r#"{"sunlight_pct": 10.0}"#),
+    )
+    .await;
+
+    let mut rx = cfg.site().subscribe_events();
+    let (status, _) = call(
+        cfg,
+        post_json("/api/component/8/drive", r#"{"clear_sunlight": true}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut seen = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        seen.push(ev);
+    }
+    assert!(
+        seen.iter().any(|ev| matches!(
+            ev,
+            SiteEvent::KnobChanged {
+                id: 8,
+                knob: "solar-sunlight",
+                expr: Some(e),
+                ..
+            } if e == "weather"
+        )),
+        "no matching KnobChanged with the weather marker on the bus; saw: {seen:?}"
+    );
+}
+
+/// The HTTP twin of
+/// `scenario_stop_restores_a_constructed_sunlight_kwarg_a_clear_dropped`
+/// in `lisp/defuns/load_drivers.rs`: `clear_sunlight` over the drive
+/// door is a user-intent verb, so inside a running scenario it must
+/// still snapshot the knob BEFORE clearing it. The clear is the run's
+/// first touch of that knob, so the Manual 40 the inverter was built
+/// with can only come back from the snapshot the clear itself took.
+#[tokio::test]
+async fn drive_clear_sunlight_inside_a_scenario_restores_on_stop() {
+    let cfg = config_with("(%make-solar-inverter :id 8 :sunlight% 40)").await;
+    let knob = |body: Vec<u8>| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        v["knobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["knob"] == "solar-sunlight")
+            .unwrap_or_else(|| panic!("no solar-sunlight knob: {v}"))
+            .clone()
+    };
+
+    let (_, body) = call(cfg.clone(), get("/api/component?id=8")).await;
+    let before = knob(body);
+    assert_eq!(before["value"], 40.0, "{before}");
+    assert!(before["expr"].is_null(), "constructed Manual: {before}");
+
+    call(
+        cfg.clone(),
+        post("/api/eval", "(scenario-start \"clear-sun\")"),
+    )
+    .await;
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/component/8/drive", r#"{"clear_sunlight": true}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body) = call(cfg.clone(), get("/api/component?id=8")).await;
+    let during = knob(body);
+    assert_eq!(
+        during["expr"], "weather",
+        "the clear must really clear while the scenario runs: {during}"
+    );
+
+    call(cfg.clone(), post("/api/eval", "(scenario-stop)")).await;
+    let (_, body) = call(cfg, get("/api/component?id=8")).await;
+    let after = knob(body);
+    assert_eq!(after["value"], 40.0, "{after}");
+    assert!(
+        after["expr"].is_null(),
+        "back to the constructed Manual 40, not left following: {after}"
+    );
+}

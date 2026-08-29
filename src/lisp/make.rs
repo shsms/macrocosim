@@ -487,15 +487,15 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             // weather instead of frozen at a Manual 100%.
             cfg.sunlight_follow = a.sunlight_pct.is_none();
             if let Some(v) = a.weather_lag_s {
-                // try_from_secs_f64, not from_secs_f64: the latter
-                // PANICS on a non-finite or overflowing value, which
-                // would abort the whole config load over one typo'd
-                // kwarg. Same guard sim_clock's parse_offset uses.
-                cfg.weather_lag = Duration::try_from_secs_f64(v).map_err(|_| {
-                    Error::invalid_argument(format!(
-                        ":weather-lag-s must be a non-negative number of seconds, got {v}"
-                    ))
-                })?;
+                // Bounded at the hour of cloud history `Weather` keeps
+                // — a longer lag samples pruned events, so the array
+                // silently never clouds over. The shared validator
+                // also does the fallible seconds→Duration conversion,
+                // because `from_secs_f64` PANICS on a non-finite or
+                // overflowing value and one typo'd kwarg must not
+                // abort the whole config load.
+                cfg.weather_lag = crate::sim::weather::validate::weather_lag_s(v)
+                    .map_err(|e| Error::invalid_argument(format!(":weather-lag-s {e}")))?;
             }
             if let Some(v) = a.weather_jitter_pct {
                 // 100% would let a sample reach zero (or double), which
@@ -1386,6 +1386,17 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains(":weather-lag-s"), "{err}");
+        // And a merely LARGE lag — well inside `Duration`, but past
+        // the hour of cloud history `Weather` retains — is rejected
+        // too, saying why: a sample that lands in pruned history
+        // reads clear sky forever instead of failing loudly.
+        let err = ctx
+            .eval_string("(%make-solar-inverter :id 21 :weather-lag-s 7200)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(":weather-lag-s"), "{err}");
+        assert!(err.contains("3600"), "the bound is named: {err}");
+        assert!(err.contains("pruned"), "…and so is the reason: {err}");
     }
 
     /// `(set-meter-power id W)` is the existing imperative setter

@@ -81,6 +81,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         snapshots::{snapshots_list_for_mg, snapshots_load_for_mg, snapshots_save_for_mg},
         topology::{topology, topology_for_mg},
         undo::{redo_for_mg, undo_depths_for_mg, undo_for_mg},
+        weather::{weather_get, weather_get_for_mg, weather_post, weather_post_for_mg},
     };
     Router::new()
         .route("/", get(index))
@@ -89,6 +90,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/api/eval", post(eval))
         .route("/api/component/{id}/status", post(component_status))
         .route("/api/component/{id}/drive", post(component_drive))
+        .route("/api/weather", get(weather_get).post(weather_post))
         .route("/api/format", post(format))
         .route("/api/history", get(history))
         .route("/api/defaults", get(defaults))
@@ -129,6 +131,10 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route(
             "/api/mg/{mg_id}/component/{id}/drive",
             post(component_drive_for_mg),
+        )
+        .route(
+            "/api/mg/{mg_id}/weather",
+            get(weather_get_for_mg).post(weather_post_for_mg),
         )
         .route("/api/mg/{mg_id}/history", get(history_for_mg))
         .route("/api/mg/{mg_id}/setpoints", get(setpoints_for_mg))

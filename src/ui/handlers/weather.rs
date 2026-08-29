@@ -1,0 +1,272 @@
+//! Site weather over HTTP: `GET`/`POST /api/weather` (plus the
+//! `/api/mg/{mg_id}/…` variants) mirror the Lisp
+//! `(make-weather)`/`(set-weather)`/`(pass-cloud)`/`(weather-status)`
+//! doors (`src/lisp/defuns/weather.rs`) for the weather panel, which
+//! has no Lisp console of its own.
+//!
+//! Unlike the typed drive door in `control.rs`, weather isn't
+//! component-addressed — it's a property of the site — so it gets
+//! its own route pair instead of a `DriveRequest` field. Validation
+//! reuses the same [`crate::sim::weather::validate`] rules the Lisp
+//! doors enforce, so a request that would be rejected in the console
+//! is rejected here too, and vice versa.
+
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::lisp::Config;
+use crate::sim::sim_clock::parse_time_of_day;
+use crate::sim::weather::{self as weather, Weather, WeatherConfig};
+
+use super::control::{ControlError, reject, site_for};
+
+type WeatherResult = Result<Json<WeatherResponse>, (StatusCode, Json<ControlError>)>;
+
+/// `GET`/`POST /api/weather` response — the config the panel can
+/// edit, plus the live readout it repaints from. Times print back as
+/// `"HH:MM"`, the same spelling the POST body accepts.
+#[derive(Serialize)]
+pub(in crate::ui) struct WeatherResponse {
+    sunrise: String,
+    sunset: String,
+    peak_pct: f32,
+    cloud_rate_per_h: Option<f32>,
+    cloud_depth: (f32, f32),
+    cloud_duration: (f32, f32),
+    cloud_ramp: (f32, f32),
+    pct: f32,
+    clear_sky_pct: f32,
+    events: Vec<CloudEventResponse>,
+}
+
+#[derive(Serialize)]
+pub(in crate::ui) struct CloudEventResponse {
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    depth_pct: f32,
+}
+
+/// `"HH:MM"`, the inverse of `parse_time_of_day`.
+fn fmt_hhmm(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
+}
+
+/// Read the site's weather back as the panel's JSON shape, evaluated
+/// at the weather's own anchor (falling back to the wall clock, same
+/// as `(weather-status)`) — `None` when no weather is configured.
+fn snapshot(site: &crate::sim::MicrogridSite) -> Option<WeatherResponse> {
+    site.with_weather(|w| {
+        let at = w.anchor().unwrap_or_else(Utc::now);
+        let cfg = w.config();
+        WeatherResponse {
+            sunrise: fmt_hhmm(cfg.sunrise),
+            sunset: fmt_hhmm(cfg.sunset),
+            peak_pct: cfg.peak_pct,
+            cloud_rate_per_h: cfg.cloud_rate_per_h,
+            cloud_depth: cfg.cloud_depth,
+            cloud_duration: cfg.cloud_duration,
+            cloud_ramp: cfg.cloud_ramp,
+            pct: w.pct_at(at),
+            clear_sky_pct: w.clear_sky_pct(at),
+            events: w
+                .events()
+                .iter()
+                .map(|e| CloudEventResponse {
+                    start: e.start,
+                    end: e.end(),
+                    depth_pct: e.depth_pct,
+                })
+                .collect(),
+        }
+    })
+}
+
+fn read_weather(config: &Config, mg_id: Option<u64>) -> WeatherResult {
+    let site = site_for(config, mg_id)?;
+    snapshot(&site)
+        .map(Json)
+        .ok_or_else(|| reject(StatusCode::NOT_FOUND, "no weather configured".to_string()))
+}
+
+pub(in crate::ui) async fn weather_get(State(config): State<Config>) -> WeatherResult {
+    read_weather(&config, None)
+}
+
+pub(in crate::ui) async fn weather_get_for_mg(
+    State(config): State<Config>,
+    Path(mg_id): Path<u64>,
+) -> WeatherResult {
+    read_weather(&config, Some(mg_id))
+}
+
+/// One scripted cloud, fired after any config change in the same
+/// request. `ramp_s` defaults to 0, matching `(pass-cloud)`'s
+/// optional third argument.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::ui) struct PassCloudRequest {
+    depth_pct: f64,
+    duration_s: f64,
+    #[serde(default)]
+    ramp_s: Option<f64>,
+}
+
+/// `POST /api/weather` body. Every field optional — a partial update
+/// over whatever the site already has, same contract as
+/// `(set-weather)`. Times are `"HH:MM"` strings; the ranges are
+/// plain `[lo, hi]` pairs (the HTTP door has no need for Lisp's
+/// number-or-list shorthand).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::ui) struct WeatherPostRequest {
+    sunrise: Option<String>,
+    sunset: Option<String>,
+    peak_pct: Option<f64>,
+    cloud_rate_per_h: Option<f64>,
+    cloud_depth: Option<(f32, f32)>,
+    cloud_duration: Option<(f32, f32)>,
+    cloud_ramp: Option<(f32, f32)>,
+    pass_cloud: Option<PassCloudRequest>,
+}
+
+impl WeatherPostRequest {
+    /// Whether the body carries any *config* field — the half that
+    /// creates weather on a weatherless site, exactly as
+    /// `(set-weather …)` does. A body holding nothing but
+    /// `pass_cloud` carries none.
+    fn has_config_field(&self) -> bool {
+        self.sunrise.is_some()
+            || self.sunset.is_some()
+            || self.peak_pct.is_some()
+            || self.cloud_rate_per_h.is_some()
+            || self.cloud_depth.is_some()
+            || self.cloud_duration.is_some()
+            || self.cloud_ramp.is_some()
+    }
+}
+
+/// Fold the request over `cfg`, validating with the same rules
+/// `(set-weather)` applies (see `crate::sim::weather::validate`).
+/// `cfg` is a working copy — a rejected request leaves the site's
+/// live weather untouched.
+fn apply_config(cfg: &mut WeatherConfig, req: &WeatherPostRequest) -> Result<(), String> {
+    if let Some(s) = &req.sunrise {
+        cfg.sunrise = parse_time_of_day(s)
+            .ok_or_else(|| format!("sunrise: malformed time {s:?} — expected \"HH:MM\""))?;
+    }
+    if let Some(s) = &req.sunset {
+        cfg.sunset = parse_time_of_day(s)
+            .ok_or_else(|| format!("sunset: malformed time {s:?} — expected \"HH:MM\""))?;
+    }
+    // Checked after both land, so a request moving the whole window
+    // is judged on the pair it produces rather than the half set
+    // first — same ordering as the Lisp doors.
+    weather::validate::sunrise_before_sunset(cfg.sunrise, cfg.sunset)
+        .map_err(|e| format!("sunrise/sunset: {e}"))?;
+    if let Some(v) = req.peak_pct {
+        let v = v as f32;
+        weather::validate::peak_pct(v).map_err(|e| format!("peak_pct: {e}"))?;
+        cfg.peak_pct = v;
+    }
+    if let Some(v) = req.cloud_rate_per_h {
+        let v = v as f32;
+        cfg.cloud_rate_per_h =
+            weather::validate::cloud_rate(v).map_err(|e| format!("cloud_rate_per_h: {e}"))?;
+    }
+    if let Some(range) = req.cloud_depth {
+        weather::validate::depth_range(range).map_err(|e| format!("cloud_depth: {e}"))?;
+        cfg.cloud_depth = range;
+    }
+    if let Some(range) = req.cloud_duration {
+        weather::validate::secs_range(range).map_err(|e| format!("cloud_duration: {e}"))?;
+        cfg.cloud_duration = range;
+    }
+    if let Some(range) = req.cloud_ramp {
+        weather::validate::secs_range(range).map_err(|e| format!("cloud_ramp: {e}"))?;
+        cfg.cloud_ramp = range;
+    }
+    Ok(())
+}
+
+fn apply_weather(config: &Config, mg_id: Option<u64>, req: &WeatherPostRequest) -> WeatherResult {
+    let site = site_for(config, mg_id)?;
+
+    // Validate everything first, apply after — same contract as
+    // apply_status/apply_drive in control.rs: a bad pass_cloud must
+    // not leave a config change applied, and vice versa.
+    let pass_cloud = req
+        .pass_cloud
+        .as_ref()
+        .map(|p| {
+            weather::validate::pass_cloud_args(p.depth_pct, p.duration_s, p.ramp_s.unwrap_or(0.0))
+        })
+        .transpose()
+        .map_err(|e| reject(StatusCode::BAD_REQUEST, format!("pass_cloud: {e}")))?;
+
+    let existing = site.with_weather(|w| w.config().clone());
+    let had_weather = existing.is_some();
+
+    // A cloud-only request on a weatherless site is the one shape
+    // where this door would otherwise diverge from `(pass-cloud …)`,
+    // which rejects it outright: falling through would install a
+    // whole default sky as a side effect of asking for one cloud.
+    // A body that also carries a config field still creates, same as
+    // `(set-weather …)` on a fresh site.
+    if !had_weather && pass_cloud.is_some() && !req.has_config_field() {
+        return Err(reject(
+            StatusCode::BAD_REQUEST,
+            "pass_cloud: no weather on this site — set a config field in the same request, or \
+             call (make-weather …) first"
+                .to_string(),
+        ));
+    }
+
+    let mut cfg = existing.unwrap_or_default();
+    apply_config(&mut cfg, req).map_err(|e| reject(StatusCode::BAD_REQUEST, e))?;
+
+    if had_weather {
+        site.with_weather(|w| *w.config_mut() = cfg);
+    } else {
+        site.set_weather(Some(Weather::new(cfg)));
+    }
+
+    if let Some((depth_pct, duration, ramp)) = pass_cloud {
+        site.with_weather(|w| w.pass_cloud(depth_pct, duration, ramp));
+    }
+
+    // Race: this handler takes the site's weather lock four separate
+    // times (read the config, write it back, arm the cloud, snapshot),
+    // and a concurrent `reset()` — a hot reload, or
+    // `(reset-microgrid)` — can clear the slot between any two of
+    // them. `with_weather` no-ops silently once that happens, so the
+    // config change and the scripted cloud both went nowhere; the
+    // missing snapshot is simply where that becomes visible. Report
+    // the conflict instead of panicking on an `expect`.
+    snapshot(&site).map(Json).ok_or_else(|| {
+        reject(
+            StatusCode::CONFLICT,
+            "weather was removed while applying".to_string(),
+        )
+    })
+}
+
+pub(in crate::ui) async fn weather_post(
+    State(config): State<Config>,
+    Json(req): Json<WeatherPostRequest>,
+) -> WeatherResult {
+    apply_weather(&config, None, &req)
+}
+
+pub(in crate::ui) async fn weather_post_for_mg(
+    State(config): State<Config>,
+    Path(mg_id): Path<u64>,
+    Json(req): Json<WeatherPostRequest>,
+) -> WeatherResult {
+    apply_weather(&config, Some(mg_id), &req)
+}
