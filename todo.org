@@ -720,16 +720,25 @@ endpoints included) and corrected =topology.rs='s module doc,
 which had matched neither reading. Same family as the 2026-06-01
 snapshot-scope item, which stays open.
 
-*** TODO [#B] Concurrent disjoint augmentations can empty the envelope :bounds:concurrency:
+*** DONE [#B] Concurrent disjoint augmentations can empty the envelope :bounds:concurrency:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 07:45] \\
+  Resolved: PowerAxis::try_augment composes, checks, and inserts under one augs lock; the gateway keeps only its shape checks.
+:END:
 
-=validate_augmentation= checks the proposed bands against
+=validate_augmentation= checked the proposed bands against
 =effective_active_bounds()= before its own =augment_active_bounds=
-applies, so two clients augmenting concurrently with mutually
-disjoint bands each see a compatible pre-state, both apply, and
-the effective envelope goes empty — every setpoint rejected while
-the running output stays unconstrained. Self-heals when a TTL
-lapses. Fix needs validate+apply under one bounds lock, i.e. a
-component-side =try_augment= API.
+applied, so two clients augmenting concurrently with mutually
+disjoint bands each saw a compatible pre-state, both applied, and
+the effective envelope went empty — every setpoint rejected and
+the component parked at 0 W until a TTL lapses (self-heals once
+the offending augmentation expires).
+
+Fixed via =PowerAxis::try_augment=: one lock spans compose (rated/
+caps ∩ live augmentations ∩ proposed band) → check (empty? reject,
+mutate nothing) → insert. The gateway's =validate_augmentation=
+keeps only its three shape checks (empty, non-finite, inverted);
+the disjoint check now lives on the axis, atomic with the insert.
 
 *** TODO [#B] Inverter share divisor counts non-DC children      :fidelity:
 

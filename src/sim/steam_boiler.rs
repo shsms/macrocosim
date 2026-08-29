@@ -221,8 +221,27 @@ impl SimulatedComponent for SteamBoiler {
         self.active.accept(power_w, Utc::now(), 0.0)
     }
 
-    fn augment_active_bounds(&self, ts: DateTime<Utc>, bounds: VecBounds, lifetime: Duration) {
-        self.active.augment(ts, bounds, lifetime);
+    /// Unlike `set_active_setpoint` above, an augmentation IS gated on
+    /// the `[0, effective_upper]` demand band — the same piece
+    /// `effective_active_bounds` composes. A setpoint outside it is
+    /// silently tracked to 0 and recovers when pressure falls, but an
+    /// augmentation disjoint from it would leave the envelope empty
+    /// for the whole TTL. Concretely: at idle the band is `[0, 0]`, so
+    /// any strictly-positive augmentation is rejected rather than
+    /// ACKed-and-ignored. The state lock is released before entering
+    /// the axis's compose-check-insert section.
+    fn try_augment_active_bounds(
+        &self,
+        ts: DateTime<Utc>,
+        bounds: VecBounds,
+        lifetime: Duration,
+    ) -> Result<(), VecBounds> {
+        let need = {
+            let s = self.state.lock();
+            VecBounds::single(0.0, s.effective_upper_w)
+        };
+        self.active
+            .try_augment(ts, bounds, lifetime, 0.0, Some(&need))
     }
 
     fn augmentation_active(

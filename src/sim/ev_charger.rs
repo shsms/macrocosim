@@ -233,8 +233,27 @@ impl SimulatedComponent for EvCharger {
         self.active.accept(power_w, Utc::now(), 0.0)
     }
 
-    fn augment_active_bounds(&self, ts: DateTime<Utc>, bounds: VecBounds, lifetime: Duration) {
-        self.active.augment(ts, bounds, lifetime);
+    /// Unlike `set_active_setpoint` above, an augmentation IS gated on
+    /// the SoC derate: a setpoint outside the derate is silently
+    /// tracked down and recovers as the cell drains, but an
+    /// augmentation disjoint from it would narrow the envelope to
+    /// nothing and park the charger at 0 W for the whole TTL. Same
+    /// band `effective_active_bounds` composes — read under the state
+    /// lock here and released before entering the axis's own
+    /// compose-check-insert section, so the state lock is never held
+    /// across the augs/caps locks.
+    fn try_augment_active_bounds(
+        &self,
+        ts: DateTime<Utc>,
+        bounds: VecBounds,
+        lifetime: Duration,
+    ) -> Result<(), VecBounds> {
+        let soc = {
+            let s = self.state.lock();
+            VecBounds::single(s.effective_lower_w, s.effective_upper_w)
+        };
+        self.active
+            .try_augment(ts, bounds, lifetime, 0.0, Some(&soc))
     }
 
     fn augmentation_active(
@@ -331,21 +350,22 @@ mod tests {
 
     /// Augmenting the active-power bounds tightens both the
     /// validation envelope and the telemetry-reported bounds. Before
-    /// the override on `augment_active_bounds` the call silently
+    /// the override on `try_augment_active_bounds` the call silently
     /// dropped — the rated bounds stayed in effect and clients saw
     /// a setpoint they thought they'd narrowed go through.
     #[test]
-    fn augment_active_bounds_narrows_validation_and_telemetry() {
+    fn try_augment_active_bounds_narrows_validation_and_telemetry() {
         let w = MicrogridSite::new();
         let ev = charger();
-        ev.augment_active_bounds(
+        ev.try_augment_active_bounds(
             Utc::now(),
             VecBounds(vec![Bounds {
                 lower: Some(0.0),
                 upper: Some(5_000.0),
             }]),
             Duration::from_secs(60),
-        );
+        )
+        .unwrap();
 
         // Effective bounds now reflect the augmentation.
         let eff = ev.effective_active_bounds().unwrap();
@@ -373,7 +393,7 @@ mod tests {
     fn multi_band_augmentation_keeps_later_band_setpoints() {
         let w = MicrogridSite::new();
         let ev = charger();
-        ev.augment_active_bounds(
+        ev.try_augment_active_bounds(
             Utc::now(),
             VecBounds(vec![
                 Bounds {
@@ -386,7 +406,8 @@ mod tests {
                 },
             ]),
             Duration::from_secs(60),
-        );
+        )
+        .unwrap();
         assert!(ev.set_active_setpoint(15_000.0).is_ok());
         ev.tick(&w, Utc::now(), Duration::from_millis(100));
         assert!((ev.aggregate_power_w(&w) - 15_000.0).abs() < 1.0);
@@ -399,14 +420,15 @@ mod tests {
         let w = MicrogridSite::new();
         let ev = charger();
         let t0 = Utc::now();
-        ev.augment_active_bounds(
+        ev.try_augment_active_bounds(
             t0,
             VecBounds(vec![Bounds {
                 lower: Some(0.0),
                 upper: Some(5_000.0),
             }]),
             Duration::from_millis(50),
-        );
+        )
+        .unwrap();
 
         // Pre-expiry: narrowed.
         let eff = ev.effective_active_bounds().unwrap();

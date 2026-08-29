@@ -122,14 +122,28 @@ impl PowerAxis {
         other_axis: f32,
         dynamic: Option<&VecBounds>,
     ) -> VecBounds {
+        let augs = self.augs.lock();
+        self.envelope_locked(&augs, now, other_axis, dynamic)
+    }
+
+    /// Same composition as [`Self::envelope`], but taking an
+    /// already-held `augs` guard instead of locking it itself —
+    /// parking_lot's `Mutex` is non-reentrant, so a caller that needs
+    /// to hold the augmentation lock across more than this one read
+    /// (`try_augment`'s compose-check-insert) can't go through
+    /// `envelope` without deadlocking. Lock order is augs → caps
+    /// everywhere that both are taken.
+    fn envelope_locked(
+        &self,
+        augs: &ComponentBounds,
+        now: DateTime<Utc>,
+        other_axis: f32,
+        dynamic: Option<&VecBounds>,
+    ) -> VecBounds {
         let mut acc: Option<VecBounds> = None;
 
-        // One lock for both reads so the two answers describe the same
-        // augmentation queue.
-        let (static_eff, any_live) = {
-            let augs = self.augs.lock();
-            (augs.effective_at(now), augs.has_live_augmentations(now))
-        };
+        let static_eff = augs.effective_at(now);
+        let any_live = augs.has_live_augmentations(now);
         if !(self.rated.is_none() && static_eff.0.is_empty() && !any_live) {
             acc = Some(static_eff);
         }
@@ -241,6 +255,80 @@ impl PowerAxis {
 
     pub fn augment(&self, ts: DateTime<Utc>, bounds: VecBounds, lifetime: Duration) {
         self.augs.lock().add_augmentation(ts, bounds, lifetime);
+    }
+
+    /// Atomic compose-check-insert: one `augs` guard spans computing
+    /// what the envelope would become with `bounds` folded in
+    /// (rated/caps-only static piece ∩ live augmentations ∩ caps@
+    /// `other_axis` ∩ `dynamic` ∩ `bounds`), checking whether that
+    /// result is empty, and — only if not — inserting.
+    ///
+    /// `dynamic` is the component's per-tick derate band, passed
+    /// exactly as `step` passes it (`StepCtx::dynamic`): an EV's SoC
+    /// clamp, a boiler's `[0, need]`. It is folded into the emptiness
+    /// check because an augmentation disjoint from the live derate
+    /// would ACK and then park the axis at 0 W for the whole TTL — a
+    /// derated EV must not accept a 10–22 kW narrowing. Components
+    /// with no derate on this axis (a battery inverter, a solar
+    /// inverter — both report `effective_active_bounds()` as rated ∩
+    /// augmentations and nothing more) pass `None`.
+    ///
+    /// `bounds` and `dynamic` are folded in through `envelope_locked`'s
+    /// single "dynamic" slot as one pre-intersected piece; set
+    /// intersection is associative, so that composes the same envelope
+    /// as folding them in separately.
+    ///
+    /// This is what `augment` above does NOT do: `augment` pushes
+    /// unconditionally after a caller has validated against a
+    /// separately-locked read. `try_augment` closes exactly that
+    /// window: two concurrent callers with mutually disjoint bands
+    /// can no longer both validate against the same pre-state, both
+    /// apply, and leave the composed envelope empty between them.
+    ///
+    /// On `Err` nothing was mutated and the returned `VecBounds` is
+    /// the CURRENT pre-insert envelope — static ∩ live augmentations ∩
+    /// caps@`other_axis` ∩ `dynamic`, i.e. what the caller could still
+    /// command right now — NOT the composed result, which is
+    /// necessarily empty on this path and so says nothing a constant
+    /// couldn't. (The current envelope can itself be empty when the
+    /// axis is already boxed in, e.g. a caps band that shrank to
+    /// nothing; the payload is then honest about that rather than
+    /// uninformative by construction.)
+    ///
+    /// What this does NOT close: the envelope can still go empty
+    /// later with no race involved at all, same as before this fix.
+    /// A Q axis's caps band is a function of the OTHER axis's live
+    /// value (`other_axis`) — it can shrink out from under an
+    /// augmentation that was perfectly legal when inserted, purely
+    /// because P ramped afterward (see
+    /// `q_axis_re_clamps_on_p_drift_after_settle` and the caps-shrink
+    /// path `a_disjoint_q_augmentation_is_rejected_at_zero_headroom`
+    /// exercises in `tests/grpc.rs`). The same goes for `dynamic`: it
+    /// is a snapshot taken by the caller before this call, and the
+    /// next tick can move it. Either case can park `step`'s tracking
+    /// target at 0 well after this call returned `Ok`.
+    pub fn try_augment(
+        &self,
+        ts: DateTime<Utc>,
+        bounds: VecBounds,
+        lifetime: Duration,
+        other_axis: f32,
+        dynamic: Option<&VecBounds>,
+    ) -> Result<(), VecBounds> {
+        let mut augs = self.augs.lock();
+        let probe = match dynamic {
+            Some(d) => bounds.intersect(d),
+            None => bounds.clone(),
+        };
+        if self
+            .envelope_locked(&augs, ts, other_axis, Some(&probe))
+            .0
+            .is_empty()
+        {
+            return Err(self.envelope_locked(&augs, ts, other_axis, dynamic));
+        }
+        augs.add_augmentation(ts, bounds, lifetime);
+        Ok(())
     }
 
     /// True while at least one unexpired augmentation is narrowing
@@ -724,6 +812,189 @@ mod tests {
         );
         // The park rule survives regardless.
         assert!(ax.accept(0.0, t0, 0.0).is_ok());
+    }
+
+    /// Two disjoint augmentations no longer stack into an empty
+    /// envelope: the second is rejected atomically and the first stays
+    /// in force.
+    #[test]
+    fn try_augment_rejects_a_band_disjoint_with_live_augmentations() {
+        let ax = PowerAxis::new(AxisConfig {
+            rated: Some((-10_000.0, 10_000.0)),
+            caps: None,
+            command_delay: Duration::ZERO,
+            ramp_rate_per_s: f32::INFINITY,
+            unit: "W",
+        });
+        let t0 = Utc::now();
+        assert!(
+            ax.try_augment(
+                t0,
+                VecBounds::single(5_000.0, 8_000.0),
+                Duration::from_secs(60),
+                0.0,
+                None
+            )
+            .is_ok(),
+            "the first augmentation overlaps the rated band"
+        );
+        let current = ax
+            .try_augment(
+                t0,
+                VecBounds::single(-8_000.0, -5_000.0),
+                Duration::from_secs(60),
+                0.0,
+                None,
+            )
+            .expect_err("disjoint from the live [5000, 8000] augmentation — rejected, not stacked");
+        // The `Err` payload is the CURRENT pre-insert envelope — what
+        // the caller could still command — not the composed result,
+        // which is empty by construction on this path and would name
+        // nothing.
+        assert_eq!(current.0.len(), 1, "expected one band, got {current}");
+        assert_eq!(
+            (current.0[0].lower, current.0[0].upper),
+            (Some(5_000.0), Some(8_000.0)),
+            "the rejection must name the live [5000, 8000] envelope, got {current}"
+        );
+        // The first augmentation is still exactly what's in force.
+        let eff = ax.effective_static_at(t0);
+        assert_eq!(eff.0.len(), 1);
+        assert_eq!(
+            (eff.0[0].lower, eff.0[0].upper),
+            (Some(5_000.0), Some(8_000.0))
+        );
+        assert!(ax.accept(6_000.0, t0, 0.0).is_ok());
+    }
+
+    /// The concurrent twin of the test above: two threads race
+    /// `try_augment` with genuinely disjoint bands against a shared,
+    /// fresh axis. The `augs` lock must span compose, check, AND
+    /// insert as one critical section — if compose and insert were
+    /// two separate lock acquisitions (the exact shape the gateway's
+    /// original race had, just relocated into the axis instead of
+    /// fixed), both threads could compose against the same
+    /// pre-insert state, both see a non-empty result, both insert,
+    /// and leave two live mutually disjoint augmentations behind —
+    /// the bug this task closes. Looped for scheduling variety rather
+    /// than trusting a single race window to land.
+    #[test]
+    fn try_augment_races_leave_exactly_one_winner() {
+        for i in 0..50 {
+            let ax = std::sync::Arc::new(PowerAxis::new(AxisConfig {
+                rated: Some((-10_000.0, 10_000.0)),
+                caps: None,
+                command_delay: Duration::ZERO,
+                ramp_rate_per_s: f32::INFINITY,
+                unit: "W",
+            }));
+            let t0 = Utc::now();
+
+            let ax1 = ax.clone();
+            let h1 = std::thread::spawn(move || {
+                ax1.try_augment(
+                    t0,
+                    VecBounds::single(5_000.0, 8_000.0),
+                    Duration::from_secs(60),
+                    0.0,
+                    None,
+                )
+            });
+            let ax2 = ax.clone();
+            let h2 = std::thread::spawn(move || {
+                ax2.try_augment(
+                    t0,
+                    VecBounds::single(-8_000.0, -5_000.0),
+                    Duration::from_secs(60),
+                    0.0,
+                    None,
+                )
+            });
+            let r1 = h1.join().unwrap();
+            let r2 = h2.join().unwrap();
+
+            let ok_count = r1.is_ok() as u8 + r2.is_ok() as u8;
+            assert_eq!(
+                ok_count, 1,
+                "iteration {i}: exactly one of two mutually disjoint \
+                 augments must win, got {r1:?} / {r2:?}"
+            );
+
+            let eff = ax.effective_static_at(t0);
+            assert_eq!(
+                eff.0.len(),
+                1,
+                "iteration {i}: the winner's band must be the sole \
+                 survivor, got {eff}"
+            );
+            let winner = if r1.is_ok() {
+                (5_000.0, 8_000.0)
+            } else {
+                (-8_000.0, -5_000.0)
+            };
+            assert_eq!(
+                (eff.0[0].lower, eff.0[0].upper),
+                (Some(winner.0), Some(winner.1)),
+                "iteration {i}: effective_static must contain exactly \
+                 the winner's band"
+            );
+        }
+    }
+
+    /// The `dynamic` derate band is part of the emptiness check, not
+    /// just of `step`'s tracking envelope: an augmentation disjoint
+    /// from the live derate is rejected (it would otherwise ACK and
+    /// then park the axis at 0 W for the whole TTL), and the `Err`
+    /// names the derated envelope the caller can still command. An
+    /// augmentation that overlaps the derate still goes in.
+    #[test]
+    fn try_augment_rejects_a_band_disjoint_with_the_dynamic_derate() {
+        let ax = PowerAxis::new(AxisConfig {
+            rated: Some((0.0, 22_000.0)),
+            caps: None,
+            command_delay: Duration::ZERO,
+            ramp_rate_per_s: f32::INFINITY,
+            unit: "W",
+        });
+        let t0 = Utc::now();
+        // The component is derated to [0, 2000] (an EV near its SoC
+        // ceiling, a boiler with little headroom).
+        let derate = VecBounds::single(0.0, 2_000.0);
+
+        let current = ax
+            .try_augment(
+                t0,
+                VecBounds::single(10_000.0, 22_000.0),
+                Duration::from_secs(60),
+                0.0,
+                Some(&derate),
+            )
+            .expect_err("[10000, 22000] is disjoint from the [0, 2000] derate");
+        assert_eq!(current.0.len(), 1, "expected one band, got {current}");
+        assert_eq!(
+            (current.0[0].lower, current.0[0].upper),
+            (Some(0.0), Some(2_000.0)),
+            "the rejection must name the derated envelope, got {current}"
+        );
+        // Nothing was inserted: the static side is still the raw rated band.
+        let eff = ax.effective_static_at(t0);
+        assert_eq!(
+            (eff.0[0].lower, eff.0[0].upper),
+            (Some(0.0), Some(22_000.0))
+        );
+
+        // A band that overlaps the derate is still accepted.
+        assert!(
+            ax.try_augment(
+                t0,
+                VecBounds::single(1_000.0, 5_000.0),
+                Duration::from_secs(60),
+                0.0,
+                Some(&derate),
+            )
+            .is_ok(),
+            "[1000, 5000] overlaps the [0, 2000] derate"
+        );
     }
 
     #[test]

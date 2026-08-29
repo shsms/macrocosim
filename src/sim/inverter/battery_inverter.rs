@@ -291,15 +291,15 @@ impl SimulatedComponent for BatteryInverter {
         }
     }
 
-    fn augment_active_bounds(
-        &self,
-        ts: DateTime<Utc>,
-        bounds: crate::sim::bounds::VecBounds,
-        lifetime: Duration,
-    ) {
-        self.active.augment(ts, bounds, lifetime);
-    }
-
+    /// Test-only convenience; production augments go through
+    /// `try_augment_reactive_bounds` below — this bypasses the atomic
+    /// validate+apply. Kept (rather than deleted like the P-axis
+    /// twin) because two tests deliberately reach a live-augmentation-
+    /// disjoint-from-caps state to pin `or_zero_band`'s telemetry
+    /// normalization, a state `try_augment_reactive_bounds` correctly
+    /// refuses to create; see
+    /// `zero_headroom_from_a_disjoint_q_augmentation_publishes_a_present_zero_band`
+    /// below and `setpoints::tests::set_reactive_power_clamps_to_zero_at_zero_headroom`.
     fn augment_reactive_bounds(
         &self,
         ts: DateTime<Utc>,
@@ -307,6 +307,36 @@ impl SimulatedComponent for BatteryInverter {
         lifetime: Duration,
     ) {
         self.reactive.augment(ts, bounds, lifetime);
+    }
+
+    /// `None` for the dynamic slot: this inverter has no per-tick
+    /// derate on its P axis — `effective_active_bounds` below is rated
+    /// ∩ augmentations and nothing more, which is exactly what
+    /// `try_augment` composes on its own.
+    fn try_augment_active_bounds(
+        &self,
+        ts: DateTime<Utc>,
+        bounds: crate::sim::bounds::VecBounds,
+        lifetime: Duration,
+    ) -> Result<(), crate::sim::bounds::VecBounds> {
+        self.active.try_augment(ts, bounds, lifetime, 0.0, None)
+    }
+
+    fn try_augment_reactive_bounds(
+        &self,
+        ts: DateTime<Utc>,
+        bounds: crate::sim::bounds::VecBounds,
+        lifetime: Duration,
+    ) -> Result<(), crate::sim::bounds::VecBounds> {
+        // Read P and release the lock before entering the axis's own
+        // compose-check-insert section — matches the `reactive_bounds_raw`
+        // idiom below, and keeps `measured_w` from being held across
+        // the augs+caps locks `try_augment` takes.
+        let p = *self.measured_w.lock();
+        // `None`: the Q axis's whole shape is the caps band at `p`,
+        // which `try_augment` composes itself — `reactive_bounds_raw`
+        // passes no dynamic band either.
+        self.reactive.try_augment(ts, bounds, lifetime, p, None)
     }
 
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
@@ -544,14 +574,15 @@ mod tests {
         w.register(inv);
         let inv = w.get(inv_id).unwrap();
 
-        inv.augment_active_bounds(
+        inv.try_augment_active_bounds(
             Utc::now(),
             VecBounds(vec![Bounds {
                 lower: Some(-5_000.0),
                 upper: Some(5_000.0),
             }]),
             Duration::from_secs(60),
-        );
+        )
+        .unwrap();
 
         let err = inv
             .set_active_setpoint(8_000.0)
@@ -586,14 +617,15 @@ mod tests {
         assert!((inv.aggregate_power_w(&w) - 8_000.0).abs() < 1.0);
 
         // Narrow to ±5 kW for 50 ms — the next tick pulls the output in.
-        inv.augment_active_bounds(
+        inv.try_augment_active_bounds(
             t0,
             VecBounds(vec![Bounds {
                 lower: Some(-5_000.0),
                 upper: Some(5_000.0),
             }]),
             Duration::from_millis(50),
-        );
+        )
+        .unwrap();
         inv.tick(&w, t0 + chrono::Duration::milliseconds(10), dt);
         assert!(
             (inv.aggregate_power_w(&w) - 5_000.0).abs() < 1.0,
@@ -842,8 +874,17 @@ mod tests {
     /// leave the WS/history/hovercard surfaces on stale non-zero
     /// bounds exactly when the operator should see "no headroom".
     ///
-    /// The augmentation goes in through the trait's
-    /// `augment_reactive_bounds`, the same door the gRPC route uses.
+    /// The augmentation goes in through the trait's infallible
+    /// test-only `augment_reactive_bounds`, not the atomic production
+    /// door (`try_augment_reactive_bounds`) the gRPC route uses — that
+    /// door refuses to install a band disjoint from the current caps
+    /// band, so it can't reach this state directly. The disjoint state
+    /// is nonetheless production-reachable: a prior augmentation that
+    /// overlapped the caps band at the P it was installed under can go
+    /// disjoint later purely from the caps band shrinking as P ramps,
+    /// with no further augmentation call at all. This test uses the
+    /// test-only door to construct that state directly rather than
+    /// waiting on a ramp.
     /// The inverter is still constructed directly rather than through
     /// `MicrogridSite::register` because the sanity check below reads
     /// the private `reactive` axis, which only the concrete type

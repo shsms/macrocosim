@@ -214,6 +214,17 @@ const NARROW_BATTERY_TOPOLOGY: &str = r#"
                                              :rated-upper  1000.0)))))))
 "#;
 
+/// A boiler at its default 8 bar target with no steam demand: it needs
+/// no electricity, so its per-tick derate band is `[0, 0]` — the
+/// narrowest live envelope any component in these tests advertises.
+const BOILER_TOPOLOGY: &str = r#"
+(%make-grid-connection-point :id 1
+            :successors
+            (list (%make-meter :id 2
+                               :successors
+                               (list (%make-steam-boiler :id 5)))))
+"#;
+
 /// An errored inverter refuses every command — both setpoints and bounds
 /// augmentations (the latter were previously accepted unconditionally).
 #[tokio::test(flavor = "multi_thread")]
@@ -462,6 +473,161 @@ async fn malformed_augmentation_is_rejected() {
     })
     .await
     .expect("valid augmentation must be accepted");
+}
+
+/// A component with no `PowerAxis` behind the augment door — a
+/// battery — still rejects a band disjoint from the envelope it
+/// advertises. The trait default is a no-op ACK only for a proposal
+/// that OVERLAPS (or a component advertising no envelope at all);
+/// blanket-ACKing everything would have let a ±5 kW battery agree to
+/// [50 kW, 60 kW] and then report bounds contradicting it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disjoint_augmentation_on_an_axis_less_component_is_rejected() {
+    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+
+    let err = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 3, // the battery: no PowerAxis
+            target_metric: Metric::AcPowerActive as i32,
+            bounds: vec![Bounds {
+                lower: Some(50_000.0),
+                upper: Some(60_000.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("disjoint from the battery's ±5 kW envelope");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("current envelope")
+            && err.message().contains("5000")
+            && !err.message().contains("envelope []"),
+        "expected a non-empty current envelope named in the message, got {:?}",
+        err.message(),
+    );
+
+    // An overlapping band is still ACKed as the documented no-op.
+    c.augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+        electrical_component_id: 3,
+        target_metric: Metric::AcPowerActive as i32,
+        bounds: vec![Bounds {
+            lower: Some(-2000.0),
+            upper: Some(2000.0),
+        }],
+        request_lifetime: Some(30),
+    })
+    .await
+    .expect("an overlapping augmentation on an axis-less component is ACKed");
+}
+
+/// A boiler sitting at target pressure with no steam demand needs no
+/// electricity: its per-tick derate band is `[0, 0]`. An augmentation
+/// asking for a strictly positive band is disjoint from that, and
+/// ACKing it would park the boiler at 0 W for the whole TTL with the
+/// client believing a 10–20 kW window was in force. The gate composes
+/// the derate, so it's an InvalidArgument — and the message names the
+/// `[0, 0]` envelope the client can actually command.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_augmentation_disjoint_from_a_derate_is_rejected() {
+    let s = TestServer::start(BOILER_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+
+    let err = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 5,
+            target_metric: Metric::AcPowerActive as i32,
+            bounds: vec![Bounds {
+                lower: Some(10_000.0),
+                upper: Some(20_000.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("disjoint from the idle boiler's [0, 0] demand band");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("current envelope [0, 0]"),
+        "expected the derated envelope named in the message, got {:?}",
+        err.message(),
+    );
+
+    // A band that includes 0 overlaps the derate and is accepted.
+    c.augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+        electrical_component_id: 5,
+        target_metric: Metric::AcPowerActive as i32,
+        bounds: vec![Bounds {
+            lower: Some(0.0),
+            upper: Some(20_000.0),
+        }],
+        request_lifetime: Some(30),
+    })
+    .await
+    .expect("a band overlapping the derate is accepted");
+}
+
+/// Two sequential augmentations with mutually disjoint bands: the
+/// second is rejected atomically against the first's still-live
+/// envelope (not a lock-free read taken before either applied), and
+/// the component still accepts a setpoint inside the first band. The
+/// gRPC-level twin of
+/// `try_augment_rejects_a_band_disjoint_with_live_augmentations` in
+/// axis.rs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_disjoint_augmentation_is_rejected_and_the_first_stays_live() {
+    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+
+    c.augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+        electrical_component_id: 4,
+        target_metric: Metric::AcPowerActive as i32,
+        bounds: vec![Bounds {
+            lower: Some(1000.0),
+            upper: Some(3000.0),
+        }],
+        request_lifetime: Some(30),
+    })
+    .await
+    .expect("the first augmentation is accepted");
+
+    let err = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 4,
+            target_metric: Metric::AcPowerActive as i32,
+            bounds: vec![Bounds {
+                lower: Some(-3000.0),
+                upper: Some(-1000.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("disjoint from the live [1000, 3000] augmentation");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    // The rejection names the component's CURRENT envelope — the live
+    // [1000, 3000] augmentation, i.e. where a client should retry —
+    // not the composed result, which is empty by construction here and
+    // would render as a useless constant "[]".
+    assert!(
+        err.message().contains("current envelope"),
+        "expected the current-envelope detail in the message, got {:?}",
+        err.message(),
+    );
+    assert!(
+        err.message().contains("1000") && err.message().contains("3000"),
+        "the message must name a NON-EMPTY envelope (the live [1000, 3000] band), got {:?}",
+        err.message(),
+    );
+
+    // The first augmentation is still in force: a setpoint inside it
+    // is still accepted, proving the envelope never went empty.
+    c.set_electrical_component_power(SetElectricalComponentPowerRequest {
+        electrical_component_id: 4,
+        power: 2000.0,
+        power_type: PowerType::Active as i32,
+        request_lifetime: Some(30),
+    })
+    .await
+    .expect("2000 W is inside the first, still-live augmentation");
 }
 
 /// Same shape as `TINY_TOPOLOGY`, but the inverter carries a real

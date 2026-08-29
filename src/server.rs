@@ -46,16 +46,26 @@ fn resolve_lifetime(
     }
 }
 
-/// Reject a malformed bounds augmentation before it reaches a component.
-/// An empty set, an inverted band (lower > upper), or one disjoint from
-/// the component's current envelope would all drive `effective()` empty —
-/// every subsequent setpoint then rejected (`contains` is false on an
-/// empty `VecBounds`) while the running output stays unconstrained
-/// (`clamp` is the identity on an empty set). Bounce it at the gateway.
-fn validate_augmentation(
-    proposed: &VecBounds,
-    current: Option<VecBounds>,
-) -> Result<(), tonic::Status> {
+/// Reject a malformed bounds augmentation before it reaches a
+/// component: an empty set, a non-finite edge, or an inverted band
+/// (lower > upper). These three are shape checks on the proposed band
+/// alone — axis-agnostic and independent of any live state, so they
+/// belong at the gateway.
+///
+/// Checking the proposed band against the component's CURRENT
+/// envelope does NOT belong here — that used to be a fourth check in
+/// this function, reading the envelope lock-free and applying it in a
+/// separate lock acquisition at the call site, which let two
+/// concurrent clients with mutually disjoint bands each validate
+/// against the same pre-state, both apply, and empty the composed
+/// envelope between them. Contrary to this function's old doc
+/// comment, an emptied envelope does NOT leave the running output
+/// "unconstrained": `PowerAxis::step` special-cases an empty tracking
+/// envelope to target 0 (see axis.rs), so the component parks at 0 W
+/// until the augmentation's TTL lapses. The fix moves that check into
+/// `PowerAxis::try_augment`, which composes, checks, and inserts
+/// under one lock — see the call site below.
+fn validate_augmentation(proposed: &VecBounds) -> Result<(), tonic::Status> {
     if proposed.0.is_empty() {
         return Err(tonic::Status::invalid_argument(
             "augmentation contains no bounds",
@@ -81,13 +91,6 @@ fn validate_augmentation(
             "augmentation bound [{:?}, {:?}] is inverted (lower > upper)",
             b.lower, b.upper
         )));
-    }
-    if let Some(cur) = current
-        && cur.intersect(proposed).0.is_empty()
-    {
-        return Err(tonic::Status::invalid_argument(
-            "augmentation is disjoint from the component's bounds; no valid setpoint would remain",
-        ));
     }
     Ok(())
 }
@@ -725,49 +728,49 @@ impl microgrid_server::Microgrid for MicrogridServer {
             Some(component) => match self.gate_runtime_faults(id).await {
                 Ok(_) => {
                     let proposed = VecBounds::new(req.bounds);
-                    // Each axis is checked against its own live
-                    // envelope and routed to its own trait method.
-                    // `validate_augmentation`'s three shape checks
-                    // (empty, non-finite edge, inverted) are
-                    // axis-agnostic and apply to both. Its fourth,
-                    // the disjoint check, is not: it runs against the
-                    // reference envelope passed here, and on the Q
-                    // route that envelope is the caps band at the
-                    // component's CURRENT P — so an augmentation
-                    // excluding zero can be accepted at idle and
-                    // rejected at full P, where the band has shrunk
-                    // away from it. A client that gets bounced should
-                    // retry when the operating point permits.
-                    //
-                    // `reactive_bounds_raw`, NOT `reactive_bounds`:
-                    // the latter normalizes an empty envelope to a
-                    // present (0, 0) band for telemetry's benefit, and
-                    // gating against that would accept any
-                    // augmentation straddling zero on a zero-headroom
-                    // axis — leaving two live, mutually disjoint
-                    // augmentations behind. Raw, an empty envelope is
-                    // disjoint from everything, exactly like the P
-                    // side's emptied-rated-band case.
-                    let current = if reactive {
-                        component.reactive_bounds_raw()
-                    } else {
-                        component.effective_active_bounds()
-                    };
-                    match validate_augmentation(&proposed, current) {
+                    // `validate_augmentation` is now shape-only (empty,
+                    // non-finite edge, inverted); disjoint-from-the-live-
+                    // envelope is checked by the component itself —
+                    // atomically with applying it on an axis-backed
+                    // component (`PowerAxis::try_augment`, derate band
+                    // included), and against the advertised envelope in
+                    // the trait default for everything else. That closes the race
+                    // this function used to have: validating against a
+                    // lock-free read here, then applying in a second,
+                    // separate lock acquisition, let two concurrent
+                    // clients with mutually disjoint bands each pass
+                    // and empty the composed envelope between them.
+                    match validate_augmentation(&proposed) {
                         Ok(()) => {
-                            if reactive {
-                                component.augment_reactive_bounds(now, proposed, lifetime);
+                            let applied = if reactive {
+                                component.try_augment_reactive_bounds(now, proposed, lifetime)
                             } else {
-                                component.augment_active_bounds(now, proposed, lifetime);
+                                component.try_augment_active_bounds(now, proposed, lifetime)
+                            };
+                            match applied {
+                                Ok(()) => {
+                                    let expiry = now + chrono::Duration::seconds(lifetime_s);
+                                    Ok(tonic::Response::new(
+                                        AugmentElectricalComponentBoundsResponse {
+                                            valid_until_time: Some(
+                                                crate::proto_conv::datetime_to_ts(expiry),
+                                            ),
+                                        },
+                                    ))
+                                }
+                                // The `Err` payload is the component's
+                                // CURRENT envelope — what a client
+                                // could still command — not the
+                                // composed result, which is empty
+                                // whenever this arm is reached and so
+                                // renders as a constant "[]". Naming
+                                // the live envelope tells the client
+                                // where to retry.
+                                Err(env) => Err(tonic::Status::invalid_argument(format!(
+                                    "augmentation is disjoint from the component's current \
+                                     envelope {env}; no valid setpoint would remain",
+                                ))),
                             }
-                            let expiry = now + chrono::Duration::seconds(lifetime_s);
-                            Ok(tonic::Response::new(
-                                AugmentElectricalComponentBoundsResponse {
-                                    valid_until_time: Some(crate::proto_conv::datetime_to_ts(
-                                        expiry,
-                                    )),
-                                },
-                            ))
                         }
                         Err(status) => Err(status),
                     }

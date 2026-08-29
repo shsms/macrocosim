@@ -292,8 +292,10 @@ pub enum ReactiveReading {
 ///   - **Identity**: id, category, name, subtype, is_hidden.
 ///   - **Lifecycle**: stream_interval, stream_jitter_pct, tick, telemetry.
 ///   - **Setpoints**: set_active_setpoint, set_reactive_setpoint,
-///     reset_setpoint, augment_active_bounds, augment_reactive_bounds,
-///     set_active_power_override.
+///     reset_setpoint, try_augment_active_bounds,
+///     try_augment_reactive_bounds (the two atomic augment doors the
+///     gRPC route uses), augment_reactive_bounds (the unchecked
+///     test-only Q door), set_active_power_override.
 ///   - **Bounds**: rated_active_bounds, effective_active_bounds,
 ///     reactive_bounds, rated_fuse_current.
 ///   - **Aggregation** (parent → child): aggregate_power_w,
@@ -414,10 +416,20 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
         self.reset_setpoint();
     }
 
-    /// Add a time-limited active-power bounds augmentation, narrowing
-    /// the rated envelope. Backs the `AugmentElectricalComponentBounds`
-    /// gRPC method.
-    fn augment_active_bounds(
+    /// Add a time-limited reactive-power bounds augmentation,
+    /// narrowing the Q envelope, with no validation of any kind.
+    ///
+    /// This does NOT back the gRPC `AugmentElectricalComponentBounds`
+    /// method any more — [`Self::try_augment_reactive_bounds`] does,
+    /// and it validates atomically with the insert. What's left here
+    /// is the unchecked door: `BatteryInverter` overrides it so tests
+    /// can deliberately reach a live-augmentation-disjoint-from-caps
+    /// state that the atomic door correctly refuses to create. The
+    /// active-side twin had no such user and was deleted.
+    ///
+    /// The default is a silent no-op: a component with no reactive
+    /// axis has nothing to narrow.
+    fn augment_reactive_bounds(
         &self,
         _create_ts: DateTime<Utc>,
         _bounds: VecBounds,
@@ -425,22 +437,62 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     ) {
     }
 
-    /// Add a time-limited reactive-power bounds augmentation — the Q
-    /// twin of [`Self::augment_active_bounds`], backing
-    /// `AugmentElectricalComponentBounds` with an `AC_POWER_REACTIVE`
-    /// target metric.
+    /// Validate and apply an active-power bounds augmentation
+    /// atomically — the door behind the `AugmentElectricalComponent
+    /// Bounds` gRPC method's `AC_POWER_ACTIVE` route. The four
+    /// axis-backed components (`EvCharger`, `SteamBoiler`,
+    /// `BatteryInverter`, `SolarInverter`) override this to route
+    /// through their axis's `PowerAxis::try_augment`, which composes,
+    /// checks and inserts under one lock.
     ///
-    /// Parity with the active side includes the default: a component
-    /// with no reactive axis (a meter, a battery) silently accepts
-    /// the call and does nothing, so the gateway ACKs the request
-    /// instead of erroring. Malformed bounds never get this far — the
-    /// gateway's `validate_augmentation` bounces them first.
-    fn augment_reactive_bounds(
+    /// The default covers everything else — a battery, a meter, a
+    /// grid connection point: there is no axis to insert into, so
+    /// nothing is stored, but the proposal is still CHECKED against
+    /// whatever envelope the component advertises. A band disjoint
+    /// from `effective_active_bounds()` is rejected (`Err(current)`,
+    /// the same actionable payload the axis returns) rather than
+    /// ACKed as a no-op — a client asking a ±5 kW battery for
+    /// [50 kW, 60 kW] has made a mistake and must hear about it. A
+    /// component advertising no envelope at all (`None`), or one the
+    /// proposal overlaps, keeps the no-op ACK.
+    ///
+    /// No TOCTOU concern in the default: nothing here mutates the
+    /// component, and a non-axis component's bounds are not moved by
+    /// augmentations, so there is no compose-then-insert window to
+    /// close (which is exactly why it needn't hold a lock the way
+    /// `PowerAxis::try_augment` must).
+    fn try_augment_active_bounds(
         &self,
         _create_ts: DateTime<Utc>,
-        _bounds: VecBounds,
+        bounds: VecBounds,
         _lifetime: Duration,
-    ) {
+    ) -> Result<(), VecBounds> {
+        match self.effective_active_bounds() {
+            Some(current) if current.intersect(&bounds).0.is_empty() => Err(current),
+            _ => Ok(()),
+        }
+    }
+
+    /// Q twin of [`Self::try_augment_active_bounds`], checking against
+    /// [`Self::reactive_bounds_raw`] — RAW, not `reactive_bounds`,
+    /// for the reason spelled out on that method: the normalized
+    /// `(0, 0)` band would let an augmentation straddling zero look
+    /// compatible with a zero-headroom axis.
+    ///
+    /// A component with no Q axis at all reports `None` and keeps the
+    /// no-op ACK, matching the pinned gateway behaviour (see
+    /// `reactive_augmentation_on_a_q_less_component_is_acked_as_a_no_op`
+    /// in `tests/grpc.rs`).
+    fn try_augment_reactive_bounds(
+        &self,
+        _create_ts: DateTime<Utc>,
+        bounds: VecBounds,
+        _lifetime: Duration,
+    ) -> Result<(), VecBounds> {
+        match self.reactive_bounds_raw() {
+            Some(current) if current.intersect(&bounds).0.is_empty() => Err(current),
+            _ => Ok(()),
+        }
     }
 
     /// Override the active-power value a meter publishes with a

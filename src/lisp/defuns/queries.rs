@@ -153,11 +153,15 @@ mod tests {
         assert!((edge(&cfg, "(component-bound-upper 2)") - 4000.0).abs() < 1.0);
         assert!((edge(&cfg, "(component-bound-lower 2)") + 4000.0).abs() < 1.0);
         // A bounds-driving app narrows the inverter to [-4 kW, +1 kW].
-        cfg.site().get(2).unwrap().augment_active_bounds(
-            Utc::now(),
-            VecBounds::single(-4000.0, 1000.0),
-            Duration::from_secs(60),
-        );
+        cfg.site()
+            .get(2)
+            .unwrap()
+            .try_augment_active_bounds(
+                Utc::now(),
+                VecBounds::single(-4000.0, 1000.0),
+                Duration::from_secs(60),
+            )
+            .unwrap();
         assert!((edge(&cfg, "(component-bound-upper 2)") - 1000.0).abs() < 1.0);
         assert!((edge(&cfg, "(component-bound-lower 2)") + 4000.0).abs() < 1.0);
     }
@@ -251,7 +255,7 @@ mod tests {
         let inv = cfg.site().get(2).unwrap();
         // ±5 kVAr caps ∩ {[-2 kVAr, -0.5 kVAr], [0.5 kVAr, 2 kVAr]}
         // leaves two disjoint bands around a dead zone at zero.
-        inv.augment_reactive_bounds(
+        inv.try_augment_reactive_bounds(
             Utc::now(),
             VecBounds(vec![
                 crate::proto::common::metrics::Bounds {
@@ -264,7 +268,8 @@ mod tests {
                 },
             ]),
             Duration::from_secs(60),
-        );
+        )
+        .unwrap();
         let bands = inv.reactive_bounds().expect("the inverter publishes Q");
         assert_eq!(bands.0.len(), 2, "expected two bands, got {bands}");
 
@@ -295,11 +300,12 @@ mod tests {
         inv.tick(&site, Utc::now(), Duration::from_millis(100));
         assert!((inv.aggregate_power_w(&site) - 4000.0).abs() < 1.0);
         // Cap drops to +1 kW; the next controller step tracks it.
-        inv.augment_active_bounds(
+        inv.try_augment_active_bounds(
             Utc::now(),
             VecBounds::single(-4000.0, 1000.0),
             Duration::from_secs(60),
-        );
+        )
+        .unwrap();
         cfg.eval(step).unwrap();
         inv.tick(&site, Utc::now(), Duration::from_millis(100));
         let p = inv.aggregate_power_w(&site);

@@ -297,22 +297,33 @@ impl SimulatedComponent for SolarInverter {
         }
     }
 
-    fn augment_active_bounds(
+    /// `None` for the dynamic slot, deliberately: the sunlight band
+    /// `tick` passes to `step` is a per-tick availability window that
+    /// swings with the sun and is explicitly kept OUT of the
+    /// advertised envelope (`effective_active_bounds` below is rated ∩
+    /// augmentations only). Gating augmentations on it would bounce a
+    /// legal curtailment at night and accept it again at noon; the
+    /// derate-aware gate is for the EV/boiler bands, which telemetry
+    /// does advertise.
+    fn try_augment_active_bounds(
         &self,
         ts: DateTime<Utc>,
         bounds: crate::sim::bounds::VecBounds,
         lifetime: Duration,
-    ) {
-        self.active.augment(ts, bounds, lifetime);
+    ) -> Result<(), crate::sim::bounds::VecBounds> {
+        self.active.try_augment(ts, bounds, lifetime, 0.0, None)
     }
 
-    fn augment_reactive_bounds(
+    fn try_augment_reactive_bounds(
         &self,
         ts: DateTime<Utc>,
         bounds: crate::sim::bounds::VecBounds,
         lifetime: Duration,
-    ) {
-        self.reactive.augment(ts, bounds, lifetime);
+    ) -> Result<(), crate::sim::bounds::VecBounds> {
+        // `None`: the Q axis carries no dynamic band (`step` passes
+        // none either) — its whole shape is the caps band at P.
+        self.reactive
+            .try_augment(ts, bounds, lifetime, self.active.actual(), None)
     }
 
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
@@ -671,11 +682,12 @@ mod tests {
         let inv = w.get(1).unwrap();
         let t0 = Utc::now();
         // [-8 kW, -6 kW] is entirely below the available -3 kW.
-        inv.augment_active_bounds(
+        inv.try_augment_active_bounds(
             t0,
             VecBounds::single(-8_000.0, -6_000.0),
             Duration::from_secs(60),
-        );
+        )
+        .unwrap();
         inv.tick(&w, t0, Duration::from_millis(100));
         assert!(
             inv.aggregate_power_w(&w).abs() < 1.0,
