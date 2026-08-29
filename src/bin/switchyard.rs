@@ -445,3 +445,21 @@ async fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bare `switchyard some.lisp` invocation keeps the documented
+    /// defaults: UI on 8801, no state dir, the script positional.
+    /// CI always boots with --ephemeral-ports and --state-dir, so
+    /// nothing else exercises these defaults.
+    #[test]
+    fn bare_invocation_keeps_the_documented_defaults() {
+        let a = Args::parse_from(["switchyard", "some.lisp"]);
+        assert_eq!(a.ui_port, 8801);
+        assert!(a.state_dir.is_none());
+        assert!(!a.ephemeral_ports);
+        assert_eq!(a.scripts, vec![std::path::PathBuf::from("some.lisp")]);
+    }
+}

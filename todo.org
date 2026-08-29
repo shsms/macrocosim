@@ -1964,3 +1964,13 @@ stopped and B started; it calls =scenario-stop= against B — now
 cancelling B's timers and restoring B's knobs, not just closing a
 journal. Pre-existing shape, sharpened by teardown. Needs the
 end-after timer to carry its scenario's identity.
+
+** TODO state-dir default differs between the binary and Config::new :design:consistency:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 15:13]
+:END:
+
+The clap help says --state-dir "Defaults to the current directory"
+and the binary resolves None to "." — but Config::new defaults to
+the script's own directory. Two constructors, two defaults; decide
+which is right and align the other (plus the help text).
