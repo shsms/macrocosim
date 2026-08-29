@@ -503,13 +503,24 @@ the scenario energy integrator also over-states charge/discharge Wh by up
 to the PF headroom. Report active P as the value, or attach apparent
 bounds.
 
-*** TODO [#B] CHP and Grid stream no power telemetry of their own :telemetry:
+*** CANCELLED [#B] CHP and Grid stream no power telemetry of their own :telemetry:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-08-29 Sa 10:03]
+:END:
+
 =Chp= is a stub (parent meter carries =:power=) and =Grid::telemetry=
 emits only id+category (the downstream meter carries flow). Faithful to
 the "meter carries the literal" design, but a controller written to the
 real API (subscribe by category = Grid / Chp) gets an empty metric set.
 Document the convention at the API boundary, or synthesize an
 =AcPowerActive= sample on these components.
+
+Cancelled 2026-08-29: we don't know enough about the CHPs we'd model
+to give them their own telemetry; the meter-carries-the-literal
+convention stands until a concrete need shows up. Grid's lean stream
+is deliberate (see grid.rs's telemetry doc comment). If CHP comes
+back, the steam-boiler graduation (steam_boiler.rs, 2026-08-29) is
+the template.
 
 *** TODO [#B] Telemetry state-code is decoupled from health       :telemetry:
 =component_state= is derived from power sign (=power_state(p)= →
