@@ -35,11 +35,16 @@ const SUNLIGHT_SEED_PCT: f32 = 100.0;
 ///
 /// Two shapes, and the split is about *who* produces the number:
 ///
-/// - [`Self::Follow`] — the site's own [`Weather`] does, sampled at
-///   `now - cfg.weather_lag` (a lag models thermal/irradiance inertia
-///   between the sky and the array) and optionally roughened by a
-///   per-tick `±cfg.weather_jitter_pct` factor. Nobody has driven
-///   this inverter's knob; it just tracks the sky.
+/// - [`Self::Follow`] — the site's own [`Weather`] does, sampled a
+///   little behind `now` and optionally roughened by a per-tick
+///   `±cfg.weather_jitter_pct` factor. How far behind is two separate
+///   ideas wearing one field: an EXPLICIT `cfg.weather_lag` models
+///   thermal/irradiance inertia between the sky and the array, while
+///   an unset one stands in for nothing physical — it is the stable
+///   id-derived offset (0–60 s, `default_weather_lag`) that makes a
+///   cloud sweep across a multi-PV site instead of hitting every
+///   array in the same tick. Nobody has driven this inverter's knob;
+///   it just tracks the sky.
 /// - [`Self::Manual`] — something drove it: a `:sunlight%` kwarg, a
 ///   `(set-solar-sunlight …)` poke, a scenario, the UI. The
 ///   [`DynamicScalar`] underneath covers both a plain constant and a
@@ -114,10 +119,13 @@ pub struct SolarInverterConfig {
     /// than write out `sunlight_pct`'s stale fallback value.
     pub sunlight_dynamic: bool,
     /// How far behind the sky a `Follow` source samples — the array
-    /// sees `weather_pct_at(now - weather_lag)`. Zero by default.
-    /// This is the only copy of the number: `resolve_sunlight` reads
-    /// it from here on every tick.
-    pub weather_lag: Duration,
+    /// sees `weather_pct_at(now - lag)`. `None` (the default) uses a
+    /// small stable offset derived from the inverter's id (0–60 s),
+    /// so a cloud sweeps across a multi-PV site instead of hitting
+    /// every inverter in the same tick. An explicit value — zero is
+    /// the opt-out — is used exactly as given. This is the only copy
+    /// of the number: `resolve_sunlight` reads it on every tick.
+    pub weather_lag: Option<Duration>,
     /// Per-tick uniform `±pct` roughening applied to a `Follow`
     /// sample, in percent of the value. Zero by default, and zero
     /// skips the RNG entirely. Read from here on every tick, like
@@ -142,7 +150,7 @@ impl Default for SolarInverterConfig {
             reactive_command_delay: Duration::from_millis(100),
             reactive_ramp_rate_var_per_s: 2000.0,
             sunlight_dynamic: false,
-            weather_lag: Duration::ZERO,
+            weather_lag: None,
             weather_jitter_pct: 0.0,
             array_peak_w: 30_000.0,
         }
@@ -294,9 +302,11 @@ impl SolarInverter {
         if !following {
             return;
         }
-        let at = now
-            - chrono::Duration::from_std(self.cfg.weather_lag)
-                .unwrap_or_else(|_| chrono::Duration::zero());
+        let lag = self
+            .cfg
+            .weather_lag
+            .unwrap_or_else(|| Self::default_weather_lag(self.id));
+        let at = now - chrono::Duration::from_std(lag).unwrap_or_else(|_| chrono::Duration::zero());
         // No weather on the site at all → full sun, which is what a
         // weatherless site has always given a PV inverter.
         let mut pct = world.weather_pct_at(at).unwrap_or(100.0);
@@ -309,6 +319,21 @@ impl SolarInverter {
 
     fn min_avail_w(&self) -> f32 {
         (-self.cfg.array_peak_w * self.sunlight_pct() / 100.0).max(self.cfg.rated_lower_w)
+    }
+
+    /// The Follow lag used when no `:weather-lag-s` was given: a
+    /// stable 0–60 s offset hashed from the component id, so a cloud
+    /// sweeps across a multi-PV site by default. Hash, not RNG — the
+    /// offset survives restarts and reloads with no stored state.
+    /// SplitMix64's finalizer, because consecutive small ids (the
+    /// common case) must land spread out, and a bare multiply mod 61
+    /// leaves them clumped.
+    fn default_weather_lag(id: u64) -> Duration {
+        let mut z = id.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        Duration::from_secs(z % 61)
     }
 }
 
@@ -679,13 +704,16 @@ impl SimulatedComponent for SolarInverter {
                 crate::lisp::lisp_float32(self.cfg.array_peak_w),
             ));
         }
-        // The two `Follow` shaping kwargs, written only when they
-        // diverge from their zero defaults so a plain inverter still
-        // renders as a plain inverter.
-        if !self.cfg.weather_lag.is_zero() {
+        // The two `Follow` shaping kwargs. Lag is written whenever it
+        // is explicit — zero included, since `:weather-lag-s 0` is
+        // the opt-out from the id-derived default sweep and must
+        // round-trip; an unset lag renders nothing, so a reloaded
+        // inverter re-derives the same offset from its id. Jitter is
+        // written only when it diverges from its zero default.
+        if let Some(lag) = self.cfg.weather_lag {
             kw.push((
                 ":weather-lag-s",
-                crate::lisp::lisp_float32(self.cfg.weather_lag.as_secs_f32()),
+                crate::lisp::lisp_float32(lag.as_secs_f32()),
             ));
         }
         if self.cfg.weather_jitter_pct != 0.0 {
@@ -1186,6 +1214,9 @@ mod tests {
             Duration::from_secs(1),
             SolarInverterConfig {
                 sunlight_pct: None,
+                // Opt out of the id-derived default lag: the exact
+                // 09:30 assertion below needs an unshifted sample.
+                weather_lag: Some(Duration::ZERO),
                 ..Default::default()
             },
         );
@@ -1300,7 +1331,7 @@ mod tests {
             Duration::from_secs(1),
             SolarInverterConfig {
                 sunlight_pct: None,
-                weather_lag: Duration::from_secs(3_600),
+                weather_lag: Some(Duration::from_secs(3_600)),
                 ..Default::default()
             },
         ));
@@ -1318,6 +1349,79 @@ mod tests {
         assert!(
             (pct - 100.0).abs() > 1.0,
             "…and that is distinguishable from the unlagged 100 at noon"
+        );
+    }
+
+    /// An unset `:weather-lag-s` gives each inverter a stable
+    /// id-derived offset (0–60 s) so a cloud sweeps across a multi-PV
+    /// site by default; an explicit zero opts out. Pinned with a
+    /// hard-edged cloud: the lagged inverter still reads the
+    /// pre-cloud sky while the opted-out one reads the cloud.
+    #[test]
+    fn unset_lag_derives_a_stable_offset_and_zero_opts_out() {
+        use crate::sim::weather::{Weather, WeatherConfig};
+        use chrono::TimeZone;
+        let lag = SolarInverter::default_weather_lag;
+        assert_eq!(lag(1581), lag(1581), "stable across calls");
+        // The hash must SPREAD consecutive ids — the whole point of
+        // the SplitMix64 finalizer. A weak mixer (`id % 61`) gives a
+        // mean neighbor gap of ~1 s and would pass any existence
+        // check; SplitMix64 lands near 20 s.
+        let mean_gap: f64 = (1..50u64)
+            .map(|i| (lag(i).as_secs() as f64 - lag(i + 1).as_secs() as f64).abs())
+            .sum::<f64>()
+            / 49.0;
+        assert!(
+            mean_gap > 15.0,
+            "consecutive ids must spread, mean neighbor gap {mean_gap:.1} s"
+        );
+        // Pick an id whose derived lag clears the 30 s cloud age
+        // below, so nothing here depends on the hash constant.
+        let lagged_id = (1..200u64)
+            .find(|i| lag(*i).as_secs() > 45)
+            .expect("some id under 200 hashes past 45 s");
+
+        let w = MicrogridSite::new();
+        w.register(SolarInverter::new(
+            lagged_id,
+            Duration::from_secs(1),
+            SolarInverterConfig {
+                sunlight_pct: None,
+                ..Default::default()
+            },
+        ));
+        w.register(SolarInverter::new(
+            lagged_id + 200,
+            Duration::from_secs(1),
+            SolarInverterConfig {
+                sunlight_pct: None,
+                weather_lag: Some(Duration::ZERO),
+                ..Default::default()
+            },
+        ));
+        w.set_weather(Some(Weather::new(WeatherConfig::default())));
+        let noon = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 13, 0, 0).unwrap();
+        let dt = Duration::from_millis(100);
+        // Anchor the weather 30 s before noon, then drop a hard-edged
+        // full cloud there: at noon the sky reads 0, but more than
+        // 45 s ago it was still clear.
+        w.tick_once(noon - chrono::Duration::seconds(30), dt);
+        w.with_weather(|wx| wx.pass_cloud(100.0, Duration::from_secs(600), Duration::ZERO));
+        w.tick_once(noon, dt);
+        let lagged = w.get(lagged_id).unwrap().sunlight_reading().unwrap().value;
+        let instant = w
+            .get(lagged_id + 200)
+            .unwrap()
+            .sunlight_reading()
+            .unwrap()
+            .value;
+        assert!(
+            instant < 1.0,
+            "explicit zero lag sees the cloud, got {instant}"
+        );
+        assert!(
+            (lagged - 100.0).abs() < 0.5,
+            "the derived lag still reads the pre-cloud sky, got {lagged}"
         );
     }
 

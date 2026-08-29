@@ -232,8 +232,10 @@ UI").
   `(weather-status)` reads the sky back as an alist (`src/lisp/defuns/weather.rs`,
   `src/sim/weather.rs`). A solar inverter with no `:sunlight%` follows the
   site's weather (`:weather-lag-s` / `:weather-jitter-pct` lag and roughen
-  the sample it reads — Follow-only; `:array-peak-w` sizes the DC array
-  whichever source the sunlight comes from); passing
+  the sample it reads — Follow-only; with no explicit lag each inverter
+  gets a stable id-derived 0–60 s offset so a cloud sweeps across a
+  multi-PV site, and `:weather-lag-s 0` opts out; `:array-peak-w` sizes
+  the DC array whichever source the sunlight comes from); passing
   `:sunlight%` explicitly makes it Manual instead, and
   `(clear-solar-sunlight ID)` is the way back to Follow. `GET`/`POST
   /api/weather` mirror the same four doors for the weather panel (day

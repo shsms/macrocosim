@@ -160,7 +160,10 @@ AsPlist! {
         /// array. Oversizing produces midday clipping.
         array_peak_w<":array-peak-w">: Option<f64> {= None},
         /// How far behind the sky a weather-following array samples,
-        /// in seconds. Only meaningful without `:sunlight%`.
+        /// in seconds. Left out, each inverter gets a small stable
+        /// offset derived from its id (0–60 s) so a cloud sweeps
+        /// across a multi-PV site; `0` opts out of that. Only
+        /// meaningful without `:sunlight%`.
         weather_lag_s<":weather-lag-s">: Option<f64> {= None},
         /// Per-tick uniform ±roughening of a weather-following
         /// sample, in percent of the value. Only meaningful without
@@ -503,8 +506,10 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 // because `from_secs_f64` PANICS on a non-finite or
                 // overflowing value and one typo'd kwarg must not
                 // abort the whole config load.
-                cfg.weather_lag = crate::sim::weather::validate::weather_lag_s(v)
-                    .map_err(|e| Error::invalid_argument(format!(":weather-lag-s {e}")))?;
+                cfg.weather_lag = Some(
+                    crate::sim::weather::validate::weather_lag_s(v)
+                        .map_err(|e| Error::invalid_argument(format!(":weather-lag-s {e}")))?,
+                );
             }
             if let Some(v) = a.weather_jitter_pct {
                 // 100% would let a sample reach zero (or double), which
@@ -1333,15 +1338,20 @@ mod tests {
     /// source samples the sky. Both are validated at the make door
     /// (a negative lag and an out-of-band jitter are config bugs, not
     /// something to clamp silently), and both round-trip through
-    /// `constructor_kwargs` — emitted only when nonzero, so a plain
-    /// inverter renders with no extra noise.
+    /// `constructor_kwargs` — the lag whenever it was given
+    /// explicitly, zero included (zero is the opt-out from the
+    /// id-derived default sweep, so dropping it would silently
+    /// re-lag the inverter on reload); the jitter only when nonzero.
+    /// An inverter that gave neither renders with no extra noise.
     #[test]
     fn solar_weather_lag_and_jitter_validate_and_round_trip() {
         let site = run(r#"(%make-solar-inverter :id 15
                                     :rated-lower -10000.0
                                     :weather-lag-s 90
                                     :weather-jitter-pct 5.0)
-               (%make-solar-inverter :id 16 :rated-lower -10000.0)"#);
+               (%make-solar-inverter :id 16 :rated-lower -10000.0)
+               (%make-solar-inverter :id 17 :rated-lower -10000.0
+                                    :weather-lag-s 0)"#);
         let kw = |id: u64| {
             site.get(id)
                 .unwrap()
@@ -1355,8 +1365,13 @@ mod tests {
         assert!(kw(15).contains(":weather-jitter-pct 5"), "{}", kw(15));
         assert!(
             !kw(16).contains(":weather-"),
-            "zero lag/jitter stay unwritten: {}",
+            "an unset lag renders nothing (the id-derived default re-derives on reload): {}",
             kw(16)
+        );
+        assert!(
+            kw(17).contains(":weather-lag-s 0"),
+            "an explicit zero is the sweep opt-out and must round-trip: {}",
+            kw(17)
         );
 
         // Round-trip: re-making from the rendered kwargs reproduces
