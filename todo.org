@@ -118,23 +118,39 @@ fail every run.
 Acceptance: three snapshot tests, baselines checked in, second
 run on the same machine matches.
 
-*** TODO [#A] B4. CI integration for the browser tests              :testing:
+*** DONE [#A] B4. CI integration for the browser tests              :testing:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 10:29] \\
+  Closed by the ui-e2e job in .github/workflows/ci.yml: boots a
+  scratch Berlin-demo server per AGENTS.md's live-smoke recipe and
+  runs tools/ui-smoke/live-topology.mjs directly (no separate
+  tests-browser package, no playwright-report artifact upload — the
+  smoke's own PASS/FAIL console output plus the on-failure server-log
+  dump is the diagnostic). Not yet had a green run on GitHub itself —
+  the job lands with this branch, so its first push is the real proof.
+:END:
 
-Add a fourth job to =.github/workflows/ci.yml=:
+Shipped as the =ui-e2e= job in =.github/workflows/ci.yml=, needing
+both =rust= (shares its cargo cache) and =ui-lint=. It builds
+=cargo build --bin switchyard=, sets up Node 22, installs Playwright
+loose and pinned to 1.62.1 (no package.json/lockfile in this repo to
+=npm ci= against — that's the locally-vendored node_modules version)
+plus its Chromium download, boots a scratch state dir seeded from
+=examples/berlin-demo.lisp= exactly per AGENTS.md's live-smoke
+recipe, reads the UI port back out of =--emit-endpoints='s JSON, and
+runs =tools/ui-smoke/live-topology.mjs= against it — the script's own
+PASS/FAIL exit code gates the job. On failure the job cats the
+server's log; there's no =tests-browser= package and no
+=playwright-report/= artifact upload, since nothing here produces
+one — that was this task's original (unbuilt) plan, superseded by
+driving the existing hand-run smoke script directly instead of
+standing up a second test runner.
 
-- Sets up Node, runs =npx playwright install --with-deps chromium=
-  (cached on the lockfile hash).
-- Builds =cargo build --bin switchyard= (cache shared with the
-  rust job).
-- Runs =npm --prefix tests-browser test=.
-
-On failure, upload =playwright-report/= as an artifact so
-screenshots / traces are inspectable post-run. Run on
-=push= + =pull_request= same as the other jobs.
-
-Acceptance: CI green on this PR; introducing a UI regression
-flips it red and the artifact contains a trace pointing at the
-broken assertion.
+B1-B3 (the still-unwritten structured Playwright suite under
+=tests-browser/=, screenshot diffing, etc.) remain separate work and
+will need their own CI wiring — snapshot artifacts, its own job —
+once that harness actually exists; this job only covers the smoke
+script that exists today.
 
 ** U. On-demand microgrid lifecycle
 

@@ -74,11 +74,13 @@ is wiring the topology + animating the environment.
     knob table offers
     `set-reactive-power` on inverters and `set-meter-reactive-power`
     / `set-meter-power-factor` (with a `leading` checkbox) on meters.
-- `tools/ui-smoke/` — Playwright smoke scripts run by hand against a
-  live server (`SW_UI=http://127.0.0.1:PORT node
-  tools/ui-smoke/live-topology.mjs`). The e2e half drives the Berlin
-  demo (microgrid 2200) and expects it in the state dir's
-  `microgrids/`, so run it from a scratch state dir:
+- `tools/ui-smoke/` — Playwright smoke scripts against a live server
+  (`SW_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`).
+  The `ui-e2e` job in `.github/workflows/ci.yml` runs the e2e half on
+  pushes to main and PRs targeting main; it's also runnable by hand
+  the same way. The e2e half drives the Berlin demo (microgrid 2200)
+  and expects it in the state dir's `microgrids/`, so run it from a
+  scratch state dir:
 
   ```sh
   SD=$(mktemp -d); mkdir "$SD/microgrids"

@@ -124,3 +124,93 @@ jobs:
             exit 1
           fi
           echo "smoke ok — $components components"
+
+  # Live browser smoke: boots the binary against a scratch Berlin-demo
+  # microgrid (same recipe AGENTS.md documents for running
+  # tools/ui-smoke/live-topology.mjs by hand) and drives the real SPA
+  # with Playwright/Chromium — inspector knobs, dialogs, the metrics
+  # panel, hover cards, the steam-boiler round trip end to end. The
+  # curl-only `smoke` job above and `ui-lint`'s DOM-shim boot smoke
+  # both miss regressions here since neither one actually drives a
+  # browser against a live server.
+  ui-e2e:
+    runs-on: ubuntu-latest
+    needs: [rust, ui-lint]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Restore cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build switchyard binary
+        run: cargo build --bin switchyard
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Cache the downloaded Chromium build, keyed on the pin below —
+      # bump the key alongside the version whenever it moves.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-1.62.1
+
+      # No package.json in this repo — tools/ui-smoke's only dependency
+      # is the playwright package itself, so it's installed loose,
+      # pinned to the version node_modules carries locally (1.62.1)
+      # rather than a lockfile.
+      - name: Install Playwright + Chromium
+        run: |
+          npm install --no-save playwright@1.62.1
+          npx playwright install --with-deps chromium
+
+      # Same scratch state-dir recipe AGENTS.md gives for the live
+      # smoke: seed microgrids/2200.lisp from the Berlin demo, boot
+      # ephemeral, and read the UI port back out of --emit-endpoints'
+      # JSON. Bounded like the `smoke` job's own boot wait above,
+      # rather than AGENTS.md's unbounded `until`, so a boot failure
+      # fails the job instead of hanging it.
+      - name: Boot a scratch server
+        run: |
+          SD=$(mktemp -d)
+          mkdir "$SD/microgrids"
+          cp examples/berlin-demo.lisp "$SD/microgrids/2200.lisp"
+          ./target/debug/switchyard --state-dir "$SD" --ephemeral-ports \
+              --emit-endpoints="$SD/endpoints.json" "$SD/microgrids/2200.lisp" \
+              > /tmp/sw-e2e.log 2>&1 &
+          echo $! > /tmp/sw-e2e.pid
+          for _ in {1..30}; do
+            [ -f "$SD/endpoints.json" ] && break
+            sleep 1
+          done
+          if [ ! -f "$SD/endpoints.json" ]; then
+            echo "server failed to emit endpoints"
+            cat /tmp/sw-e2e.log
+            exit 1
+          fi
+          echo "SW_UI=http://$(jq -r .ui "$SD/endpoints.json")" >> "$GITHUB_ENV"
+
+      - name: Live topology smoke
+        run: node tools/ui-smoke/live-topology.mjs
+
+      - name: Server log (on failure)
+        if: failure()
+        run: cat /tmp/sw-e2e.log 2>/dev/null || true
+
+      - name: Kill the server
+        if: always()
+        run: kill "$(cat /tmp/sw-e2e.pid 2>/dev/null)" 2>/dev/null || true
