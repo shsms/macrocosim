@@ -988,6 +988,77 @@ check(
   "e2e: the knob clears itself once submitted",
   await page.evaluate(() => document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]').value === ""),
 );
+
+// ── e2e: the meter power knob's measure button clears an override ─
+// Reuses `meterId` and `evalNumber` from above (still selected). The
+// knob rows above were only ever DOM-queried (page.evaluate, no
+// visibility requirement); this section actually fills + clicks, so
+// the Component card — folded by default (CARD_DEFAULT_OPEN in
+// inspect.js) — has to be open first, or Playwright's actionability
+// check on `fill`/`click` times out against a display:none row.
+const componentCardOpen = await page.evaluate(() =>
+  document.getElementById("card-component")?.classList.contains("open"),
+);
+if (!componentCardOpen) await page.click("#card-component [data-fold-toggle]");
+// Capture the live P this meter reports while it's still following
+// its children — clear-meter-power's whole job is to land back near
+// this reading, not at zero or at whatever override gets set below.
+const measureHidden = () =>
+  page.evaluate(() =>
+    document
+      .querySelector('.knob-input[data-defun="set-meter-power"]')
+      ?.closest("dd")
+      ?.querySelector(".knob-measure-btn")?.hidden,
+  );
+const childrenP = await waitFor(async () => {
+  const p = await evalNumber(`(component-active-power ${meterId})`);
+  return Number.isFinite(p) ? p : null;
+});
+check("e2e: the power measure button starts hidden", (await measureHidden()) === true);
+// Submit the real way — fill + Enter, the keydown path the input's
+// own listener wires (unlike the reactive knob above, whose
+// dispatched "change" event no listener ever reads — the standing
+// failure). Blur afterward: while the field is "editing", its
+// visible text stays frozen against the WS repaint the clear below
+// depends on (paintKnobEntry).
+const OVERRIDE_P = 424242;
+await page.fill('.knob-input[data-defun="set-meter-power"]', String(OVERRIDE_P));
+await page.press('.knob-input[data-defun="set-meter-power"]', "Enter");
+await page.evaluate(() => document.activeElement?.blur());
+const overrideP = await waitFor(async () => {
+  const p = await evalNumber(`(component-active-power ${meterId})`);
+  return Math.abs(p - OVERRIDE_P) < 1 ? p : null;
+});
+check("e2e: the power knob overrides the meter's live P", Math.abs(overrideP - OVERRIDE_P) < 1, String(overrideP));
+check(
+  "e2e: the measure button appears once the override is live",
+  await waitFor(async () => (await measureHidden()) === false),
+);
+await page.click('dd:has(.knob-input[data-defun="set-meter-power"]) .knob-measure-btn');
+const blanked = await waitFor(async () =>
+  (await page.evaluate(() => document.querySelector('.knob-input[data-defun="set-meter-power"]').value)) === "" || null,
+);
+check("e2e: the power knob blanks once cleared", blanked === true);
+check(
+  "e2e: the measure button disappears once cleared",
+  await waitFor(async () => (await measureHidden()) === true),
+);
+// The demo's hidden consumer meter (id 100, one of this meter's
+// children) drives ±500 W of per-tick random jitter plus a slow
+// 15-min sine (examples/berlin-demo.lisp) — the round trip can't
+// land on the exact pre-override reading, so this compares with a
+// generous threshold, same idiom as the boiler section's power-level
+// checks below.
+const clearedP = await waitFor(async () => {
+  const p = await evalNumber(`(component-active-power ${meterId})`);
+  return Number.isFinite(p) && Math.abs(p - childrenP) < 2500 ? p : null;
+}, 10000).catch(() => evalNumber(`(component-active-power ${meterId})`));
+check(
+  "e2e: clearing the power knob returns the meter to its children's sum",
+  Math.abs(clearedP - childrenP) < 2500,
+  `children ${childrenP}, after clear ${clearedP}`,
+);
+
 await page.evaluate(async () => {
   const { topology } = await import("/assets/topology.js");
   topology.select([]);

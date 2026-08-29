@@ -47,6 +47,8 @@ export const COMPLETIONS = [
   "set-active-power",
   "set-reactive-power",
   "set-meter-power",
+  "clear-meter-power",
+  "clear-meter-reactive",
   "set-solar-sunlight",
   "set-reactive-pf-limit",
   "set-reactive-apparent-va",

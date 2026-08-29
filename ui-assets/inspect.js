@@ -174,19 +174,36 @@ export const ACCEPTS_SETPOINTS = new Set(["battery", "inverter", "ev-charger", "
 // else is an environment/simulation driver and joins the Simulation
 // rows — a meter's sources and a PV's sunlight steer what the sim
 // produces, the same family as health/telemetry.
+// `clear`, on a meter knob only, names the Lisp defun a small
+// "measure" button next to the input calls to drop the override and
+// hand the reading back to the children's sum (clear-meter-power /
+// clear-meter-reactive — Task 3). The button is hidden until the
+// token actually carries a live override; see the knobRow/
+// paintKnobEntry/setKnobText comments below for the show/hide
+// discipline. Reactive power and power factor share one clear defun
+// (one slot server-side, mutually exclusive readings) so both rows
+// carry the same `clear` value.
 const KNOBS_BY_CATEGORY = {
   meter: [
-    { label: "power (W or expr)", defun: "set-meter-power", dynamic: true, unit: "W" },
+    {
+      label: "power (W or expr)",
+      defun: "set-meter-power",
+      dynamic: true,
+      unit: "W",
+      clear: "clear-meter-power",
+    },
     {
       label: "reactive power (VAr or expr)",
       defun: "set-meter-reactive-power",
       dynamic: true,
       unit: "VAr",
+      clear: "clear-meter-reactive",
     },
     {
       label: "power factor (0–1]",
       defun: "set-meter-power-factor",
       flag: "leading",
+      clear: "clear-meter-reactive",
     },
   ],
   // No direct VAr-setpoint input here: reactive power on an inverter
@@ -388,9 +405,16 @@ function renderInspect(d, parentIds, childIds) {
       // reading to show; `data-unit` carries the display unit through
       // to paintKnobEntry without another lookup table there.
       const resolvedHtml = k.dynamic ? `<div class="knob-resolved" hidden></div>` : "";
+      // `k.clear`: the small "✕ measure" button, styled like the
+      // link-btn disconnect affordances above. Starts hidden — shown
+      // only while this token carries a live override, toggled by
+      // paintKnobEntry/setKnobText alongside the input text itself.
+      const measureBtnHtml = k.clear
+        ? `<button type="button" class="link-btn knob-measure-btn" data-clear="${k.clear}" hidden title="clear override, measure from children again">✕</button>`
+        : "";
       return `<dt>${escapeHtml(k.label)}</dt><dd>
         <input ${inputAttrs} class="knob-input"
-               data-defun="${k.defun}"${k.dynamic ? ` data-dynamic="1" data-unit="${escapeHtml(k.unit || "")}"` : ""} />${exprChipHtml}${flagHtml}${resolvedHtml}
+               data-defun="${k.defun}"${k.dynamic ? ` data-dynamic="1" data-unit="${escapeHtml(k.unit || "")}"` : ""} />${exprChipHtml}${flagHtml}${measureBtnHtml}${resolvedHtml}
       </dd>`;
     };
   const configKnobsHtml = knobs.filter((k) => k.group === "config").map(knobRow).join("");
@@ -554,6 +578,13 @@ function renderInspect(d, parentIds, childIds) {
       evalQuoted(`(disconnect ${d.id} ${btn.dataset.disconnectTo})`),
     );
   }
+  // Meter knob "measure" buttons — see the `clear` field on
+  // KNOBS_BY_CATEGORY. The WS knob_changed broadcast the clear defun
+  // triggers is what actually blanks the input and hides the button
+  // again (paintKnobEntry, via inspectorLive.applyKnob).
+  for (const btn of inspectEl.querySelectorAll(".knob-measure-btn")) {
+    btn.addEventListener("click", () => evalQuoted(`(${btn.dataset.clear} ${d.id})`));
+  }
 
   // Component, Power, and Setpoints cards: persisted per-card fold
   // state, no async work behind any of them (the setpoint list is
@@ -592,7 +623,7 @@ function renderInspect(d, parentIds, childIds) {
 //
 // liveState = {
 //   id,
-//   knobEntries: Map<token, { input: HTMLInputElement, dynamic: bool }>,
+//   knobEntries: Map<token, { input: HTMLInputElement }>,
 //   axes: {
 //     active:   { lo, hi, liveVal, sp: { value, deadlineMs } | null },
 //     reactive: { lo, hi, liveVal, sp: { value, deadlineMs } | null },
@@ -642,21 +673,36 @@ const EXPR_PLACEHOLDER = "(expression)";
 // component ever sees it, and that opaque Display is caught here,
 // the one place both the snapshot and WS paths funnel through, so
 // they can't render it differently.
-function knobDisplay(value, expr, dynamic) {
+//
+// `value == null && expr == null` on a dynamic knob is a CLEARED
+// override (clear-meter-power/clear-meter-reactive broadcast exactly
+// this) — blank the input, same as any other knob with nothing
+// configured. That's distinct from a dynamic source with a captured
+// expression but no resolved value yet, which the `expr != null`
+// branch above already renders (placeholder for the opaque closure
+// Display, printed source otherwise) — there's no live case left
+// where a dynamic knob's null/null pair means anything but "cleared".
+function knobDisplay(value, expr) {
   if (expr != null) {
     const opaque = expr.startsWith("CompiledDefun");
     return { text: opaque ? EXPR_PLACEHOLDER : expr, hasExpr: true };
   }
-  // Degrade case (spec-mandated, shouldn't happen in practice since
-  // source_text is captured at construction): a dynamic knob with
-  // neither a usable expr nor a resolved value.
-  if (dynamic && value == null) return { text: EXPR_PLACEHOLDER, hasExpr: true };
   return { text: value != null ? String(value) : "", hasExpr: false };
 }
 
 function toggleExprChip(input, show) {
   const chip = input.closest("dd")?.querySelector(".knob-expr-chip");
   if (chip) chip.hidden = !show;
+}
+
+// The meter knobs' small "✕ measure" button — visible only while
+// this token carries a live override (a value present, whether or
+// not it's expression-driven). Shared by paintKnobEntry (WS/snapshot
+// updates) and setKnobText (the "no state for this token" blank-out),
+// so a cleared or never-set override can't leave the button showing.
+function toggleMeasureBtn(input, show) {
+  const btn = input.closest("dd")?.querySelector(".knob-measure-btn");
+  if (btn) btn.hidden = !show;
 }
 
 // The small muted line beneath an expression-driven knob's input,
@@ -679,9 +725,9 @@ function paintResolved(input, show, value) {
 }
 
 // Paint one knob entry's input (+ its optional leading checkbox + its
-// resolved-value line) from a {value, expr, leading} reading — shared
-// by the snapshot prefill and the WS knob_changed apply, so the two
-// paths can't drift.
+// resolved-value line + its measure button) from a {value, expr,
+// leading} reading — shared by the snapshot prefill and the WS
+// knob_changed apply, so the two paths can't drift.
 //
 // `input.dataset.live` (and the flag's own `dataset.live`) are ALWAYS
 // refreshed to the newest reading, even while the user has the field
@@ -690,28 +736,46 @@ function paintResolved(input, show, value) {
 // time instead of the actual current one. Only the visible WRITES
 // (input.value, the expr chip, the flag checkbox) are frozen while
 // `data-editing` is set, so a live update can't yank text out from
-// under the user mid-edit.
+// under the user mid-edit. The measure button is deliberately NOT
+// frozen — like `paintResolved`, it runs above the editing guard
+// below, always live.
 function paintKnobEntry(entry, value, expr, leading) {
-  const { input, dynamic } = entry;
-  const disp = knobDisplay(value, expr, dynamic);
+  const { input } = entry;
+  const disp = knobDisplay(value, expr);
   input.dataset.live = disp.text;
   const flag = input.closest("dd")?.querySelector(".knob-flag-input");
-  if (leading != null && flag) flag.dataset.live = leading ? "1" : "0";
+  // `leading` is only meaningful on the power-factor knob — every
+  // other token's event carries it null, and there's no flag sibling
+  // there to write anyway. On the power-factor knob's OWN flag,
+  // though, a null value means the reactive clear just blanked this
+  // token: there's no override left to be leading/lagging, so force
+  // it unchecked rather than leaving the last reading's state stuck.
+  if (flag) {
+    if (leading != null) flag.dataset.live = leading ? "1" : "0";
+    else if (value == null) flag.dataset.live = "0";
+  }
   paintResolved(input, disp.hasExpr, value);
+  toggleMeasureBtn(input, value != null);
   if (input.dataset.editing) return;
   input.value = disp.text;
   toggleExprChip(input, disp.hasExpr);
-  if (leading != null && flag) flag.checked = leading;
+  if (flag) {
+    if (leading != null) flag.checked = leading;
+    else if (value == null) flag.checked = false;
+  }
 }
 
 // Write a plain (non-expr) text reading to a knob input — used by
 // prefillKnobs' "no state for this token" blank-out, which doesn't
 // go through knobDisplay. Same live-vs-editing discipline as
 // paintKnobEntry: dataset.live always updates, the visible write is
-// frozen while the user has the field focused.
+// frozen while the user has the field focused. No state for the
+// token also means no override in force, so the measure button hides
+// along with everything else.
 function setKnobText(input, text) {
   input.dataset.live = text;
   paintResolved(input, false, null);
+  toggleMeasureBtn(input, false);
   if (input.dataset.editing) return;
   input.value = text;
   toggleExprChip(input, false);
@@ -829,7 +893,7 @@ function applySnapshot(id, snap) {
   const knobEntries = new Map();
   for (const input of inspectEl.querySelectorAll(".knob-input[data-defun]")) {
     const token = input.dataset.defun.replace(/^set-/, "");
-    knobEntries.set(token, { input, dynamic: input.dataset.dynamic === "1" });
+    knobEntries.set(token, { input });
   }
   liveState = {
     id,
