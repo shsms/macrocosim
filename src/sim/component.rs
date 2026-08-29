@@ -872,6 +872,17 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
 
     // ── inverter → child push (DC bus) ───────────────────────────────
 
+    /// Whether this component sits on a DC bus and takes
+    /// [`Self::set_dc_power`] pushes. An inverter only counts
+    /// children answering `true` when it splits its commanded power —
+    /// a mis-wired AC child (say a meter connected under an inverter
+    /// from the UI) must not inflate the divisor and silently swallow
+    /// a share the inverter then reports as delivered. Default
+    /// `false`; batteries override.
+    fn takes_dc_power(&self) -> bool {
+        false
+    }
+
     /// Push DC active power onto a child. Inverters call this on each
     /// of their batteries every tick. Default no-op.
     fn set_dc_power(&self, _p: f32) {}

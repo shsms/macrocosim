@@ -229,6 +229,10 @@ impl SimulatedComponent for Battery {
         self.state.lock().power_w
     }
 
+    fn takes_dc_power(&self) -> bool {
+        true
+    }
+
     /// Add an inverter's active push to this tick's accumulator.
     /// The actual `power_w` value is the *total* across all parents
     /// after `tick()` clamps the accumulated sum to the SoC envelope.

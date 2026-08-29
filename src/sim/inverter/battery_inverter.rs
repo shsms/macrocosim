@@ -171,16 +171,22 @@ impl SimulatedComponent for BatteryInverter {
             },
         );
 
-        // Distribute equal share among the *healthy* children. Failed
+        // Distribute equal share among the *healthy DC sinks*. Failed
         // batteries (Health::Error / Standby) are skipped, so the
-        // surviving siblings absorb the full commanded value. Each
-        // child accumulates pushes additively over the tick, so an
-        // MxN topology (N inverters → 1 bus → M batteries) settles to
-        // the clamped sum of all parent pushes, not last-writer-wins.
-        let healthy: Vec<u64> = site
+        // surviving siblings absorb the full commanded value; a child
+        // that doesn't take DC pushes at all (a meter mis-wired under
+        // the inverter from the UI) is skipped too, so it neither
+        // inflates the divisor nor counts as having accepted a share.
+        // Each child accumulates pushes additively over the tick, so
+        // an MxN topology (N inverters → 1 bus → M batteries) settles
+        // to the clamped sum of all parent pushes, not
+        // last-writer-wins.
+        let healthy: Vec<std::sync::Arc<dyn SimulatedComponent>> = site
             .children_of(self.id)
             .into_iter()
             .filter(|id| site.runtime_of(*id).health == Health::Ok)
+            .filter_map(|id| site.get(id))
+            .filter(|c| c.takes_dc_power())
             .collect();
         if healthy.is_empty() {
             // No child accepted the push → no AC output. Publishing the
@@ -205,11 +211,9 @@ impl SimulatedComponent for BatteryInverter {
             // reaches the battery at all — it terminates here, on the
             // AC side, so a battery under this inverter never sees it.
             let mut accepted_p = 0.0;
-            for id in &healthy {
-                if let Some(child) = site.get(*id) {
-                    child.set_dc_power(p_share);
-                    accepted_p += p_share * child.dc_accept_ratio();
-                }
+            for child in &healthy {
+                child.set_dc_power(p_share);
+                accepted_p += p_share * child.dc_accept_ratio();
             }
             *self.measured_w.lock() = accepted_p;
             self.reactive.override_published(commanded_q);
@@ -432,6 +436,15 @@ mod tests {
                 rated_upper_w: 10000.0,
                 command_delay: Duration::ZERO,
                 ramp_rate_w_per_s: f32::INFINITY,
+                // Instant Q with a pure kVA cap, so a reactive
+                // setpoint is accepted at P = 0 and publishes on the
+                // next tick.
+                reactive: ReactiveCapability {
+                    pf_limit: None,
+                    apparent_va: Some(10_000.0),
+                },
+                reactive_command_delay: Duration::ZERO,
+                reactive_ramp_rate_var_per_s: f32::INFINITY,
                 ..Default::default()
             },
         );
@@ -745,6 +758,50 @@ mod tests {
         w.set_health(bat_id, Health::Ok);
         inv.tick(&w, Utc::now(), Duration::from_millis(100));
         assert!((inv.aggregate_power_w(&w) - 3000.0).abs() < 1.0);
+    }
+
+    /// A child that takes no DC pushes (a meter mis-wired under the
+    /// inverter from the UI) is left out of the share split: the
+    /// battery gets the FULL commanded value, and the published P
+    /// reflects what the battery accepted — pre-fix the meter halved
+    /// the divisor and its swallowed share was still reported as
+    /// delivered via the default accept ratio of 1.0.
+    #[test]
+    fn non_dc_children_do_not_dilute_the_share() {
+        use crate::sim::Meter;
+        let (w, bat_id, inv_id) = setup_inverter_with_battery();
+        w.register(Meter::new(
+            300,
+            Duration::from_secs(1),
+            None,
+            None,
+            0.0,
+            false,
+        ));
+        w.connect(inv_id, 300);
+        let inv = w.get(inv_id).unwrap();
+
+        inv.set_active_setpoint(3000.0).unwrap();
+        inv.set_reactive_setpoint(500.0).unwrap();
+        inv.tick(&w, Utc::now(), Duration::from_millis(100));
+        assert!(
+            (inv.aggregate_power_w(&w) - 3000.0).abs() < 1.0,
+            "expected the full 3000 W published, got {}",
+            inv.aggregate_power_w(&w),
+        );
+        assert!(
+            (inv.aggregate_reactive_var(&w) - 500.0).abs() < 1.0,
+            "expected the commanded Q published, got {}",
+            inv.aggregate_reactive_var(&w),
+        );
+
+        // With the battery down only the meter is left — no DC sink,
+        // so the inverter publishes zero on BOTH axes, same as
+        // having no children at all.
+        w.set_health(bat_id, Health::Error);
+        inv.tick(&w, Utc::now(), Duration::from_millis(100));
+        assert!(inv.aggregate_power_w(&w).abs() < 1.0);
+        assert!(inv.aggregate_reactive_var(&w).abs() < 1.0);
     }
 
     /// When the *inverter itself* faults it trips offline: zero output,

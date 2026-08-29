@@ -475,6 +475,8 @@ mod tests {
     /// production topology nests a Q-reporting child under an
     /// inverter yet, so this hangs a solar inverter (which does
     /// report a Q band) off the battery inverter to reach the branch.
+    /// The battery sibling gives the inverter a real DC sink, so the
+    /// clamped Q is published instead of zeroed by the no-sink rule.
     #[test]
     fn reactive_gateway_rejects_outside_the_child_intersection() {
         use std::time::Duration;
@@ -486,12 +488,13 @@ mod tests {
                                             :rated-lower -1000.0 :rated-upper 0.0
                                             :reactive-pf-limit 0
                                             :reactive-apparent-va 1000.0))
+             (setq bat (%make-battery :id 4 :rated-lower -5000.0 :rated-upper 5000.0))
              (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
                                        :reactive-pf-limit 0
                                        :reactive-apparent-va 5000.0
                                        :reactive-command-delay-ms 0
                                        :reactive-ramp-rate 1e9
-                                       :successors (list pv))",
+                                       :successors (list pv bat))",
         );
         let site = cfg.site();
         let envelope = site

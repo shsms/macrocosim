@@ -779,7 +779,11 @@ mutate nothing) → insert. The gateway's =validate_augmentation=
 keeps only its three shape checks (empty, non-finite, inverted);
 the disjoint check now lives on the axis, atomic with the insert.
 
-*** TODO [#B] Inverter share divisor counts non-DC children      :fidelity:
+*** DONE [#B] Inverter share divisor counts non-DC children        :fidelity:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 16:01] \\
+  takes_dc_power() trait predicate (true only for Battery); BatteryInverter::tick filters its share split by it, so a mis-wired AC child neither dilutes the divisor nor reports a swallowed share as delivered. No DC sink at all falls into the existing zero-publish path. Pinned by non_dc_children_do_not_dilute_the_share.
+:END:
 
 =BatteryInverter::tick= distributes the commanded value over /all/
 healthy graph children, but =set_dc_active_reactive= is a default
