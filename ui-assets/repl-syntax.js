@@ -50,6 +50,7 @@ export const COMPLETIONS = [
   "clear-meter-power",
   "clear-meter-reactive",
   "set-solar-sunlight",
+  "clear-solar-sunlight",
   "set-reactive-pf-limit",
   "set-reactive-apparent-va",
   "set-boiler-demand",
@@ -57,6 +58,12 @@ export const COMPLETIONS = [
   "set-physics-tick-ms",
   "set-voltage-per-phase",
   "set-frequency",
+  // Site weather — the sky the solar inverters follow. Same doors the
+  // weather panel drives over /api/weather.
+  "make-weather",
+  "set-weather",
+  "pass-cloud",
+  "weather-status",
   // Metadata
   "set-enterprise-id",
   "set-microgrid-name",
