@@ -740,37 +740,49 @@ impl MicrogridSite {
             .count()
     }
 
-    /// Sum the `effective_active_bounds()` of every direct child of
-    /// `parent`. Returns `None` when `parent` has no children that
-    /// expose bounds.
-    ///
-    /// The microgrid API gateway uses this to gate setpoints against
-    /// the downstream physical envelope — a real inverter has no data
-    /// link to its battery's BMS limits, but the gateway sees both
-    /// telemetry streams and intersects them on the client's behalf.
-    pub fn aggregate_child_bounds(&self, parent: u64) -> Option<crate::sim::bounds::VecBounds> {
+    /// Shared walk behind the two `aggregate_*_bounds` twins: sum
+    /// `bounds_of`'s envelope over `parent`'s direct children,
+    /// dividing a shared child's envelope by its parent count —
+    /// the same parallel-paths share the meter walk applies to
+    /// power, so a child under two parents contributes half its
+    /// envelope to each gate instead of its full envelope to both.
+    /// The share uses the raw edge count (hidden edges and faulted
+    /// parents included), like the meter's split: the gate is
+    /// static-topology conservative and does not widen while a
+    /// parallel parent is faulted. `None` when no child exposes an
+    /// envelope.
+    fn sum_child_bounds(
+        &self,
+        parent: u64,
+        bounds_of: impl Fn(&dyn SimulatedComponent) -> Option<crate::sim::bounds::VecBounds>,
+    ) -> Option<crate::sim::bounds::VecBounds> {
         use crate::sim::bounds::VecBounds;
-        let child_ids: Vec<u64> = self
-            .inner
-            .connections
-            .read()
-            .iter()
-            .filter(|(p, _)| *p == parent)
-            .map(|(_, c)| *c)
-            .collect();
-        if child_ids.is_empty() {
-            return None;
-        }
-        let bounds: Vec<VecBounds> = child_ids
-            .iter()
-            .filter_map(|id| self.get(*id))
-            .filter_map(|c| c.effective_active_bounds())
+        let bounds: Vec<VecBounds> = self
+            .children_with_parent_counts(parent)
+            .into_iter()
+            .filter_map(|(id, pc)| {
+                let b = bounds_of(self.get(id)?.as_ref())?;
+                Some(b.scale(1.0 / pc.max(1) as f32))
+            })
             .collect();
         if bounds.is_empty() {
             None
         } else {
             Some(VecBounds::sum_single(bounds))
         }
+    }
+
+    /// Sum the `effective_active_bounds()` of every direct child of
+    /// `parent`, with the parallel-paths share division of
+    /// [`Self::sum_child_bounds`]. Returns `None` when `parent` has
+    /// no children that expose bounds.
+    ///
+    /// The microgrid API gateway uses this to gate setpoints against
+    /// the downstream physical envelope — a real inverter has no data
+    /// link to its battery's BMS limits, but the gateway sees both
+    /// telemetry streams and intersects them on the client's behalf.
+    pub fn aggregate_child_bounds(&self, parent: u64) -> Option<crate::sim::bounds::VecBounds> {
+        self.sum_child_bounds(parent, |c| c.effective_active_bounds())
     }
 
     /// The active-power envelope a setpoint for `id` must fall within:
@@ -797,9 +809,9 @@ impl MicrogridSite {
     }
 
     /// Sum the `reactive_bounds()` of every direct child of `parent`
-    /// — the reactive twin of [`Self::aggregate_child_bounds`].
-    /// Returns `None` when `parent` has no children that expose
-    /// reactive bounds.
+    /// — the reactive twin of [`Self::aggregate_child_bounds`], on
+    /// the same [`Self::sum_child_bounds`] walk. Returns `None` when
+    /// `parent` has no children that expose reactive bounds.
     ///
     /// In today's topologies that is always the answer: the only
     /// components reporting Q bounds are inverters, and an inverter's
@@ -812,28 +824,7 @@ impl MicrogridSite {
         &self,
         parent: u64,
     ) -> Option<crate::sim::bounds::VecBounds> {
-        use crate::sim::bounds::VecBounds;
-        let child_ids: Vec<u64> = self
-            .inner
-            .connections
-            .read()
-            .iter()
-            .filter(|(p, _)| *p == parent)
-            .map(|(_, c)| *c)
-            .collect();
-        if child_ids.is_empty() {
-            return None;
-        }
-        let bounds: Vec<VecBounds> = child_ids
-            .iter()
-            .filter_map(|id| self.get(*id))
-            .filter_map(|c| c.reactive_bounds())
-            .collect();
-        if bounds.is_empty() {
-            None
-        } else {
-            Some(VecBounds::sum_single(bounds))
-        }
+        self.sum_child_bounds(parent, |c| c.reactive_bounds())
     }
 
     /// The reactive-power envelope a setpoint for `id` must fall
@@ -1616,6 +1607,70 @@ mod tests {
         // checking the connection-graph shape, not the bounds math.
         assert!(w.aggregate_child_bounds(2).is_none());
         assert!(w.aggregate_child_bounds(3).is_none());
+    }
+
+    /// A registered child shared by two parents contributes HALF its
+    /// envelope to each parent's gate — the meter walk's parallel-
+    /// paths power share applied to bounds, so the two parents can't
+    /// jointly admit 2x the child's envelope.
+    #[test]
+    fn shared_child_bounds_are_split_across_parents() {
+        use crate::sim::{Battery, battery::BatteryConfig};
+        let w = MicrogridSite::new();
+        w.register(Battery::new(
+            100,
+            Duration::from_secs(1),
+            BatteryConfig::default(),
+        ));
+        w.connect(2, 100);
+        w.connect(3, 100);
+        let full = w.get(100).unwrap().effective_active_bounds().unwrap();
+        let gate = w.aggregate_child_bounds(2).unwrap();
+        assert_eq!(gate.0.len(), 1);
+        assert!((gate.0[0].lower.unwrap() - full.0[0].lower.unwrap() / 2.0).abs() < 1e-3);
+        assert!((gate.0[0].upper.unwrap() - full.0[0].upper.unwrap() / 2.0).abs() < 1e-3);
+        // The other parent sees the same halved envelope.
+        let gate3 = w.aggregate_child_bounds(3).unwrap();
+        assert_eq!(gate3.0[0].lower, gate.0[0].lower);
+    }
+
+    /// The reactive twin applies the same parallel-paths share — a
+    /// Q-reporting child under two parents contributes half its Q
+    /// band to each gate.
+    #[test]
+    fn shared_child_reactive_bounds_are_split_across_parents() {
+        use crate::sim::{
+            inverter::{SolarInverter, solar_inverter::SolarInverterConfig},
+            reactive::ReactiveCapability,
+        };
+        let w = MicrogridSite::new();
+        w.register(SolarInverter::new(
+            100,
+            Duration::from_secs(1),
+            SolarInverterConfig {
+                // No sun parks P at 0, and a pure kVA cap makes the
+                // Q band ±1000 there — the default (full sun + PF
+                // cap) collapses the band to (0, 0) and would make
+                // the halving check vacuous.
+                sunlight_pct: 0.0,
+                reactive: ReactiveCapability {
+                    pf_limit: None,
+                    apparent_va: Some(1000.0),
+                },
+                ..Default::default()
+            },
+        ));
+        w.connect(2, 100);
+        w.connect(3, 100);
+        let full = w.get(100).unwrap().reactive_bounds().unwrap();
+        assert!(
+            full.0[0].upper.unwrap() > 999.0,
+            "the child's own Q band must be nonzero for this test, got {full}"
+        );
+        let gate = w.aggregate_child_reactive_bounds(2).unwrap();
+        assert_eq!(gate.0.len(), 1);
+        assert!((gate.0[0].lower.unwrap() - full.0[0].lower.unwrap() / 2.0).abs() < 1e-3);
+        assert!((gate.0[0].upper.unwrap() - full.0[0].upper.unwrap() / 2.0).abs() < 1e-3);
     }
 
     /// `children_of` is the unfiltered list of edges from a parent.

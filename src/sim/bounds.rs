@@ -112,6 +112,21 @@ impl VecBounds {
         prev_upper.unwrap_or(value)
     }
 
+    /// Scale every edge by `factor` (positive, so band order is
+    /// preserved). Divides a shared child's envelope across its
+    /// parallel parents, mirroring the meter's power share.
+    pub fn scale(&self, factor: f32) -> Self {
+        VecBounds(
+            self.0
+                .iter()
+                .map(|b| Bounds {
+                    lower: b.lower.map(|l| l * factor),
+                    upper: b.upper.map(|u| u * factor),
+                })
+                .collect(),
+        )
+    }
+
     /// Add bound containers element-wise into one `[lower, upper]`
     /// band. A multi-band item is collapsed to its hull (lowest
     /// lower, highest upper) first — microsim's general-case add

@@ -573,7 +573,11 @@ gate) ignores later bands of a multi-band inverter. Single-band today,
 but unenforced — a future multi-band rated inverter regresses the gate
 silently.
 
-*** TODO [#B] aggregate_child_bounds skips the parallel-share divisor :bounds:fidelity:
+*** DONE [#B] aggregate_child_bounds skips the parallel-share divisor :bounds:fidelity:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 15:59] \\
+  Both aggregate walks now use children_with_parent_counts and scale each child's envelope by 1/parent_count via VecBounds::scale, matching the meter's power share. Pinned by shared_child_bounds_are_split_across_parents.
+:END:
 =aggregate_child_bounds= (=src/sim/microgrid_site.rs=) sums children's
 effective bounds without the =/ parent_count= share that =meter.rs:68=
 applies to power. A child shared between two parents contributes its full
