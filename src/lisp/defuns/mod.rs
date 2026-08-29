@@ -37,6 +37,7 @@ mod scenarios;
 mod setpoints;
 mod time;
 mod watches;
+mod weather;
 mod world_ops;
 
 pub(super) use clock::register as register_clock;
@@ -65,6 +66,7 @@ pub(super) fn register_runtime(
     metadata::register(ctx, metadata.clone());
     runtime_modes::register(ctx, router.clone());
     load_drivers::register(ctx, router.clone());
+    weather::register(ctx, router.clone());
     time::register(ctx);
     reactive::register(ctx, router.clone());
     setpoints::register(ctx, router.clone(), metadata);

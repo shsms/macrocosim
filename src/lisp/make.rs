@@ -480,6 +480,33 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                     cfg.sunlight_dynamic = true;
                 }
             }
+            // No `:sunlight%` at all is the opt-in to weather: the
+            // absent kwarg is exactly what `constructor_kwargs`
+            // renders for a `Follow` source, so a saved-and-reloaded
+            // weather-following inverter comes back following the
+            // weather instead of frozen at a Manual 100%.
+            cfg.sunlight_follow = a.sunlight_pct.is_none();
+            if let Some(v) = a.weather_lag_s {
+                // try_from_secs_f64, not from_secs_f64: the latter
+                // PANICS on a non-finite or overflowing value, which
+                // would abort the whole config load over one typo'd
+                // kwarg. Same guard sim_clock's parse_offset uses.
+                cfg.weather_lag = Duration::try_from_secs_f64(v).map_err(|_| {
+                    Error::invalid_argument(format!(
+                        ":weather-lag-s must be a non-negative number of seconds, got {v}"
+                    ))
+                })?;
+            }
+            if let Some(v) = a.weather_jitter_pct {
+                // 100% would let a sample reach zero (or double), which
+                // is weather, not roughening — the upper end is open.
+                if !(v.is_finite() && (0.0..100.0).contains(&v)) {
+                    return Err(Error::invalid_argument(format!(
+                        ":weather-jitter-pct must be within [0, 100), got {v}"
+                    )));
+                }
+                cfg.weather_jitter_pct = v as f32;
+            }
             if let Some(v) = a.rated_lower {
                 cfg.rated_lower_w = v as f32;
             }
@@ -1259,6 +1286,106 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains(":array-peak-w"), "{err}");
+    }
+
+    /// Omitting `:sunlight%` is the opt-in to weather: the inverter
+    /// starts as a `Follow` source (the "weather" marker in
+    /// `sunlight_reading().expr`) and renders back without the kwarg.
+    /// Passing `:sunlight%` — a number or a lambda — keeps the
+    /// historical `Manual` slot.
+    #[test]
+    fn omitting_sunlight_pct_follows_the_site_weather() {
+        let site = run(r#"(%make-solar-inverter :id 13 :rated-lower -10000.0)
+               (%make-solar-inverter :id 14 :rated-lower -10000.0 :sunlight% 40.0)"#);
+        assert_eq!(
+            site.get(13).unwrap().sunlight_reading().unwrap().expr,
+            Some("weather".into()),
+            "no :sunlight% ⇒ follows the weather"
+        );
+        assert_eq!(
+            site.get(14).unwrap().sunlight_reading().unwrap().expr,
+            None,
+            "an explicit :sunlight% stays manual"
+        );
+        let kw = |id: u64| {
+            site.get(id)
+                .unwrap()
+                .constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(!kw(13).contains(":sunlight%"), "{}", kw(13));
+        assert!(kw(14).contains(":sunlight% 40"), "{}", kw(14));
+    }
+
+    /// `:weather-lag-s` / `:weather-jitter-pct` shape how a `Follow`
+    /// source samples the sky. Both are validated at the make door
+    /// (a negative lag and an out-of-band jitter are config bugs, not
+    /// something to clamp silently), and both round-trip through
+    /// `constructor_kwargs` — emitted only when nonzero, so a plain
+    /// inverter renders with no extra noise.
+    #[test]
+    fn solar_weather_lag_and_jitter_validate_and_round_trip() {
+        let site = run(r#"(%make-solar-inverter :id 15
+                                    :rated-lower -10000.0
+                                    :weather-lag-s 90
+                                    :weather-jitter-pct 5.0)
+               (%make-solar-inverter :id 16 :rated-lower -10000.0)"#);
+        let kw = |id: u64| {
+            site.get(id)
+                .unwrap()
+                .constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(kw(15).contains(":weather-lag-s 90"), "{}", kw(15));
+        assert!(kw(15).contains(":weather-jitter-pct 5"), "{}", kw(15));
+        assert!(
+            !kw(16).contains(":weather-"),
+            "zero lag/jitter stay unwritten: {}",
+            kw(16)
+        );
+
+        // Round-trip: re-making from the rendered kwargs reproduces
+        // both values.
+        let (site2, _ctx) = run_with_ctx(&format!("(%make-solar-inverter :id 15 {})", kw(15)));
+        let kw2 = site2
+            .get(15)
+            .unwrap()
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(kw2, kw(15));
+
+        let (_s, mut ctx) = run_with_ctx("");
+        let err = ctx
+            .eval_string("(%make-solar-inverter :id 17 :weather-lag-s -1)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(":weather-lag-s"), "{err}");
+        let err = ctx
+            .eval_string("(%make-solar-inverter :id 18 :weather-jitter-pct 100)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(":weather-jitter-pct"), "{err}");
+        let err = ctx
+            .eval_string("(%make-solar-inverter :id 19 :weather-jitter-pct -0.5)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(":weather-jitter-pct"), "{err}");
+        // A lag that overflows Duration must ERROR, not panic the
+        // config load — `Duration::from_secs_f64` would abort here.
+        let err = ctx
+            .eval_string("(%make-solar-inverter :id 20 :weather-lag-s 1e300)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(":weather-lag-s"), "{err}");
     }
 
     /// `(set-meter-power id W)` is the existing imperative setter

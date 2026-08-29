@@ -672,6 +672,21 @@ impl SimulatedComponent for SolarInverter {
                 crate::lisp::lisp_float32(self.cfg.array_peak_w),
             ));
         }
+        // The two `Follow` shaping kwargs, written only when they
+        // diverge from their zero defaults so a plain inverter still
+        // renders as a plain inverter.
+        if !self.cfg.weather_lag.is_zero() {
+            kw.push((
+                ":weather-lag-s",
+                crate::lisp::lisp_float32(self.cfg.weather_lag.as_secs_f32()),
+            ));
+        }
+        if self.cfg.weather_jitter_pct != 0.0 {
+            kw.push((
+                ":weather-jitter-pct",
+                crate::lisp::lisp_float32(self.cfg.weather_jitter_pct),
+            ));
+        }
         kw
     }
 }

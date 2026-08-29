@@ -43,6 +43,10 @@
         :reactive-pf-limit     0.0         ;; 0 = disabled
         :reactive-apparent-va 32000.0))    ;; kVA-circle envelope
 
+;; Deliberately NO :sunlight% here — an omitted :sunlight% is what
+;; makes an array follow the site weather, so adding one to this
+;; plist would pin every solar inverter site-wide to a manual
+;; constant and silently disable (make-weather).
 (setq solar-inverter-defaults
       '(:ramp-rate          2000.0
         :stream-jitter-pct  5.0))

@@ -1,0 +1,503 @@
+//! Site weather doors: `(make-weather …)` / `(set-weather …)` install
+//! and retune the site's [`Weather`] singleton, `(pass-cloud …)`
+//! scripts one deterministic cloud over the array, and
+//! `(weather-status)` reads the sky back as an alist.
+
+use std::time::Duration;
+
+use tulisp::{Error, TulispContext, TulispObject};
+
+use crate::lisp::value::LispValue;
+use crate::sim::microgrids::SharedSiteRouter;
+use crate::sim::sim_clock::parse_time_of_day;
+use crate::sim::weather::{Weather, WeatherConfig};
+
+tulisp::AsPlist! {
+    /// Plist payload shared by `(make-weather …)` and
+    /// `(set-weather …)`. Every key is optional: `make-weather`
+    /// applies them over [`WeatherConfig::default`], `set-weather`
+    /// over whatever the site already has.
+    pub struct WeatherArgs {
+        /// Time of day (UTC) the clear-sky curve turns on — either
+        /// an `"HH:MM"` string or a bare number of seconds since
+        /// midnight, matching `(parse-time-of-day)`.
+        sunrise: Option<LispValue> {= None},
+        /// Time of day (UTC) the clear-sky curve turns off. Same
+        /// two spellings as `:sunrise`.
+        sunset: Option<LispValue> {= None},
+        /// Clear-sky output at solar noon, percent.
+        peak_pct<":peak%">: Option<f64> {= None},
+        /// Ambient cloud arrival rate, events per hour. Zero disables
+        /// the ambient generator, leaving only scripted
+        /// `(pass-cloud)` events; a negative rate is an error.
+        cloud_rate<":cloud-rate">: Option<f64> {= None},
+        /// Ambient cloud depth, percent — a number (fixed) or a
+        /// two-element `(lo hi)` list drawn from uniformly.
+        cloud_depth<":cloud-depth">: Option<LispValue> {= None},
+        /// Ambient cloud total duration, seconds. Number or `(lo hi)`.
+        cloud_duration<":cloud-duration">: Option<LispValue> {= None},
+        /// Ambient cloud ramp-in/ramp-out time, seconds. Number or
+        /// `(lo hi)`.
+        cloud_ramp<":cloud-ramp">: Option<LispValue> {= None},
+        /// Ambient generator seed. Passing it to `(set-weather)`
+        /// re-seeds the generator (see the defun's docs).
+        seed: Option<i64> {= None},
+    }
+}
+
+/// A `(lo hi)` range kwarg: a plain number means a fixed value
+/// (`(v, v)`), a two-element list means the uniform range. Mirrors
+/// `:sunlight%`'s raw-value dispatch in `make.rs`.
+fn range_arg(kw: &str, v: &LispValue) -> Result<(f32, f32), Error> {
+    let raw = v.as_inner();
+    if raw.numberp() {
+        let x = f64::try_from(raw)? as f32;
+        return Ok((x, x));
+    }
+    if raw.consp() {
+        // A malformed list — `'(20)`, whose cadr is nil — fails the
+        // number conversion with tulisp's own type error, which names
+        // neither the kwarg nor the shape expected. Re-wrap so the
+        // author is told which key they got wrong.
+        let elem = |o: TulispObject| {
+            f64::try_from(&o).map(|v| v as f32).map_err(|_| {
+                Error::invalid_argument(format!(
+                    "{kw}: expected a two-element (lo hi) list of numbers — got {raw}"
+                ))
+            })
+        };
+        return Ok((elem(raw.car()?)?, elem(raw.cadr()?)?));
+    }
+    Err(Error::invalid_argument(format!(
+        "{kw}: expected a number or a (lo hi) list — got {raw}"
+    )))
+}
+
+/// A range of a physical duration: both ends must be a real,
+/// non-negative number of seconds. Same guard `pass-cloud` applies to
+/// the same two quantities — a NaN would poison every `uniform` draw
+/// and a negative would make `Duration::from_secs_f32` panic downstream.
+fn checked_secs_range(kw: &str, range: (f32, f32)) -> Result<(f32, f32), Error> {
+    if !range.0.is_finite() || !range.1.is_finite() || range.0 < 0.0 || range.1 < 0.0 {
+        return Err(Error::invalid_argument(format!(
+            "{kw} must be a non-negative number of seconds, got ({}, {})",
+            range.0, range.1
+        )));
+    }
+    Ok(range)
+}
+
+/// A time-of-day kwarg: an `"HH:MM"` string, or a bare number of
+/// seconds since midnight. The number spelling matches what
+/// `(parse-time-of-day)` already accepts, so a scenario can compute
+/// one instead of formatting a string.
+fn time_of_day_arg(kw: &str, v: &LispValue) -> Result<Duration, Error> {
+    let raw = v.as_inner();
+    if raw.numberp() {
+        let secs = f64::try_from(raw)?;
+        if !(0.0..86_400.0).contains(&secs) {
+            return Err(Error::invalid_argument(format!(
+                "{kw}: seconds since midnight must be in [0, 86400), got {secs}"
+            )));
+        }
+        return Ok(Duration::from_secs_f64(secs));
+    }
+    let s = String::try_from(raw.clone())?;
+    parse_time_of_day(&s).ok_or_else(|| {
+        Error::invalid_argument(format!("{kw}: malformed time {s:?} — expected \"HH:MM\""))
+    })
+}
+
+/// Depth is a percentage of the sky blocked, so both ends of the
+/// range have to be a real percentage — a negative depth would
+/// *brighten* the array and >100 would drive `pct_at` negative.
+fn checked_depth(range: (f32, f32)) -> Result<(f32, f32), Error> {
+    if !(0.0..=100.0).contains(&range.0) || !(0.0..=100.0).contains(&range.1) {
+        return Err(Error::invalid_argument(format!(
+            ":cloud-depth must be within [0, 100], got ({}, {})",
+            range.0, range.1
+        )));
+    }
+    Ok(range)
+}
+
+/// Fold the plist over `cfg`, validating as it goes. Takes a working
+/// copy so a rejected form leaves the site's live weather untouched.
+/// `door` is the defun name the caller came through, so an error
+/// message names the form the author actually typed.
+fn apply_args(door: &str, cfg: &mut WeatherConfig, a: &WeatherArgs) -> Result<(), Error> {
+    if let Some(v) = a.sunrise.as_ref() {
+        cfg.sunrise = time_of_day_arg(":sunrise", v)?;
+    }
+    if let Some(v) = a.sunset.as_ref() {
+        cfg.sunset = time_of_day_arg(":sunset", v)?;
+    }
+    // Checked after both land, so a form moving the whole window
+    // ("06:00"→"21:00" over a 05:00–20:00 config) is judged on the
+    // pair it produces rather than on the half it happens to set
+    // first.
+    if cfg.sunrise >= cfg.sunset {
+        return Err(Error::invalid_argument(format!(
+            "{door}: :sunrise must be before :sunset, got {}s and {}s",
+            cfg.sunrise.as_secs(),
+            cfg.sunset.as_secs()
+        )));
+    }
+    if let Some(v) = a.peak_pct {
+        // A negative peak inverts the clear-sky arch, which drives
+        // `min_avail` positive — the band collapses and every
+        // following array parks at 0 instead of generating, with
+        // nothing in the telemetry to say why.
+        if !(v.is_finite() && v >= 0.0) {
+            return Err(Error::invalid_argument(format!(
+                "{door}: :peak% must be a non-negative percentage, got {v}"
+            )));
+        }
+        cfg.peak_pct = v as f32;
+    }
+    if let Some(v) = a.cloud_rate {
+        // 0 is the natural "no ambient clouds" spelling from Lisp,
+        // where `None` has no keyword of its own — but a NEGATIVE
+        // rate is a mistake, not a second spelling of "off", so it
+        // says so rather than silently disabling the generator.
+        if !(v.is_finite() && v >= 0.0) {
+            return Err(Error::invalid_argument(format!(
+                "{door}: :cloud-rate must be a non-negative rate (0 disables), got {v}"
+            )));
+        }
+        cfg.cloud_rate_per_h = if v > 0.0 { Some(v as f32) } else { None };
+    }
+    if let Some(v) = a.cloud_depth.as_ref() {
+        cfg.cloud_depth = checked_depth(range_arg(":cloud-depth", v)?)?;
+    }
+    if let Some(v) = a.cloud_duration.as_ref() {
+        cfg.cloud_duration =
+            checked_secs_range(":cloud-duration", range_arg(":cloud-duration", v)?)?;
+    }
+    if let Some(v) = a.cloud_ramp.as_ref() {
+        cfg.cloud_ramp = checked_secs_range(":cloud-ramp", range_arg(":cloud-ramp", v)?)?;
+    }
+    if let Some(v) = a.seed {
+        cfg.seed = Some(v as u64);
+    }
+    Ok(())
+}
+
+pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
+    // Install a fresh Weather on the site, replacing whatever was
+    // there (events and RNG stream included). Every key optional —
+    // the bare `(make-weather)` gives the default 06:00–20:00
+    // clear-sky day with no ambient clouds.
+    let r = router.clone();
+    ctx.defun(
+        "make-weather",
+        move |args: tulisp::Plist<WeatherArgs>| -> Result<bool, Error> {
+            let a = args.into_inner();
+            let mut cfg = WeatherConfig::default();
+            apply_args("make-weather", &mut cfg, &a)?;
+            r.site().set_weather(Some(Weather::new(cfg)));
+            Ok(true)
+        },
+    );
+
+    // PARTIAL update of the site's existing weather config: only the
+    // keys passed are touched, and the event list and anchor survive.
+    // With no weather installed yet it starts from the defaults, so
+    // `(set-weather :cloud-rate 6)` on a fresh site is a valid way in.
+    //
+    // `:seed` is the exception: an RNG can't be re-seeded in place
+    // without disturbing the stream, so passing it rebuilds the
+    // Weather outright — a deliberate reset of the ambient event
+    // stream, which is exactly what "re-seed" means for a scenario
+    // that wants reproducibility from here on.
+    let r = router.clone();
+    ctx.defun(
+        "set-weather",
+        move |args: tulisp::Plist<WeatherArgs>| -> Result<bool, Error> {
+            let a = args.into_inner();
+            let w = r.site();
+            let existing = w.with_weather(|wx| wx.config().clone());
+            let existed = existing.is_some();
+            let mut cfg = existing.unwrap_or_default();
+            apply_args("set-weather", &mut cfg, &a)?;
+            if !existed || a.seed.is_some() {
+                w.set_weather(Some(Weather::new(cfg)));
+            } else {
+                w.with_weather(|wx| *wx.config_mut() = cfg);
+            }
+            Ok(true)
+        },
+    );
+
+    // Script one deterministic cloud starting at the weather's
+    // current anchor. Plain positional args, not a plist — this is
+    // the one weather door a scenario cue fires repeatedly, and
+    // `(pass-cloud 80 600)` reads better in a cue list than a plist
+    // would.
+    let r = router.clone();
+    ctx.defun(
+        "pass-cloud",
+        move |depth_pct: f64, duration_s: f64, ramp_s: Option<f64>| -> Result<bool, Error> {
+            if !(0.0..=100.0).contains(&depth_pct) {
+                return Err(Error::invalid_argument(format!(
+                    "pass-cloud: depth must be within [0, 100], got {depth_pct}"
+                )));
+            }
+            if duration_s < 0.0 || ramp_s.is_some_and(|r| r < 0.0) {
+                return Err(Error::invalid_argument(format!(
+                    "pass-cloud: duration and ramp must be non-negative, got {duration_s} and {}",
+                    ramp_s.unwrap_or(0.0)
+                )));
+            }
+            let duration = Duration::try_from_secs_f64(duration_s)
+                .map_err(|e| Error::invalid_argument(format!("pass-cloud: bad duration: {e}")))?;
+            let ramp = Duration::try_from_secs_f64(ramp_s.unwrap_or(0.0))
+                .map_err(|e| Error::invalid_argument(format!("pass-cloud: bad ramp: {e}")))?;
+            r.site()
+                .with_weather(|w| w.pass_cloud(depth_pct as f32, duration, ramp))
+                .ok_or_else(|| {
+                    Error::invalid_argument(
+                        "pass-cloud: no weather on this site — call (make-weather …) first"
+                            .to_string(),
+                    )
+                })?;
+            Ok(true)
+        },
+    );
+
+    // Read the sky back as `((pct . N) (clear-sky . N) (events . N))`,
+    // evaluated at the weather's own anchor — the last `now` a tick
+    // handed it, so the answer matches what the inverters just saw
+    // rather than a wall clock that may be hours off in a stepped
+    // run. `nil` when the site has no weather: this is a query, and a
+    // panel polling it shouldn't have to catch an error to learn the
+    // sky isn't modelled.
+    let r = router;
+    ctx.defun(
+        "weather-status",
+        move |ctx: &mut TulispContext| -> Result<TulispObject, Error> {
+            let Some((pct, clear, events)) = r.site().with_weather(|w| {
+                // Un-anchored (nothing has ticked yet) falls back to
+                // the wall clock, which is what `pass_cloud` uses for
+                // its own start in that state — so the two agree.
+                let at = w.anchor().unwrap_or_else(chrono::Utc::now);
+                (w.pct_at(at), w.clear_sky_pct(at), w.events().len() as i64)
+            }) else {
+                return Ok(TulispObject::nil());
+            };
+            // Two decimals: the underlying f32 widened to f64 prints
+            // as 99.99999237060547, which is noise in an alist a
+            // human reads and a scenario asserts on.
+            let round2 = |v: f32| (v as f64 * 100.0).round() / 100.0;
+            let mut cell = |k: &str, v: TulispObject| TulispObject::cons(ctx.intern(k), v);
+            Ok(vec![
+                cell("pct", round2(pct).into()),
+                cell("clear-sky", round2(clear).into()),
+                cell("events", events.into()),
+            ]
+            .into_iter()
+            .collect())
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::test_support::config_with;
+    use chrono::{TimeZone, Utc};
+    use std::time::Duration;
+
+    /// make-weather + weather-status round trip, pass-cloud arms an
+    /// event, and the malformed / inverted time forms error cleanly.
+    #[test]
+    fn weather_doors_round_trip() {
+        let (cfg, _dir) = config_with("");
+        cfg.eval(r#"(make-weather :sunrise "06:00" :sunset "20:00")"#)
+            .unwrap();
+        // Nothing has ticked, so the reading is un-anchored — assert
+        // the alist shape, not the value.
+        let st = cfg.eval("(weather-status)").unwrap();
+        assert!(st.contains("pct"), "alist shape, got {st}");
+        cfg.eval("(pass-cloud 50 600)").unwrap();
+        let st = cfg.eval("(weather-status)").unwrap();
+        assert!(st.contains("(events . 1)"), "one event armed, got {st}");
+
+        // Malformed and inverted windows error — and the message
+        // names the door the author actually typed, not the sibling
+        // that shares the plist folding.
+        assert!(cfg.eval(r#"(set-weather :sunrise "6h30")"#).is_err());
+        let err = cfg
+            .eval(r#"(set-weather :sunrise "21:00" :sunset "06:00")"#)
+            .unwrap_err();
+        assert!(err.contains("set-weather:"), "{err}");
+        let err = cfg
+            .eval(r#"(make-weather :sunrise "21:00" :sunset "06:00")"#)
+            .unwrap_err();
+        assert!(err.contains("make-weather:"), "{err}");
+        // …and a rejected form leaves the live weather alone.
+        let st = cfg.eval("(weather-status)").unwrap();
+        assert!(st.contains("(events . 1)"), "still armed, got {st}");
+    }
+
+    /// `(weather-status)` on a site with no weather is `nil`, not an
+    /// error — a polling panel shouldn't need a handler for "the sky
+    /// isn't modelled here".
+    #[test]
+    fn weather_status_is_nil_without_weather() {
+        let (cfg, _dir) = config_with("");
+        assert_eq!(cfg.eval("(weather-status)").unwrap(), "nil");
+        // pass-cloud, being a mutator, does error.
+        let err = cfg.eval("(pass-cloud 50 600)").unwrap_err();
+        assert!(err.contains("no weather"), "{err}");
+    }
+
+    /// `(set-weather)` is a PARTIAL update: it keeps the keys it
+    /// wasn't given (and the armed events), while `:seed` rebuilds
+    /// the generator. Range keys take a number or a `(lo hi)` list.
+    #[test]
+    fn set_weather_updates_partially_and_reseeds() {
+        let (cfg, _dir) = config_with("");
+        cfg.eval(r#"(make-weather :sunrise "05:00" :sunset "21:00" :peak% 80)"#)
+            .unwrap();
+        cfg.eval("(pass-cloud 30 600)").unwrap();
+        cfg.eval("(set-weather :cloud-rate 6 :cloud-depth '(20 70) :cloud-ramp 15)")
+            .unwrap();
+        let site = cfg.site();
+        site.with_weather(|w| {
+            let c = w.config();
+            assert_eq!(c.sunrise, Duration::from_secs(5 * 3600), "kept :sunrise");
+            assert_eq!(c.peak_pct, 80.0, "kept :peak%");
+            assert_eq!(c.cloud_rate_per_h, Some(6.0));
+            assert_eq!(c.cloud_depth, (20.0, 70.0), "(lo hi) list");
+            assert_eq!(c.cloud_ramp, (15.0, 15.0), "a bare number is a fixed value");
+        })
+        .unwrap();
+        assert!(
+            cfg.eval("(weather-status)")
+                .unwrap()
+                .contains("(events . 1)"),
+            "a partial update keeps the armed events"
+        );
+
+        // :seed rebuilds the generator — a deliberate reset.
+        cfg.eval("(set-weather :seed 7)").unwrap();
+        site.with_weather(|w| assert_eq!(w.config().seed, Some(7)))
+            .unwrap();
+        assert!(
+            cfg.eval("(weather-status)")
+                .unwrap()
+                .contains("(events . 0)"),
+            "re-seeding resets the event stream"
+        );
+
+        // Out-of-range depth is rejected.
+        let err = cfg.eval("(set-weather :cloud-depth '(0 140))").unwrap_err();
+        assert!(err.contains("[0, 100]"), "{err}");
+    }
+
+    /// Every numeric kwarg is checked at the door rather than left to
+    /// produce silently wrong physics: a negative `:peak%` inverts
+    /// the clear-sky arch into parked-at-0 non-generation, a negative
+    /// `:cloud-rate` would otherwise pass as a second spelling of
+    /// "disabled", and a negative duration/ramp panics
+    /// `Duration::from_secs_f32` downstream. A malformed range list
+    /// names its own kwarg.
+    #[test]
+    fn numeric_kwargs_are_validated_at_the_door() {
+        let (cfg, _dir) = config_with("");
+        cfg.eval("(make-weather)").unwrap();
+        for (form, needle) in [
+            ("(set-weather :peak% -10)", ":peak%"),
+            ("(make-weather :peak% -0.5)", ":peak%"),
+            ("(set-weather :cloud-rate -1)", ":cloud-rate"),
+            (
+                "(set-weather :cloud-duration '(-60 600))",
+                ":cloud-duration",
+            ),
+            ("(set-weather :cloud-ramp -5)", ":cloud-ramp"),
+            ("(set-weather :cloud-duration '(20))", ":cloud-duration"),
+            ("(set-weather :cloud-depth \"heavy\")", ":cloud-depth"),
+        ] {
+            let err = cfg.eval(form).unwrap_err();
+            assert!(err.contains(needle), "{form} → {err}");
+        }
+        // The live weather survived every rejection.
+        cfg.site()
+            .with_weather(|w| {
+                assert_eq!(w.config().peak_pct, 100.0);
+                assert_eq!(w.config().cloud_rate_per_h, None);
+            })
+            .unwrap();
+        // 0 stays the "no ambient clouds" spelling.
+        cfg.eval("(set-weather :cloud-rate 0)").unwrap();
+        cfg.site()
+            .with_weather(|w| assert_eq!(w.config().cloud_rate_per_h, None))
+            .unwrap();
+    }
+
+    /// `:sunrise` / `:sunset` also take a bare number of seconds
+    /// since midnight, the same second spelling `(parse-time-of-day)`
+    /// accepts.
+    #[test]
+    fn time_of_day_takes_seconds_too() {
+        let (cfg, _dir) = config_with("");
+        cfg.eval("(make-weather :sunrise 21600 :sunset (* 20 3600))")
+            .unwrap();
+        cfg.site()
+            .with_weather(|w| {
+                assert_eq!(w.config().sunrise, Duration::from_secs(21_600));
+                assert_eq!(w.config().sunset, Duration::from_secs(72_000));
+            })
+            .unwrap();
+        assert!(
+            cfg.eval("(make-weather :sunrise 90000)").is_err(),
+            "seconds past a day are rejected"
+        );
+    }
+
+    /// A follow-mode inverter's output dips through a scripted cloud
+    /// in a stepped run: weather → inverter → telemetry end to end.
+    /// Driven straight off `tick_once` (the same door the headless
+    /// stepped runner turns) so the assertion doesn't depend on a
+    /// scenario harness.
+    #[test]
+    fn stepped_run_sweeps_a_scripted_cloud() {
+        let (cfg, _dir) =
+            config_with(r#"(%make-solar-inverter :id 3 :rated-lower -10000.0 :rated-upper 0.0)"#);
+        cfg.eval(r#"(make-weather :sunrise "00:00" :sunset "23:59" :peak% 100)"#)
+            .unwrap();
+        let site = cfg.site();
+        let dt = Duration::from_secs(60);
+        let noon = Utc.with_ymd_and_hms(2020, 1, 1, 12, 0, 0).unwrap();
+        // Step up to solar noon in dt-sized steps, exactly as the
+        // stepped runner does.
+        let mut t = noon - chrono::Duration::minutes(10);
+        while t <= noon {
+            site.tick_once(t, dt);
+            t += chrono::Duration::seconds(60);
+        }
+        let before = site
+            .get(3)
+            .unwrap()
+            .telemetry(&site)
+            .active_power_w
+            .expect("active power");
+        assert!(before < -9_000.0, "clear-sky noon production, got {before}");
+
+        cfg.eval("(pass-cloud 80 600 0)").unwrap();
+        for _ in 0..12 {
+            t += chrono::Duration::seconds(10);
+            site.tick_once(t, Duration::from_secs(10));
+        }
+        let during = site
+            .get(3)
+            .unwrap()
+            .telemetry(&site)
+            .active_power_w
+            .expect("active power");
+        assert!(
+            during > before * 0.5,
+            "80% cloud must cut production (negative W): before {before}, during {during}"
+        );
+    }
+}

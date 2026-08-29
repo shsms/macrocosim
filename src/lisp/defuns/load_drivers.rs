@@ -270,6 +270,45 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         },
     );
 
+    // The way back from set-solar-sunlight — the trip the sunlight
+    // knob never had one. Drops whatever is driving the slot and
+    // returns the inverter to following the site's weather, exactly
+    // as a freshly-constructed one with no `:sunlight%` does.
+    // Gated on the trait door: `false` means "not a component that
+    // takes a sunlight clear".
+    let r = router.clone();
+    ctx.defun(
+        "clear-solar-sunlight",
+        move |id: i64| -> Result<bool, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "clear-solar-sunlight: component {id} not found"
+                )));
+            };
+            w.scenario_snapshot_knob(id as u64, KnobKind::Sunlight);
+            if !c.clear_sunlight_source() {
+                return Err(Error::invalid_argument(format!(
+                    "clear-solar-sunlight: component {id} does not take a sunlight clear"
+                )));
+            }
+            // Unlike clear-meter-power, the cleared slot is not
+            // "nothing" — a `Follow` source has a live percentage of
+            // its own (the seeded full sun until the first tick
+            // resolves the sky), so the inspector gets that value
+            // rather than a blanked input.
+            let now_pct = c.sunlight_reading().map(|r| r.value);
+            w.note_knob_changed(
+                id as u64,
+                "solar-sunlight",
+                now_pct,
+                Some("weather".into()),
+                None,
+            );
+            Ok(true)
+        },
+    );
+
     // Steam boiler analogue of set-meter-power / set-solar-sunlight:
     // drive the `:demand` (kg/h) input from Lisp. Same numeric /
     // dynamic dispatch — a number installs a constant, a lambda or
@@ -785,6 +824,87 @@ mod tests {
         }
     }
 
+    /// `(clear-solar-sunlight id)` is the way back from a driven
+    /// sunlight knob: the source returns to following the site's
+    /// weather (the "weather" marker in `sunlight_reading().expr`),
+    /// the `KnobChanged` broadcast carries that same marker (so the
+    /// inspector doesn't render a bare, markerless 100 right after
+    /// the clear — the opposite of the mode the door just installed),
+    /// a non-solar component errors, and so does an unknown id.
+    #[test]
+    fn clear_solar_sunlight_returns_to_following_weather() {
+        let (cfg, _dir) = config_with("(%make-solar-inverter :id 8 :sunlight% 40)");
+        let site = cfg.site();
+        let inv = site.get(8).unwrap();
+        assert_eq!(inv.sunlight_reading().unwrap().expr, None, "starts manual");
+
+        cfg.eval("(set-solar-sunlight 8 10.0)").unwrap();
+        let mut rx = site.subscribe_events();
+        cfg.eval("(clear-solar-sunlight 8)").unwrap();
+        assert_eq!(
+            inv.sunlight_reading().unwrap().expr,
+            Some("weather".into()),
+            "cleared back to following the weather"
+        );
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged {
+                    id: 8,
+                    knob: "solar-sunlight",
+                    expr: Some(e),
+                    ..
+                } if e == "weather"
+            )),
+            "no matching KnobChanged with the weather marker on the bus; saw: {seen:?}"
+        );
+
+        // Non-solar: the default trait door returns false.
+        let (cfg2, _dir2) = config_with("(%make-meter :id 7)");
+        let err = cfg2.eval("(clear-solar-sunlight 7)").unwrap_err();
+        assert!(err.contains("does not take a sunlight clear"), "{err}");
+
+        // Unknown id errors too.
+        let err = cfg.eval("(clear-solar-sunlight 99)").unwrap_err();
+        assert!(err.contains("not found"), "{err}");
+    }
+
+    /// The clear must survive a save/reload: a `:sunlight%`-built
+    /// inverter that has been cleared renders WITHOUT the kwarg, and
+    /// re-making from those kwargs yields a weather-following
+    /// inverter — not a `Manual(100)` one that silently ignores the
+    /// sky forever.
+    #[test]
+    fn cleared_sunlight_round_trips_through_constructor_kwargs() {
+        let (cfg, _dir) = config_with("(%make-solar-inverter :id 8 :sunlight% 40)");
+        cfg.eval("(clear-solar-sunlight 8)").unwrap();
+        let kwargs = cfg
+            .site()
+            .get(8)
+            .unwrap()
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            !kwargs.contains(":sunlight%"),
+            "a Follow source renders as the ABSENT kwarg: {kwargs}"
+        );
+
+        cfg.eval(&format!("(%make-solar-inverter :id 9 {kwargs})"))
+            .unwrap();
+        assert_eq!(
+            cfg.site().get(9).unwrap().sunlight_reading().unwrap().expr,
+            Some("weather".into()),
+            "the rebuilt inverter follows the weather, not Manual(100)"
+        );
+    }
+
     /// `sunlight_reading` reads back the PV inverter's cloud-cover
     /// knob after `(set-solar-sunlight)` pokes in a constant.
     #[test]
@@ -888,6 +1008,63 @@ mod tests {
         cfg.eval("(setq sun-src 77.0)").unwrap();
         cfg.refresh_once();
         assert_eq!(inv.sunlight_reading().unwrap().value, 77.0);
+    }
+
+    /// The sunlight twin of
+    /// `scenario_stop_restores_a_constructed_power_kwarg_a_clear_dropped`:
+    /// a `:sunlight%`-built inverter whose FIRST touch inside the run
+    /// is the CLEAR, so the restored baseline can only have come from
+    /// the snapshot `clear-solar-sunlight` takes on its way in. The
+    /// clear is a user-intent verb — mid-run it really clears (the
+    /// source is `Follow`, "weather" marker and all, and the
+    /// `:sunlight%` kwarg is dropped so the inverter would save as
+    /// weather-following) — but a scenario only borrowed the knob, so
+    /// `(scenario-stop)` must put the Manual 40 back, markerless, with
+    /// its kwarg.
+    #[test]
+    fn scenario_stop_restores_a_constructed_sunlight_kwarg_a_clear_dropped() {
+        let (cfg, _dir) = config_with("(%make-solar-inverter :id 8 :sunlight% 40)");
+        let inv = cfg.site().get(8).unwrap();
+        let kwargs = || {
+            inv.constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(inv.sunlight_reading().unwrap().value, 40.0);
+        assert_eq!(
+            inv.sunlight_reading().unwrap().expr,
+            None,
+            "the constructed baseline is Manual, markerless"
+        );
+        assert!(kwargs().contains(":sunlight% 40"), "{}", kwargs());
+
+        cfg.eval("(scenario-start \"clear-sun\")").unwrap();
+        cfg.eval("(clear-solar-sunlight 8)").unwrap();
+        assert_eq!(
+            inv.sunlight_reading().unwrap().expr,
+            Some("weather".into()),
+            "the clear must really clear while the scenario runs"
+        );
+        assert!(
+            !kwargs().contains(":sunlight%"),
+            "the clear drops the constructed kwarg too: {}",
+            kwargs()
+        );
+
+        cfg.eval("(scenario-stop)").unwrap();
+        assert_eq!(inv.sunlight_reading().unwrap().value, 40.0);
+        assert_eq!(
+            inv.sunlight_reading().unwrap().expr,
+            None,
+            "back to Manual 40, not left following the weather"
+        );
+        assert!(
+            kwargs().contains(":sunlight% 40"),
+            "the constructed kwarg must come back, not just the live source: {}",
+            kwargs()
+        );
     }
 
     /// A meter with no baseline override (measuring its children):
