@@ -498,7 +498,11 @@ live telemetry bounds should each read. Likely answer: config bounds use
 rated P (=p_max=), telemetry keeps live-P. Check IEEE 1547-2018
 reactive-at-zero-P capability and typical nameplate Q ratings.
 
-*** TODO [#B] Reported PV bounds ignore sunlight curtailment :fidelity:bounds:
+*** CANCELLED [#B] Reported PV bounds ignore sunlight curtailment :fidelity:bounds:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-08-29 Sa 15:55] \\
+  Won't fix: real PV inverters advertise rated limits regardless of irradiance, so the sim reporting sun-limited bounds would be kinder than the field — a controller must face the same information gap it faces on real hardware. The sun band stays a per-tick dynamic clamp only (see SolarInverter::tick).
+:END:
 =SolarInverter::effective_active_bounds()= returns rated ∩ augmentation,
 so telemetry advertises e.g. =[-30 kW, 0]= at 50% sun while the inverter
 only delivers -15 kW. I1 made the *output* curtail to =min_avail_w=, but
