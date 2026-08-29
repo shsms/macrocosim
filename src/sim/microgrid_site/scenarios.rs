@@ -16,6 +16,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use crate::sim::component::{KnobKind, ReactiveReading};
 use crate::sim::scenario::{ScenarioCheck, ScenarioEvent};
 use crate::sim::scenario_csv::{CsvSink, CsvSinks};
 
@@ -237,14 +238,136 @@ impl MicrogridSite {
         let mut journal = self.inner.scenario.write();
         journal.start(name, now);
         journal.energy_baseline_wh = baseline;
+        drop(journal);
+        // Fresh run, fresh baseline — any knobs a PRIOR scenario
+        // displaced and never got to restore (a crash, a hot-reload)
+        // must not leak into this one's teardown.
+        self.inner.scenario_knob_baseline.write().clear();
+    }
+
+    /// Is a scenario RUNNING right now — started and not yet stopped?
+    /// The single source of truth for "a scenario is in progress":
+    /// `scenario_snapshot_knob` self-gates on it, and the Lisp side
+    /// reads the same answer rather than shadowing it with a flag of
+    /// its own.
+    pub(crate) fn scenario_is_running(&self) -> bool {
+        let g = self.inner.scenario.read();
+        g.started_at.is_some() && g.ended_at.is_none()
+    }
+
+    /// Capture `id`'s `kind` knob into the scenario's pre-run
+    /// baseline, first-snapshot-wins, so `scenario_stop` can put it
+    /// back exactly as it was before the scenario touched it — even
+    /// if the scenario re-drives the same knob many times in between.
+    /// No-op unless a scenario is currently RUNNING (`started_at` set,
+    /// `ended_at` unset): a snapshot taken outside a run has nothing
+    /// to restore against, and would otherwise sit in the map forever
+    /// waiting for a `scenario_stop` that never comes for it. Also a
+    /// no-op if `id` isn't registered or doesn't support `kind` — the
+    /// component's own `snapshot_knob` reports that via `None`.
+    ///
+    /// `#[allow(dead_code)]`: this is stage 1 of scenario teardown —
+    /// the Rust snapshot/restore machinery. Nothing calls this yet in
+    /// production; stage 2 wires it into the `(scenario-*)` /
+    /// `set-meter-power` &c. defun chokepoints that actually displace
+    /// a knob. Exercised directly by this module's own tests below in
+    /// the meantime.
+    #[allow(dead_code)]
+    pub(crate) fn scenario_snapshot_knob(&self, id: u64, kind: KnobKind) {
+        if !self.scenario_is_running() {
+            return;
+        }
+        let Some(component) = self.get(id) else {
+            return;
+        };
+        let mut baseline = self.inner.scenario_knob_baseline.write();
+        use std::collections::btree_map::Entry;
+        if let Entry::Vacant(slot) = baseline.entry((id, kind))
+            && let Some(snap) = component.snapshot_knob(kind)
+        {
+            slot.insert(snap);
+        }
     }
 
     /// Mark the scenario as ended at `now`. Also closes any active
     /// CSV sinks so the file flushes before a downstream loader
-    /// might pick it up. Idempotent.
+    /// might pick it up, and restores every knob a running scenario
+    /// displaced back to its pre-scenario baseline. Idempotent: the
+    /// baseline map is drained (`mem::take`) on the first call, so a
+    /// second `scenario_stop` finds it empty and restores/broadcasts
+    /// nothing.
+    ///
+    /// Lock order: the baseline map is drained under its own lock
+    /// BEFORE any component is touched — `restore_knob` and the
+    /// knob-reading calls below never run while that lock is held, so
+    /// there's no window where the baseline lock is held alongside a
+    /// component's own lock.
     pub(crate) fn scenario_stop(&self, now: DateTime<Utc>) {
         self.inner.scenario.write().stop(now);
         self.scenario_close_csv();
+        let baseline = std::mem::take(&mut *self.inner.scenario_knob_baseline.write());
+        for ((id, kind), snap) in baseline {
+            let Some(component) = self.get(id) else {
+                continue;
+            };
+            if !component.restore_knob(snap) {
+                continue;
+            }
+            self.broadcast_restored_knob(id, kind, component.as_ref());
+        }
+    }
+
+    /// Rebroadcast a `KnobChanged` for the token(s) `kind` corresponds
+    /// to, reading the freshly-restored value back off the component
+    /// — mirrors what the `clear-meter-*` / `set-meter-power-factor`
+    /// Lisp defuns broadcast on their own success paths, including the
+    /// meter-reactive axis's two-token aliasing (`meter-reactive-power`
+    /// AND `meter-power-factor` both go out, since a live reading is
+    /// exactly one shape or the other and the inspector's two inputs
+    /// both need to hear about it).
+    fn broadcast_restored_knob(
+        &self,
+        id: u64,
+        kind: KnobKind,
+        component: &dyn crate::sim::SimulatedComponent,
+    ) {
+        match kind {
+            KnobKind::MeterPower => {
+                let (value, expr) = match component.meter_power_reading() {
+                    Some(r) => (Some(r.value), r.expr),
+                    None => (None, None),
+                };
+                self.note_knob_changed(id, "meter-power", value, expr, None);
+            }
+            KnobKind::MeterReactive => match component.meter_reactive_reading() {
+                Some(ReactiveReading::Var(r)) => {
+                    self.note_knob_changed(id, "meter-reactive-power", Some(r.value), r.expr, None);
+                    self.note_knob_changed(id, "meter-power-factor", None, None, None);
+                }
+                Some(ReactiveReading::PowerFactor { pf, leading }) => {
+                    self.note_knob_changed(id, "meter-reactive-power", None, None, None);
+                    self.note_knob_changed(id, "meter-power-factor", Some(pf), None, Some(leading));
+                }
+                None => {
+                    self.note_knob_changed(id, "meter-reactive-power", None, None, None);
+                    self.note_knob_changed(id, "meter-power-factor", None, None, None);
+                }
+            },
+            KnobKind::Sunlight => {
+                let (value, expr) = match component.sunlight_reading() {
+                    Some(r) => (Some(r.value), r.expr),
+                    None => (None, None),
+                };
+                self.note_knob_changed(id, "solar-sunlight", value, expr, None);
+            }
+            KnobKind::BoilerDemand => {
+                let (value, expr) = match component.demand_reading() {
+                    Some(r) => (Some(r.value), r.expr),
+                    None => (None, None),
+                };
+                self.note_knob_changed(id, "boiler-demand", value, expr, None);
+            }
+        }
     }
 
     /// Append a journal event. Returns the assigned id.
@@ -387,6 +510,195 @@ impl MicrogridSite {
 #[cfg(test)]
 mod tests {
     use super::compute_soc_stats;
+    use crate::sim::component::KnobKind;
+    use crate::sim::dynamic_scalar::DynamicScalar;
+    use crate::sim::events::SiteEvent;
+    use crate::sim::meter::Meter;
+    use crate::sim::microgrid_site::MicrogridSite;
+    use chrono::Utc;
+    use std::time::Duration;
+
+    fn meter_with_power(id: u64, watts: f32) -> Meter {
+        Meter::new(
+            id,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(watts)),
+            None,
+            0.0,
+            false,
+        )
+    }
+
+    /// A snapshot taken outside a running scenario is a no-op: it
+    /// never lands in the baseline map, so a subsequent run that
+    /// itself takes no snapshot has nothing to restore — the
+    /// scenario's own drive is what's left standing after stop.
+    #[test]
+    fn snapshot_outside_a_running_scenario_is_a_noop() {
+        let w = MicrogridSite::new();
+        w.register(meter_with_power(1, 1000.0));
+        let now = Utc::now();
+
+        // No scenario running yet — this must not seed any baseline.
+        w.scenario_snapshot_knob(1, KnobKind::MeterPower);
+
+        w.scenario_start("s".into(), now);
+        // The scenario drives the meter WITHOUT ever snapshotting it.
+        w.get(1).unwrap().set_active_power_override(5000.0);
+        w.scenario_stop(now);
+
+        assert_eq!(
+            w.get(1).unwrap().meter_power_reading().unwrap().value,
+            5000.0,
+            "nothing was ever snapshotted this run, so stop must not touch the live value"
+        );
+    }
+
+    /// First-snapshot-wins: repeated `scenario_snapshot_knob` calls on
+    /// the same (id, kind) during one run keep the FIRST captured
+    /// value, and `scenario_stop` restores to it regardless of how
+    /// many times the scenario re-drove the knob in between.
+    #[test]
+    fn first_snapshot_wins_and_stop_restores_it() {
+        let w = MicrogridSite::new();
+        w.register(meter_with_power(2, 1200.0));
+        let now = Utc::now();
+
+        w.scenario_start("s2".into(), now);
+        w.scenario_snapshot_knob(2, KnobKind::MeterPower); // captures 1200.0
+        w.get(2).unwrap().set_active_power_override(3000.0);
+        w.scenario_snapshot_knob(2, KnobKind::MeterPower); // no-op: already captured
+        w.get(2).unwrap().set_active_power_override(7000.0);
+
+        w.scenario_stop(now);
+        assert_eq!(
+            w.get(2).unwrap().meter_power_reading().unwrap().value,
+            1200.0,
+            "restore must land on the FIRST snapshot, not an intermediate drive"
+        );
+    }
+
+    /// A second `scenario_stop` is a no-op: the baseline map was
+    /// already drained by the first call, so nothing is restored and
+    /// no `KnobChanged` is rebroadcast.
+    #[test]
+    fn second_scenario_stop_is_idempotent() {
+        let w = MicrogridSite::new();
+        w.register(meter_with_power(3, 1500.0));
+        let now = Utc::now();
+
+        w.scenario_start("s3".into(), now);
+        w.scenario_snapshot_knob(3, KnobKind::MeterPower);
+        w.get(3).unwrap().set_active_power_override(4000.0);
+        w.scenario_stop(now);
+        assert_eq!(
+            w.get(3).unwrap().meter_power_reading().unwrap().value,
+            1500.0
+        );
+
+        // Subscribe only AFTER the first stop's broadcasts have
+        // already gone out, so the receiver starts empty.
+        let mut rx = w.subscribe_events();
+        w.scenario_stop(now);
+        assert!(
+            rx.try_recv().is_err(),
+            "a second stop must not rebroadcast a restored knob"
+        );
+    }
+
+    /// `remove_component` prunes any baseline entry captured for that
+    /// id: a component re-registered under the same id during a
+    /// scenario run must not inherit a stale snapshot from the
+    /// component that used to hold that id.
+    #[test]
+    fn remove_component_prunes_the_knob_baseline() {
+        let w = MicrogridSite::new();
+        w.register(meter_with_power(4, 100.0));
+        let now = Utc::now();
+
+        w.scenario_start("s4".into(), now);
+        w.scenario_snapshot_knob(4, KnobKind::MeterPower); // baseline: 100.0
+        w.remove_component(4);
+        // Fresh component under the same id, never snapshotted this run.
+        w.register(meter_with_power(4, 555.0));
+        w.scenario_stop(now);
+
+        assert_eq!(
+            w.get(4).unwrap().meter_power_reading().unwrap().value,
+            555.0,
+            "the removed component's stale baseline must not restore onto the fresh one"
+        );
+    }
+
+    /// `reset()` clears the whole baseline map: a knob captured before
+    /// the reset must not resurface in a later run.
+    #[test]
+    fn reset_clears_the_knob_baseline() {
+        let w = MicrogridSite::new();
+        w.register(meter_with_power(5, 200.0));
+        let now = Utc::now();
+
+        w.scenario_start("s5".into(), now);
+        w.scenario_snapshot_knob(5, KnobKind::MeterPower);
+        w.get(5).unwrap().set_active_power_override(999.0);
+        w.reset();
+
+        w.register(meter_with_power(5, 777.0));
+        w.scenario_start("s6".into(), now);
+        // No snapshot taken in this fresh run.
+        w.scenario_stop(now);
+
+        assert_eq!(
+            w.get(5).unwrap().meter_power_reading().unwrap().value,
+            777.0,
+            "a pre-reset baseline must not resurrect after reset()"
+        );
+    }
+
+    /// Restoring a meter's reactive axis broadcasts BOTH
+    /// `meter-reactive-power` and `meter-power-factor` — the same
+    /// two-token aliasing `clear-meter-reactive` uses — and restoring
+    /// the active axis broadcasts only `meter-power`.
+    #[test]
+    fn stop_rebroadcasts_the_right_knob_tokens() {
+        use crate::sim::meter::ReactiveSource;
+
+        let w = MicrogridSite::new();
+        w.register(Meter::new(
+            6,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(8_000.0)),
+            Some(ReactiveSource::Var(DynamicScalar::constant(500.0))),
+            0.0,
+            false,
+        ));
+        let now = Utc::now();
+        w.scenario_start("s7".into(), now);
+        w.scenario_snapshot_knob(6, KnobKind::MeterPower);
+        w.scenario_snapshot_knob(6, KnobKind::MeterReactive);
+        w.get(6).unwrap().set_active_power_override(1_000.0);
+        w.get(6).unwrap().set_power_factor(0.8, true);
+
+        let mut rx = w.subscribe_events();
+        w.scenario_stop(now);
+
+        let mut saw_power = false;
+        let mut saw_reactive = false;
+        let mut saw_pf = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let SiteEvent::KnobChanged { id: 6, knob, .. } = ev {
+                match knob {
+                    "meter-power" => saw_power = true,
+                    "meter-reactive-power" => saw_reactive = true,
+                    "meter-power-factor" => saw_pf = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_power, "expected a meter-power KnobChanged");
+        assert!(saw_reactive, "expected a meter-reactive-power KnobChanged");
+        assert!(saw_pf, "expected a meter-power-factor KnobChanged");
+    }
 
     #[test]
     fn soc_stats_compute_on_typical_set() {

@@ -13,7 +13,7 @@ use crate::sim::{
     Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
     bounds::VecBounds,
-    component::ScalarReading,
+    component::{KnobKind, KnobSnapshot, ScalarReading},
     dynamic_scalar::DynamicScalar,
 };
 
@@ -325,6 +325,25 @@ impl SimulatedComponent for SteamBoiler {
         Some(self.cfg.target_bar)
     }
 
+    fn snapshot_knob(&self, kind: KnobKind) -> Option<KnobSnapshot> {
+        match kind {
+            KnobKind::BoilerDemand => Some(KnobSnapshot::BoilerDemand(
+                self.demand_source.read().clone(),
+            )),
+            _ => None,
+        }
+    }
+
+    fn restore_knob(&self, snap: KnobSnapshot) -> bool {
+        match snap {
+            KnobSnapshot::BoilerDemand(scalar) => {
+                *self.demand_source.write() = scalar;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn make_fn(&self) -> &'static str {
         "%make-steam-boiler"
     }
@@ -609,5 +628,43 @@ mod tests {
             .join(" ");
         assert!(!s2.contains(":demand"));
         assert!(b2.has_unrenderable_source());
+    }
+
+    /// Snapshot/restore round-trip for the boiler-demand knob — the
+    /// steam-boiler twin of the sunlight test: a dynamic source
+    /// survives a scenario collapsing it to a constant and back.
+    #[test]
+    fn snapshot_restore_round_trip_boiler_demand_dynamic_source() {
+        let mut ctx = tulisp::TulispContext::new();
+        let b = boiler(SteamBoilerConfig::default());
+        let lambda = ctx.eval_string("(lambda () 77.0)").unwrap();
+        let scalar = DynamicScalar::from_lisp(&lambda, 0.0).unwrap();
+        b.set_steam_demand_source(scalar);
+        let text_before = b.demand_reading().unwrap().expr;
+        assert!(text_before.is_some());
+
+        let snap = b.snapshot_knob(KnobKind::BoilerDemand).unwrap();
+
+        // A scenario collapses it to a constant.
+        assert!(b.set_steam_demand_kg_h(15.0));
+        assert!(b.demand_reading().unwrap().expr.is_none());
+        assert!(!b.has_unrenderable_source());
+
+        assert!(b.restore_knob(snap));
+        assert_eq!(b.demand_reading().unwrap().expr, text_before);
+        assert!(b.has_unrenderable_source(), "dynamic source restored");
+    }
+
+    /// The one mismatch case worth a test: `Sunlight` and
+    /// `BoilerDemand` carry the same payload — a bare `DynamicScalar`
+    /// — and are told apart only by their variant. A sunlight
+    /// snapshot handed to a boiler must be refused, not written into
+    /// its demand slot. Every other cross-knob pairing is refused by
+    /// the same single `match` on the variant.
+    #[test]
+    fn restore_knob_rejects_a_sunlight_snapshot() {
+        let b = boiler(SteamBoilerConfig::default());
+        assert!(!b.restore_knob(KnobSnapshot::Sunlight(DynamicScalar::constant(1.0))));
+        assert_eq!(b.demand_reading().unwrap().value, 0.0);
     }
 }

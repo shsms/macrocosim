@@ -14,7 +14,7 @@ use crate::sim::{
     Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
     bounds::VecBounds,
-    component::ScalarReading,
+    component::{KnobKind, KnobSnapshot, ScalarReading},
     dynamic_scalar::DynamicScalar,
     reactive::ReactiveCapability,
     runtime::Health,
@@ -392,6 +392,23 @@ impl SimulatedComponent for SolarInverter {
         })
     }
 
+    fn snapshot_knob(&self, kind: KnobKind) -> Option<KnobSnapshot> {
+        match kind {
+            KnobKind::Sunlight => Some(KnobSnapshot::Sunlight(self.sunlight_source.read().clone())),
+            _ => None,
+        }
+    }
+
+    fn restore_knob(&self, snap: KnobSnapshot) -> bool {
+        match snap {
+            KnobSnapshot::Sunlight(scalar) => {
+                *self.sunlight_source.write() = scalar;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn make_fn(&self) -> &'static str {
         "%make-solar-inverter"
     }
@@ -746,5 +763,33 @@ mod tests {
         let lambda = ctx.eval_string("(lambda () 40.0)").unwrap();
         inv.set_sunlight_source(DynamicScalar::from_lisp(&lambda, 80.0).unwrap());
         assert!(inv.has_unrenderable_source());
+    }
+
+    /// Snapshot/restore round-trip for the sunlight knob: a dynamic
+    /// (lambda) source survives being swapped out for a constant and
+    /// back — `is_dynamic()` and the printed source text both come
+    /// back exactly as they were, because `restore_knob` writes the
+    /// captured `DynamicScalar` object itself, not a re-parse of its
+    /// text.
+    #[test]
+    fn snapshot_restore_round_trip_sunlight_dynamic_source() {
+        let mut ctx = tulisp::TulispContext::new();
+        let inv = SolarInverter::new(1, Duration::from_secs(1), cfg_with_sun(50.0));
+        let lambda = ctx.eval_string("(lambda () 33.0)").unwrap();
+        let scalar = DynamicScalar::from_lisp(&lambda, 50.0).unwrap();
+        inv.set_sunlight_source(scalar);
+        let text_before = inv.sunlight_reading().unwrap().expr;
+        assert!(text_before.is_some());
+
+        let snap = inv.snapshot_knob(KnobKind::Sunlight).unwrap();
+
+        // A scenario collapses it to a constant.
+        inv.set_sunlight_pct(10.0);
+        assert!(inv.sunlight_reading().unwrap().expr.is_none());
+        assert!(!inv.has_unrenderable_source());
+
+        assert!(inv.restore_knob(snap));
+        assert_eq!(inv.sunlight_reading().unwrap().expr, text_before);
+        assert!(inv.has_unrenderable_source(), "dynamic source restored");
     }
 }

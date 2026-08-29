@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use tulisp::{TulispContext, TulispObject};
 
 /// How to resolve the source expression on each refresh.
+#[derive(Clone)]
 enum Source {
     /// Evaluate the expression as-is. Symbols deref to their variable
     /// value; arithmetic forms compute; numeric literals self-evaluate.
@@ -42,6 +43,29 @@ pub struct DynamicScalar {
     /// read-back never touches the `TulispObject` off the
     /// interpreter lock. `None` for constants.
     source_text: Option<String>,
+}
+
+/// Clones the cached value into a fresh atomic (loaded from the
+/// current bits, `Acquire` pairing with `set`'s `Release`) alongside
+/// the source and its printed text. The cached value and the atomic
+/// itself are independent after the clone: a `set` on one never
+/// touches the other. The `Source` it wraps is a different story —
+/// the `TulispObject` inside is itself `Clone`, an `Arc` bump under
+/// tulisp's sync feature, so a lambda's or symbol's underlying Lisp
+/// cell is deliberately SHARED between the original and the clone;
+/// that's what makes a lambda's closed-over state and a symbol's
+/// live binding still resolve correctly through either copy. Scenario
+/// teardown relies on the cached-value independence: a snapshot's
+/// cache has to be a standalone copy, not a second handle the
+/// scenario's own refreshes silently update out from under it.
+impl Clone for DynamicScalar {
+    fn clone(&self) -> Self {
+        Self {
+            cached: AtomicU32::new(self.cached.load(Ordering::Acquire)),
+            source: self.source.clone(),
+            source_text: self.source_text.clone(),
+        }
+    }
 }
 
 impl DynamicScalar {
@@ -290,6 +314,36 @@ mod tests {
     fn constant_has_no_source_text() {
         let s = DynamicScalar::constant(42.0);
         assert_eq!(s.source_text(), None);
+    }
+
+    /// A clone is an independent copy: it starts with the same
+    /// cached value and source text, and mutating one (`set`, or a
+    /// `refresh` that resolves a different result) does not leak
+    /// into the other.
+    #[test]
+    fn clone_is_independent_of_the_original() {
+        let mut ctx = TulispContext::new();
+        ctx.eval_string("(setq clone-src 10.0)").unwrap();
+        let sym = ctx.eval_string("'clone-src").unwrap();
+        let s = DynamicScalar::from_eval(sym, 0.0);
+        s.refresh(&mut ctx);
+        assert_eq!(s.get(), 10.0);
+
+        let cloned = s.clone();
+        assert_eq!(cloned.get(), 10.0);
+        assert_eq!(cloned.source_text(), s.source_text());
+        assert!(cloned.is_dynamic());
+
+        // Poking the original's cache doesn't touch the clone.
+        s.set(999.0);
+        assert_eq!(cloned.get(), 10.0);
+
+        // Re-resolving the clone independently picks up the live
+        // binding without disturbing the original's cache.
+        ctx.eval_string("(setq clone-src 20.0)").unwrap();
+        cloned.refresh(&mut ctx);
+        assert_eq!(cloned.get(), 20.0);
+        assert_eq!(s.get(), 999.0);
     }
 
     #[test]

@@ -3,7 +3,12 @@ use std::{fmt, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use tulisp::TulispContext;
 
-use crate::sim::{bounds::VecBounds, dynamic_scalar::DynamicScalar, microgrid_site::MicrogridSite};
+use crate::sim::{
+    bounds::VecBounds,
+    dynamic_scalar::DynamicScalar,
+    meter::{ConstructedReactive, ReactiveSource},
+    microgrid_site::MicrogridSite,
+};
 
 /// High-level kind of a component, mirroring the proto category enum but
 /// kept Rust-side so non-gRPC code does not need to depend on protobuf.
@@ -284,6 +289,64 @@ pub struct ScalarReading {
 pub enum ReactiveReading {
     Var(ScalarReading),
     PowerFactor { pf: f32, leading: bool },
+}
+
+/// Which driven knob a scenario snapshot call targets — the
+/// vocabulary [`SimulatedComponent::snapshot_knob`] keys on, the key
+/// type `MicrogridSite`'s per-scenario baseline map indexes by
+/// alongside the component id, and what teardown dispatches its
+/// `KnobChanged` broadcast on. Restore needs no `KnobKind`: a
+/// [`KnobSnapshot`] already names its own knob by variant.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum KnobKind {
+    MeterPower,
+    MeterReactive,
+    Sunlight,
+    BoilerDemand,
+}
+
+/// A captured knob value, ready to be written straight back into a
+/// component's slot(s) by [`SimulatedComponent::restore_knob`].
+/// Holds the live Rust objects (`DynamicScalar` / `ReactiveSource`),
+/// not their printed text: a lambda's closed-over state and a
+/// symbol's live binding can't be reconstructed by re-parsing a
+/// string, and restoring one has to hand back the exact object that
+/// was installed before the scenario touched it.
+///
+/// The meter variants carry BOTH the live source and the
+/// construction-time kwarg, captured as one paired snapshot: restore
+/// must write both, or a scenario-era `clear_active_power_source` /
+/// `clear_reactive_power_source` (which also drops the construction
+/// kwarg — "clear means cleared") would permanently lose the
+/// `:power` / `:reactive-power` a component was originally built
+/// with.
+pub enum KnobSnapshot {
+    /// Solar inverter sunlight %: the source slot is never optional
+    /// on this component (it's always at least a constant), so a bare
+    /// `DynamicScalar` is the whole story. Distinct from
+    /// [`Self::BoilerDemand`] despite the identical payload, so the
+    /// type — not a `kind` argument travelling alongside it — is what
+    /// keeps a boiler's snapshot from being written into an
+    /// inverter's slot.
+    Sunlight(DynamicScalar),
+    /// Steam boiler steam demand (kg/h): same shape as
+    /// [`Self::Sunlight`], different knob.
+    BoilerDemand(DynamicScalar),
+    /// Meter active-power axis: the live override (`None` when the
+    /// meter was measuring its children) plus the `:power` kwarg it
+    /// was constructed with, if any.
+    MeterActive {
+        source: Option<DynamicScalar>,
+        constructed: Option<f32>,
+    },
+    /// Meter reactive-power axis: the live override — `Var` or
+    /// `PowerFactor`, or `None` when the meter was measuring — plus
+    /// the `:reactive-power` / `:power-factor` kwarg it was
+    /// constructed with, if any.
+    MeterReactive {
+        source: Option<ReactiveSource>,
+        constructed: Option<ConstructedReactive>,
+    },
 }
 
 /// The single trait every simulated component implements.
@@ -637,6 +700,39 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// Steam boiler: install a Lisp-driven demand source that
     /// `refresh_inputs` re-resolves each tick.
     fn set_steam_demand_source(&self, _scalar: DynamicScalar) {}
+
+    // ── scenario teardown (snapshot / restore) ───────────────────────
+
+    /// Capture this component's `kind` knob so a later
+    /// [`Self::restore_knob`] can put it back exactly as it was.
+    /// Called by `MicrogridSite`'s scenario baseline map the first
+    /// time a scenario is about to displace a knob it hasn't already
+    /// snapshotted — so the very first capture, taken before the
+    /// scenario's own drive, is what teardown restores to, no matter
+    /// how many times the scenario re-drives the same knob
+    /// afterward. `None` when this component has no such knob (the
+    /// default) — the caller treats that as "nothing to snapshot",
+    /// not an error.
+    fn snapshot_knob(&self, _kind: KnobKind) -> Option<KnobSnapshot> {
+        None
+    }
+
+    /// Write a previously captured [`KnobSnapshot`] straight back
+    /// into the component's slot(s). Mechanical, unlike
+    /// [`Self::clear_active_power_source`] /
+    /// [`Self::clear_reactive_power_source`] — those are user-intent
+    /// verbs that also drop the construction-time kwarg, which would
+    /// permanently erase a `:power` a scenario merely overrode for
+    /// its own duration.
+    ///
+    /// `snap`'s variant names the knob on its own — there is one per
+    /// [`KnobKind`], so a boiler-demand snapshot handed to a solar
+    /// inverter simply doesn't match its arm. Returns `false` when
+    /// `snap` names nothing this component owns (including "this
+    /// component has no such knob at all", the default).
+    fn restore_knob(&self, _snap: KnobSnapshot) -> bool {
+        false
+    }
 
     // ── bounds telemetry ─────────────────────────────────────────────
 

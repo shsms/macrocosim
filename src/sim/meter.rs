@@ -6,7 +6,7 @@ use tulisp::TulispContext;
 
 use crate::sim::{
     Category, MicrogridSite, SimulatedComponent, Telemetry,
-    component::{ReactiveReading, ScalarReading},
+    component::{KnobKind, KnobSnapshot, ReactiveReading, ScalarReading},
     dynamic_scalar::DynamicScalar,
 };
 
@@ -14,6 +14,7 @@ use crate::sim::{
 /// `:power` active-power source. Either a direct VAr value (constant,
 /// lambda, or symbol) or a derivation from the meter's own live P via
 /// a power factor.
+#[derive(Clone)]
 pub enum ReactiveSource {
     /// VArs directly: constant, lambda, or symbol.
     Var(DynamicScalar),
@@ -27,8 +28,20 @@ pub enum ReactiveSource {
 /// The reactive source's construction-time freeze — the Q twin of
 /// `constructed_power`. `None` when the meter was built with no
 /// reactive source, or with a dynamic (lambda / symbol) `Var`.
+// `pub`, not `pub(crate)`: `KnobSnapshot::MeterReactive` (a variant of
+// the `pub` `KnobSnapshot` enum, since it appears in the `pub trait
+// SimulatedComponent`'s `snapshot_knob` / `restore_knob` signatures)
+// carries this type, and an enum's variant fields can't be less
+// visible than the enum itself — the `pub trait` signature forces
+// `pub` here regardless of what the `meter` module itself does with
+// its own visibility. This crate is unpublished (it has a `lib.rs`,
+// but nothing outside this workspace depends on it), so there's no
+// external downstream to leak the type to; the module-privacy trick
+// that keeps `DynamicScalar` (declared in a `pub(crate) mod
+// dynamic_scalar`) off this crate's public API doesn't apply here,
+// since `sim/mod.rs` declares `pub mod meter`.
 #[derive(Clone, Copy)]
-enum ConstructedReactive {
+pub enum ConstructedReactive {
     Var(f32),
     PowerFactor { pf: f32, leading: bool },
 }
@@ -351,6 +364,60 @@ impl SimulatedComponent for Meter {
 
     fn is_hidden(&self) -> bool {
         self.hidden
+    }
+
+    fn snapshot_knob(&self, kind: KnobKind) -> Option<KnobSnapshot> {
+        match kind {
+            KnobKind::MeterPower => {
+                // Same paired-guard order `clear_active_power_source`
+                // writes under (constructed then source), so a
+                // concurrent poke can't be observed torn between the
+                // two fields of the snapshot.
+                let constructed = self.constructed_power.read();
+                let source = self.power_source.read();
+                Some(KnobSnapshot::MeterActive {
+                    source: source.clone(),
+                    constructed: *constructed,
+                })
+            }
+            KnobKind::MeterReactive => {
+                let constructed = self.constructed_reactive.read();
+                let source = self.reactive_source.read();
+                Some(KnobSnapshot::MeterReactive {
+                    source: source.clone(),
+                    constructed: *constructed,
+                })
+            }
+            KnobKind::Sunlight | KnobKind::BoilerDemand => None,
+        }
+    }
+
+    fn restore_knob(&self, snap: KnobSnapshot) -> bool {
+        match snap {
+            KnobSnapshot::MeterActive {
+                source,
+                constructed,
+            } => {
+                // Write both under the guards held together, matching
+                // `clear_active_power_source`'s ABBA-safe pairing.
+                let mut c = self.constructed_power.write();
+                let mut s = self.power_source.write();
+                *c = constructed;
+                *s = source;
+                true
+            }
+            KnobSnapshot::MeterReactive {
+                source,
+                constructed,
+            } => {
+                let mut c = self.constructed_reactive.write();
+                let mut s = self.reactive_source.write();
+                *c = constructed;
+                *s = source;
+                true
+            }
+            _ => false,
+        }
     }
 
     fn make_fn(&self) -> &'static str {
@@ -1013,5 +1080,106 @@ mod tests {
         assert!(m.clear_reactive_power_source());
         assert!((m.aggregate_power_w(&w) - 500.0).abs() < 1e-3);
         assert!((m.aggregate_reactive_var(&w) - 50.0).abs() < 1e-3);
+    }
+
+    /// A meter constructed with `:power`, then driven by a scenario
+    /// installing a dynamic source: `restore_knob` must bring back
+    /// BOTH the live constant source AND the `:power` constructor
+    /// kwarg — restore is not `clear_active_power_source`, which
+    /// would drop the kwarg for good.
+    #[test]
+    fn snapshot_restore_round_trip_meter_active_constructed_then_driven() {
+        let m = Meter::new(
+            1,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(1875.0)),
+            None,
+            0.0,
+            false,
+        );
+        let snap = m.snapshot_knob(KnobKind::MeterPower).unwrap();
+
+        // A scenario displaces it with a dynamic source.
+        let mut ctx = tulisp::TulispContext::new();
+        let lambda = ctx.eval_string("(lambda () 42.0)").unwrap();
+        m.set_active_power_source(DynamicScalar::from_lisp(&lambda, 0.0).unwrap());
+        assert!(m.meter_power_reading().unwrap().expr.is_some());
+
+        assert!(m.restore_knob(snap));
+        assert_eq!(m.meter_power_reading().unwrap().value, 1875.0);
+        assert!(m.meter_power_reading().unwrap().expr.is_none());
+        assert!(!m.has_unrenderable_source());
+        let kw = m
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(kw.contains(":power 1875.0"), "{kw}");
+    }
+
+    /// A meter with NO reactive override snapshots as empty; after a
+    /// scenario fakes one in, restore puts it back to measuring —
+    /// and, crucially, never touches the unrelated active axis's own
+    /// constructed `:power` kwarg.
+    #[test]
+    fn snapshot_restore_round_trip_meter_reactive_empty_baseline() {
+        let m = Meter::new(
+            1,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(1875.0)),
+            None,
+            0.0,
+            false,
+        );
+        let snap = m.snapshot_knob(KnobKind::MeterReactive).unwrap();
+        assert!(m.meter_reactive_reading().is_none());
+
+        m.set_fixed_reactive_power(500.0);
+        assert!(m.meter_reactive_reading().is_some());
+
+        assert!(m.restore_knob(snap));
+        assert!(
+            m.meter_reactive_reading().is_none(),
+            "reactive axis must go back to measuring"
+        );
+        let kw = m
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            kw.contains(":power 1875.0"),
+            "restoring the reactive axis must not disturb the active axis's kwarg: {kw}"
+        );
+    }
+
+    /// Baseline `Var`, scenario overrides to `PowerFactor`, restore
+    /// brings back `Var` — the whole `ReactiveSource` enum round-trips,
+    /// not just the numeric value.
+    #[test]
+    fn snapshot_restore_round_trip_meter_reactive_pf_to_var() {
+        let m = Meter::new(
+            1,
+            Duration::from_secs(1),
+            None,
+            Some(ReactiveSource::Var(DynamicScalar::constant(500.0))),
+            0.0,
+            false,
+        );
+        let snap = m.snapshot_knob(KnobKind::MeterReactive).unwrap();
+
+        assert!(m.set_power_factor(0.8, true));
+        match m.meter_reactive_reading().unwrap() {
+            ReactiveReading::PowerFactor { .. } => {}
+            ReactiveReading::Var(_) => panic!("expected PowerFactor after the scenario override"),
+        }
+
+        assert!(m.restore_knob(snap));
+        match m.meter_reactive_reading().unwrap() {
+            ReactiveReading::Var(r) => assert_eq!(r.value, 500.0),
+            ReactiveReading::PowerFactor { .. } => panic!("expected Var after restore"),
+        }
     }
 }

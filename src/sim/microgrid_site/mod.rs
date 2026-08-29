@@ -10,7 +10,7 @@
 //! invokes `SimulatedComponent::tick` on each.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -25,7 +25,9 @@ use tokio::sync::broadcast;
 
 use crate::sim::EnergyAccum;
 use crate::sim::component::OperationalMode;
-use crate::sim::component::{ComponentHandle, FIRST_AUTO_ID, SimulatedComponent};
+use crate::sim::component::{
+    ComponentHandle, FIRST_AUTO_ID, KnobKind, KnobSnapshot, SimulatedComponent,
+};
 use crate::sim::events::{EVENT_BUS_CAPACITY, SiteEvent};
 use crate::sim::history::ComponentHistory;
 use crate::sim::runtime::{CommandMode, ComponentRuntime, Health, TelemetryMode};
@@ -179,6 +181,27 @@ struct MicrogridSiteInner {
     /// outlive an `eval_file` call and the gRPC server reads from
     /// it via `MicrogridSite::scenario_*`.
     scenario: RwLock<ScenarioJournal>,
+    /// Pre-scenario baseline for every driven knob a running scenario
+    /// has displaced — first-snapshot-wins per `(component id, knob
+    /// kind)`, so a scenario that re-drives the same knob repeatedly
+    /// still restores to what was there *before the scenario started*,
+    /// not to some intermediate value. Populated by
+    /// `scenario_snapshot_knob`; cleared on `scenario_start`; drained
+    /// (and each entry written back) on `scenario_stop`. Pruned
+    /// per-component alongside `energy_baseline_wh` so a removed-then-
+    /// re-registered id never restores a stale snapshot.
+    ///
+    /// Lock-order invariant: this lock is always taken BEFORE any
+    /// component's own knob lock, never the reverse.
+    /// `scenario_snapshot_knob` holds this map's write guard across
+    /// the call into `component.snapshot_knob` — safe only because
+    /// every caller respects this as the strict outer lock, so no
+    /// path ever holds a component lock first and then reaches for
+    /// this one. `scenario_stop` keeps to the same order by design:
+    /// it drains the whole map (dropping this lock) before touching
+    /// any component via `restore_knob`, rather than holding it
+    /// across the restore loop.
+    scenario_knob_baseline: RwLock<BTreeMap<(u64, KnobKind), KnobSnapshot>>,
     /// Per-component CSV sinks active during the scenario.
     /// Populated by `(scenario-record-csv DIR)`; drained on
     /// `(scenario-stop-csv)` or implicitly by `scenario-stop`.
@@ -243,6 +266,7 @@ impl MicrogridSite {
                 events: broadcast::channel(EVENT_BUS_CAPACITY).0,
                 timeout_tracker: TimeoutTracker::new(),
                 scenario: RwLock::new(ScenarioJournal::default()),
+                scenario_knob_baseline: RwLock::new(BTreeMap::new()),
                 scenario_csv: RwLock::new(CsvSinks::new()),
                 scenario_setpoints_csv: RwLock::new(CsvSinks::new()),
                 scenario_bounds_csv: RwLock::new(CsvSinks::new()),
@@ -569,6 +593,10 @@ impl MicrogridSite {
         // energy cursor would integrate the removal-to-reregister gap).
         self.inner.component_energy.write().remove(&id);
         self.inner.scenario.write().energy_baseline_wh.remove(&id);
+        self.inner
+            .scenario_knob_baseline
+            .write()
+            .retain(|(cid, _), _| *cid != id);
         self.inner.histories.write().remove(&id);
         self.inner.setpoint_logs.write().remove(&id);
         // Same rationale for the setpoint deadlines: a removal that
@@ -904,6 +932,7 @@ impl MicrogridSite {
         // resetting a command the NEW run accepted.
         self.inner.timeout_tracker.clear();
         *self.inner.scenario.write() = ScenarioJournal::default();
+        self.inner.scenario_knob_baseline.write().clear();
         // `clear()` drops every sink; each BufWriter flushes on drop.
         self.inner.scenario_csv.write().clear();
         self.inner.scenario_setpoints_csv.write().clear();
@@ -938,6 +967,10 @@ impl MicrogridSite {
         // under this id restarts its accumulator at zero, and subtracting
         // the old baseline would read negative energy.
         self.inner.scenario.write().energy_baseline_wh.remove(&id);
+        self.inner
+            .scenario_knob_baseline
+            .write()
+            .retain(|(cid, _), _| *cid != id);
         self.inner.runtime.write().remove(&id);
         self.inner.operational_modes.write().remove(&id);
         self.inner.setpoint_logs.write().remove(&id);
