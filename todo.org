@@ -61,6 +61,14 @@ Coverage note [2026-08-25]: include the redesigned component inspector
 (docs/superpowers/specs/2026-08-25-inspector-redesign-design.md) —
 its browser-side behaviour ships untested until this harness lands.
 
+Update 2026-08-29: tools/ui-smoke/live-topology.mjs is now a
+~230-assertion Playwright smoke covering topology, inspector,
+formula/metrics panels, import dialog, and the steam boiler — much
+of what this entry envisioned, though as one monolithic script with
+no CI wiring. Remaining value here: restructure into a proper
+tests-browser/ project (per-area specs, parallel projects) if and
+when the monolith gets painful. B4 (CI) is where the leverage is.
+
 *** TODO B2. Scenario flow + REPL interaction tests                 :testing:
 
 Build on B1 to cover the more state-ful flows.
@@ -81,6 +89,10 @@ Build on B1 to cover the more state-ful flows.
 
 Acceptance: each flow runs deterministically when the server is
 fresh; tests don't share state between runs.
+
+Update 2026-08-29: partially covered — the live smoke exercises
+scenario compile paths (drive-boiler) and REPL eval; dedicated
+scenario-flow browser tests remain unwritten.
 
 *** TODO [#A] B3. Visual regression on a small set of stable views  :testing:
 
@@ -1435,7 +1447,7 @@ Jump to any component by name/id (select + reveal), switch
 microgrid/subview, run a scenario, eval a snippet. (Medium. Top-3
 pick.)
 
-** TODO Dashboard power-flow card                                 :ux:design:
+** TODO Power-flow card as a floating panel                       :ux:design:
 :LOGBOOK:
 - State "TODO"       from              [2026-08-20 Do 15:12]
 :END:
@@ -1444,7 +1456,11 @@ Sankey-ish tile: grid <-> site, PV -> load/battery, battery <-> load
 with live numbers on the arrows — "where is the power going" at a
 glance instead of assembling it from seven tiles. (Medium-large.)
 
-** TODO Dashboard alert strip                                            :ux:
+Retitled 2026-08-29: the Dashboard subview this targeted was removed
+on 2026-08-27; the idea now lands as a floating panel on the
+topology canvas (formula-explorer pattern), not a subview tile.
+
+** TODO Alert strip: surface components needing attention               :ux:
 :LOGBOOK:
 - State "TODO"       from              [2026-08-20 Do 15:12]
 :END:
@@ -1452,6 +1468,10 @@ glance instead of assembling it from seven tiles. (Medium-large.)
 Components in error/standby as chips at the top of the dashboard
 with jump-to-node links; today the signal hides in pulse-bar counts.
 (Small.)
+
+Retitled 2026-08-29: the Dashboard subview is gone; if built, this
+is a canvas overlay/panel (or pill-level badging), not a Dashboard
+strip.
 
 ** TODO Scenario run timeline                                     :ux:design:
 :LOGBOOK:
@@ -1760,3 +1780,98 @@ moves that edge without re-running the clamp on already-open panels -
 their applied translate survives the reflow unchecked. A resize
 listener re-running the sanitize on open panels would probably cover
 it. Not investigated yet - recorded from live use on 2026-08-28.
+
+* Review backlog — 2026-08-29
+** TODO Reactive knob smoke check fails: knob commits on Enter, smoke sends change :ui:testing:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+The standing red check "e2e: the reactive knob writes through to the
+sim" in tools/ui-smoke/live-topology.mjs: the inspector knob input
+commits on Enter-keydown, while the smoke dispatches a =change=
+event, which the knob ignores. Decide the intended UX (should blur/
+change also commit?) and align either the knob or the smoke; the
+suite has carried this one FAIL since 2026-08-27.
+
+** TODO Floating panels: reopen inside the resize debounce ratchets the stored size cap :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+Closing and reopening a panel within the ~200 ms gripper-to-cap
+conversion window can overwrite the stored height cap
+(sw-panel-size-<name>) with the transient value. From the
+2026-08-27 metrics-panel review; low frequency, real ratchet.
+
+** TODO Floating panels: fitted position doesn't spring back when the window re-widens :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+The debounced resize re-sanitize mutates the in-session p.pos with
+persist=false, so storage keeps the user intent — but within the
+session, re-widening the window leaves the panel at the fitted
+position instead of restoring the stored one. Reload restores.
+
+** TODO Floating panels: cascade slot reuse can overlap two panels       :ux:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+The open-time cascade offsets (CASCADE_BASE/STEP) can hand two
+panels the same slot after closes/reopens, stacking them exactly on
+top of each other. Needs a smarter free-slot pick.
+
+** TODO Panel MIN_HEIGHT constant duplicated in JS and CSS       :ui:cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+side-panel.js and style.css each carry the panel minimum height;
+they can drift. Single-source it (CSS custom property read from JS,
+or generated).
+
+** TODO SPA structural cleanups: alive-token helpers, store-panel coupling, fmtValue dedup :ui:cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+Three approved-in-principle refactors from the 2026-08-27/28 rounds:
+merge the chartsAliveToken / snapshotAliveToken idiom into one
+helper; decouple metrics-store's reseed gating from side-panel's
+isPanelOpen; dedupe fmtValue vs formatScaled. Behavior-neutral
+batch, needs its own review pass.
+
+** TODO SteamBoiler::new accepts configs that panic in tick   :rust:fidelity:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+The Lisp door validates max-bar >= target-bar > 0, but the pub
+=SteamBoiler::new= does not — a config with =max_bar < target_bar=
+(or a subnormal max) makes the pressure =clamp()= panic inside the
+tick loop. Guard in =new= (clamp or error) like EvCharger's
+=warn_if_overwide=. While there: the NaN-demand sanitize branch in
+=tick= has no test (only negative demand is covered).
+
+** TODO Runtime knob pokes don't round-trip into saved worlds :microgrid-files:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+=constructor_kwargs= renders construction-time values: poke solar
+sunlight or boiler demand at runtime (inspector knob, defun), save
+the world, reload — the poke is gone. Dynamic sources are omitted
+by design (=has_unrenderable_source=), but plain numeric pokes
+could round-trip if the renderer read the live source instead of
+cfg. Decide per-knob whether live-value serialization is wanted.
+
+** TODO swctl short_category prints ? for several categories    :api:cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 06:47]
+:END:
+
+=short_category= now labels boilers, but Converter, HVAC, Breaker,
+PowerTransformer, WindTurbine (and any other lifted category) still
+fall to the "?" catch-all in swctl's listing output.
