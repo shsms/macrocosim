@@ -82,7 +82,20 @@ impl SunlightSource {
 pub struct SolarInverterConfig {
     pub rated_lower_w: f32,
     pub rated_upper_w: f32,
-    pub sunlight_pct: f32,
+    /// Where the sunlight slot starts, in one field:
+    ///
+    /// - `None` — follow the site's weather
+    ///   ([`SunlightSource::Follow`]), shaped by
+    ///   [`Self::weather_lag`] and [`Self::weather_jitter_pct`].
+    /// - `Some(v)` — start driven at `v` percent
+    ///   ([`SunlightSource::Manual`]).
+    ///
+    /// Defaults to `Some(100.0)`: an inverter built without saying
+    /// anything about weather keeps the historical full-sun constant,
+    /// so nothing that never heard of weather changes behaviour. The
+    /// Lisp door maps an absent `:sunlight%` to `None` — the absent
+    /// kwarg *is* how a weather-following inverter renders.
+    pub sunlight_pct: Option<f32>,
     pub command_delay: Duration,
     pub ramp_rate_w_per_s: f32,
     pub stream_jitter_pct: f32,
@@ -100,12 +113,6 @@ pub struct SolarInverterConfig {
     /// (a dynamic source can't round-trip as a static number) rather
     /// than write out `sunlight_pct`'s stale fallback value.
     pub sunlight_dynamic: bool,
-    /// Start the sunlight slot as [`SunlightSource::Follow`] — the
-    /// inverter tracks the site's weather instead of a constant.
-    /// Default **false**: an inverter built without an explicit
-    /// opt-in keeps the historical `Manual(sunlight_pct)` slot, so
-    /// nothing that never heard of weather changes behaviour.
-    pub sunlight_follow: bool,
     /// How far behind the sky a `Follow` source samples — the array
     /// sees `weather_pct_at(now - weather_lag)`. Zero by default.
     /// This is the only copy of the number: `resolve_sunlight` reads
@@ -127,7 +134,7 @@ impl Default for SolarInverterConfig {
         Self {
             rated_lower_w: -30_000.0,
             rated_upper_w: 0.0,
-            sunlight_pct: 100.0,
+            sunlight_pct: Some(100.0),
             command_delay: Duration::ZERO,
             ramp_rate_w_per_s: f32::INFINITY,
             stream_jitter_pct: 0.0,
@@ -135,7 +142,6 @@ impl Default for SolarInverterConfig {
             reactive_command_delay: Duration::from_millis(100),
             reactive_ramp_rate_var_per_s: 2000.0,
             sunlight_dynamic: false,
-            sunlight_follow: false,
             weather_lag: Duration::ZERO,
             weather_jitter_pct: 0.0,
             array_peak_w: 30_000.0,
@@ -182,19 +188,13 @@ pub struct SolarInverter {
 
 impl SolarInverter {
     pub fn new(id: u64, interval: Duration, cfg: SolarInverterConfig) -> Self {
-        let source = if cfg.sunlight_follow {
-            SunlightSource::Follow
-        } else {
-            SunlightSource::manual(DynamicScalar::constant(cfg.sunlight_pct))
+        let source = match cfg.sunlight_pct {
+            None => SunlightSource::Follow,
+            Some(pct) => SunlightSource::manual(DynamicScalar::constant(pct)),
         };
-        // Whatever the slot starts at, not `cfg.sunlight_pct` blindly:
-        // a `Follow` slot starts at the cache's full-sun seed, which
-        // need not be the (unused) `sunlight_pct` fallback.
-        let init_pct = if cfg.sunlight_follow {
-            SUNLIGHT_SEED_PCT
-        } else {
-            cfg.sunlight_pct
-        };
+        // Whatever the slot starts at: a `Follow` slot starts at the
+        // cache's full-sun seed, a driven one at its constant.
+        let init_pct = cfg.sunlight_pct.unwrap_or(SUNLIGHT_SEED_PCT);
         let active = PowerAxis::new(AxisConfig {
             rated: Some((cfg.rated_lower_w, cfg.rated_upper_w)),
             caps: None,
@@ -618,14 +618,27 @@ impl SimulatedComponent for SolarInverter {
             // expression to lose, so reporting it unrenderable would
             // block a save over a slot that renders perfectly.
             SunlightSource::Follow => false,
-            // A dynamic sunlight source has no static number to
-            // write. Both spellings count: constructed dynamic (which
+            // Three ways a driven slot outruns what can be written
+            // back. The first two are dynamic sources, which have no
+            // static number at all: constructed dynamic (which
             // `constructor_kwargs` already omits `:sunlight%` for)
             // and a runtime `(set-solar-sunlight ID (lambda …))`
             // poke, whose expression the generated block cannot carry
             // either — the same case Meter reports for
             // `set-meter-power`.
-            SunlightSource::Manual(s) => self.cfg.sunlight_dynamic || s.is_dynamic(),
+            //
+            // The third is a plain CONSTANT poked over an inverter
+            // built with no `:sunlight%` at all (`sunlight_pct` is
+            // `None`). There is a number to write, but nowhere to
+            // write it from: the renderer emits the constructed
+            // kwarg, and this inverter never had one, so the poke
+            // would be dropped silently and the saved file would come
+            // back following the weather. Meter says the same thing
+            // the same way, with `constructed_power.is_none() &&
+            // power_source.is_some()`.
+            SunlightSource::Manual(s) => {
+                self.cfg.sunlight_dynamic || s.is_dynamic() || self.cfg.sunlight_pct.is_none()
+            }
         }
     }
 
@@ -643,16 +656,19 @@ impl SimulatedComponent for SolarInverter {
         });
         // A dynamic sunlight source can't round-trip as a static
         // number — the renderer omits :sunlight% entirely rather
-        // than writing the (possibly stale) fallback value. A
-        // `Follow` source omits it too, but for the opposite reason:
-        // the absent kwarg is precisely what a reload reads back as
-        // "this inverter follows the weather".
+        // than writing the (possibly stale) fallback value. An
+        // inverter built to follow the weather (`sunlight_pct: None`)
+        // omits it too, but for the opposite reason: the absent kwarg
+        // is precisely what a reload reads back as "this inverter
+        // follows the weather". A slot driven to a constant at
+        // runtime also omits it, since there is no constructed number
+        // to write.
         let manual = matches!(&*self.sunlight_source.read(), SunlightSource::Manual(_));
-        if !self.cfg.sunlight_dynamic && manual {
-            kw.push((
-                ":sunlight%",
-                crate::lisp::lisp_float32(self.cfg.sunlight_pct),
-            ));
+        if let Some(pct) = self.cfg.sunlight_pct
+            && !self.cfg.sunlight_dynamic
+            && manual
+        {
+            kw.push((":sunlight%", crate::lisp::lisp_float32(pct)));
         }
         // Only write :array-peak-w when it diverges from the matched-array
         // default (|rated-lower|) — a matched config round-trips with
@@ -690,7 +706,7 @@ mod tests {
         SolarInverterConfig {
             rated_lower_w: -10_000.0,
             rated_upper_w: 0.0,
-            sunlight_pct: pct,
+            sunlight_pct: Some(pct),
             ramp_rate_w_per_s: f32::INFINITY,
             array_peak_w: 10_000.0,
             ..Default::default()
@@ -746,7 +762,7 @@ mod tests {
         let cfg = SolarInverterConfig {
             rated_lower_w: -30_000.0,
             rated_upper_w: 0.0,
-            sunlight_pct: 80.0,
+            sunlight_pct: Some(80.0),
             array_peak_w: 45_000.0,
             ramp_rate_w_per_s: f32::INFINITY,
             ..Default::default()
@@ -979,7 +995,7 @@ mod tests {
         let cfg = SolarInverterConfig {
             rated_lower_w: -30_000.0,
             rated_upper_w: 0.0,
-            sunlight_pct: 10.0, // → only -3 kW available
+            sunlight_pct: Some(10.0), // → only -3 kW available
             ramp_rate_w_per_s: f32::INFINITY,
             ..Default::default()
         };
@@ -1051,6 +1067,48 @@ mod tests {
         let lambda = ctx.eval_string("(lambda () 40.0)").unwrap();
         inv.set_sunlight_source(DynamicScalar::from_lisp(&lambda, 80.0).unwrap());
         assert!(inv.has_unrenderable_source());
+    }
+
+    /// The other unwritable poke, and the one a lambda check alone
+    /// misses: a plain CONSTANT driven over an inverter built with no
+    /// `:sunlight%` at all. The number is perfectly renderable in the
+    /// abstract, but this inverter has no constructed `:sunlight%`
+    /// for the renderer to write it into — `constructor_kwargs` omits
+    /// the kwarg, so a save would drop the poke and reload as a
+    /// weather-following inverter. Reporting it unrenderable is what
+    /// makes that loss visible instead of silent, exactly as Meter
+    /// does for a `set-meter-power` over a meter built without
+    /// `:power`.
+    #[test]
+    fn a_constant_poked_over_a_follow_built_inverter_reports_unrenderable() {
+        let inv = SolarInverter::new(
+            7,
+            Duration::from_secs(1),
+            SolarInverterConfig {
+                sunlight_pct: None,
+                ..Default::default()
+            },
+        );
+        assert!(
+            !inv.has_unrenderable_source(),
+            "following the weather renders by omission",
+        );
+
+        SolarInverter::set_sunlight_pct(&inv, 30.0);
+        assert!(
+            inv.has_unrenderable_source(),
+            "a constant with no constructed kwarg to carry it",
+        );
+        let s = inv
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, _)| *k)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            !s.contains(":sunlight%"),
+            "…and the renderer really has nowhere to put it, got {s}",
+        );
     }
 
     /// `cfg.sunlight_dynamic` is sticky — it records how the inverter
@@ -1127,7 +1185,7 @@ mod tests {
             1,
             Duration::from_secs(1),
             SolarInverterConfig {
-                sunlight_follow: true,
+                sunlight_pct: None,
                 ..Default::default()
             },
         );
@@ -1189,7 +1247,7 @@ mod tests {
             1,
             Duration::from_secs(1),
             SolarInverterConfig {
-                sunlight_follow: true,
+                sunlight_pct: None,
                 ..Default::default()
             },
         ));
@@ -1241,7 +1299,7 @@ mod tests {
             1,
             Duration::from_secs(1),
             SolarInverterConfig {
-                sunlight_follow: true,
+                sunlight_pct: None,
                 weather_lag: Duration::from_secs(3_600),
                 ..Default::default()
             },
@@ -1277,7 +1335,7 @@ mod tests {
             1,
             Duration::from_secs(1),
             SolarInverterConfig {
-                sunlight_follow: true,
+                sunlight_pct: None,
                 weather_jitter_pct: 50.0,
                 ..Default::default()
             },
@@ -1311,7 +1369,7 @@ mod tests {
             1,
             Duration::from_secs(1),
             SolarInverterConfig {
-                sunlight_follow: true,
+                sunlight_pct: None,
                 ..Default::default()
             },
         );
@@ -1336,7 +1394,7 @@ mod tests {
             1,
             Duration::from_secs(1),
             SolarInverterConfig {
-                sunlight_follow: true,
+                sunlight_pct: None,
                 ..Default::default()
             },
         );

@@ -149,6 +149,9 @@ AsPlist! {
         /// Cloud-cover percentage. May be a number, a lambda, or a
         /// symbol — see [`crate::sim::dynamic_scalar::DynamicScalar::from_lisp`].
         /// Resolved each tick via the scheduler's pre-tick hook.
+        /// Leaving it out is the opt-in to the site's weather: the
+        /// inverter tracks the sky instead of a driven number, shaped
+        /// by `:weather-lag-s` / `:weather-jitter-pct`.
         sunlight_pct<":sunlight%">: Option<LispValue> {= None},
         rated_lower<":rated-lower">: Option<f64> {= None},
         rated_upper<":rated-upper">: Option<f64> {= None},
@@ -465,27 +468,33 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             // :sunlight% accepts a number, lambda, or symbol. Number
             // seeds the initial ramp target on `cfg.sunlight_pct`;
             // lambda / symbol installs a dynamic source that takes
-            // effect on the first `refresh_inputs`. The wrapper-
+            // effect on the first `refresh_inputs`, over a constant
+            // slot still holding the default fallback. The wrapper-
             // expanded category default lands in `a.sunlight_pct`
             // already; per-component plist overrides via last-wins.
             let mut dynamic_sunlight: Option<DynamicScalar> = None;
-            if let Some(v) = a.sunlight_pct.as_ref() {
-                let raw = v.as_inner();
-                if raw.numberp() {
-                    if let Ok(pct) = f64::try_from(raw) {
-                        cfg.sunlight_pct = pct as f32;
+            match a.sunlight_pct.as_ref() {
+                // No `:sunlight%` at all is the opt-in to weather —
+                // `None` is exactly the config shape that starts the
+                // inverter on a `Follow` slot, and the absent kwarg is
+                // what `constructor_kwargs` renders back for one, so a
+                // saved-and-reloaded weather-following inverter comes
+                // back following the weather instead of frozen at a
+                // Manual 100%.
+                None => cfg.sunlight_pct = None,
+                Some(v) => {
+                    let raw = v.as_inner();
+                    if raw.numberp() {
+                        if let Ok(pct) = f64::try_from(raw) {
+                            cfg.sunlight_pct = Some(pct as f32);
+                        }
+                    } else {
+                        let fallback = cfg.sunlight_pct.unwrap_or(100.0);
+                        dynamic_sunlight = DynamicScalar::from_lisp(raw, fallback);
+                        cfg.sunlight_dynamic = true;
                     }
-                } else {
-                    dynamic_sunlight = DynamicScalar::from_lisp(raw, cfg.sunlight_pct);
-                    cfg.sunlight_dynamic = true;
                 }
             }
-            // No `:sunlight%` at all is the opt-in to weather: the
-            // absent kwarg is exactly what `constructor_kwargs`
-            // renders for a `Follow` source, so a saved-and-reloaded
-            // weather-following inverter comes back following the
-            // weather instead of frozen at a Manual 100%.
-            cfg.sunlight_follow = a.sunlight_pct.is_none();
             if let Some(v) = a.weather_lag_s {
                 // Bounded at the hour of cloud history `Weather` keeps
                 // — a longer lag samples pruned events, so the array

@@ -1705,7 +1705,7 @@ mod tests {
                 // Q band ±1000 there — the default (full sun + PF
                 // cap) collapses the band to (0, 0) and would make
                 // the halving check vacuous.
-                sunlight_pct: 0.0,
+                sunlight_pct: Some(0.0),
                 reactive: ReactiveCapability {
                     pf_limit: None,
                     apparent_va: Some(1000.0),

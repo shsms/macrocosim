@@ -768,7 +768,7 @@ mod tests {
 
         let site = MicrogridSite::new();
         let cfg = SolarInverterConfig {
-            sunlight_pct: 100.0,
+            sunlight_pct: Some(100.0),
             ..Default::default()
         };
         site.register(SolarInverter::new(7, Duration::from_secs(1), cfg));

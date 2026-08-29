@@ -822,9 +822,15 @@ mod tests {
     (%make-meter :id 9 :operational-mode 'inactive)
     (%make-meter :id 10 :power 2000.0 :reactive-power 500.0)
     (%make-meter :id 11 :power 2000.0 :power-factor 0.9 :leading t)
+    ;; No `:sunlight%` at all — a weather-FOLLOWING PV inverter,
+    ;; whose rendering is the absence of the kwarg. Round-tripping
+    ;; it pins that omission: a render that emitted a number here
+    ;; (the cache's seed, say) would reload as a driven inverter and
+    ;; the `expr` assertion below would find no "weather" marker.
+    (%make-solar-inverter :id 12)
     (connect 1 2) (connect 2 4) (connect 4 5)
     (connect 2 6) (connect 2 7) (connect 2 8) (connect 2 3) (connect 2 9)
-    (connect 2 10) (connect 2 11)))
+    (connect 2 10) (connect 2 11) (connect 2 12)))
 "#;
         let (cfg, _dir) = config_with(body);
         let (def, site) = {
@@ -833,6 +839,23 @@ mod tests {
             let e = r.get(&2205).unwrap();
             (e.def.clone(), e.site.clone())
         };
+        // Drive the Follow inverter and put it straight back, so what
+        // gets rendered below is a slot that has been all the way
+        // round: built following, poked to a constant (unrenderable
+        // while it holds one — there is no constructed kwarg to write
+        // it into), cleared back to Follow, and renderable again.
+        let pv = site.get(12).expect("the weather-following inverter");
+        assert!(pv.set_sunlight_pct(30.0));
+        assert!(
+            pv.has_unrenderable_source(),
+            "a constant poked over an inverter built with no :sunlight% has nowhere to render"
+        );
+        assert!(pv.clear_sunlight_source());
+        assert!(
+            !pv.has_unrenderable_source(),
+            "cleared back to Follow, the omitted kwarg IS the rendering"
+        );
+
         let block = render_block(&def, &site);
         // Evaluate the rendered block in a second, fresh Config.
         let (cfg2, _dir2) = config_with(&block);
@@ -864,6 +887,16 @@ mod tests {
             (v, site.all_connections())
         };
         assert_eq!(sig(&site), sig(&e2.site));
+        // …and the reloaded PV inverter is really following the sky
+        // again, not sitting on a constant the render invented. Same
+        // components/kwargs above only proves the kwarg stayed
+        // absent; this proves what the absence reconstructs to.
+        let pv2 = e2.site.get(12).expect("the inverter survives the reload");
+        assert_eq!(
+            pv2.sunlight_reading().expect("PV has a sunlight knob").expr,
+            Some("weather".to_string()),
+            "no :sunlight% must reload as a weather-following slot"
+        );
         // Rendering the reloaded site is byte-stable.
         assert_eq!(block, render_block(&e2.def, &e2.site));
     }
