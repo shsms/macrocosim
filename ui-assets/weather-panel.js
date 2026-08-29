@@ -259,23 +259,66 @@ function showError(text) {
 
 // ── editable fields ─────────────────────────────────────────────────
 
+// What each knob means, in one sentence, hung off its label as a
+// `title`. Written once here because the same three words (depth,
+// duration, ramp) name both a random cloud's range and a fired
+// cloud's value, and they have to mean the same thing in both places.
+const TIPS = {
+  depth: "How much light the cloud blocks at its darkest (%)",
+  duration: "Cloud lifetime, fade-in to fade-out (s)",
+  ramp: "Fade-in/out time at the cloud's edges (s); the middle holds at full depth",
+  rate: "Average random clouds per hour (Poisson); 0 = off",
+  peak: "Clear-sky maximum at the middle of the day",
+  time: "UTC, HH:MM",
+  bound: "Each random cloud draws uniformly from lo–hi",
+};
+
 // The scalar knobs. `kind` decides both the input type and how the
 // typed text becomes a POST value; `key` is the payload field, spelled
-// exactly as WeatherPostRequest deserializes it.
+// exactly as WeatherPostRequest deserializes it. `sec` is which
+// captioned section the row is painted into.
 const FIELDS = [
-  { id: "weather-sunrise", key: "sunrise", label: "sunrise", kind: "time" },
-  { id: "weather-sunset", key: "sunset", label: "sunset", kind: "time" },
-  { id: "weather-peak-pct", key: "peak_pct", label: "peak %", kind: "num" },
-  { id: "weather-cloud-rate", key: "cloud_rate_per_h", label: "clouds/h", kind: "num" },
+  { id: "weather-sunrise", key: "sunrise", label: "sunrise", kind: "time", sec: "clear", tip: TIPS.time },
+  { id: "weather-sunset", key: "sunset", label: "sunset", kind: "time", sec: "clear", tip: TIPS.time },
+  { id: "weather-peak-pct", key: "peak_pct", label: "peak %", kind: "num", sec: "clear", tip: TIPS.peak },
+  {
+    id: "weather-cloud-rate",
+    key: "cloud_rate_per_h",
+    label: "clouds/h",
+    kind: "num",
+    sec: "clouds",
+    tip: TIPS.rate,
+    // An empty rate is off, not "unknown" — say so instead of the
+    // bare dash every other field uses for "no reading yet".
+    placeholder: "off",
+  },
 ];
 
 // The `[lo, hi]` pairs the ambient cloud generator draws from. Either
 // half commits the whole pair, since the door takes the range as one
 // value — the untouched half rides along at whatever it reads.
 const RANGES = [
-  { key: "cloud_depth", label: "depth %", lo: "weather-depth-lo", hi: "weather-depth-hi" },
-  { key: "cloud_duration", label: "duration s", lo: "weather-duration-lo", hi: "weather-duration-hi" },
-  { key: "cloud_ramp", label: "ramp s", lo: "weather-ramp-lo", hi: "weather-ramp-hi" },
+  {
+    key: "cloud_depth",
+    label: "depth %",
+    lo: "weather-depth-lo",
+    hi: "weather-depth-hi",
+    tip: TIPS.depth,
+  },
+  {
+    key: "cloud_duration",
+    label: "duration s",
+    lo: "weather-duration-lo",
+    hi: "weather-duration-hi",
+    tip: TIPS.duration,
+  },
+  {
+    key: "cloud_ramp",
+    label: "ramp s",
+    lo: "weather-ramp-lo",
+    hi: "weather-ramp-hi",
+    tip: TIPS.ramp,
+  },
 ];
 
 const fieldText = (v) => (v == null ? "" : String(v));
@@ -386,22 +429,63 @@ async function commitRange(r) {
 const fieldInput = (f) =>
   f.kind === "time"
     ? `<input id="${f.id}" class="wfield-input" type="text" placeholder="HH:MM" />`
-    : `<input id="${f.id}" class="wfield-input" type="number" step="any" placeholder="—" />`;
+    : `<input id="${f.id}" class="wfield-input" type="number" step="any" placeholder="${escapeHtml(f.placeholder ?? "—")}" />`;
+
+// One label with its explainer hung off it. The `title` is what a
+// hover shows; it is the only place the knobs are spelled out, so
+// every label gets one.
+const fieldLabel = (forId, text, tip) =>
+  `<label for="${forId}" title="${escapeHtml(tip)}">${escapeHtml(text)}</label>`;
+
+const scalarRow = (f) =>
+  `<div class="wfield">${fieldLabel(f.id, f.label, f.tip)}
+        ${fieldInput(f)}</div>`;
+
+const rangeRow = (r) =>
+  `<div class="wfield">${fieldLabel(r.lo, r.label, r.tip)}
+        <span class="wfield-pair">
+          <input id="${r.lo}" class="wfield-input" type="number" step="any" placeholder="lo" title="${escapeHtml(TIPS.bound)}" />
+          <span class="wfield-dash">–</span>
+          <input id="${r.hi}" class="wfield-input" type="number" step="any" placeholder="hi" title="${escapeHtml(TIPS.bound)}" />
+        </span>
+      </div>`;
+
+// A captioned group of knobs: a quiet header, one line saying what
+// the group does, then the rows.
+const sectionHtml = (head, caption, rows) => `
+      <section class="wsec">
+        <h3>${escapeHtml(head)}</h3>
+        <p class="hint wsec-cap">${escapeHtml(caption)}</p>
+        ${rows}
+      </section>`;
+
+// The scalar rows belonging to one section, as one label/value grid.
+const scalarRows = (name) => FIELDS.filter((f) => f.sec === name).map(scalarRow).join("");
 
 function liveHtml() {
-  const rows = FIELDS.map(
-    (f) => `<div class="wfield"><label for="${f.id}">${escapeHtml(f.label)}</label>
-        ${fieldInput(f)}</div>`,
-  ).join("");
-  const ranges = RANGES.map(
-    (r) => `<div class="wfield"><label for="${r.lo}">${escapeHtml(r.label)}</label>
-        <span class="wfield-pair">
-          <input id="${r.lo}" class="wfield-input" type="number" step="any" placeholder="lo" />
-          <span class="wfield-dash">–</span>
-          <input id="${r.hi}" class="wfield-input" type="number" step="any" placeholder="hi" />
-        </span>
-      </div>`,
-  ).join("");
+  const clearSky = sectionHtml(
+    "Clear sky",
+    "A sine curve between sunrise and sunset, peaking at peak%. Times are UTC.",
+    `<div class="wfields">${scalarRows("clear")}</div>`,
+  );
+  const randomClouds = sectionHtml(
+    "Random clouds",
+    "On average this many clouds per hour; each draws its depth, duration and ramp from these ranges. 0 or empty = off.",
+    `<div class="wfields">${scalarRows("clouds")}${RANGES.map(rangeRow).join("")}</div>`,
+  );
+  const fireCloudSec = sectionHtml(
+    "Fire a cloud",
+    "One deterministic cloud, right now.",
+    `<div class="wcloud-row">
+          ${fieldLabel("weather-cloud-depth", "depth %", TIPS.depth)}
+          <input id="weather-cloud-depth" class="wfield-input wfield-fire" type="number" step="any" value="60" />
+          ${fieldLabel("weather-cloud-duration", "for s", TIPS.duration)}
+          <input id="weather-cloud-duration" class="wfield-input wfield-fire" type="number" step="any" value="600" />
+          ${fieldLabel("weather-cloud-ramp", "ramp s", TIPS.ramp)}
+          <input id="weather-cloud-ramp" class="wfield-input wfield-fire" type="number" step="any" value="60" />
+          <button type="button" class="pill" id="weather-cloud-fire">fire</button>
+        </div>`,
+  );
   return `
     <div class="weather-panel">
       <div class="weather-head">
@@ -411,19 +495,7 @@ function liveHtml() {
       <div class="wchart" id="weather-chart"></div>
       <p class="hint weather-sub" id="weather-clear-sky">clear sky —</p>
       <p class="hint weather-err" id="weather-error" hidden></p>
-      <div class="wfields">${rows}${ranges}</div>
-      <section class="wcloud">
-        <h3>Pass a cloud</h3>
-        <div class="wcloud-row">
-          <label for="weather-cloud-depth">depth %</label>
-          <input id="weather-cloud-depth" class="wfield-input wfield-fire" type="number" step="any" value="60" />
-          <label for="weather-cloud-duration">for s</label>
-          <input id="weather-cloud-duration" class="wfield-input wfield-fire" type="number" step="any" value="600" />
-          <label for="weather-cloud-ramp">ramp s</label>
-          <input id="weather-cloud-ramp" class="wfield-input wfield-fire" type="number" step="any" value="60" />
-          <button type="button" class="pill" id="weather-cloud-fire">fire</button>
-        </div>
-      </section>
+      ${clearSky}${randomClouds}${fireCloudSec}
       <section class="wevents">
         <h3>Clouds</h3>
         <ul id="weather-events"><li class="hint">none</li></ul>
@@ -441,8 +513,27 @@ const EMPTY_HTML = `
     <p class="hint weather-err" id="weather-error" hidden></p>
   </div>`;
 
+// The clouds still overhead. The model keeps an event for about an
+// hour after it ends, so lagged inverters can still read the sky they
+// were in — but a cloud that has already passed is not news, and a
+// list of dead ones buries the live one. The curve keeps using the
+// WHOLE list: a cloud that ended at noon still shaped the part of the
+// day the curve has already drawn.
 function eventsHtml(w) {
-  const events = w.events ?? [];
+  // Against the SERVER's clock, not the browser's: the ends below were
+  // stamped by the server, and the two clocks are routinely different
+  // machines (a host browser driving a guest VM). A browser running a
+  // few seconds ahead would drop a cloud the instant it was fired. The
+  // payload's `now` is the same instant the rest of this snapshot was
+  // evaluated at; the local clock is only the fallback for a payload
+  // that has no readable one.
+  const stamped = Date.parse(w.now);
+  const now = Number.isFinite(stamped) ? stamped : Date.now();
+  const events = (w.events ?? []).filter((e) => {
+    const end = Date.parse(e.end);
+    // An unreadable end can't be shown to have passed — keep it.
+    return !Number.isFinite(end) || end > now;
+  });
   if (events.length === 0) return '<li class="hint">none</li>';
   return events
     .map((e) => {

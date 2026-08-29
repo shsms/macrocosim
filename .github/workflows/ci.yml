@@ -69,6 +69,12 @@ jobs:
       - name: metrics-store tests
         run: node tools/metrics-store-test.mjs
 
+      # The weather panel's split contract: the cloud LIST drops what
+      # the sky is already past (filtered against the server's stamp,
+      # not the browser's clock), while the day CURVE keeps drawing it.
+      - name: weather-panel tests
+        run: node tools/weather-panel-test.mjs
+
       # Executes the whole ES-module import graph under a DOM shim —
       # catches a TDZ / class-ordering error or a renamed export that
       # serving the file happily would not.

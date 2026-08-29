@@ -1436,7 +1436,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   grid-template-columns: max-content 1fr;
   align-items: center;
   gap: 5px 8px;
-  margin: 10px 0 0;
+  margin: 0;
 }
 .wfield {
   display: contents;
@@ -1444,6 +1444,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .wfield label {
   font-size: 11px;
   color: var(--muted);
+}
+/* Every knob's label carries a `title` explaining it; the help
+   cursor is the only hint that hovering is worth it. */
+.wfield label[title],
+.wcloud-row label[title] {
+  cursor: help;
 }
 /* A range row's two inputs and their dash share the grid's single
    value cell — .wfield is `display: contents`, so the pair needs its
@@ -1472,13 +1478,21 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .wfield-input:focus {
   outline: 1px solid var(--accent);
 }
-.wcloud {
+/* A captioned group of knobs (Clear sky / Random clouds / Fire a
+   cloud). The header and its one-line caption stay quiet — they are
+   there to be read once, not to compete with the values. */
+.wsec {
   margin-top: 12px;
 }
-.wcloud h3,
+.wsec h3,
 .wevents h3 {
   font-size: 11px;
   color: var(--muted);
+  margin: 0 0 6px;
+}
+.weather-panel .wsec-cap {
+  font-size: 11px;
+  line-height: 1.35;
   margin: 0 0 6px;
 }
 .wcloud-row {

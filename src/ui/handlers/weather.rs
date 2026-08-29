@@ -42,6 +42,14 @@ pub(in crate::ui) struct WeatherResponse {
     cloud_ramp: (f32, f32),
     pct: f32,
     clear_sky_pct: f32,
+    /// The instant this snapshot was evaluated at — the same clock
+    /// that stamped every `events` start/end below. The panel filters
+    /// its "clouds still overhead" list against THIS rather than the
+    /// browser's `Date.now()`: the two clocks are usually different
+    /// machines (a host browser against a guest VM), and a browser
+    /// running a few seconds ahead would drop a cloud that had only
+    /// just been fired.
+    now: DateTime<Utc>,
     events: Vec<CloudEventResponse>,
 }
 
@@ -75,6 +83,7 @@ fn snapshot(site: &crate::sim::MicrogridSite) -> Option<WeatherResponse> {
             cloud_ramp: cfg.cloud_ramp,
             pct: w.pct_at(at),
             clear_sky_pct: w.clear_sky_pct(at),
+            now: at,
             events: w
                 .events()
                 .iter()

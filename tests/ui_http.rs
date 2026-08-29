@@ -7,6 +7,7 @@ mod common;
 
 use std::time::Duration;
 
+use chrono::DateTime;
 use common::TestServer;
 use serde_json::Value;
 
@@ -686,6 +687,12 @@ async fn weather_http_round_trip() {
         .await
         .unwrap();
     assert_eq!(cloud["events"].as_array().unwrap().len(), 1, "{cloud}");
+    // `now` is the snapshot's own instant, stamped by the same clock as
+    // the event ends — it is what the panel filters its cloud list
+    // against, so a just-fired cloud has to still be ahead of it.
+    let now = DateTime::parse_from_rfc3339(cloud["now"].as_str().unwrap()).unwrap();
+    let end = DateTime::parse_from_rfc3339(cloud["events"][0]["end"].as_str().unwrap()).unwrap();
+    assert!(end > now, "{cloud}");
     // The config change from the prior request survived — a partial
     // update, not a reset.
     assert_eq!(cloud["sunrise"], "05:00", "{cloud}");
