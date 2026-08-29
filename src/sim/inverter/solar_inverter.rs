@@ -147,6 +147,10 @@ pub struct SolarInverterConfig {
     /// sample, in percent of the value. Zero by default, and zero
     /// skips the RNG entirely.
     pub weather_jitter_pct: f32,
+    /// The array's peak DC output (Wp), positive — not an
+    /// instantaneous power. Defaults to |rated-lower|: a matched
+    /// array. Oversizing produces midday clipping.
+    pub array_peak_w: f32,
 }
 
 impl Default for SolarInverterConfig {
@@ -165,6 +169,7 @@ impl Default for SolarInverterConfig {
             sunlight_follow: false,
             weather_lag: Duration::ZERO,
             weather_jitter_pct: 0.0,
+            array_peak_w: 30_000.0,
         }
     }
 }
@@ -214,7 +219,10 @@ impl SolarInverter {
         });
         // A fresh PV inverter is already generating from whatever sun
         // it has — it does not slew up from zero on its first tick.
-        active.snap_output(cfg.rated_lower_w * init_pct / 100.0);
+        // Same array-clamp shape as `min_avail_w`: an oversized array
+        // flat-tops at the AC rating from the very first sample, not
+        // just from the first tick onward.
+        active.snap_output((-cfg.array_peak_w * init_pct / 100.0).max(cfg.rated_lower_w));
         // A Q axis has no rated band of its own — its static shape is
         // the PF/kVA capability evaluated at the live P.
         let reactive = PowerAxis::new(AxisConfig {
@@ -246,7 +254,7 @@ impl SolarInverter {
     }
 
     /// Replace the cloud-cover source with a constant. Drives the
-    /// per-tick `min_avail = rated_lower_w × sunlight_pct / 100`
+    /// per-tick `min_avail = max(-array_peak_w × sunlight_pct / 100, rated_lower_w)`
     /// clamp the inverter applies to incoming setpoints. Values are
     /// applied as-is; the per-tick clamp happens in [`Self::min_avail_w`].
     /// Collapses any prior source — a dynamic expression or a
@@ -309,7 +317,7 @@ impl SolarInverter {
     }
 
     fn min_avail_w(&self) -> f32 {
-        self.cfg.rated_lower_w * self.sunlight_pct() / 100.0
+        (-self.cfg.array_peak_w * self.sunlight_pct() / 100.0).max(self.cfg.rated_lower_w)
     }
 }
 
@@ -655,6 +663,15 @@ impl SimulatedComponent for SolarInverter {
                 crate::lisp::lisp_float32(self.cfg.sunlight_pct),
             ));
         }
+        // Only write :array-peak-w when it diverges from the matched-array
+        // default (|rated-lower|) — a matched config round-trips with
+        // no extra noise.
+        if (self.cfg.array_peak_w - self.cfg.rated_lower_w.abs()).abs() > f32::EPSILON {
+            kw.push((
+                ":array-peak-w",
+                crate::lisp::lisp_float32(self.cfg.array_peak_w),
+            ));
+        }
         kw
     }
 }
@@ -669,6 +686,7 @@ mod tests {
             rated_upper_w: 0.0,
             sunlight_pct: pct,
             ramp_rate_w_per_s: f32::INFINITY,
+            array_peak_w: 10_000.0,
             ..Default::default()
         }
     }
@@ -683,9 +701,62 @@ mod tests {
         inv.set_sunlight_pct(20.0);
         assert!((inv.min_avail_w() - (-2_000.0)).abs() < 1e-3);
 
-        // Out-of-range values pass through (microsim parity).
+        // Overdrive now clamps at the AC rating rather than
+        // overdriving past it — the microsim's out-of-range
+        // pass-through is retired. Expressing overdrive intent is
+        // now `:array-peak-w`'s job (see `oversized_array_clips_at_the_ac_rating`).
         inv.set_sunlight_pct(150.0);
-        assert!((inv.min_avail_w() - (-15_000.0)).abs() < 1e-3);
+        assert!((inv.min_avail_w() - (-10_000.0)).abs() < 1e-3);
+    }
+
+    /// An oversized DC array flat-tops at the inverter's AC rating;
+    /// a matched array is unchanged from the pre-:array-peak-w behavior.
+    #[test]
+    fn oversized_array_clips_at_the_ac_rating() {
+        let matched = SolarInverter::new(1, Duration::from_secs(1), SolarInverterConfig::default());
+        assert!((matched.min_avail_w() - (-30_000.0)).abs() < 1e-3);
+        let oversized = SolarInverter::new(
+            2,
+            Duration::from_secs(1),
+            SolarInverterConfig {
+                array_peak_w: 45_000.0,
+                ..Default::default()
+            },
+        );
+        // 100% sun: 45 kW of array clamped to the 30 kW rating.
+        assert!((oversized.min_avail_w() - (-30_000.0)).abs() < 1e-3);
+        // 50% sun: 22.5 kW — inside the rating, no clamp.
+        SolarInverter::set_sunlight_pct(&oversized, 50.0);
+        assert!((oversized.min_avail_w() - (-22_500.0)).abs() < 1e-3);
+    }
+
+    /// The initial output snapped at construction uses the same
+    /// array-clamp shape as `min_avail_w` — an oversized array
+    /// flat-tops at the AC rating from the very first sample, BEFORE
+    /// any tick has run, not just from the first tick onward.
+    #[test]
+    fn initial_output_clamps_at_the_ac_rating_before_any_tick() {
+        let w = MicrogridSite::new();
+        let cfg = SolarInverterConfig {
+            rated_lower_w: -30_000.0,
+            rated_upper_w: 0.0,
+            sunlight_pct: 80.0,
+            array_peak_w: 45_000.0,
+            ramp_rate_w_per_s: f32::INFINITY,
+            ..Default::default()
+        };
+        let inv = SolarInverter::new(1, Duration::from_secs(1), cfg);
+        // 80% of the 45 kW array is -36 kW, clamped to the -30 kW AC
+        // rating — NOT -24,000 W, what the pre-array-clamp formula
+        // (rated_lower_w × init_pct / 100) would have snapped to.
+        let p = inv
+            .telemetry(&w)
+            .active_power_w
+            .expect("active power present");
+        assert!(
+            (p - (-30_000.0)).abs() < 1e-3,
+            "expected AC-clamped -30000 W before any tick, got {p}"
+        );
     }
 
     /// A dynamic sunlight source resolves on each `refresh_inputs`,

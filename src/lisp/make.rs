@@ -152,6 +152,17 @@ AsPlist! {
         sunlight_pct<":sunlight%">: Option<LispValue> {= None},
         rated_lower<":rated-lower">: Option<f64> {= None},
         rated_upper<":rated-upper">: Option<f64> {= None},
+        /// The array's peak DC output (Wp), positive — not an
+        /// instantaneous power. Defaults to |:rated-lower|: a matched
+        /// array. Oversizing produces midday clipping.
+        array_peak_w<":array-peak-w">: Option<f64> {= None},
+        /// How far behind the sky a weather-following array samples,
+        /// in seconds. Only meaningful without `:sunlight%`.
+        weather_lag_s<":weather-lag-s">: Option<f64> {= None},
+        /// Per-tick uniform ±roughening of a weather-following
+        /// sample, in percent of the value. Only meaningful without
+        /// `:sunlight%`.
+        weather_jitter_pct<":weather-jitter-pct">: Option<f64> {= None},
         command_delay_ms<":command-delay-ms">: Option<i64> {= None},
         ramp_rate<":ramp-rate">: Option<f64> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
@@ -472,6 +483,24 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             if let Some(v) = a.rated_lower {
                 cfg.rated_lower_w = v as f32;
             }
+            // Defaults to a matched array (|:rated-lower|) now that
+            // :rated-lower has landed on cfg above.
+            if let Some(v) = a.array_peak_w {
+                // A non-finite or non-positive array inverts the band
+                // (min_avail_w goes positive, intersects emptily with
+                // rated) and silently parks the inverter at 0 forever
+                // — the same failure mode :peak% is guarded against
+                // above, with nothing in telemetry to say why.
+                if !(v.is_finite() && v > 0.0) {
+                    return Err(Error::invalid_argument(format!(
+                        ":array-peak-w must be a positive number, got {v}"
+                    )));
+                }
+            }
+            cfg.array_peak_w = a
+                .array_peak_w
+                .map(|v| v as f32)
+                .unwrap_or_else(|| cfg.rated_lower_w.abs());
             if let Some(v) = a.rated_upper {
                 cfg.rated_upper_w = v as f32;
             }
@@ -1179,6 +1208,57 @@ mod tests {
             (p - (-2000.0)).abs() < 1.0,
             "expected sunlight-clipped -2000 W, got {p}"
         );
+    }
+
+    /// `:array-peak-w` sizes the DC array separately from `:rated-lower`'s
+    /// AC clamp: a 15 kW array on a 10 kW inverter at 50% sun clamps
+    /// production to 7.5 kW, not 5 kW. Omitting `:array-peak-w` leaves
+    /// behavior identical to a matched array — the lambda test above
+    /// stays green with no `:array-peak-w` at all.
+    #[test]
+    fn solar_inverter_array_peak_w_sizes_the_dc_array_separately_from_rated() {
+        let (site, mut ctx) = run_with_ctx(
+            r#"(%make-solar-inverter :id 12
+                                    :sunlight% 50.0
+                                    :rated-lower -10000.0
+                                    :array-peak-w 15000.0)"#,
+        );
+        let inv = site.get(12).unwrap();
+        inv.refresh_inputs(&mut ctx);
+        // Demand the full AC rating; ramp is infinite by default so
+        // the actual jumps straight to whatever the array/sun clamp
+        // allows.
+        inv.set_active_setpoint(-10_000.0)
+            .expect("setpoint within rated");
+        let now = chrono::Utc::now();
+        inv.tick(&site, now, Duration::from_millis(100));
+        let p = inv
+            .telemetry(&site)
+            .active_power_w
+            .expect("active power present");
+        assert!(
+            (p - (-7_500.0)).abs() < 1.0,
+            "expected array-clamped -7500 W, got {p}"
+        );
+    }
+
+    /// A non-finite or non-positive `:array-peak-w` inverts the DC band —
+    /// `min_avail_w` goes positive, intersects emptily with rated, and
+    /// parks the inverter at 0 forever with nothing in telemetry to
+    /// say why. Rejected at the door instead, naming the kwarg.
+    #[test]
+    fn array_peak_w_rejects_non_positive_values() {
+        let (_s, mut ctx) = run_with_ctx("");
+        let err = ctx
+            .eval_string("(%make-solar-inverter :id 30 :rated-lower -10000.0 :array-peak-w -5000)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(":array-peak-w"), "{err}");
+        let err = ctx
+            .eval_string("(%make-solar-inverter :id 31 :rated-lower -10000.0 :array-peak-w 0)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(":array-peak-w"), "{err}");
     }
 
     /// `(set-meter-power id W)` is the existing imperative setter

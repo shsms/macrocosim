@@ -228,8 +228,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // PV analogue of set-meter-power. Same numeric / dynamic
     // dispatch — drives `(set-solar-sunlight id (lambda () …))` and
     // friends from scenarios or the UI. Per-tick `min-avail =
-    // rated-lower × sunlight%/100` clamp picks up the new value on
-    // the next refresh + tick pair.
+    // max(-array-peak-w × sunlight%/100, rated-lower)` clamp — the AC
+    // rating floor — picks up the new value on the next refresh +
+    // tick pair.
     let r = router.clone();
     ctx.defun(
         "set-solar-sunlight",
