@@ -232,6 +232,13 @@ struct MicrogridSiteInner {
     /// outside that path (tags pass, unit tests) leave it `None`
     /// and fall back to the per-mg `grid_state.frequency_hz`.
     grid_frequency: RwLock<Option<crate::sim::frequency::SharedFrequency>>,
+    /// Site-wide sunlight model. Run-scoped: installed by whichever
+    /// `make-weather` form (if any) the loaded config carries, advanced
+    /// once per tick by `tick_once` before components read it, and
+    /// cleared by `reset()` so a reload that dropped its `make-weather`
+    /// form does not leave stale weather behind. `None` when no
+    /// weather is configured.
+    weather: RwLock<Option<crate::sim::weather::Weather>>,
 }
 
 impl MicrogridSite {
@@ -273,6 +280,7 @@ impl MicrogridSite {
                 scenario_reactive_bounds_csv: RwLock::new(CsvSinks::new()),
                 scenario_csv_dir: RwLock::new(None),
                 grid_frequency: RwLock::new(None),
+                weather: RwLock::new(None),
                 stream_cancel_epoch: AtomicU64::new(0),
                 sample_lag_ms: AtomicU64::new(0),
             }),
@@ -341,6 +349,28 @@ impl MicrogridSite {
     /// Voltage stays per-mg.
     pub fn set_grid_frequency(&self, freq: crate::sim::frequency::SharedFrequency) {
         *self.inner.grid_frequency.write() = Some(freq);
+    }
+
+    /// Install or remove this site's weather. `None` clears it, same
+    /// as `reset()` does on a reload without a `make-weather` form.
+    pub fn set_weather(&self, w: Option<crate::sim::weather::Weather>) {
+        *self.inner.weather.write() = w;
+    }
+
+    /// Run `f` against the site's weather under the write lock (it
+    /// needs `&mut` — `advance` and `pass_cloud` both mutate). `None`
+    /// when no weather is configured.
+    pub fn with_weather<R>(
+        &self,
+        f: impl FnOnce(&mut crate::sim::weather::Weather) -> R,
+    ) -> Option<R> {
+        self.inner.weather.write().as_mut().map(f)
+    }
+
+    /// Read-lock convenience: sunlight percent at `t`, or `None` when
+    /// no weather is configured.
+    pub fn weather_pct_at(&self, t: DateTime<Utc>) -> Option<f32> {
+        self.inner.weather.read().as_ref().map(|w| w.pct_at(t))
     }
 
     /// Feed one loopback grid-formula active-power sample to the
@@ -929,6 +959,9 @@ impl MicrogridSite {
         self.inner.scenario_setpoints_csv.write().clear();
         self.inner.scenario_bounds_csv.write().clear();
         self.inner.scenario_reactive_bounds_csv.write().clear();
+        // Weather is run-scoped: a reload that dropped its make-weather
+        // form must not leave stale weather behind.
+        *self.inner.weather.write() = None;
         // Deliberately do NOT rewind `next_id`: the allocator is shared
         // across every site in an enterprise, so a per-site reset (a lone
         // `(reset-microgrid)`) must not rewind the global counter while
@@ -1191,6 +1224,9 @@ impl MicrogridSite {
     /// refreshes leave behind. Tests that need a synchronous refresh
     /// before driving `tick_once` should call `Config::refresh_once`.
     pub fn tick_once(&self, now: DateTime<Utc>, dt: Duration) {
+        if let Some(w) = self.inner.weather.write().as_mut() {
+            w.advance(now);
+        }
         let components = self.inner.components.read().clone();
         for c in components.iter() {
             c.tick(self, now, dt);
@@ -1400,6 +1436,23 @@ fn reachable(edges: &[(u64, u64)], from: u64, to: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Weather is a run-scoped site singleton: tick advances it, and
+    /// `reset()` clears it so a reload that dropped its make-weather
+    /// form does not leave stale weather behind.
+    #[test]
+    fn weather_is_advanced_by_tick_and_cleared_by_reset() {
+        use crate::sim::weather::{Weather, WeatherConfig};
+        use chrono::TimeZone;
+        let w = MicrogridSite::new();
+        w.set_weather(Some(Weather::new(WeatherConfig::default())));
+        let noon = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 13, 0, 0).unwrap();
+        w.tick_once(noon, Duration::from_millis(100));
+        let pct = w.weather_pct_at(noon).unwrap();
+        assert!((pct - 100.0).abs() < 0.01, "solar noon, got {pct}");
+        w.reset();
+        assert!(w.weather_pct_at(noon).is_none(), "reset clears weather");
+    }
 
     /// The energy integrator reads `active_power_w()` where every
     /// other consumer reads `telemetry().active_power_w`; the trait
