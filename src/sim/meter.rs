@@ -27,6 +27,7 @@ pub enum ReactiveSource {
 /// The reactive source's construction-time freeze — the Q twin of
 /// `constructed_power`. `None` when the meter was built with no
 /// reactive source, or with a dynamic (lambda / symbol) `Var`.
+#[derive(Clone, Copy)]
 enum ConstructedReactive {
     Var(f32),
     PowerFactor { pf: f32, leading: bool },
@@ -70,11 +71,16 @@ pub struct Meter {
     /// `set_fixed_power` never touch this, so the microgrid-file
     /// renderer keeps writing the original construction kwarg
     /// instead of resurrecting a runtime poke as if it were config.
-    constructed_power: Option<f32>,
+    /// RwLock so `clear_active_power_source` can drop it too —
+    /// "clear means cleared" extends to the constructed kwarg, not
+    /// just the live slot, so a save/reload agrees with a cleared
+    /// meter instead of resurrecting the override.
+    constructed_power: RwLock<Option<f32>>,
     /// The `:reactive-power` / `:power-factor` this meter was
     /// constructed with — the Q twin of `constructed_power`. See
-    /// there for why this is construction-only state.
-    constructed_reactive: Option<ConstructedReactive>,
+    /// there for why this is construction-only state, and why it's
+    /// an RwLock (`clear_reactive_power_source` drops it too).
+    constructed_reactive: RwLock<Option<ConstructedReactive>>,
 }
 
 impl Meter {
@@ -111,8 +117,8 @@ impl Meter {
             reactive_source: RwLock::new(reactive_source),
             stream_jitter_pct,
             hidden,
-            constructed_power,
-            constructed_reactive,
+            constructed_power: RwLock::new(constructed_power),
+            constructed_reactive: RwLock::new(constructed_reactive),
         }
     }
 
@@ -279,6 +285,21 @@ impl SimulatedComponent for Meter {
         *self.power_source.write() = Some(scalar);
     }
 
+    fn clear_active_power_source(&self) -> bool {
+        // Hold both write guards together, acquired in the same order
+        // `has_unrenderable_source` reads them (constructed before
+        // source) — two separate statement-scoped acquisitions here
+        // would open a window where a concurrent save could observe
+        // `power_source` already cleared but `constructed_power` not
+        // yet, tearing "cleared means cleared"; matching the read
+        // order also keeps this ABBA-safe against that read pair.
+        let mut constructed = self.constructed_power.write();
+        let mut source = self.power_source.write();
+        *constructed = None;
+        *source = None;
+        true
+    }
+
     fn set_reactive_power_override(&self, vars: f32) -> bool {
         self.set_fixed_reactive_power(vars);
         true
@@ -294,6 +315,17 @@ impl SimulatedComponent for Meter {
 
     fn set_power_factor(&self, pf: f32, leading: bool) -> bool {
         self.set_power_factor_source(pf, leading);
+        true
+    }
+
+    fn clear_reactive_power_source(&self) -> bool {
+        // Same fix as `clear_active_power_source`: both guards held
+        // together, acquired constructed-then-source to match
+        // `has_unrenderable_source`'s read order.
+        let mut constructed = self.constructed_reactive.write();
+        let mut source = self.reactive_source.write();
+        *constructed = None;
+        *source = None;
         true
     }
 
@@ -334,8 +366,8 @@ impl SimulatedComponent for Meter {
         // (`set-meter-power`, `set_fixed_reactive_power`,
         // `set_power_factor_source`) over a meter constructed without
         // that kwarg.
-        (self.constructed_power.is_none() && self.power_source.read().is_some())
-            || (self.constructed_reactive.is_none() && self.reactive_source.read().is_some())
+        (self.constructed_power.read().is_none() && self.power_source.read().is_some())
+            || (self.constructed_reactive.read().is_none() && self.reactive_source.read().is_some())
     }
 
     fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
@@ -343,10 +375,16 @@ impl SimulatedComponent for Meter {
         if self.interval != Duration::from_millis(1000) {
             kw.push((":interval", self.interval.as_millis().to_string()));
         }
-        if let Some(p) = self.constructed_power.filter(|p| p.is_finite()) {
+        if let Some(p) = self.constructed_power.read().filter(|p| p.is_finite()) {
             kw.push((":power", crate::lisp::lisp_float32(p)));
         }
-        match self.constructed_reactive {
+        // Hoisted out of the match scrutinee: a place-expression match
+        // on `*self.constructed_reactive.read()` would hold the read
+        // guard for the whole match (Rust's temporary-lifetime
+        // extension covers the arms too), which is a future-deadlock
+        // hazard the moment an arm ever needs to touch the lock again.
+        let ctor = *self.constructed_reactive.read();
+        match ctor {
             Some(ConstructedReactive::Var(v)) if v.is_finite() => {
                 kw.push((":reactive-power", crate::lisp::lisp_float32(v)));
             }
@@ -802,5 +840,178 @@ mod tests {
         assert!(!h.has_unrenderable_source());
         h.set_power_factor_source(0.8, false);
         assert!(h.has_unrenderable_source());
+    }
+
+    /// `clear_active_power_source` empties the active override and the
+    /// meter goes back to measuring its children's aggregate — the
+    /// one-way trip fixed by this change.
+    #[test]
+    fn clear_active_power_source_restores_children_sum() {
+        let w = MicrogridSite::new();
+        let child = std::sync::Arc::new(FixedFlow {
+            id: 100,
+            p: 3_000.0,
+            q: 0.0,
+        });
+        w.register_arc(child);
+        let m = Meter::new(
+            2,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(9_000.0)),
+            None,
+            0.0,
+            false,
+        );
+        w.register(m);
+        w.connect(2, 100);
+        let m = w.get(2).unwrap();
+
+        // Overridden: reads the constant, not the child sum.
+        assert!((m.aggregate_power_w(&w) - 9_000.0).abs() < 1e-3);
+
+        assert!(m.clear_active_power_source());
+        assert!((m.aggregate_power_w(&w) - 3_000.0).abs() < 1e-3);
+        assert!(m.meter_power_reading().is_none());
+    }
+
+    /// `clear_reactive_power_source` clears a `Var` reactive override
+    /// back to summing children's Q — the Q twin of the active-axis
+    /// test above.
+    #[test]
+    fn clear_reactive_power_source_restores_children_sum_for_var() {
+        let w = MicrogridSite::new();
+        let child = std::sync::Arc::new(FixedFlow {
+            id: 100,
+            p: 0.0,
+            q: 1_100.0,
+        });
+        w.register_arc(child);
+        let m = Meter::new(
+            2,
+            Duration::from_secs(1),
+            None,
+            Some(ReactiveSource::Var(DynamicScalar::constant(750.0))),
+            0.0,
+            false,
+        );
+        w.register(m);
+        w.connect(2, 100);
+        let m = w.get(2).unwrap();
+
+        assert!((m.aggregate_reactive_var(&w) - 750.0).abs() < 1e-3);
+        assert!(m.clear_reactive_power_source());
+        assert!((m.aggregate_reactive_var(&w) - 1_100.0).abs() < 1e-3);
+        assert!(m.meter_reactive_reading().is_none());
+    }
+
+    /// Same as above but for a `PowerFactor` reactive source — the
+    /// clear must drop the whole `ReactiveSource` enum, not just a
+    /// `Var` variant, so a PF-derived meter also goes back to
+    /// measuring.
+    #[test]
+    fn clear_reactive_power_source_restores_children_sum_for_power_factor() {
+        let w = MicrogridSite::new();
+        let child = std::sync::Arc::new(FixedFlow {
+            id: 100,
+            p: 0.0,
+            q: 2_200.0,
+        });
+        w.register_arc(child);
+        let m = Meter::new(
+            2,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(8_000.0)),
+            Some(ReactiveSource::PowerFactor {
+                pf: 0.8,
+                leading: false,
+            }),
+            0.0,
+            false,
+        );
+        w.register(m);
+        w.connect(2, 100);
+        let m = w.get(2).unwrap();
+
+        assert!((m.aggregate_reactive_var(&w) - 6_000.0).abs() < 1.0);
+        assert!(m.clear_reactive_power_source());
+        assert!((m.aggregate_reactive_var(&w) - 2_200.0).abs() < 1e-3);
+        assert!(m.meter_reactive_reading().is_none());
+    }
+
+    /// A meter CONSTRUCTED with `:power` then cleared emits no
+    /// `:power` kwarg on the next render, and `has_unrenderable_source`
+    /// stays false — "clear means cleared" extends to the construction
+    /// kwarg, so a save/reload agrees with the live (measuring) state
+    /// instead of resurrecting the override.
+    #[test]
+    fn clear_active_power_source_drops_constructed_kwarg() {
+        let m = Meter::new(
+            1,
+            Duration::from_secs(1),
+            Some(DynamicScalar::constant(1875.0)),
+            None,
+            0.0,
+            false,
+        );
+        let kw = |m: &Meter| {
+            m.constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(kw(&m).contains(":power 1875.0"));
+        assert!(m.clear_active_power_source());
+        assert!(!kw(&m).contains(":power"), "{}", kw(&m));
+        assert!(!m.has_unrenderable_source());
+    }
+
+    /// Same round-trip for the reactive axis, constructed with
+    /// `:reactive-power`.
+    #[test]
+    fn clear_reactive_power_source_drops_constructed_kwarg() {
+        let m = Meter::new(
+            1,
+            Duration::from_secs(1),
+            None,
+            Some(ReactiveSource::Var(DynamicScalar::constant(500.0))),
+            0.0,
+            false,
+        );
+        let kw = |m: &Meter| {
+            m.constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(kw(&m).contains(":reactive-power 500.0"));
+        assert!(m.clear_reactive_power_source());
+        assert!(!kw(&m).contains(":reactive-power"), "{}", kw(&m));
+        assert!(!m.has_unrenderable_source());
+    }
+
+    /// Clearing a never-overridden meter is a no-op that still
+    /// returns `true` (a meter always "supports" clearing, even with
+    /// nothing in the slot) — distinct from the `false` a non-meter
+    /// component's default trait method returns.
+    #[test]
+    fn clear_on_never_overridden_meter_is_a_noop_true() {
+        let w = MicrogridSite::new();
+        let child = std::sync::Arc::new(FixedFlow {
+            id: 100,
+            p: 500.0,
+            q: 50.0,
+        });
+        w.register_arc(child);
+        let m = Meter::new(2, Duration::from_secs(1), None, None, 0.0, false);
+        w.register(m);
+        w.connect(2, 100);
+        let m = w.get(2).unwrap();
+
+        assert!(m.clear_active_power_source());
+        assert!(m.clear_reactive_power_source());
+        assert!((m.aggregate_power_w(&w) - 500.0).abs() < 1e-3);
+        assert!((m.aggregate_reactive_var(&w) - 50.0).abs() < 1e-3);
     }
 }

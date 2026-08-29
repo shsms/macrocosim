@@ -112,6 +112,56 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         },
     );
 
+    // Drop a meter's active-power override, returning it to measuring
+    // its children — the one-way trip set-meter-power never had a way
+    // back from. Gated on the trait door itself: `false` means "not a
+    // meter" (a meter always returns true, even with nothing set).
+    let r = router.clone();
+    ctx.defun("clear-meter-power", move |id: i64| -> Result<bool, Error> {
+        let w = r.site();
+        let Some(c) = w.get(id as u64) else {
+            return Err(Error::invalid_argument(format!(
+                "clear-meter-power: component {id} not found"
+            )));
+        };
+        if !c.clear_active_power_source() {
+            return Err(Error::invalid_argument(format!(
+                "clear-meter-power: component {id} is not a meter"
+            )));
+        }
+        w.note_knob_changed(id as u64, "meter-power", None, None, None);
+        Ok(true)
+    });
+
+    // Drop a meter's reactive-power override — whichever of Var /
+    // PowerFactor is set, it's the same slot — returning it to summing
+    // children's Q. The Q twin of clear-meter-power above.
+    let r = router.clone();
+    ctx.defun(
+        "clear-meter-reactive",
+        move |id: i64| -> Result<bool, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "clear-meter-reactive: component {id} not found"
+                )));
+            };
+            if !c.clear_reactive_power_source() {
+                return Err(Error::invalid_argument(format!(
+                    "clear-meter-reactive: component {id} is not a meter"
+                )));
+            }
+            // Two tokens, one slot: the inspector's power-factor input
+            // is a knob of its own ("meter-power-factor"), separate
+            // from "meter-reactive-power" — a PowerFactor-shaped clear
+            // must blank both or the PF input keeps showing a stale
+            // number until the next full snapshot.
+            w.note_knob_changed(id as u64, "meter-reactive-power", None, None, None);
+            w.note_knob_changed(id as u64, "meter-power-factor", None, None, None);
+            Ok(true)
+        },
+    );
+
     // Hold a meter's reactive power at a power factor that tracks its
     // own live active power. PF is deliberately validated HERE (and
     // again by the typed control API) rather than in the trait door:
@@ -464,6 +514,129 @@ mod tests {
                 }
             )),
             "no matching KnobChanged with expr on the bus; saw: {seen:?}"
+        );
+    }
+
+    /// `(clear-meter-power id)` after `(set-meter-power id V)`
+    /// restores measuring: `meter_power_reading()` goes back to
+    /// `None` and aggregation reads the (empty, here zero) children
+    /// sum instead of the constant. Errors on a non-meter.
+    #[test]
+    fn clear_meter_power_restores_measuring() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        cfg.eval("(set-meter-power 7 5000.0)").unwrap();
+        let site = cfg.site();
+        let m = site.get(7).unwrap();
+        assert!(m.meter_power_reading().is_some());
+
+        cfg.eval("(clear-meter-power 7)").unwrap();
+        assert!(m.meter_power_reading().is_none());
+        assert_eq!(m.aggregate_power_w(&site), 0.0);
+
+        // Non-meter: the battery's default trait method returns
+        // false, so the defun errors instead of silently no-opping.
+        let (cfg2, _dir2) = config_with("(%make-battery :id 4)");
+        let err = cfg2.eval("(clear-meter-power 4)").unwrap_err();
+        assert!(err.to_string().contains("not a meter"), "{err}");
+
+        // Unknown id errors too.
+        assert!(cfg.eval("(clear-meter-power 99)").is_err());
+    }
+
+    /// `(clear-meter-reactive id)` clears whichever reactive state is
+    /// set — a `Var` override here — restoring the children sum. The
+    /// same defun also clears a `PowerFactor` state (one slot, both
+    /// shapes route through the same trait door).
+    #[test]
+    fn clear_meter_reactive_restores_measuring() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        cfg.eval("(set-meter-reactive-power 7 500.0)").unwrap();
+        let site = cfg.site();
+        let m = site.get(7).unwrap();
+        assert!(m.meter_reactive_reading().is_some());
+
+        cfg.eval("(clear-meter-reactive 7)").unwrap();
+        assert!(m.meter_reactive_reading().is_none());
+        assert_eq!(m.aggregate_reactive_var(&site), 0.0);
+
+        let err = cfg.eval("(clear-meter-reactive 99)").unwrap_err();
+        assert!(err.to_string().contains("not found"), "{err}");
+
+        // Non-meter: same "not a meter" error branch as
+        // clear-meter-power above.
+        let (cfg2, _dir2) = config_with("(%make-battery :id 4)");
+        let err = cfg2.eval("(clear-meter-reactive 4)").unwrap_err();
+        assert!(err.to_string().contains("not a meter"), "{err}");
+    }
+
+    /// `(clear-meter-reactive id)` broadcasts on BOTH knob tokens: the
+    /// inspector's power-factor input is a separate knob
+    /// ("meter-power-factor") from "meter-reactive-power", so a
+    /// PowerFactor-shaped clear must blank both or the PF input keeps
+    /// showing a stale number until the next full snapshot.
+    #[test]
+    fn clear_meter_reactive_broadcasts_both_knob_tokens() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 8000.0)");
+        cfg.eval("(set-meter-power-factor 7 0.8 t)").unwrap();
+        let mut rx = cfg.site().subscribe_events();
+        cfg.eval("(clear-meter-reactive 7)").unwrap();
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged {
+                    id: 7,
+                    knob: "meter-reactive-power",
+                    value: None,
+                    expr: None,
+                    ..
+                }
+            )),
+            "no meter-reactive-power KnobChanged on the bus; saw: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged {
+                    id: 7,
+                    knob: "meter-power-factor",
+                    value: None,
+                    expr: None,
+                    ..
+                }
+            )),
+            "no meter-power-factor KnobChanged on the bus; saw: {seen:?}"
+        );
+    }
+
+    /// `(clear-meter-power id)` broadcasts a `KnobChanged` with a
+    /// `None` value so a live inspector tab blanks the `:power`
+    /// input instead of showing a stale number.
+    #[test]
+    fn clear_meter_power_broadcasts_knob_changed_with_none() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        cfg.eval("(set-meter-power 7 1500)").unwrap();
+        let mut rx = cfg.site().subscribe_events();
+        cfg.eval("(clear-meter-power 7)").unwrap();
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged {
+                    id: 7,
+                    knob: "meter-power",
+                    value: None,
+                    expr: None,
+                    ..
+                }
+            )),
+            "no matching KnobChanged on the bus; saw: {seen:?}"
         );
     }
 

@@ -1900,3 +1900,12 @@ TimeoutTracker entries; after a hot reload re-registers the same
 id, a pre-reload deadline can fire and reset a fresh component's
 axis that was never commanded. Pre-existing (the old drain path had
 the same hole), surfaced during the 2026-08-29 race fix review.
+
+** TODO Python drive() lacks the meter clear fields :python:api:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 08:25]
+:END:
+
+python/src/switchyard/handles.py drive() builds its payload
+field-by-field and has no clear_power/clear_reactive, so the SDK
+trails the HTTP drive door added 2026-08-29.

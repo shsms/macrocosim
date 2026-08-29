@@ -544,6 +544,19 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// Default no-op for non-meter components.
     fn set_active_power_source(&self, _scalar: DynamicScalar) {}
 
+    /// Drop the meter's active-power override, returning it to
+    /// measuring its children's aggregate — the one-way trip
+    /// `set_active_power_override` / `set_active_power_source` never
+    /// had a way back from. Also drops the construction-time
+    /// `:power` kwarg for this axis so a save/reload agrees with the
+    /// now-measuring live state instead of resurrecting the cleared
+    /// override. Returns whether the component supports the
+    /// stimulus (a meter always does, even with nothing to clear);
+    /// the default is an unsupported no-op.
+    fn clear_active_power_source(&self) -> bool {
+        false
+    }
+
     /// Override the reactive-power value a meter publishes with a
     /// constant. The Q twin of [`Self::set_active_power_override`].
     /// Returns whether the component supports the stimulus; the
@@ -575,6 +588,18 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// `set-meter-power-factor` in Lisp and the HTTP drive op already
     /// do), because an out-of-range factor lands silently otherwise.
     fn set_power_factor(&self, _pf: f32, _leading: bool) -> bool {
+        false
+    }
+
+    /// Drop the meter's reactive-power override — whichever of
+    /// `Var` / `PowerFactor` is currently set — returning it to
+    /// summing its children's Q. The Q twin of
+    /// `clear_active_power_source`: same "clear means cleared" rule,
+    /// dropping the construction-time `:reactive-power` /
+    /// `:power-factor` kwarg for this axis too. Returns whether the
+    /// component supports the stimulus; the default is an
+    /// unsupported no-op.
+    fn clear_reactive_power_source(&self) -> bool {
         false
     }
 
