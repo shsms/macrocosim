@@ -1806,8 +1806,10 @@ listener re-running the sanitize on open panels would probably cover
 it. Not investigated yet - recorded from live use on 2026-08-28.
 
 * Review backlog — 2026-08-29
-** TODO Reactive knob smoke check fails: knob commits on Enter, smoke sends change :ui:testing:
+** DONE Reactive knob smoke check fails: knob commits on Enter, smoke sends change :ui:testing:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 10:27] \\
+  smoke now presses Enter like a user; the Enter-commit/blur-cancel UX stands
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
@@ -1920,3 +1922,14 @@ the same hole), surfaced during the 2026-08-29 race fix review.
 python/src/switchyard/handles.py drive() builds its payload
 field-by-field and has no clear_power/clear_reactive, so the SDK
 trails the HTTP drive door added 2026-08-29.
+
+** TODO Smoke waitFor timeouts are swallowed by catch-and-continue  :testing:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 10:38]
+:END:
+
+13 .catch(() => {}) / .catch(() => null) sites (17 total .catch(
+call sites) in tools/ui-smoke/live-topology.mjs let a timeout pass
+silently into the following check, which then asserts stale state —
+the one mechanism that could go green-but-hollow now that CI gates
+on the script. Convert to explicit failing checks.

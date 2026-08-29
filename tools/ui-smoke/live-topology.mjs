@@ -965,41 +965,98 @@ check(
   "e2e: the power-factor knob carries its leading flag",
   await page.evaluate(() => Boolean(document.querySelector('.knob-input[data-defun="set-meter-power-factor"]')?.closest("dd")?.querySelector(".knob-flag-input"))),
 );
-// Fill the knob the way a user does and let its change handler build
-// the defun call. The answer is read back with a direct eval from
-// Node, so the assertion lands on the sim's own state and not on
-// anything the page happens to be holding.
+// Fill the knob the way a user does — fill + Enter, the keydown path
+// the input's own listener wires (inspect.js commits on Enter-keydown
+// only; blur/Esc restore the pre-edit value instead, on purpose). The
+// answer is read back with a direct eval from Node, so the assertion
+// lands on the sim's own state and not on anything the page happens
+// to be holding.
 const evalNumber = async (expr) => {
-  const r = await fetch(`${BASE}/api/mg/2200/eval`, { method: "POST", body: expr });
+  const r = await fetch(`${BASE}/api/mg/2200/eval`, { method: "POST", body: expr, signal: AbortSignal.timeout(5000) });
   const j = await r.json();
   return j.ok ? Number(j.value) : Number.NaN;
 };
-await page.evaluate(() => {
-  const input = document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]');
-  input.value = "500";
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-});
+// The Component card that holds the knobs is folded by default
+// (CARD_DEFAULT_OPEN in inspect.js) — open it, or Playwright's
+// actionability check on fill/press times out against a display:none
+// row.
+if (!(await page.evaluate(() => document.getElementById("card-component")?.classList.contains("open")))) {
+  await page.click("#card-component [data-fold-toggle]");
+}
+await page.fill('.knob-input[data-defun="set-meter-reactive-power"]', "500");
+await page.press('.knob-input[data-defun="set-meter-reactive-power"]', "Enter");
 const knobQ = await waitFor(async () => {
   const q = await evalNumber(`(component-reactive-power ${meterId})`);
   return Math.abs(q - 500) < 1 ? q : null;
 }, 10000).catch(() => evalNumber(`(component-reactive-power ${meterId})`));
 check("e2e: the reactive knob writes through to the sim", Math.abs(knobQ - 500) < 1, String(knobQ));
-check(
-  "e2e: the knob clears itself once submitted",
-  await page.evaluate(() => document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]').value === ""),
+// inspect.js's Enter-commit contract (~519-521): on success the
+// commit handler remembers the committed text as the new "live"
+// baseline (data-live) rather than clearing the field — a blur
+// afterward restores THAT, not the pre-edit value. waitFor rather
+// than an immediate read: the commit success handler resolves off
+// evalQuoted's own fetch, a separate promise from the sim write
+// knobQ above already confirmed landed, so data-live can still be
+// stale for a moment even once the sim itself is caught up. No blur
+// before this check — blurring before data-live updates would race
+// the blur listener's own restore-to-data-live against the commit,
+// which is exactly what made the old (deleted) "clears itself"
+// assertion pass for the wrong reason.
+const rememberedLive = await waitFor(async () =>
+  (await page.evaluate(
+    () => document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]').dataset.live,
+  )) === "500"
+    ? "500"
+    : null,
 );
+check("e2e: the knob remembers the committed value", rememberedLive === "500", `data-live ${rememberedLive}`);
+// The check above only proves the Enter-commit handler updated
+// data-live — it says nothing about blur. Proving blur actually
+// restores data-live (rather than just leaving an already-"500"
+// field alone) needs a value blur can visibly change: fill an
+// UNCOMMITTED "999" (no Enter, so data-live stays "500"), blur, and
+// confirm the visible text snaps back to "500" rather than sticking
+// at "999". Deleting inspect.js's blur listener (~535-539) makes
+// this fail with afterBlur === "999"; the old version of this check
+// asserted afterBlur === "500" right after page.fill'ing "500" and
+// pressing Enter, a value the field already held and the blur
+// listener's own restore-to-data-live would also have produced — so
+// deleting that listener couldn't have turned it red.
+await page.fill('.knob-input[data-defun="set-meter-reactive-power"]', "999");
+await page.evaluate(() => document.activeElement?.blur());
+const afterBlur = await page.evaluate(
+  () => document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]').value,
+);
+check(
+  "e2e: blurring an uncommitted edit snaps the knob back to the committed value",
+  afterBlur === "500",
+  `value after blur "${afterBlur}"`,
+);
+// (Not exercised: the power-factor knob's .knob-flag-input rides the
+// same blur path (flag.checked = flag.dataset.live === "1"), but that
+// checkbox only exists on set-meter-power-factor, a different knob
+// from the one this section already has open/selected — covering it
+// here would mean switching knobs mid-section rather than reusing
+// this one, so it's left for a future section instead.)
+
+// Leave the meter as we found it: clear the reactive override so
+// later sections (and anything appended after this one) aren't
+// coupled to this section's 500 VAr state.
+const reactiveCleared = await (async () => {
+  const r = await fetch(`${BASE}/api/mg/2200/eval`, {
+    method: "POST",
+    body: `(clear-meter-reactive ${meterId})`,
+    signal: AbortSignal.timeout(5000),
+  });
+  return (await r.json()).ok;
+})();
+check("e2e: the reactive override is cleared at the end of the section", reactiveCleared === true, String(reactiveCleared));
 
 // ── e2e: the meter power knob's measure button clears an override ─
-// Reuses `meterId` and `evalNumber` from above (still selected). The
-// knob rows above were only ever DOM-queried (page.evaluate, no
-// visibility requirement); this section actually fills + clicks, so
-// the Component card — folded by default (CARD_DEFAULT_OPEN in
-// inspect.js) — has to be open first, or Playwright's actionability
-// check on `fill`/`click` times out against a display:none row.
-const componentCardOpen = await page.evaluate(() =>
-  document.getElementById("card-component")?.classList.contains("open"),
-);
-if (!componentCardOpen) await page.click("#card-component [data-fold-toggle]");
+// Reuses `meterId` and `evalNumber` from above (still selected), and
+// the Component card the reactive-knob section above already opened
+// (fill/click need it open, or Playwright's actionability check
+// times out against a display:none row).
 // Capture the live P this meter reports while it's still following
 // its children — clear-meter-power's whole job is to land back near
 // this reading, not at zero or at whatever override gets set below.
@@ -1016,11 +1073,9 @@ const childrenP = await waitFor(async () => {
 });
 check("e2e: the power measure button starts hidden", (await measureHidden()) === true);
 // Submit the real way — fill + Enter, the keydown path the input's
-// own listener wires (unlike the reactive knob above, whose
-// dispatched "change" event no listener ever reads — the standing
-// failure). Blur afterward: while the field is "editing", its
-// visible text stays frozen against the WS repaint the clear below
-// depends on (paintKnobEntry).
+// own listener wires. Blur afterward: while the field is "editing",
+// its visible text stays frozen against the WS repaint the clear
+// below depends on (paintKnobEntry).
 const OVERRIDE_P = 424242;
 await page.fill('.knob-input[data-defun="set-meter-power"]', String(OVERRIDE_P));
 await page.press('.knob-input[data-defun="set-meter-power"]', "Enter");
