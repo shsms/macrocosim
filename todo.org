@@ -1954,14 +1954,25 @@ id, a pre-reload deadline can fire and reset a fresh component's
 axis that was never commanded. Pre-existing (the old drain path had
 the same hole), surfaced during the 2026-08-29 race fix review.
 
-** TODO Python drive() lacks the meter clear fields :python:api:
+** TODO Typed Python weather surface (and the drive clear fields) :python:api:
 :LOGBOOK:
+- Note taken on [2026-08-29 Sa 23:59] \\
+  Widened per Sahas: fold the missing drive() clear fields into a
+  typed weather surface for the SDK.
 - State "TODO"       from              [2026-08-29 Sa 08:25]
 :END:
 
-python/src/switchyard/handles.py drive() builds its payload
-field-by-field and has no clear_power/clear_reactive, so the SDK
-trails the HTTP drive door added 2026-08-29.
+The SDK reaches weather only through raw ~site.eval~ lisp strings. Add
+a typed surface wrapping ~GET~/~POST /api/weather~: an ~mg.weather~
+handle with ~configure(sunrise=..., sunset=..., peak=..., cloud_rate=...,
+depth=(lo, hi), duration=..., ramp=..., seed=...)~, ~pass_cloud(depth,
+duration, ramp=None)~ and ~status()~ — so Python callers get the typed
+validation and 404/409 semantics instead of lisp strings. In the same
+stroke close the drive-door gap: ~handles.py drive()~ builds its
+payload field-by-field and still has no ~clear_power~ /
+~clear_reactive~ / ~clear_sunlight~ (the HTTP door has carried all
+three since 2026-08-29), and the PV handle should grow
+~clear_sunlight()~ as the typed way back to weather-following.
 
 ** TODO Smoke waitFor timeouts are swallowed by catch-and-continue  :testing:
 :LOGBOOK:
