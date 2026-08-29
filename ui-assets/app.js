@@ -46,6 +46,7 @@ import {
 import { closePanel, closeTopPanel, isPanelOpen } from "./side-panel.js";
 import { setupDrawerSplitter } from "./splitter.js";
 import { topology } from "./topology.js";
+import { setupWeatherPanel } from "./weather-panel.js";
 
 // Re-export the routing helpers that other modules still pull
 // via `./app.js` so consumers (panels / chrome / the metrics and
@@ -486,6 +487,7 @@ async function init() {
   setupModeToggle();
   setupReplMgChip();
   setupMetricsPanel();
+  setupWeatherPanel();
   scenariosPanel.setup();
   dispatchesPanel.setup();
   await clockState.init();
