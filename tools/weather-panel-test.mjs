@@ -107,6 +107,36 @@ const PAYLOAD = {
     `${atten[overhead]} vs ${clear[overhead] * 0.5}`);
 }
 
+// ── the ghost preview spans what pass_cloud would actually build ─────
+
+{
+  const nowMs = Date.parse(NOW);
+  const clearDay = { ...PAYLOAD, events: [] };
+  // The span the ghost is drawn over, in seconds: the preview series
+  // is null everywhere outside the previewed cloud.
+  const ghostSpanS = (ghost) => {
+    const [xs, , , preview] = daySeries(clearDay, nowMs, ghost);
+    const inside = xs.filter((_h, i) => preview[i] != null);
+    return (inside[inside.length - 1] - inside[0]) * 3600;
+  };
+  check("ghost: a plateaued cloud spans its duration",
+    near(ghostSpanS({ depth: 100, duration: 3600, ramp: 600 }), 3600),
+    String(ghostSpanS({ depth: 100, duration: 3600, ramp: 600 })));
+  // `Weather::pass_cloud` keeps ramp_in = ramp_out = ramp whole and
+  // saturates only the plateau, so 2*ramp past the duration the cloud
+  // is two ramps back to back and OUTLASTS what was typed.
+  check("ghost: 2×ramp past the duration spans 2×ramp",
+    near(ghostSpanS({ depth: 100, duration: 600, ramp: 900 }), 1800),
+    String(ghostSpanS({ depth: 100, duration: 600, ramp: 900 })));
+  // …and it still reaches full depth, at the apex where the two ramps
+  // meet — a compressed-ramp preview would put the apex elsewhere.
+  const [xs, , , preview] = daySeries(clearDay, nowMs, { depth: 100, duration: 600, ramp: 900 });
+  const apex = xs.indexOf(12.25);
+  check("ghost: the apex of an all-ramp cloud is full depth",
+    apex >= 0 && near(preview[apex], 0),
+    `${apex} ${preview[apex]}`);
+}
+
 if (failures) {
   console.error(`${failures} failure(s)`);
   process.exit(1);

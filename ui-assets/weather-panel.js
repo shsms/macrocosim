@@ -48,6 +48,15 @@ let skeleton = "";
 // argument. See nowHours() for why the browser's clock is the right
 // one to ask.
 let markerHour = 0;
+// The last reading the panel painted. Kept so the ghost preview can
+// re-plot the curve on a keystroke, where there is no fresh payload
+// to hand applyLive.
+let lastWeather = null;
+// The ghost preview's two triggers: the pass-a-cloud fields are being
+// filled in (focus), or they have been changed and not fired yet.
+// Either one draws the would-be cloud; firing clears both.
+let ghostFocused = false;
+let ghostEdited = false;
 
 const escapeHtml = (s) =>
   String(s).replace(
@@ -110,15 +119,47 @@ function dayStartMs(nowMs) {
 
 // The now-marker's hour-of-day. The server evaluates the sky at the
 // weather's own anchor, which `advance` re-stamps from the wall clock
-// every tick — so the browser's clock is the same clock, and asking
-// it here costs nothing. Clock skew between the two would show as the
-// marker sitting a little off the readout; nothing else depends on it.
+// every tick — so the browser's clock is close enough, and asking it
+// here costs nothing. The marker deliberately stays on the browser
+// clock: skew only nudges a pixel-wide line. The cloud-expiry filter
+// is the one place skew has a visible casualty, and it uses the
+// payload's server-stamped `now` instead (see `eventsHtml`).
 const nowHours = (nowMs) => (nowMs - dayStartMs(nowMs)) / 3600000;
 
-// The two plotted series over one UTC day: clear-sky, and clear-sky
+// The curve's x samples, in seconds from UTC midnight: the regular
+// 10-minute grid, plus the ghost trapezoid's four corners. Without
+// those corners a previewed cloud shorter than one grid step would
+// fall between two samples and draw as nothing.
+function sampleSecs(ghostEv, origin) {
+  const secs = [];
+  for (let s = 0; s <= DAY_S; s += SAMPLE_S) secs.push(s);
+  if (!ghostEv) return secs;
+  const ramp = Math.min(ghostEv.ramp, (ghostEv.end - ghostEv.start) / 2);
+  // The trailing inside corner is held a millisecond off the end even
+  // when the ramp is zero: sampled AT the end the cloud is already
+  // over, so with no ramp the only two corners would be "full depth"
+  // and "gone", and the line between them would slope across the
+  // whole cloud. One sample just inside makes that fall a step.
+  for (const ms of [
+    ghostEv.start,
+    ghostEv.start + ramp,
+    ghostEv.end - Math.max(ramp, 1),
+    ghostEv.end,
+  ]) {
+    const s = (ms - origin) / 1000;
+    if (s > 0 && s < DAY_S) secs.push(s);
+  }
+  // A zero ramp makes the leading corners coincide; the Set drops the
+  // repeats.
+  return [...new Set(secs)].sort((a, b) => a - b);
+}
+
+// The three plotted series over one UTC day: clear-sky, clear-sky
 // attenuated by every tracked cloud (Π (1 − attenuation_i), so
-// overlapping clouds compound — `Weather::pct_at`'s rule).
-function daySeries(w, nowMs) {
+// overlapping clouds compound — `Weather::pct_at`'s rule), and the
+// ghost — that same attenuated curve with one not-yet-fired cloud
+// laid on top of it, or nulls everywhere when there is no preview.
+function daySeries(w, nowMs, ghost) {
   const sunrise = hhmmToSecs(w.sunrise) ?? 0;
   const sunset = hhmmToSecs(w.sunset) ?? 0;
   const peak = Number(w.peak_pct) || 0;
@@ -134,18 +175,42 @@ function daySeries(w, nowMs) {
     }))
     .filter((e) => Number.isFinite(e.start) && Number.isFinite(e.end));
   const origin = dayStartMs(nowMs);
+  // The previewed cloud starts at the now-marker: it is what firing
+  // the button right now would do — so its span is the span
+  // `Weather::pass_cloud` would build, not the duration as typed. That
+  // door keeps both ramps at full length and saturates only the
+  // plateau (`duration - 2*ramp`), so once 2×ramp passes duration the
+  // cloud is two ramps back to back and outlives what was asked for.
+  // Compressing the ramps to fit the duration instead would preview a
+  // cloud the server never makes.
+  const ghostEv = ghost
+    ? {
+        start: nowMs,
+        end: nowMs + Math.max(ghost.duration, 2 * ghost.ramp) * 1000,
+        depth: ghost.depth,
+        ramp: ghost.ramp * 1000,
+      }
+    : null;
   const xs = [];
   const clear = [];
   const atten = [];
-  for (let s = 0; s <= DAY_S; s += SAMPLE_S) {
+  const preview = [];
+  for (const s of sampleSecs(ghostEv, origin)) {
+    const t = origin + s * 1000;
     const cs = clearSkyPct(s, sunrise, sunset, peak);
     let transmission = 1;
-    for (const e of events) transmission *= 1 - attenuationAt(e, origin + s * 1000);
+    for (const e of events) transmission *= 1 - attenuationAt(e, t);
+    const lit = cs * transmission;
     xs.push(s / 3600);
     clear.push(cs);
-    atten.push(cs * transmission);
+    atten.push(lit);
+    // Null outside the previewed cloud's own span, so the ghost draws
+    // as a short dip hanging off the real curve rather than a second
+    // copy of it. Both its ends sit exactly on the curve, since the
+    // trapezoid is zero at its corners.
+    preview.push(ghostEv && t >= ghostEv.start && t <= ghostEv.end ? lit * (1 - attenuationAt(ghostEv, t)) : null);
   }
-  return [xs, clear, atten];
+  return [xs, clear, atten, preview];
 }
 
 // ── the chart ───────────────────────────────────────────────────────
@@ -213,6 +278,10 @@ function buildChart(slot, data) {
       // clear-sky is by construction the upper of the two.
       { stroke: solar, width: 1, dash: [3, 3], points: { show: false } },
       { stroke: solar, width: 1.5, points: { show: false } },
+      // The pass-a-cloud preview: same colour as the real sky but
+      // faint and dashed, so it reads as "this would happen" rather
+      // than as a reading. It is all nulls unless a preview is up.
+      { stroke: solar, width: 1.5, dash: [2, 3], alpha: 0.55, points: { show: false } },
     ],
     bands: [{ series: [1, 2], fill: "rgba(168, 211, 90, 0.14)" }],
     hooks: { draw: [drawNowMarker] },
@@ -266,7 +335,7 @@ function showError(text) {
 const TIPS = {
   depth: "How much light the cloud blocks at its darkest (%)",
   duration: "Cloud lifetime, fade-in to fade-out (s)",
-  ramp: "Fade-in/out time at the cloud's edges (s); the middle holds at full depth",
+  ramp: "Fade-in/out time at the cloud's edges (s); the middle holds at full depth. If 2×ramp exceeds duration the cloud is all ramp, and lasts 2×ramp",
   rate: "Average random clouds per hour (Poisson); 0 = off",
   peak: "Clear-sky maximum at the middle of the day",
   time: "UTC, HH:MM",
@@ -424,6 +493,56 @@ async function commitRange(r) {
   applyLive(res.body);
 }
 
+// ── derived hints and the ghost preview ─────────────────────────────
+
+// The pass-a-cloud row's three inputs, by what they hold.
+const PASS_CLOUD = {
+  depth: "weather-cloud-depth",
+  duration: "weather-cloud-duration",
+  ramp: "weather-cloud-ramp",
+};
+
+// A field's text as a number. Reading the DOM rather than the last
+// payload is deliberate: both callers below want to follow what is
+// being typed, before (or without) any commit.
+const numIn = (id) => Number(document.getElementById(id)?.value.trim());
+
+// "≈ N clouds overhead on average": the arrival rate times how long
+// a cloud lasts is how many of them are up at any one moment — the
+// one number the rate and the duration range only mean together.
+function updateRateHint() {
+  const el = document.getElementById("weather-rate-hint");
+  if (!el) return;
+  const rate = numIn("weather-cloud-rate");
+  const meanDuration = (numIn("weather-duration-lo") + numIn("weather-duration-hi")) / 2;
+  const overhead = (rate * meanDuration) / 3600;
+  const show = Number.isFinite(overhead) && rate > 0;
+  el.hidden = !show;
+  el.textContent = show ? `≈ ${overhead.toFixed(1)} clouds overhead on average` : "";
+}
+
+// The pass-a-cloud fields as a cloud to preview, or null when they
+// don't describe one. Silent about bad input — firing is what
+// complains; the preview just stays away.
+function ghostFromFields() {
+  const depth = numIn(PASS_CLOUD.depth);
+  const duration = numIn(PASS_CLOUD.duration);
+  const ramp = numIn(PASS_CLOUD.ramp);
+  if (!Number.isFinite(depth) || !Number.isFinite(duration) || !Number.isFinite(ramp)) return null;
+  if (!(depth > 0) || !(duration > 0)) return null;
+  return { depth, duration, ramp };
+}
+
+const ghostEvent = () => (ghostFocused || ghostEdited ? ghostFromFields() : null);
+
+// Re-plot from the last reading. The ghost's focus / edit / blur
+// handlers call this: the sky hasn't changed, only what is drawn on
+// top of it.
+function redrawCurve() {
+  if (!lastWeather || !plot) return;
+  plot.setData(daySeries(lastWeather, Date.now(), ghostEvent()));
+}
+
 // ── rendering ───────────────────────────────────────────────────────
 
 const fieldInput = (f) =>
@@ -450,6 +569,30 @@ const rangeRow = (r) =>
         </span>
       </div>`;
 
+// What a cloud does to the light, as one picture: time across, how
+// much is blocked upwards. The three range knobs under it are the
+// three measurements marked on the trapezoid, so the words below
+// have something to point at. Static, and drawn in the panel's own
+// CSS colours so it follows the theme.
+const CLOUD_SKETCH = `<svg class="wsketch" id="weather-cloud-sketch" viewBox="0 0 260 86"
+          role="img" aria-label="A cloud's attenuation over time: it ramps up to its
+          depth, holds, then ramps back down over its duration.">
+          <path class="wsketch-shape" d="M40 60 L78 24 L190 24 L228 60 Z" />
+          <line class="wsketch-axis" x1="20" y1="60" x2="242" y2="60" />
+          <line class="wsketch-mark" x1="40" y1="14" x2="78" y2="14" />
+          <line class="wsketch-mark" x1="40" y1="10" x2="40" y2="18" />
+          <line class="wsketch-mark" x1="78" y1="10" x2="78" y2="18" />
+          <text x="59" y="7" text-anchor="middle">ramp</text>
+          <line class="wsketch-mark" x1="134" y1="24" x2="134" y2="60" />
+          <line class="wsketch-mark" x1="130" y1="24" x2="138" y2="24" />
+          <line class="wsketch-mark" x1="130" y1="60" x2="138" y2="60" />
+          <text x="142" y="45">depth</text>
+          <line class="wsketch-mark" x1="40" y1="70" x2="228" y2="70" />
+          <line class="wsketch-mark" x1="40" y1="66" x2="40" y2="74" />
+          <line class="wsketch-mark" x1="228" y1="66" x2="228" y2="74" />
+          <text x="134" y="83" text-anchor="middle">duration</text>
+        </svg>`;
+
 // A captioned group of knobs: a quiet header, one line saying what
 // the group does, then the rows.
 const sectionHtml = (head, caption, rows) => `
@@ -471,7 +614,10 @@ function liveHtml() {
   const randomClouds = sectionHtml(
     "Random clouds",
     "On average this many clouds per hour; each draws its depth, duration and ramp from these ranges. 0 or empty = off.",
-    `<div class="wfields">${scalarRows("clouds")}${RANGES.map(rangeRow).join("")}</div>`,
+    `${CLOUD_SKETCH}
+        <div class="wfields">${scalarRows("clouds")}
+          <p class="hint wrate-hint" id="weather-rate-hint" hidden></p>
+          ${RANGES.map(rangeRow).join("")}</div>`,
   );
   const fireCloudSec = sectionHtml(
     "Fire a cloud",
@@ -563,6 +709,52 @@ function paintLiveSkeleton() {
     wireField(document.getElementById(r.hi), () => commitRange(r));
   }
   document.getElementById("weather-cloud-fire").addEventListener("click", fireCloud);
+  // The derived "clouds overhead" line follows the keystrokes in the
+  // fields it is computed from, not their commits — it is a reading
+  // of what you are typing, and nothing is posted for it.
+  for (const id of ["weather-cloud-rate", "weather-duration-lo", "weather-duration-hi"]) {
+    document.getElementById(id).addEventListener("input", updateRateHint);
+  }
+  // The ghost preview shows while the pass-a-cloud row is being
+  // filled in, and stays after blur if something was changed and not
+  // yet fired.
+  for (const id of Object.values(PASS_CLOUD)) {
+    const el = document.getElementById(id);
+    el.addEventListener("focus", () => {
+      ghostFocused = true;
+      redrawCurve();
+    });
+    el.addEventListener("blur", () => {
+      ghostFocused = false;
+      redrawCurve();
+    });
+    el.addEventListener("input", () => {
+      ghostEdited = true;
+      redrawCurve();
+    });
+    // Enter fires, Esc takes the preview back — the two halves of
+    // "done with this row". Enter reaches the button these fields are
+    // committed by (there is no form here to submit it for us), which
+    // is what the rest of the panel's Enter-commit fields have trained
+    // the hand to expect. Esc is the other direction: these fields
+    // have no committed value to snap back to, so dropping the ghost
+    // IS "never mind" — without it an edit pins the preview until
+    // something is fired. fireCloud clears both flags on either POST
+    // outcome (a validation bail keeps the ghost, deliberately), so
+    // Enter needs no cleanup of its own.
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        fireCloud();
+        return;
+      }
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      ghostFocused = false;
+      ghostEdited = false;
+      redrawCurve();
+    });
+  }
   plot?.destroy();
   plot = null;
 }
@@ -585,9 +777,9 @@ function paintEmptySkeleton() {
 }
 
 async function fireCloud() {
-  const depth = Number(document.getElementById("weather-cloud-depth").value);
-  const duration = Number(document.getElementById("weather-cloud-duration").value);
-  const ramp = Number(document.getElementById("weather-cloud-ramp").value);
+  const depth = numIn(PASS_CLOUD.depth);
+  const duration = numIn(PASS_CLOUD.duration);
+  const ramp = numIn(PASS_CLOUD.ramp);
   if (!Number.isFinite(depth) || !Number.isFinite(duration) || !Number.isFinite(ramp)) {
     showError("pass a cloud: depth, duration and ramp must all be numbers");
     return;
@@ -595,8 +787,14 @@ async function fireCloud() {
   const res = await postWeather({
     pass_cloud: { depth_pct: depth, duration_s: duration, ramp_s: ramp },
   });
+  // The fire is over either way — the cloud is in the reading now, or
+  // the door refused it. Neither leaves the preview anything to show,
+  // so it goes even when the answer was no.
+  ghostFocused = false;
+  ghostEdited = false;
   if (!res.ok) {
     showError(errorOf(res));
+    redrawCurve();
     return;
   }
   showError(null);
@@ -632,10 +830,12 @@ function applyLive(w) {
     paintField(document.getElementById(r.hi), fieldText(pair[1]));
   }
   document.getElementById("weather-events").innerHTML = eventsHtml(w);
+  updateRateHint();
 
+  lastWeather = w;
   const nowMs = Date.now();
   markerHour = nowHours(nowMs);
-  const data = daySeries(w, nowMs);
+  const data = daySeries(w, nowMs, ghostEvent());
   const slot = document.getElementById("weather-chart");
   if (plot) plot.setData(data);
   else if (slot) buildChart(slot, data);
@@ -680,6 +880,9 @@ function teardown() {
   plot = null;
   contentEl = null;
   skeleton = "";
+  lastWeather = null;
+  ghostFocused = false;
+  ghostEdited = false;
 }
 
 export function setupWeatherPanel() {

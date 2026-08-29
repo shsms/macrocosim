@@ -1495,6 +1495,41 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   line-height: 1.35;
   margin: 0 0 6px;
 }
+/* The cloud sketch: one trapezoid naming depth, duration and ramp.
+   Sized by its viewBox, so it scales with the panel, and painted in
+   the panel's own variables so it follows the theme. */
+.wsketch {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 0 8px;
+}
+.wsketch-shape {
+  fill: var(--accent);
+  fill-opacity: 0.16;
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+.wsketch-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.wsketch-mark {
+  stroke: var(--muted);
+  stroke-width: 0.8;
+}
+.wsketch text {
+  fill: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 8px;
+}
+/* The derived "clouds overhead" line sits under the rate input, in
+   the grid's value column rather than under its label. */
+.weather-panel .wrate-hint {
+  grid-column: 2;
+  font-size: 11px;
+  margin: -1px 0 1px;
+}
 .wcloud-row {
   display: flex;
   flex-wrap: wrap;

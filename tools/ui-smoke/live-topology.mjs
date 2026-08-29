@@ -1446,6 +1446,32 @@ check(
   `${preCloudPct}% -> ${postCloudPct}%`,
 );
 
+// Enter in the pass-a-cloud row fires it too — there is no form here
+// to submit the button for us, so it is wired by hand. Counted off the
+// cloud list rather than the readout: both clouds are live, so the
+// second one's arrival shows as a row without needing the sine to be
+// bright enough for another measurable drop.
+const cloudRows = async () =>
+  await page.evaluate(() => document.querySelectorAll("#weather-events li:not(.hint)").length);
+const rowsBeforeEnter = await cloudRows();
+await page.fill("#weather-cloud-depth", "40");
+await page.fill("#weather-cloud-duration", "1800");
+await page.fill("#weather-cloud-ramp", "5");
+await page.press("#weather-cloud-ramp", "Enter");
+const rowsAfterEnter = await waitFor(async () => {
+  const n = await cloudRows();
+  return n > rowsBeforeEnter ? n : null;
+}, 10000);
+check(
+  "e2e: Enter in the pass-a-cloud row fires the cloud",
+  rowsAfterEnter > rowsBeforeEnter,
+  `${rowsBeforeEnter} -> ${rowsAfterEnter} cloud rows`,
+);
+// The ghost preview's Esc dismissal has no assertion here: it is a
+// canvas-ink difference, measurable only by screenshotting the chart.
+// Hand-checked instead (see the branch's report), and the arithmetic
+// under it is covered DOM-free by tools/weather-panel-test.mjs.
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }
