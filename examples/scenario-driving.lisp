@@ -26,7 +26,29 @@
 (scenario-start "example-30min")
 
 ;; Cap the run at 30 wall-clock minutes; (scenario-stop) fires
-;; automatically and freezes elapsed + every metric accumulator.
+;; automatically. It freezes elapsed + every metric accumulator AND
+;; unwinds the run: every knob this script drove goes back to what it
+;; was before the run first touched it. So the minute-15 sunlight
+;; setting is itself reverted at minute 30 — inverter 200 returns to
+;; berlin-demo.lisp's own sunlight source, not to the 100 % this
+;; script last set — and the outage chain below, armed while the run
+;; is in progress, is cancelled with the run. If minute 30 lands
+;; inside one of that chain's outages (with the timings below, a
+;; battery is down maybe a fifth of the time), teardown puts the
+;; victim's health back as it cancels the chain, rather than leaving
+;; it in 'error with no chain left to restore it.
+;;
+;; Health this script flips ITSELF is a different matter: teardown
+;; restores driven knobs and the outage chain's victim, not every
+;; write. A (set-component-health ...) in a cue of your own stands
+;; after the stop until something puts it back.
+;;
+;; The bare `every` / `run-with-timer` blocks below are NOT the
+;; scenario's own timers (only `agent` / `cue` / `expect` sections
+;; and a `random-outage` chain are), so they keep firing afterward:
+;; the consumer-load loop simply re-drives meter 100 a second after
+;; teardown restored it. Cancel them with `(cancel-timers)` when
+;; you want the world fully back to where it started.
 (scenario-end-after 30)
 
 ;; ── Consumer load: end-of-window spike ─────────────────────────
@@ -45,7 +67,8 @@
      (set-meter-power 100 (+ base spike)))))
 
 ;; ── PV cloud cover ─────────────────────────────────────────────
-;; Drop sunlight to 30 % at minute 10, restore at minute 15. The
+;; Drop sunlight to 30 % at minute 10, back to full at minute 15
+;; (and back to the world's own source at the minute-30 stop). The
 ;; solar inverter's `min-avail` clamp picks up each new sunlight%
 ;; on the next physics tick — observable as a visible drop in
 ;; available generation on the Report panel.

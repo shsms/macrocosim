@@ -41,10 +41,43 @@ centrally before replaying the files, so scripts do NOT call it
 themselves — a script's own call, replayed after another script,
 would cancel that script's freshly re-registered timers.
 Re-loading one file cancels only that file's timers, via
-`cancel-file-timers`."
+`cancel-file-timers`.
+
+Also resets `scenario--armed-timers` and BOTH of the random-outage
+chain's own variables — the `random-outage--scenario-owned`
+ownership latch and the `random-outage--current-victim` in-flight
+marker — to nil, if bound (only true once sim/scenarios.lisp has
+been loaded).
+
+Every handle the armed list might be holding was just cancelled
+above (it's a subset of the same `active-timers` entries), so a
+stale reference left there after a whole-world reload would be dead
+weight. The chain those entries belonged to is gone too, in both of
+its aspects: a NEXT chain must re-decide for itself whether a
+scenario owns it rather than inheriting the cut-off run's answer,
+and — the sharper one — a victim id left behind by a chain cancelled
+MID-OUTAGE must not outlive it. `random-outage--release-victim`
+reads that marker under the NEXT chain's ownership, so a stale id
+would have a later scenario's stop force-write
+`(set-component-health OLD-ID 'ok)` and journal a \"back\" event for
+an outage that chain never caused. Clearing it here costs the
+cut-off outage its restore — the timer that would have run it was
+just cancelled anyway — and a reload rebuilds the world regardless.
+
+Nothing else needs resetting: whether a timer armed after this point
+belongs to a scenario is read from the journal at arm time
+(`scenario-running-p`), so a reload landing mid-scenario cannot
+leave a stale \"we are tracking\" flag behind to capture an ambient
+timer."
   (dolist (entry active-timers)
     (cancel-timer (cdr entry)))
-  (setq active-timers nil))
+  (setq active-timers nil)
+  (when (boundp 'scenario--armed-timers)
+    (setq scenario--armed-timers nil))
+  (when (boundp 'random-outage--scenario-owned)
+    (setq random-outage--scenario-owned nil))
+  (when (boundp 'random-outage--current-victim)
+    (setq random-outage--current-victim nil)))
 
 (defun cancel-file-timers (file)
   "Cancel every timer FILE armed and drop it from `active-timers`.
@@ -56,6 +89,21 @@ per-file reload calls before re-evaluating the file."
     (dolist (entry active-timers)
       (if (equal (car entry) file)
           (cancel-timer (cdr entry))
+        (setq kept (cons entry kept))))
+    (setq active-timers kept)))
+
+(defun cancel-timer-handle (timer)
+  "Cancel exactly TIMER (a handle from `run-with-timer` / `every`,
+e.g. one this caller stashed itself) and drop its entry from
+`active-timers`. Companion to `cancel-file-timers`: that cancels
+every timer a FILE armed; this cancels one specific handle
+regardless of which file (or no file) armed it — for a caller that
+tracks its own handles directly rather than filing by source, like
+`scenario--cancel-timers`."
+  (cancel-timer timer)
+  (let (kept)
+    (dolist (entry active-timers)
+      (unless (eq (cdr entry) timer)
         (setq kept (cons entry kept))))
     (setq active-timers kept)))
 
@@ -83,15 +131,17 @@ calls `(fire 1001)` each tick, saving a closing lambda. Defaults
 to no extra args.
 
 The handle is pushed onto `active-timers` paired with the file that
-armed it, so a reload of that file (or `cancel-timers`) cancels it."
+armed it, so a reload of that file (or `cancel-timers`) cancels it.
+Returns the bare timer handle (not `active-timers` itself) so a
+caller that wants to track just its own timer — `scenario--agent`,
+via `define-controller` — can stash it directly."
   (let* ((ms (plist-get plist :milliseconds))
          (func (plist-get plist :call))
          (args (plist-get plist :args))
-         (secs (/ ms 1000.0)))
-    (setq active-timers
-          (cons (cons (current-source-file)
-                      (apply 'run-with-timer secs secs func args))
-                active-timers))))
+         (secs (/ ms 1000.0))
+         (timer (apply 'run-with-timer secs secs func args)))
+    (setq active-timers (cons (cons (current-source-file) timer) active-timers))
+    timer))
 
 ;; -----------------------------------------------------------------------------
 ;; In-sim controller

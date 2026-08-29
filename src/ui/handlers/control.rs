@@ -16,6 +16,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::lisp::Config;
+use crate::sim::component::KnobKind;
 use crate::sim::microgrid_site::MicrogridSite;
 use crate::sim::runtime::{CommandMode, Health, TelemetryMode};
 
@@ -349,7 +350,18 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
     // after clear_power mutated is a component whose predicates and
     // doors genuinely disagree, i.e. a bug in that component, not a
     // reachable client request.
+    // Every mutation below is preceded by a `scenario_snapshot_knob`
+    // for the knob it touches — the same first-snapshot-wins capture
+    // the Lisp setters in `src/lisp/defuns/load_drivers.rs` take, with
+    // the same kind mapping. Self-gating (a no-op outside a running
+    // scenario), and it is what makes the uniform-restore policy true
+    // for EVERY door: a poke through this route during a run is put
+    // back by `(scenario-stop)` like any other, and — the case that
+    // actually bites — a first-touch poke here can no longer be
+    // mistaken for the pre-scenario baseline by a LATER scenario
+    // drive of the same knob.
     if req.clear_power {
+        site.scenario_snapshot_knob(id, KnobKind::MeterPower);
         if !component.clear_active_power_source() {
             return Err(reject(
                 StatusCode::BAD_REQUEST,
@@ -359,6 +371,7 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         site.note_knob_changed(id, "meter-power", None, None, None);
     }
     if req.clear_reactive {
+        site.scenario_snapshot_knob(id, KnobKind::MeterReactive);
         if !component.clear_reactive_power_source() {
             return Err(reject(
                 StatusCode::BAD_REQUEST,
@@ -381,6 +394,7 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
     // tokens — `soc_pct` isn't part of the knob vocabulary the
     // inspector reads back, so set_soc_pct gets no broadcast.
     if let Some(watts) = req.power_w {
+        site.scenario_snapshot_knob(id, KnobKind::MeterPower);
         let applied = component.set_active_power_override(watts as f32);
         debug_assert!(applied, "takes_active_power_override disagrees with setter");
         if applied {
@@ -388,6 +402,7 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         }
     }
     if let Some(pct) = req.sunlight_pct {
+        site.scenario_snapshot_knob(id, KnobKind::Sunlight);
         let applied = component.set_sunlight_pct(pct as f32);
         debug_assert!(applied, "takes_sunlight_pct disagrees with setter");
         if applied {
@@ -399,6 +414,7 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         debug_assert!(applied, "takes_soc_pct disagrees with setter");
     }
     if let Some(vars) = req.reactive_var {
+        site.scenario_snapshot_knob(id, KnobKind::MeterReactive);
         let applied = component.set_reactive_power_override(vars as f32);
         debug_assert!(
             applied,
@@ -409,6 +425,7 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         }
     }
     if let Some(pf) = req.power_factor {
+        site.scenario_snapshot_knob(id, KnobKind::MeterReactive);
         let leading = req.leading.unwrap_or(false);
         let applied = component.set_power_factor(pf as f32, leading);
         debug_assert!(
@@ -426,6 +443,7 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         }
     }
     if let Some(kg_h) = req.steam_demand_kg_h {
+        site.scenario_snapshot_knob(id, KnobKind::BoilerDemand);
         let applied = component.set_steam_demand_kg_h(kg_h as f32);
         debug_assert!(applied, "takes_steam_demand disagrees with setter");
         if applied {
@@ -809,6 +827,43 @@ mod tests {
                 }
             )),
             "no meter-power-factor KnobChanged on the bus; saw: {seen:?}"
+        );
+    }
+
+    /// The typed drive route snapshots exactly like the Lisp
+    /// setters do, so scenario teardown covers it too: a poke made
+    /// through `POST /api/component/:id/drive` while a scenario runs
+    /// is put back at `(scenario-stop)`. Without the snapshot, a poke
+    /// on a knob the scenario never touched would survive teardown —
+    /// and, worse, a FIRST touch through this door would go on to be
+    /// captured as the "pre-scenario" baseline by a later scenario
+    /// drive, so stop would restore the poke instead of the meter's
+    /// own constructed value.
+    #[test]
+    fn a_drive_poke_during_a_scenario_is_restored_at_stop() {
+        let site = MicrogridSite::new();
+        site.register(Meter::new(
+            5,
+            Duration::from_secs(1),
+            Some(crate::sim::dynamic_scalar::DynamicScalar::constant(1234.0)),
+            None,
+            0.0,
+            false,
+        ));
+        let now = chrono::Utc::now();
+        let meter = site.get(5).unwrap();
+        assert_eq!(meter.meter_power_reading().unwrap().value, 1234.0);
+
+        site.scenario_start("drive-poke".into(), now);
+        let req: DriveRequest = serde_json::from_str(r#"{"power_w": 7777.0}"#).unwrap();
+        assert!(apply_drive(&site, 5, &req).is_ok());
+        assert_eq!(meter.meter_power_reading().unwrap().value, 7777.0);
+
+        site.scenario_stop(now, None);
+        assert_eq!(
+            meter.meter_power_reading().unwrap().value,
+            1234.0,
+            "a drive-route poke during a scenario must be restored by its stop"
         );
     }
 }

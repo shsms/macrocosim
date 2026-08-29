@@ -10,6 +10,7 @@
 
 use tulisp::{Error, TulispContext, TulispObject};
 
+use crate::sim::component::KnobKind;
 use crate::sim::microgrids::SharedSiteRouter;
 
 pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
@@ -30,6 +31,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-meter-power: component {id} not found"
                 )));
             };
+            w.scenario_snapshot_knob(id as u64, KnobKind::MeterPower);
             if value.numberp() {
                 let watts = f64::try_from(&value)?;
                 // Lisp keeps the historic lenient behavior: the bool is
@@ -75,6 +77,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-meter-reactive-power: component {id} not found"
                 )));
             };
+            w.scenario_snapshot_knob(id as u64, KnobKind::MeterReactive);
             if value.numberp() {
                 let vars = f64::try_from(&value)?;
                 // Lisp keeps the historic lenient behavior: the bool is
@@ -124,6 +127,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                 "clear-meter-power: component {id} not found"
             )));
         };
+        w.scenario_snapshot_knob(id as u64, KnobKind::MeterPower);
         if !c.clear_active_power_source() {
             return Err(Error::invalid_argument(format!(
                 "clear-meter-power: component {id} is not a meter"
@@ -146,6 +150,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "clear-meter-reactive: component {id} not found"
                 )));
             };
+            w.scenario_snapshot_knob(id as u64, KnobKind::MeterReactive);
             if !c.clear_reactive_power_source() {
                 return Err(Error::invalid_argument(format!(
                     "clear-meter-reactive: component {id} is not a meter"
@@ -183,6 +188,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-meter-power-factor: component {id} not found"
                 )));
             };
+            w.scenario_snapshot_knob(id as u64, KnobKind::MeterReactive);
             // Lisp keeps the historic lenient behavior: a non-meter is a
             // no-op here, only the typed control API rejects it.
             let leading = leading.unwrap_or(false);
@@ -234,6 +240,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-solar-sunlight: component {id} not found"
                 )));
             };
+            w.scenario_snapshot_knob(id as u64, KnobKind::Sunlight);
             if value.numberp() {
                 let pct = f64::try_from(&value)?;
                 let _ = c.set_sunlight_pct(pct as f32);
@@ -284,6 +291,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-boiler-demand: component {id} is not a steam boiler"
                 )));
             }
+            w.scenario_snapshot_knob(id as u64, KnobKind::BoilerDemand);
             if value.numberp() {
                 let kg_h = f64::try_from(&value)?;
                 let _ = c.set_steam_demand_kg_h(kg_h as f32);
@@ -836,5 +844,321 @@ mod tests {
         assert!(err.to_string().contains("not a steam boiler"), "{err}");
         let err = cfg.eval("(set-boiler-pressure 7 9.0)").unwrap_err();
         assert!(err.to_string().contains("not a steam boiler"), "{err}");
+    }
+
+    // ── scenario teardown: these setters/clears snapshot BEFORE they
+    // mutate, and `(scenario-stop)` restores from that baseline. ─────
+
+    /// A dynamic (symbol) sunlight source survives a scenario driving
+    /// it to a constant and back: `(scenario-stop)` restores the
+    /// exact captured `DynamicScalar`, not a re-parse of its text, so
+    /// both the printed source AND its live tracking come back.
+    #[test]
+    fn scenario_stop_restores_a_dynamic_sunlight_source() {
+        let (cfg, _dir) = config_with(
+            "(setq sun-src 40.0)
+             (%make-solar-inverter :id 8 :rated-lower -8000.0 :rated-upper 0.0)",
+        );
+        cfg.eval("(set-solar-sunlight 8 'sun-src)").unwrap();
+        cfg.refresh_once();
+        let inv = cfg.site().get(8).unwrap();
+        let before = inv.sunlight_reading().unwrap();
+        assert!(
+            before.expr.is_some(),
+            "baseline is the dynamic symbol source"
+        );
+        assert_eq!(before.value, 40.0);
+
+        cfg.eval("(scenario-start \"sun\")").unwrap();
+        cfg.eval("(set-solar-sunlight 8 10.0)").unwrap();
+        assert!(
+            inv.sunlight_reading().unwrap().expr.is_none(),
+            "scenario collapsed it to a constant"
+        );
+
+        cfg.eval("(scenario-stop)").unwrap();
+        let after = inv.sunlight_reading().unwrap();
+        assert!(after.expr.is_some(), "dynamic source restored");
+        assert_eq!(after.expr, before.expr);
+
+        // And it still tracks live: mutate the global, refresh, see
+        // it move — proves restore put back the real symbol source,
+        // not a frozen snapshot of its last-read value.
+        cfg.eval("(setq sun-src 77.0)").unwrap();
+        cfg.refresh_once();
+        assert_eq!(inv.sunlight_reading().unwrap().value, 77.0);
+    }
+
+    /// A meter with no baseline override (measuring its children):
+    /// driven by a scenario, then `(scenario-stop)` returns it to
+    /// measuring — `meter_power_reading()` is `None` again, not some
+    /// leftover scenario value.
+    #[test]
+    fn scenario_stop_restores_meter_with_no_baseline_to_measuring() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7)");
+        let m = cfg.site().get(7).unwrap();
+        assert!(m.meter_power_reading().is_none(), "starts measuring");
+
+        cfg.eval("(scenario-start \"m-measuring\")").unwrap();
+        cfg.eval("(set-meter-power 7 5000.0)").unwrap();
+        assert!(m.meter_power_reading().is_some());
+
+        cfg.eval("(scenario-stop)").unwrap();
+        assert!(
+            m.meter_power_reading().is_none(),
+            "meter must return to measuring, not stay at the scenario's driven value"
+        );
+    }
+
+    /// A meter constructed with `:power 5000.0`, driven by a scenario
+    /// to a dynamic source, then stopped: the reading AND the
+    /// `:power` constructor kwarg both come back — restore is
+    /// mechanical (unlike `clear-meter-power`, which would drop the
+    /// kwarg), and `has_unrenderable_source` reports the meter is
+    /// plain-savable again.
+    #[test]
+    fn scenario_stop_restores_constructed_meter_power_and_kwarg() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 5000.0)");
+        let m = cfg.site().get(7).unwrap();
+        assert_eq!(m.meter_power_reading().unwrap().value, 5000.0);
+
+        cfg.eval("(scenario-start \"m-constructed\")").unwrap();
+        cfg.eval("(set-meter-power 7 (lambda () 42.0))").unwrap();
+        cfg.refresh_once();
+        assert_eq!(m.meter_power_reading().unwrap().value, 42.0);
+
+        cfg.eval("(scenario-stop)").unwrap();
+        assert_eq!(m.meter_power_reading().unwrap().value, 5000.0);
+        assert!(!m.has_unrenderable_source());
+        let kw = m
+            .constructor_kwargs()
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(kw.contains(":power 5000"), "{kw}");
+    }
+
+    /// PF/Var aliasing: a baseline `Var` reactive source, driven to a
+    /// `PowerFactor` by `set-meter-power-factor`, restores back to
+    /// `Var` on `(scenario-stop)` — the whole `ReactiveSource` shape
+    /// round-trips, not just a number.
+    #[test]
+    fn scenario_stop_restores_var_reactive_after_power_factor_drive() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 8000.0)");
+        cfg.eval("(set-meter-reactive-power 7 500.0)").unwrap();
+        let m = cfg.site().get(7).unwrap();
+        match m.meter_reactive_reading().unwrap() {
+            ReactiveReading::Var(r) => assert_eq!(r.value, 500.0),
+            ReactiveReading::PowerFactor { .. } => panic!("expected baseline Var"),
+        }
+
+        cfg.eval("(scenario-start \"pf\")").unwrap();
+        cfg.eval("(set-meter-power-factor 7 0.8 t)").unwrap();
+        match m.meter_reactive_reading().unwrap() {
+            ReactiveReading::PowerFactor { .. } => {}
+            ReactiveReading::Var(_) => panic!("expected PowerFactor after the scenario drive"),
+        }
+
+        cfg.eval("(scenario-stop)").unwrap();
+        match m.meter_reactive_reading().unwrap() {
+            ReactiveReading::Var(r) => assert_eq!(r.value, 500.0),
+            ReactiveReading::PowerFactor { .. } => panic!("expected Var restored"),
+        }
+    }
+
+    /// First-snapshot-wins: a scenario driving the same knob twice —
+    /// its own drive, then a second direct eval standing in for a
+    /// cue re-setting it later (no real timer needed to exercise
+    /// this; a cue re-driving the same knob compiles to exactly this
+    /// same `set-meter-power` call) — still restores to the value
+    /// from BEFORE the scenario ever touched it, not to either driven
+    /// value.
+    #[test]
+    fn scenario_stop_restores_first_snapshot_despite_repeated_drives() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 1200.0)");
+        let m = cfg.site().get(7).unwrap();
+
+        cfg.eval("(scenario-start \"first-wins\")").unwrap();
+        cfg.eval("(set-meter-power 7 3000.0)").unwrap(); // captures the 1200.0 baseline
+        cfg.eval("(set-meter-power 7 7000.0)").unwrap(); // a second direct drive — no-op on the baseline
+        assert_eq!(m.meter_power_reading().unwrap().value, 7000.0);
+
+        cfg.eval("(scenario-stop)").unwrap();
+        assert_eq!(
+            m.meter_power_reading().unwrap().value,
+            1200.0,
+            "restore must land on the FIRST pre-scenario value, not an intermediate drive"
+        );
+    }
+
+    /// `(scenario-stop)` is idempotent, and nothing resurrects a
+    /// manual poke made AFTER it: the baseline map was drained by the
+    /// first stop, so a second stop restores nothing and leaves a
+    /// later poke exactly as the user left it.
+    #[test]
+    fn scenario_stop_is_idempotent_and_a_post_stop_poke_sticks() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 1500.0)");
+        let m = cfg.site().get(7).unwrap();
+
+        cfg.eval("(scenario-start \"idempotent\")").unwrap();
+        cfg.eval("(set-meter-power 7 4000.0)").unwrap();
+        cfg.eval("(scenario-stop)").unwrap();
+        assert_eq!(m.meter_power_reading().unwrap().value, 1500.0);
+
+        // A manual poke after stop: nothing tracks it anymore, so it
+        // just sticks.
+        cfg.eval("(set-meter-power 7 9999.0)").unwrap();
+        assert_eq!(m.meter_power_reading().unwrap().value, 9999.0);
+
+        // A second stop must not disturb it.
+        cfg.eval("(scenario-stop)").unwrap();
+        assert_eq!(
+            m.meter_power_reading().unwrap().value,
+            9999.0,
+            "second stop must be a no-op — it must not resurrect a pre-scenario value \
+             over a later manual poke"
+        );
+    }
+
+    /// The case restore exists for, on its real path: a scenario
+    /// CLEARS a knob the component was constructed with. `clear` is a
+    /// user-intent verb — it drops the `:power` kwarg too, so the
+    /// component saves as "measuring" — which is right for a user and
+    /// wrong for a scenario that only borrowed the knob. Mid-scenario
+    /// the clear must take full effect (no reading, no kwarg); at stop
+    /// BOTH halves must come back, or the meter is left permanently
+    /// unable to write its own `:power` back to disk.
+    #[test]
+    fn scenario_stop_restores_a_constructed_power_kwarg_a_clear_dropped() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 5000.0)");
+        let m = cfg.site().get(7).unwrap();
+        let kwargs = || {
+            cfg.site()
+                .get(7)
+                .unwrap()
+                .constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(kwargs().contains(":power 5000"), "{}", kwargs());
+
+        cfg.eval("(scenario-start \"clear-p\")").unwrap();
+        cfg.eval("(clear-meter-power 7)").unwrap();
+        assert!(
+            m.meter_power_reading().is_none(),
+            "the clear must really clear while the scenario runs"
+        );
+        assert!(
+            !kwargs().contains(":power"),
+            "the clear drops the constructed kwarg too: {}",
+            kwargs()
+        );
+
+        cfg.eval("(scenario-stop)").unwrap();
+        assert_eq!(m.meter_power_reading().unwrap().value, 5000.0);
+        assert!(
+            kwargs().contains(":power 5000"),
+            "the constructed kwarg must come back, not just the live source: {}",
+            kwargs()
+        );
+    }
+
+    /// The reactive twin: a `:reactive-power`-constructed meter,
+    /// cleared mid-scenario, gets both its `Var` source and its
+    /// `:reactive-power` kwarg back at stop.
+    #[test]
+    fn scenario_stop_restores_a_constructed_reactive_kwarg_a_clear_dropped() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 8000.0 :reactive-power 500.0)");
+        let m = cfg.site().get(7).unwrap();
+        let kwargs = || {
+            cfg.site()
+                .get(7)
+                .unwrap()
+                .constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(kwargs().contains(":reactive-power 500"), "{}", kwargs());
+
+        cfg.eval("(scenario-start \"clear-q\")").unwrap();
+        cfg.eval("(clear-meter-reactive 7)").unwrap();
+        assert!(m.meter_reactive_reading().is_none());
+        assert!(!kwargs().contains(":reactive-power"), "{}", kwargs());
+
+        cfg.eval("(scenario-stop)").unwrap();
+        match m.meter_reactive_reading().unwrap() {
+            ReactiveReading::Var(r) => assert_eq!(r.value, 500.0),
+            ReactiveReading::PowerFactor { .. } => panic!("expected the constructed Var back"),
+        }
+        assert!(
+            kwargs().contains(":reactive-power 500"),
+            "the constructed kwarg must come back: {}",
+            kwargs()
+        );
+        // The active axis was never touched, so its own kwarg stands.
+        assert!(kwargs().contains(":power 8000"), "{}", kwargs());
+    }
+
+    /// Same again for the OTHER `ConstructedReactive` shape: a meter
+    /// built with `:power-factor` (+ `:leading`) round-trips the pf
+    /// pair, not a number — the reactive snapshot carries the enum.
+    #[test]
+    fn scenario_stop_restores_a_constructed_power_factor_a_clear_dropped() {
+        let (cfg, _dir) =
+            config_with("(%make-meter :id 7 :power 8000.0 :power-factor 0.8 :leading t)");
+        let m = cfg.site().get(7).unwrap();
+        let kwargs = || {
+            cfg.site()
+                .get(7)
+                .unwrap()
+                .constructor_kwargs()
+                .iter()
+                .map(|(k, v)| format!("{k} {v}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert!(kwargs().contains(":power-factor 0.8"), "{}", kwargs());
+        assert!(kwargs().contains(":leading t"), "{}", kwargs());
+
+        cfg.eval("(scenario-start \"clear-pf\")").unwrap();
+        cfg.eval("(clear-meter-reactive 7)").unwrap();
+        assert!(m.meter_reactive_reading().is_none());
+        assert!(!kwargs().contains(":power-factor"), "{}", kwargs());
+
+        cfg.eval("(scenario-stop)").unwrap();
+        match m.meter_reactive_reading().unwrap() {
+            ReactiveReading::PowerFactor { pf, leading } => {
+                assert_eq!(pf, 0.8);
+                assert!(leading, "the leading flag is part of the constructed pair");
+            }
+            ReactiveReading::Var(_) => panic!("expected the constructed PowerFactor back"),
+        }
+        assert!(kwargs().contains(":power-factor 0.8"), "{}", kwargs());
+        assert!(kwargs().contains(":leading t"), "{}", kwargs());
+    }
+
+    /// Boiler-demand twin of the sunlight test above: a constant
+    /// baseline, driven to a dynamic (lambda) source by a scenario,
+    /// restores to the constant on `(scenario-stop)`.
+    #[test]
+    fn scenario_stop_restores_boiler_demand_after_dynamic_drive() {
+        let (cfg, _dir) = config_with("(%make-steam-boiler :id 9)");
+        cfg.eval("(set-boiler-demand 9 40.0)").unwrap();
+        let b = cfg.site().get(9).unwrap();
+        assert_eq!(b.demand_reading().unwrap().value, 40.0);
+        assert!(!b.has_unrenderable_source());
+
+        cfg.eval("(scenario-start \"boiler\")").unwrap();
+        cfg.eval("(set-boiler-demand 9 (lambda () 99.0))").unwrap();
+        assert!(b.has_unrenderable_source());
+
+        cfg.eval("(scenario-stop)").unwrap();
+        assert_eq!(b.demand_reading().unwrap().value, 40.0);
+        assert!(!b.has_unrenderable_source());
     }
 }

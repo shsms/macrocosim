@@ -1013,17 +1013,12 @@ async fn run_scenario(
                 let dt = std::time::Duration::from_millis(step.unwrap_or(100));
                 let (cfg, _clock) = switchyard::lisp::Config::new_headless(&config)
                     .map_err(|e| format!("headless boot failed: {e}"))?;
-                let steps = match until {
-                    Some(secs) => {
-                        switchyard::sim::scenarios::start(
-                            &cfg.interpreter(),
-                            &cfg.scenarios(),
-                            &name,
-                        )?;
-                        cfg.sim_run(std::time::Duration::from_secs(secs), dt)
-                    }
-                    None => cfg.run_scenario_stepped(&name, dt)?,
-                };
+                // `--until` overrides the scenario's own `:length`;
+                // without it the declared length is the run length.
+                // Same runner either way, so both paths tear down —
+                // cancel timers + restore driven knobs — identically.
+                let steps =
+                    cfg.run_scenario_stepped(&name, dt, until.map(std::time::Duration::from_secs))?;
                 let rv = cfg.scenario_report_json();
                 if json {
                     println!("{}", serde_json::to_string_pretty(&rv)?);

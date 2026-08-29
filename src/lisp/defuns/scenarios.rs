@@ -1,7 +1,7 @@
 //! Scenarios: `(define-scenario …)` for the multi-stage registry +
 //! the per-microgrid lifecycle defuns (`scenario-start`,
 //! `-stop`, `-event`, `-expect`, `-record-csv`, `-stop-csv`,
-//! `-elapsed`).
+//! `-elapsed`, `-running-p`).
 //!
 //! Both surfaces share data via `MicrogridSite`'s scenario journal;
 //! keeping them in one file makes the read-write story obvious.
@@ -252,6 +252,42 @@ fn parse_expect_metric(name: &str) -> Option<Metric> {
 /// and `(scenario-stop)` when finished. The underlying journal lives
 /// on `MicrogridSite` and is read by the `/api/scenario` and
 /// `/api/scenario/events` endpoints.
+///
+/// POLICY — `scenario-stop` returns every driven knob (a meter's
+/// `:power` / `:reactive-power` / power-factor override, a solar
+/// inverter's `:sunlight%`, a boiler's `:demand`) to its
+/// PRE-SCENARIO state: the value/source it had the moment BEFORE the
+/// scenario first touched it, captured by `scenario_snapshot_knob`.
+/// This holds even over a mid-scenario manual poke or
+/// `clear-meter-*` — first-snapshot-wins means only the very first
+/// pre-scenario capture matters, and anything that happened to the
+/// knob after that (the scenario's own drive, a cue re-driving it, a
+/// user poking it through the UI while the scenario is running) is
+/// simply gone once `scenario-stop` runs. Simple and uniform: no
+/// attempt to distinguish "the scenario's change" from "the user's
+/// change" once both have landed on the same knob during the same
+/// run.
+///
+/// EVERY door onto those knobs takes that snapshot, on the same
+/// first-touch rule: the `set-meter-power` &c. Lisp defuns and the
+/// two `clear-meter-*` defuns (`src/lisp/defuns/load_drivers.rs`),
+/// and the typed `POST /api/component/:id/drive` route
+/// (`src/ui/handlers/control.rs`). No door is exempt — one that was
+/// would not merely leak its own poke past teardown, it would let a
+/// first-touch poke through it be captured as the "pre-scenario"
+/// baseline by a later drive of the same knob, and teardown would
+/// then restore the poke rather than the state that preceded it.
+///
+/// `scenario-stop` also cancels the timers the running scenario
+/// armed (agents, cues, checks, an outage chain — see
+/// `scenario--cancel-timers` in `sim/scenarios.lisp`) before the knob
+/// restore below, so nothing is left running to immediately re-drive
+/// a knob this just put back. And `scenario-start` runs the whole
+/// teardown itself when a scenario is still going, so two runs never
+/// overlap and leave the first one's knobs displaced with no baseline
+/// left to restore them from — that guard lives on the defun, so it
+/// covers a bare `(scenario-start …)` from a script or the REPL, not
+/// just a `define-scenario` run through `scenario--run`.
 pub(super) fn register_lifecycle(
     ctx: &mut TulispContext,
     router: SharedSiteRouter,
@@ -272,9 +308,52 @@ pub(super) fn register_lifecycle(
     let nowsrc = now.clone();
     ctx.defun(
         "scenario-start",
-        move |name: String| -> Result<bool, Error> {
+        move |ctx: &mut TulispContext, name: String| -> Result<bool, Error> {
             let now = nowsrc.now();
             let sites: Vec<_> = reg.lock().values().map(|e| e.site.clone()).collect();
+            // A run still in progress is torn down FIRST, here, in the
+            // defun every start path goes through — `scenario--run`,
+            // the UI's start route, a bare `(scenario-start …)` from a
+            // script or the REPL. It has to be here and not in
+            // `scenario--run`: the fan-out below clears each site's
+            // knob-restore baseline, so a start over a running
+            // scenario without this would strand that scenario's
+            // displaced knobs with nothing left to restore them from,
+            // and leave its agents and cues firing into the new run.
+            //
+            // The full `(scenario-stop)` — not just the Rust half —
+            // so the previous run's timers are cancelled too. Same
+            // `ctx.eval`-on-a-built-form reason as `scenario-stop`'s
+            // own call into `scenario--cancel-timers`: `eval_string`
+            // would reset `eval_depth` re-entrantly.
+            //
+            // Termination is structural, not a matter of this check:
+            // stopping a scenario never starts one, so there is no
+            // cycle to recurse through. What `scenario_stop`'s
+            // ended-first ordering buys is a different hazard —
+            // its refresh pass runs Lisp (a restored lambda source),
+            // and a callback that reached back in here would find
+            // `scenario_is_running()` already false rather than
+            // re-entering the teardown of a run being torn down.
+            //
+            // Errors are logged, not propagated: a teardown that
+            // somehow fails must not also prevent the new run from
+            // starting.
+            let running = if sites.is_empty() {
+                r.site().scenario_is_running()
+            } else {
+                sites.iter().any(|s| s.scenario_is_running())
+            };
+            if running {
+                let stop_call: TulispObject =
+                    vec![ctx.intern("scenario-stop")].into_iter().collect();
+                if let Err(e) = ctx.eval(&stop_call) {
+                    log::warn!(
+                        "scenario-start: tearing down the running scenario failed: {}",
+                        e.format(ctx)
+                    );
+                }
+            }
             if sites.is_empty() {
                 r.site().scenario_start(name, now);
             } else {
@@ -289,18 +368,60 @@ pub(super) fn register_lifecycle(
     let reg = microgrids.clone();
     let r = router.clone();
     let nowsrc = now.clone();
-    ctx.defun("scenario-stop", move || -> Result<bool, Error> {
-        let now = nowsrc.now();
-        let sites: Vec<_> = reg.lock().values().map(|e| e.site.clone()).collect();
-        if sites.is_empty() {
-            r.site().scenario_stop(now);
-        } else {
-            for site in sites {
-                site.scenario_stop(now);
+    ctx.defun(
+        "scenario-stop",
+        move |ctx: &mut TulispContext| -> Result<bool, Error> {
+            // Cancel the scenario's OWN agent/cue/check timers (see
+            // `scenario--cancel-timers` in sim/scenarios.lisp) BEFORE
+            // restoring driven knobs below: an agent left running past
+            // this point could re-drive a knob a heartbeat after
+            // restore puts it back, undoing the restore.
+            //
+            // `ctx.eval`, NOT `ctx.eval_string`: this defun body runs
+            // WHILE `(scenario-stop)` itself is being evaluated, and
+            // `eval_string` unconditionally resets `eval_depth` to 0
+            // as its top-level entry point — fine called from Rust
+            // between evals (`reload`'s own `(cancel-timers)` call),
+            // but re-entrant here it corrupts the outer eval's depth
+            // bookkeeping and the bytecode interpreter panics
+            // ("attempt to subtract with overflow") once IT tries to
+            // unwind. Building the call form and using `ctx.eval`
+            // (which doesn't touch `eval_depth`) avoids the hazard —
+            // same pattern `sim::scenarios::start` uses to invoke
+            // `scenario--run` from Rust.
+            //
+            // Errors are logged rather than propagated — a teardown
+            // must still restore knobs even if cancellation itself
+            // somehow fails (e.g. scenarios.lisp wasn't loaded in
+            // this context).
+            let cancel_call: TulispObject = vec![ctx.intern("scenario--cancel-timers")]
+                .into_iter()
+                .collect();
+            if let Err(e) = ctx.eval(&cancel_call) {
+                log::warn!(
+                    "scenario-stop: scenario--cancel-timers failed: {}",
+                    e.format(ctx)
+                );
             }
-        }
-        Ok(true)
-    });
+            let now = nowsrc.now();
+            let sites: Vec<_> = reg.lock().values().map(|e| e.site.clone()).collect();
+            // `ctx` goes through to the restore so each reinstalled
+            // dynamic source re-resolves before its value is read back
+            // and broadcast — see `MicrogridSite::scenario_stop`'s
+            // three phases. This defun is the only stop path with an
+            // interpreter in hand, and it is the path every real stop
+            // takes (Lisp, the UI's POST /api/scenarios/stop, and the
+            // stepped runner all funnel through `(scenario-stop)`).
+            if sites.is_empty() {
+                r.site().scenario_stop(now, Some(ctx));
+            } else {
+                for site in sites {
+                    site.scenario_stop(now, Some(&mut *ctx));
+                }
+            }
+            Ok(true)
+        },
+    );
 
     let r = router.clone();
     let nowsrc = now.clone();
@@ -417,6 +538,18 @@ pub(super) fn register_lifecycle(
     ctx.defun("scenario-stop-csv", move || -> Result<i64, Error> {
         let w = r.site();
         Ok(w.scenario_close_csv() as i64)
+    });
+
+    // `(scenario-running-p)` — t while a scenario is in progress
+    // (started, not yet stopped). Site-scoped like `scenario-elapsed`
+    // beside it, and read straight off the journal: it IS the
+    // "a scenario is running" truth `scenario_snapshot_knob` gates on,
+    // so `sim/scenarios.lisp`'s timer tracking can key on it directly
+    // instead of shadowing it with a flag of its own that a crash or a
+    // mid-run reload could leave out of sync.
+    let r = router.clone();
+    ctx.defun("scenario-running-p", move || -> Result<bool, Error> {
+        Ok(r.site().scenario_is_running())
     });
 
     let r = router;
@@ -973,6 +1106,42 @@ mod tests {
         let later = cfg.site().scenario_summary(chrono::Utc::now());
         assert_eq!(frozen.elapsed_s, later.elapsed_s);
         assert!(frozen.ended_at.is_some());
+    }
+
+    /// A second `(scenario-start …)` tears the running scenario down
+    /// first. The guard lives on the defun, not in `scenario--run`,
+    /// so a bare imperative start — a script, the REPL, the UI's
+    /// start route — gets the same teardown a `define-scenario` run
+    /// gets. Without it the fresh start clears the knob baseline
+    /// Rust-side and the first run's driven meter could never be
+    /// restored: its pre-scenario `:power` would be lost for good.
+    #[test]
+    fn a_second_scenario_start_tears_the_running_one_down() {
+        let (cfg, _dir) = config_with("(%make-meter :id 7 :power 1234.0)");
+        let m = cfg.site().get(7).unwrap();
+
+        cfg.eval("(scenario-start \"a\")").unwrap();
+        cfg.eval("(set-meter-power 7 9000.0)").unwrap();
+        assert_eq!(m.meter_power_reading().unwrap().value, 9000.0);
+
+        // B starts with A still running, and with no (scenario-stop)
+        // of our own in between.
+        cfg.eval("(scenario-start \"b\")").unwrap();
+        assert_eq!(
+            m.meter_power_reading().unwrap().value,
+            1234.0,
+            "starting B must restore A's pre-scenario :power, not strand it"
+        );
+        let summary = cfg.site().scenario_summary(chrono::Utc::now());
+        assert_eq!(summary.name.as_deref(), Some("b"));
+        assert!(
+            summary.started_at.is_some() && summary.ended_at.is_none(),
+            "B must be the running scenario after the teardown"
+        );
+
+        // B drove nothing, so its own stop leaves A's restored value.
+        cfg.eval("(scenario-stop)").unwrap();
+        assert_eq!(m.meter_power_reading().unwrap().value, 1234.0);
     }
 
     /// `(define-scenario)` parses the unified model into the registry:

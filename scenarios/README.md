@@ -35,8 +35,8 @@ server was started from).
 
 | Defun                              | Purpose                                          |
 |------------------------------------|--------------------------------------------------|
-| `(scenario-start NAME)`            | begin a run — clears the journal + reporters    |
-| `(scenario-stop)`                  | end the run — freezes elapsed + metrics + CSV   |
+| `(scenario-start NAME)`            | begin a run — clears the journal + reporters; tears down a run still in progress first (see [Teardown](#teardown)) |
+| `(scenario-stop)`                  | end the run — freezes elapsed + metrics + CSV, cancels the run's own timers, restores every driven knob (see [Teardown](#teardown)) |
 | `(scenario-event KIND PAYLOAD)`    | append a journaled event                        |
 | `(scenario-elapsed)`               | wall-clock seconds since start (frozen on stop) |
 | `(scenario-end-after MINUTES)`     | schedule `(scenario-stop)` after MINUTES        |
@@ -71,6 +71,17 @@ the symbol as the source — the scheduler re-resolves it once per
 tick. An imperative numeric `set-meter-power` collapses any prior
 dynamic source back to a constant.
 
+Inside a running scenario the five knob setters — `set-meter-power`,
+`set-meter-reactive-power`, `set-meter-power-factor`,
+`set-solar-sunlight`, `set-boiler-demand`, plus the two
+`clear-meter-*` — are TRANSIENT: the knob's previous value is
+captured the first time the run touches it, and `(scenario-stop)`
+puts it back. The other stimuli here are not: `set-battery-soc`,
+`set-boiler-pressure`, the health / mode setters and the setpoint
+doors all write permanently, inside a run or outside it. Outside a
+scenario the knob setters are permanent too, as before. See
+[Teardown](#teardown).
+
 `(set-component-telemetry-mode 200 'silent)` plus
 `(set-component-command-mode 200 'timeout)` simulates a
 "flaky network" — the inverter keeps producing power and the
@@ -102,7 +113,51 @@ explicit `(load …)` is needed:
   a random pick from `IDS`. Plist opts: `:min-every` /
   `:max-every` (gap seconds), `:min-duration` / `:max-duration`
   (outage seconds), `:kind` (health symbol while down — default
-  `'error`). Each transition lands as a journal event.
+  `'error`). Each transition lands as a journal event. A chain
+  started while a scenario is running belongs to that scenario and
+  stops with it — including putting the victim's health back if the
+  stop lands mid-outage; one started outside any run keeps going
+  until `reset-state`.
+
+## Teardown
+
+`(scenario-stop)` ends a run and unwinds it:
+
+- **Cancels the run's own timers** — the agents it installed, the
+  `cue` / `expect` timers it scheduled, and a `random-outage` chain
+  started while it was running — and if the stop lands mid-outage,
+  that chain's victim gets its health put back as the chain is
+  cancelled, since the timer that would have restored it is the one
+  being cancelled. A chain armed BEFORE the run (a config's own
+  top-level `(random-outage …)`, say) is ambient: it keeps going,
+  restores its own victims on schedule, and only `reset-state`
+  stops it.
+- **Restores every driven knob** — a meter's `:power` /
+  `:reactive-power` / power factor, a solar inverter's
+  `:sunlight%`, a boiler's `:demand` go back to what they were the
+  moment before the run first touched them. First snapshot wins:
+  it doesn't matter how often the run re-drove a knob, whether a
+  cue re-drove it, or whether you poked it yourself mid-run — from
+  the REPL, the UI, or `POST /api/component/:id/drive`, all of
+  which snapshot on the same rule. A knob the run never touched is
+  never restored.
+- Freezes elapsed time and every metric accumulator, and flushes +
+  closes any CSV sinks.
+
+Those five knobs are the whole of it. State a scenario wrote by
+any other means stays written: health flipped by a cue's own
+`(set-component-health …)`, an agent's setpoints, and the
+stimuli that have no snapshot on ANY door — `set-battery-soc` /
+`soc_pct` and `set-boiler-pressure` / `pressure_bar`. A run that
+teleports a battery to 10 % SoC leaves it at 10 %. Put such state
+back in the scenario itself if the next run depends on it.
+
+Starting a scenario while another is still running stops the
+running one first — `(scenario-start …)` does that itself, so it
+holds for a bare start from a script or the REPL as much as for a
+`define-scenario` run — and the new run begins from the old one's
+pre-scenario state rather than inheriting its displaced knobs and
+still-firing timers.
 
 ## Reading the report
 

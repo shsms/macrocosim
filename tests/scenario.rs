@@ -265,3 +265,56 @@ async fn drive_boiler_sets_demand_via_scenario_compile() {
         .expect("demand reading");
     assert_eq!(r.value, 40.0, "drive-boiler should set constant demand");
 }
+
+/// The dedicated `POST /api/scenarios/stop` HTTP door must restore
+/// driven knobs exactly like `(scenario-stop)` does from Lisp — both
+/// paths go through the same `scenario-stop` Rust defun
+/// (`scenarios_stop`'s handler evals `"(scenario-stop)"`), but this
+/// pins the actual REST endpoint the Scenarios UI's Stop button
+/// calls, guarding against a future refactor that routes it straight
+/// to `MicrogridSite::scenario_stop` and skips the knob-restore this
+/// defun wires in. Only knob-restore is asserted here — the same
+/// refactor would also skip timer-cancellation, but that half is
+/// pinned separately (no agent/timer is involved in this test) by
+/// `boot::tests::scenario_stop_cancels_the_agent_timer_so_it_stops_firing`,
+/// which exercises the defun directly.
+#[tokio::test(flavor = "multi_thread")]
+async fn http_scenarios_stop_endpoint_restores_a_driven_knob() {
+    let s = TestServer::start(TOPOLOGY).await;
+    let client = reqwest::Client::new();
+
+    eval_or_panic(&client, &s, "(scenario-start \"http-stop\")").await;
+    eval_or_panic(&client, &s, "(set-meter-power 2 9000.0)").await;
+    assert_eq!(
+        s.config
+            .site()
+            .get(2)
+            .unwrap()
+            .meter_power_reading()
+            .unwrap()
+            .value,
+        9000.0,
+        "sanity: the drive landed before we stop"
+    );
+
+    let resp = client
+        .post(format!("{}/api/scenarios/stop", s.ui_url))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "POST /api/scenarios/stop: {}",
+        resp.status()
+    );
+
+    assert!(
+        s.config
+            .site()
+            .get(2)
+            .unwrap()
+            .meter_power_reading()
+            .is_none(),
+        "the dedicated /api/scenarios/stop door must restore driven knobs, same as (scenario-stop)"
+    );
+}

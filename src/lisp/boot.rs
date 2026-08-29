@@ -841,27 +841,54 @@ impl Config {
         steps
     }
 
-    /// Run a registered scenario on the headless sim clock for its
-    /// declared `:length`, stepping by `dt`. Returns the number of
-    /// steps. The stepped runner (todo §J2): compiles the scenario via
-    /// the Lisp `scenario--run` (so its cue / check timers fire on the
-    /// sim clock) then drives `sim_run`, deterministically and faster
-    /// than real time. Pair with `scenario-expect` + `scenario report
-    /// --assert` for a CI gate. Errors on a live `Config`, an unknown
-    /// scenario, or one without a `:length`.
-    pub fn run_scenario_stepped(&self, name: &str, dt: Duration) -> Result<u64, String> {
+    /// Run a registered scenario on the headless sim clock, stepping
+    /// by `dt` — for `until` if given, otherwise for the scenario's
+    /// declared `:length`. Returns the number of steps. The stepped
+    /// runner (todo §J2): compiles the scenario via the Lisp
+    /// `scenario--run` (so its cue / check timers fire on the sim
+    /// clock) then drives `sim_run`, deterministically and faster
+    /// than real time, then stops the scenario — cancelling its
+    /// agent/cue/check timers and restoring every driven knob to its
+    /// pre-scenario state, the same as a live run's `(scenario-stop)`
+    /// — before returning, so a caller inspecting component state
+    /// right after this returns sees the SAME teardown a live run
+    /// would have left behind, not the scenario's final driven value.
+    /// Pair with `scenario-expect` + `scenario report --assert` for a
+    /// CI gate (those read the frozen report, unaffected by the
+    /// knob restore). Errors on a live `Config`, an unknown scenario,
+    /// or — only when `until` is None, since an explicit run length
+    /// answers the question `:length` would have — one without a
+    /// `:length`.
+    pub fn run_scenario_stepped(
+        &self,
+        name: &str,
+        dt: Duration,
+        until: Option<Duration>,
+    ) -> Result<u64, String> {
         if self.sim_clock.is_none() {
             return Err("run_scenario_stepped requires a headless Config".to_string());
         }
-        let length_s = self
-            .scenarios
-            .lock()
-            .get(name)
-            .ok_or_else(|| format!("no scenario named {name:?}"))?
-            .length_s
-            .ok_or_else(|| format!("scenario {name:?} has no :length for a stepped run"))?;
+        let run_for = match until {
+            Some(d) => d,
+            None => Duration::from_secs_f64(
+                self.scenarios
+                    .lock()
+                    .get(name)
+                    .ok_or_else(|| format!("no scenario named {name:?}"))?
+                    .length_s
+                    .ok_or_else(|| format!("scenario {name:?} has no :length for a stepped run"))?,
+            ),
+        };
         crate::sim::scenarios::start(&self.ctx, &self.scenarios, name)?;
-        Ok(self.sim_run(Duration::from_secs_f64(length_s), dt))
+        let steps = self.sim_run(run_for, dt);
+        // `eval_silent`, not `eval`: a scenario stop is a runtime poke
+        // (health flips, power pokes, teardown restores), not a
+        // structural change — `eval` would snapshot every registered
+        // microgrid's structural version and run the persist / bump-
+        // version pass for nothing, same as `set-meter-power` &c.
+        // never going through `eval` either.
+        self.eval_silent("(scenario-stop)")?;
+        Ok(steps)
     }
 
     /// The current microgrid's scenario report (peak / charge / SoC
@@ -1540,6 +1567,35 @@ mod tests {
     use super::super::Config;
     use super::super::test_support::{config_with, next_unique};
 
+    /// Boot a headless `Config` from `body`, written into a fresh temp
+    /// dir with `sim/common.lisp` + `sim/scenarios.lisp` copied
+    /// alongside so the config's own `(load …)` forms resolve. `tag`
+    /// just names the directory, for readable strace/ls output when a
+    /// case is being debugged. The `ManualClock` the constructor also
+    /// returns is an `Arc` clone of the one `Config` keeps, so
+    /// dropping it here changes nothing.
+    fn stepped_config(tag: &str, body: &str) -> Config {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "switchyard-{tag}-{}-{}",
+            std::process::id(),
+            next_unique(),
+        ));
+        let sim = dir.join("sim");
+        std::fs::create_dir_all(&sim).unwrap();
+        for f in ["common.lisp", "scenarios.lisp"] {
+            std::fs::copy(format!("sim/{f}"), sim.join(f)).unwrap();
+        }
+        let path = dir.join("config.lisp");
+        std::fs::write(&path, body).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (cfg, _clock) = rt
+            .block_on(async { Config::new_headless(path.to_str().unwrap()) })
+            .expect("headless config builds");
+        std::mem::forget(rt);
+        cfg
+    }
+
     /// The id in a collision message survives being wrapped in
     /// tulisp's trace formatting — that number is what the load
     /// endpoint offers a free id against.
@@ -1726,8 +1782,10 @@ mod tests {
     /// the sim clock: `define-scenario` sections (a `timeline` drive +
     /// timed `check`s) compile through `scenario--run`, the checks fire
     /// as sim-time timers, and `run_scenario_stepped` advances the
-    /// clock for the declared `:length`. Deterministic + faster than
-    /// real time — the J2 CI gate.
+    /// clock for the declared `:length` — far enough that a check
+    /// scheduled at exactly `:length` still fires, before the run's
+    /// own stop. Deterministic + faster than real time — the J2 CI
+    /// gate.
     #[test]
     fn stepped_runner_runs_a_registered_scenario() {
         use std::time::Duration;
@@ -1757,6 +1815,8 @@ mod tests {
   :expect (list (check \"10s\" :component 2 :metric 'active-power
                        :approx 1000.0 :tol 200.0)
                 (check \"59s\" :component 2 :metric 'active-power
+                       :approx 5000.0 :tol 800.0)
+                (check \"60s\" :component 2 :metric 'active-power
                        :approx 5000.0 :tol 800.0)))";
         let path = dir.join("config.lisp");
         std::fs::write(&path, body).unwrap();
@@ -1768,21 +1828,25 @@ mod tests {
 
         let start = std::time::Instant::now();
         let steps = cfg
-            .run_scenario_stepped("ramp", Duration::from_secs(1))
+            .run_scenario_stepped("ramp", Duration::from_secs(1), None)
             .expect("scenario runs");
         let wall = start.elapsed();
         assert_eq!(steps, 60);
         assert!(wall < Duration::from_secs(5), "stepped wall time {wall:?}");
 
-        // Both timed checks fired and passed; none failed.
+        // All three timed checks fired and passed; none failed. The
+        // third sits at exactly `:length`, which pins the runner's
+        // ordering: `sim_run` advances the clock through t=60 (firing
+        // that check) BEFORE the `(scenario-stop)` that would freeze
+        // the journal and cancel any timer still pending.
         let report = cfg.site().scenario_report(chrono::Utc::now());
-        assert_eq!(report.checks_passed, 2, "report: {report:?}");
+        assert_eq!(report.checks_passed, 3, "report: {report:?}");
         assert_eq!(report.checks_failed, 0, "report: {report:?}");
 
         // A scenario without :length can't be stepped; an unknown one
         // errors too.
         assert!(
-            cfg.run_scenario_stepped("nope", Duration::from_secs(1))
+            cfg.run_scenario_stepped("nope", Duration::from_secs(1), None)
                 .is_err()
         );
     }
@@ -1836,13 +1900,625 @@ mod tests {
         std::mem::forget(rt);
 
         let steps = cfg
-            .run_scenario_stepped("q-ramp", Duration::from_secs(1))
+            .run_scenario_stepped("q-ramp", Duration::from_secs(1), None)
             .expect("scenario runs");
         assert_eq!(steps, 60);
 
         let report = cfg.site().scenario_report(chrono::Utc::now());
         assert_eq!(report.checks_passed, 3, "report: {report:?}");
         assert_eq!(report.checks_failed, 0, "report: {report:?}");
+    }
+
+    /// Pins the stepped-runner half of scenario teardown:
+    /// `run_scenario_stepped` now evals `(scenario-stop)` after
+    /// `sim_run` completes, so a driven knob is back to its
+    /// pre-scenario state (here, meter 2's constructed `:power`) by
+    /// the time the call returns — not left at the scenario's final
+    /// driven value.
+    #[test]
+    fn stepped_runner_restores_a_driven_knob_after_it_stops_the_scenario() {
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "stepped-restore",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18905 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 1234.0)))))
+(define-scenario :name \"restore-check\"
+  :schedule 'relative :clock 'stepped :length \"5s\"
+  :drive (list (drive-meter 2 9999.0)))",
+        );
+
+        let steps = cfg
+            .run_scenario_stepped("restore-check", Duration::from_secs(1), None)
+            .expect("scenario runs");
+        assert_eq!(steps, 5);
+
+        let m = cfg.site().get(2).unwrap();
+        let reading = m
+            .meter_power_reading()
+            .expect("meter still has a source — the constructed :power");
+        assert_eq!(
+            reading.value, 1234.0,
+            "run_scenario_stepped must restore the pre-scenario :power after stopping"
+        );
+    }
+
+    /// Pins the timer-cancellation half of scenario teardown: an
+    /// `every`-driven agent installed by `scenario--agent` must stop
+    /// firing once `(scenario-stop)` runs — `scenario--cancel-timers`
+    /// (wired into the `scenario-stop` Rust defun) cancels exactly
+    /// the timers `scenario--run` armed. Drives the scenario manually
+    /// (rather than through `run_scenario_stepped`, which now stops
+    /// it automatically) so the test can step sim-time both before
+    /// AND after an explicit stop and compare.
+    #[test]
+    fn scenario_stop_cancels_the_agent_timer_so_it_stops_firing() {
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "stepped-cancel",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18906 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 0.0)))))
+(setq tick-count 0)
+(define-scenario :name \"agent-cancel\"
+  :schedule 'relative :clock 'stepped :length \"20s\"
+  :agents (list (controller 'counter :every \"1s\"
+                  (lambda () (setq tick-count (+ tick-count 1))))))",
+        );
+
+        crate::sim::scenarios::start(&cfg.ctx, &cfg.scenarios, "agent-cancel")
+            .expect("scenario starts");
+        cfg.sim_run(Duration::from_secs(3), Duration::from_secs(1));
+        let mid = cfg.eval("tick-count").expect("read tick-count");
+        assert_eq!(mid, "3", "agent should have fired 3 times by 3s");
+        let armed_before_stop = cfg
+            .eval("(length active-timers)")
+            .expect("read active-timers length");
+        assert_eq!(
+            armed_before_stop, "1",
+            "the agent's own repeating timer is the only entry on active-timers pre-stop"
+        );
+
+        cfg.eval("(scenario-stop)").expect("scenario stops");
+        let armed_after_stop = cfg
+            .eval("(length active-timers)")
+            .expect("read active-timers length");
+        assert_eq!(
+            armed_after_stop, "0",
+            "scenario-stop must also prune active-timers, not just cancel the handle"
+        );
+        cfg.sim_run(Duration::from_secs(5), Duration::from_secs(1));
+        let after = cfg.eval("tick-count").expect("read tick-count");
+        assert_eq!(
+            after, mid,
+            "agent timer must be cancelled by scenario-stop — tick-count must not advance further"
+        );
+    }
+
+    /// A `:setup`-armed `random-outage` chain is a real surprise case
+    /// for teardown: it re-arms itself on every fire/restore
+    /// (`random-outage--schedule` -> `--fire` -> `--restore` ->
+    /// `--schedule` ...), so unlike an `every`-driven agent it never
+    /// stops re-tracking a NEW handle each cycle. Pins that
+    /// `random-outage--track` routing every re-arm through
+    /// `scenario--track-timer` actually stops the chain at
+    /// `(scenario-stop)`: with `:min-every`/`:max-every` and
+    /// `:min-duration`/`:max-duration` collapsed to equal bounds, the
+    /// cadence is deterministic without even needing the RNG seed
+    /// (`random-uniform`'s span is zero), so this asserts health
+    /// flips down-then-up DURING the run, then — after an explicit
+    /// stop — stays 'ok and no further outage/restored events land
+    /// on the scenario journal, well past where another cycle would
+    /// have fired had the chain survived.
+    #[test]
+    fn scenario_stop_cancels_a_setup_armed_random_outage_chain() {
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "stepped-outage",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18907 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 0.0)))))
+(define-scenario :name \"outage-setup\"
+  :schedule 'relative :clock 'stepped :length \"30s\" :seed 7
+  :setup (lambda () (random-outage (list 2)
+                                   :min-every 2.0 :max-every 2.0
+                                   :min-duration 2.0 :max-duration 2.0)))",
+        );
+
+        crate::sim::scenarios::start(&cfg.ctx, &cfg.scenarios, "outage-setup")
+            .expect("scenario starts");
+        // Outage fires at t=2 (health -> error), restores at t=4
+        // (health -> ok), next outage armed for t=6. Land at t=5, in
+        // the gap, and confirm the chain actually ran.
+        cfg.sim_run(Duration::from_secs(5), Duration::from_secs(1));
+        let health = cfg.site().runtime_of(2).health;
+        assert_eq!(
+            health,
+            crate::sim::runtime::Health::Ok,
+            "mid-run: should be back from the first restore by t=5"
+        );
+        let events_before_stop = cfg
+            .site()
+            .scenario_events_since(0, 1000)
+            .into_iter()
+            .filter(|e| e.kind == "outage" || e.kind == "restored")
+            .count();
+        assert_eq!(
+            events_before_stop, 2,
+            "one outage + one restored event by t=5"
+        );
+
+        cfg.eval("(scenario-stop)").expect("scenario stops");
+        let armed_after_stop = cfg
+            .eval("(length active-timers)")
+            .expect("read active-timers length");
+        assert_eq!(
+            armed_after_stop, "0",
+            "the outage chain's own re-armed timer must be pruned from active-timers too"
+        );
+
+        // Step well past where at least one more outage cycle
+        // (t=6 down, t=8 up) would have fired had the chain survived.
+        cfg.sim_run(Duration::from_secs(15), Duration::from_secs(1));
+        let health_after = cfg.site().runtime_of(2).health;
+        assert_eq!(
+            health_after,
+            crate::sim::runtime::Health::Ok,
+            "the outage chain must not flip health again after scenario-stop"
+        );
+        let events_after = cfg
+            .site()
+            .scenario_events_since(0, 1000)
+            .into_iter()
+            .filter(|e| e.kind == "outage" || e.kind == "restored")
+            .count();
+        assert_eq!(
+            events_after, events_before_stop,
+            "no further outage/restored events after scenario-stop cancelled the chain"
+        );
+    }
+
+    /// Cancelling a scenario-owned outage chain removes the very
+    /// timer that would have ended the outage in flight, so a stop
+    /// landing inside an outage window would strand the victim in
+    /// `error with nothing left to bring it back —
+    /// `random-outage--release-victim` is teardown doing that
+    /// restore itself. Here the chain fires at t=2 for four seconds
+    /// and the stop lands at t=3, squarely inside it.
+    #[test]
+    fn stopping_mid_outage_puts_the_victims_health_back() {
+        use crate::sim::runtime::Health;
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "stepped-mid-outage",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18914 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 0.0)))))
+(define-scenario :name \"mid-outage\"
+  :schedule 'relative :clock 'stepped :length \"30s\" :seed 7
+  :setup (lambda () (random-outage (list 2)
+                                   :min-every 2.0 :max-every 2.0
+                                   :min-duration 4.0 :max-duration 4.0)))",
+        );
+        crate::sim::scenarios::start(&cfg.ctx, &cfg.scenarios, "mid-outage")
+            .expect("scenario starts");
+        cfg.sim_run(Duration::from_secs(3), Duration::from_secs(1));
+        assert_eq!(
+            cfg.site().runtime_of(2).health,
+            Health::Error,
+            "the outage fired at t=2 and runs to t=6"
+        );
+
+        cfg.eval("(scenario-stop)").expect("scenario stops");
+        assert_eq!(
+            cfg.site().runtime_of(2).health,
+            Health::Ok,
+            "teardown cancelled the chain's restore timer, so teardown owes the \
+             victim its health back — right away, not never"
+        );
+        // The journal records it, and nothing fires afterward: the
+        // chain is gone, so health stays put past both the cancelled
+        // restore (t=6) and the next outage that would have been (t=8).
+        let kinds: Vec<String> = cfg
+            .site()
+            .scenario_events_since(0, 1000)
+            .into_iter()
+            .filter(|e| e.kind == "outage" || e.kind == "restored")
+            .map(|e| e.kind)
+            .collect();
+        assert_eq!(kinds, vec!["outage", "restored"], "journal: {kinds:?}");
+        cfg.sim_run(Duration::from_secs(10), Duration::from_secs(1));
+        assert_eq!(cfg.site().runtime_of(2).health, Health::Ok);
+        assert_eq!(
+            cfg.site()
+                .scenario_events_since(0, 1000)
+                .into_iter()
+                .filter(|e| e.kind == "outage" || e.kind == "restored")
+                .count(),
+            2,
+            "the cancelled chain must not journal anything more"
+        );
+    }
+
+    /// The victim marker must not outlive the chain that set it.
+    /// `random-outage--release-victim` reads it under whatever chain
+    /// owns the process NOW, so an id left behind by a chain
+    /// cancelled mid-outage — a whole-world reload's
+    /// `(cancel-timers)` is the way that happens — would have a later
+    /// scenario's stop force `(set-component-health OLD-ID 'ok)` and
+    /// journal a "back" event for an outage that scenario never
+    /// caused. Both clears are exercised here: `cancel-timers`
+    /// blanking the marker, and the next `random-outage` refusing to
+    /// inherit one.
+    #[test]
+    fn a_chain_cancelled_mid_outage_leaves_no_victim_for_a_later_stop() {
+        use crate::sim::runtime::Health;
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "stepped-stale-victim",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18915 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 0.0)
+                        (%make-meter :id 3 :power 0.0)))))
+(random-outage (list 2) :min-every 2.0 :max-every 2.0
+                        :min-duration 60.0 :max-duration 60.0)
+(define-scenario :name \"later\"
+  :schedule 'relative :clock 'stepped :length \"30s\"
+  :setup (lambda () (random-outage (list 3)
+                                   :min-every 600.0 :max-every 600.0
+                                   :min-duration 60.0 :max-duration 60.0)))",
+        );
+        let victim = || cfg.eval("random-outage--current-victim").unwrap();
+
+        // An ambient chain knocks meter 2 down at t=2, for 60 s.
+        cfg.sim_run(Duration::from_secs(3), Duration::from_secs(1));
+        assert_eq!(cfg.site().runtime_of(2).health, Health::Error);
+        assert_eq!(victim(), "2");
+
+        // Defence 1 — a whole-world reload's central cancel lands
+        // mid-outage: the restore timer dies with everything else,
+        // and the marker must not survive it.
+        cfg.eval("(cancel-timers)").expect("cancel-timers");
+        assert_eq!(
+            victim(),
+            "nil",
+            "cancel-timers must clear the in-flight victim along with the chain"
+        );
+
+        // Defence 2 — the same hand-off with no reload in it: a fresh
+        // ambient chain downs meter 2 again, and then a scenario arms
+        // a chain of its OWN (on meter 3, too slow to fire here).
+        // Starting that chain is the only thing standing between the
+        // stale id and this scenario's ownership.
+        cfg.eval(
+            "(random-outage (list 2) :min-every 1.0 :max-every 1.0 \
+                             :min-duration 60.0 :max-duration 60.0)",
+        )
+        .expect("ambient chain re-armed");
+        cfg.sim_run(Duration::from_secs(2), Duration::from_secs(1));
+        assert_eq!(victim(), "2", "the ambient chain is mid-outage again");
+
+        crate::sim::scenarios::start(&cfg.ctx, &cfg.scenarios, "later").expect("scenario starts");
+        assert_eq!(
+            victim(),
+            "nil",
+            "a chain must not inherit the previous chain's in-flight victim"
+        );
+
+        cfg.eval("(scenario-stop)").expect("scenario stops");
+        assert_eq!(
+            cfg.site().runtime_of(2).health,
+            Health::Error,
+            "meter 2's outage belongs to the ambient chain — this scenario's \
+             teardown must not write its health at all"
+        );
+        assert_eq!(
+            cfg.site()
+                .scenario_events_since(0, 1000)
+                .into_iter()
+                .filter(|e| e.kind == "restored")
+                .count(),
+            0,
+            "no restore was owed, so none may be journalled"
+        );
+    }
+
+    /// The twin of the case above, and the one that decides where the
+    /// ownership question is ASKED. An outage chain armed AMBIENTLY —
+    /// before any scenario ran — re-arms itself from its own timer
+    /// callbacks, so a chain that happens to re-arm while an unrelated
+    /// scenario is running must NOT be adopted by it: ownership is
+    /// latched once, at `random-outage`, not re-derived per re-arm.
+    /// Steps the clock across a re-arm that lands inside the
+    /// scenario's window, stops the scenario, and confirms the chain
+    /// both completes that cycle and keeps firing new ones.
+    #[test]
+    fn an_ambient_outage_chain_survives_an_unrelated_scenarios_stop() {
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "ambient-outage",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18909 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 0.0)))))
+(random-outage (list 2) :min-every 2.0 :max-every 2.0
+                        :min-duration 2.0 :max-duration 2.0)
+(define-scenario :name \"unrelated\"
+  :schedule 'relative :clock 'stepped :length \"30s\")",
+        );
+        let health = || cfg.site().runtime_of(2).health;
+        use crate::sim::runtime::Health;
+
+        // Ambient cadence with no scenario in sight: down at t=2, up
+        // at t=4, next outage armed for t=6.
+        cfg.sim_run(Duration::from_secs(5), Duration::from_secs(1));
+        assert_eq!(health(), Health::Ok, "mid-gap at t=5");
+
+        // A scenario starts at t=5 and the chain re-arms (t=6 fire,
+        // then a t=8 restore) entirely inside its window.
+        crate::sim::scenarios::start(&cfg.ctx, &cfg.scenarios, "unrelated")
+            .expect("scenario starts");
+        cfg.sim_run(Duration::from_secs(2), Duration::from_secs(1));
+        assert_eq!(health(), Health::Error, "the t=6 outage fired");
+        assert_eq!(
+            cfg.eval("(length scenario--armed-timers)").unwrap(),
+            "0",
+            "an ambient chain's re-arm must not be captured by whatever scenario \
+             happens to be running when it re-arms"
+        );
+
+        cfg.eval("(scenario-stop)").expect("scenario stops");
+        assert_eq!(
+            health(),
+            Health::Error,
+            "teardown must not force-restore an AMBIENT chain's victim: that outage \
+             was not this scenario's to end, and the chain will end it on schedule"
+        );
+        // The restore this chain had already armed still fires...
+        cfg.sim_run(Duration::from_secs(1), Duration::from_secs(1));
+        assert_eq!(
+            health(),
+            Health::Ok,
+            "the pending restore must survive an unrelated scenario's stop — \
+             otherwise the component is stuck in the outage forever"
+        );
+        // ...and the chain keeps arming new cycles (t=10 fire).
+        cfg.sim_run(Duration::from_secs(3), Duration::from_secs(1));
+        assert_eq!(
+            health(),
+            Health::Error,
+            "an ambient chain must keep firing after an unrelated scenario stops"
+        );
+    }
+
+    /// `scenario--track-timer` needs no flag of its own: it records a
+    /// handle exactly when `(scenario-running-p)` says a scenario is
+    /// in progress. Outside a run it's a pass-through, so an ambient
+    /// `every` / outage chain can route through it unconditionally and
+    /// still be left alone by every scenario's teardown.
+    #[test]
+    fn track_timer_records_only_while_a_scenario_runs() {
+        let cfg = stepped_config(
+            "track-timer",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18910 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 0.0)))))",
+        );
+        assert_eq!(cfg.eval("(scenario-running-p)").unwrap(), "nil");
+        cfg.eval("(scenario--track-timer (run-with-timer 9999 nil (lambda () nil)))")
+            .unwrap();
+        assert_eq!(
+            cfg.eval("(length scenario--armed-timers)").unwrap(),
+            "0",
+            "a timer armed with no scenario running belongs to nobody"
+        );
+
+        cfg.eval("(scenario-start \"live\")").unwrap();
+        assert_eq!(cfg.eval("(scenario-running-p)").unwrap(), "t");
+        cfg.eval("(scenario--track-timer (run-with-timer 9999 nil (lambda () nil)))")
+            .unwrap();
+        assert_eq!(
+            cfg.eval("(length scenario--armed-timers)").unwrap(),
+            "1",
+            "a timer armed while a scenario runs is that scenario's to cancel"
+        );
+    }
+
+    /// Starting a scenario while one is still running tears the
+    /// running one down first, rather than orphaning it: `scenario-start`
+    /// clears the knob baseline Rust-side and `scenario--run` resets
+    /// the armed-timer list, so without the stop scenario A's driven
+    /// meter could never be restored and A's agent would keep firing
+    /// through B's run and beyond. Drives A (a constructed-`:power`
+    /// meter + a 1 s agent), starts B with no stop in between, and
+    /// checks both halves.
+    #[test]
+    fn starting_a_scenario_tears_down_the_one_still_running() {
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "overlap",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18911 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 1234.0)))))
+(setq a-ticks 0)
+(define-scenario :name \"a\"
+  :schedule 'relative :clock 'stepped :length \"60s\"
+  :drive (list (drive-meter 2 9000.0))
+  :agents (list (controller 'a-counter :every \"1s\"
+                  (lambda () (setq a-ticks (+ a-ticks 1))))))
+(define-scenario :name \"b\"
+  :schedule 'relative :clock 'stepped :length \"60s\")",
+        );
+        let power = || {
+            cfg.site()
+                .get(2)
+                .unwrap()
+                .meter_power_reading()
+                .unwrap()
+                .value
+        };
+
+        crate::sim::scenarios::start(&cfg.ctx, &cfg.scenarios, "a").expect("A starts");
+        cfg.sim_run(Duration::from_secs(3), Duration::from_secs(1));
+        assert_eq!(cfg.eval("a-ticks").unwrap(), "3", "A's agent is firing");
+        assert_eq!(power(), 9000.0, "A is driving the meter");
+
+        // B starts with A still running — no (scenario-stop) of our own.
+        crate::sim::scenarios::start(&cfg.ctx, &cfg.scenarios, "b").expect("B starts");
+        assert_eq!(
+            power(),
+            1234.0,
+            "A's teardown must restore the meter's PRE-A :power as B begins"
+        );
+        let ticks_at_b_start = cfg.eval("a-ticks").unwrap();
+        cfg.sim_run(Duration::from_secs(3), Duration::from_secs(1));
+        assert_eq!(
+            cfg.eval("a-ticks").unwrap(),
+            ticks_at_b_start,
+            "A's agent must have been cancelled by A's teardown, not left running into B"
+        );
+
+        cfg.eval("(scenario-stop)").expect("B stops");
+        assert_eq!(
+            power(),
+            1234.0,
+            "B drove nothing, so stopping it leaves A's restored pre-scenario value"
+        );
+    }
+
+    /// A cue that hasn't fired yet is the running scenario's own timer
+    /// and dies with it: a cue armed for t=10 s, with the scenario
+    /// stopped at t=3 s, must never run — stepping the clock well past
+    /// its due time leaves its counter untouched.
+    #[test]
+    fn scenario_stop_cancels_a_cue_that_has_not_fired_yet() {
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "cue-cancel",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(make-microgrid :id 9 :grpc-port 18912 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 0.0)))))
+(setq cue-count 0)
+(define-scenario :name \"cue-cancel\"
+  :schedule 'relative :clock 'stepped :length \"30s\"
+  :cues (list (at \"10s\" (lambda () (setq cue-count (+ cue-count 1))))))",
+        );
+        crate::sim::scenarios::start(&cfg.ctx, &cfg.scenarios, "cue-cancel")
+            .expect("scenario starts");
+        cfg.sim_run(Duration::from_secs(3), Duration::from_secs(1));
+        assert_eq!(cfg.eval("cue-count").unwrap(), "0", "cue is due at 10s");
+
+        cfg.eval("(scenario-stop)").expect("scenario stops");
+        assert_eq!(
+            cfg.eval("(length active-timers)").unwrap(),
+            "0",
+            "the pending cue timer must be pruned from active-timers too"
+        );
+        cfg.sim_run(Duration::from_secs(15), Duration::from_secs(1));
+        assert_eq!(
+            cfg.eval("cue-count").unwrap(),
+            "0",
+            "a cue cancelled at stop must not fire once its due time passes"
+        );
+    }
+
+    /// A restored knob must read its CURRENT value the instant the
+    /// stop returns, not the one its source last resolved to before
+    /// the scenario displaced it. The snapshot carries the live
+    /// `DynamicScalar` plus a cached number frozen at capture time, so
+    /// a scenario cue that moves the variable the source reads leaves
+    /// that cache stale — `scenario_stop`'s refresh phase is what
+    /// re-resolves it, both for the value the stepped runner's caller
+    /// reads back and for the `KnobChanged` the restore broadcasts.
+    #[test]
+    fn stepped_runner_restores_a_dynamic_source_at_its_current_value() {
+        use crate::sim::events::SiteEvent;
+        use std::time::Duration;
+        let cfg = stepped_config(
+            "restore-refresh",
+            "(set-enterprise-id 1)
+(load \"sim/common.lisp\")
+(load \"sim/scenarios.lisp\")
+(setq load-w 1000.0)
+(make-microgrid :id 9 :grpc-port 18913 :topology
+  (lambda ()
+    (%make-grid-connection-point :id 1
+      :successors (list (%make-meter :id 2 :power 'load-w)))))
+(define-scenario :name \"refresh\"
+  :schedule 'relative :clock 'stepped :length \"5s\"
+  :drive (list (drive-meter 2 9999.0))
+  :cues (list (at \"2s\" (lambda () (setq load-w 4242.0)))))",
+        );
+        let mut rx = cfg.site().subscribe_events();
+        let steps = cfg
+            .run_scenario_stepped("refresh", Duration::from_secs(1), None)
+            .expect("scenario runs");
+        assert_eq!(steps, 5);
+
+        let reading = cfg.site().get(2).unwrap().meter_power_reading().unwrap();
+        assert_eq!(
+            reading.expr.as_deref(),
+            Some("load-w"),
+            "the dynamic source itself must come back, not a collapsed constant"
+        );
+        assert_eq!(
+            reading.value, 4242.0,
+            "the restored source must read the variable's CURRENT value, not the \
+             one cached when the scenario snapshotted it"
+        );
+
+        let mut last_broadcast = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let SiteEvent::KnobChanged {
+                id: 2,
+                knob: "meter-power",
+                value,
+                ..
+            } = ev
+            {
+                last_broadcast = value;
+            }
+        }
+        assert_eq!(
+            last_broadcast,
+            Some(4242.0),
+            "the restore's KnobChanged must carry the re-resolved value"
+        );
     }
 
     /// `Config::refresh_once` drains tulisp-async's pending-timer

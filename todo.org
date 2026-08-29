@@ -1170,7 +1170,11 @@ Decision: make unscoped =set-physics-tick-ms= (and arguably
 =set-voltage-per-phase=) fan out registry-wide, or move the call
 inside each per-mg =:topology= and fix the section comment.
 
-*** TODO [#C] Scenario-collapsed sunlight never returns to ambient :scenarios:design:
+*** DONE [#C] Scenario-collapsed sunlight never returns to ambient :scenarios:design:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 12:09] \\
+  Resolved: scenario teardown now snapshots every driven knob (meter P/Q, sunlight, boiler demand) the first time a scenario displaces it and (scenario-stop) restores the pre-scenario source verbatim — the demo PV's :sunlight% lambda comes back as the live object, not a re-parse, so the ambient curve resumes tracking on its own. scenario-stop also cancels the timers scenario--run itself armed (agents/cues/checks via scenario--cancel-timers), so the frozen-timeline worry is moot too — nothing is left running to re-collapse it after the restore.
+:END:
 The cloud curve rides the demo inverter's =:sunlight%= lambda source
 now, so a scenario's numeric =set-solar-sunlight= collapses it — and
 with the old =every= timer gone, nothing reinstalls the ambient
@@ -1949,3 +1953,14 @@ call sites) in tools/ui-smoke/live-topology.mjs let a timeout pass
 silently into the following check, which then asserts stale state —
 the one mechanism that could go green-but-hollow now that CI gates
 on the script. Convert to explicit failing checks.
+
+** TODO [#C] Stale scenario-end-after timer tears down the wrong scenario :scenarios:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-08-29 Sa 12:05]
+:END:
+
+A =scenario-end-after= armed by run A fires after A was manually
+stopped and B started; it calls =scenario-stop= against B — now
+cancelling B's timers and restoring B's knobs, not just closing a
+journal. Pre-existing shape, sharpened by teardown. Needs the
+end-after timer to carry its scenario's identity.

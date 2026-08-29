@@ -16,6 +16,8 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use tulisp::TulispContext;
+
 use crate::sim::component::{KnobKind, ReactiveReading};
 use crate::sim::scenario::{ScenarioCheck, ScenarioEvent};
 use crate::sim::scenario_csv::{CsvSink, CsvSinks};
@@ -247,9 +249,10 @@ impl MicrogridSite {
 
     /// Is a scenario RUNNING right now — started and not yet stopped?
     /// The single source of truth for "a scenario is in progress":
-    /// `scenario_snapshot_knob` self-gates on it, and the Lisp side
-    /// reads the same answer rather than shadowing it with a flag of
-    /// its own.
+    /// `scenario_snapshot_knob` self-gates on it, and the
+    /// `(scenario-running-p)` defun exposes it to Lisp so the timer
+    /// tracking in `sim/scenarios.lisp` needs no flag of its own to
+    /// keep in sync with the journal.
     pub(crate) fn scenario_is_running(&self) -> bool {
         let g = self.inner.scenario.read();
         g.started_at.is_some() && g.ended_at.is_none()
@@ -266,13 +269,16 @@ impl MicrogridSite {
     /// no-op if `id` isn't registered or doesn't support `kind` — the
     /// component's own `snapshot_knob` reports that via `None`.
     ///
-    /// `#[allow(dead_code)]`: this is stage 1 of scenario teardown —
-    /// the Rust snapshot/restore machinery. Nothing calls this yet in
-    /// production; stage 2 wires it into the `(scenario-*)` /
-    /// `set-meter-power` &c. defun chokepoints that actually displace
-    /// a knob. Exercised directly by this module's own tests below in
-    /// the meantime.
-    #[allow(dead_code)]
+    /// Called from EVERY door onto these knobs before it mutates one:
+    /// the `set-meter-power` / `set-meter-reactive-power` /
+    /// `set-meter-power-factor` / `set-solar-sunlight` /
+    /// `set-boiler-demand` / `clear-meter-power` /
+    /// `clear-meter-reactive` Lisp defuns, and the typed
+    /// `POST /api/component/:id/drive` route's equivalent fields. A
+    /// door that skipped it would not just leak its own write past
+    /// teardown — its first-touch write would become the "baseline"
+    /// a later drive captures, and `scenario_stop` would restore THAT
+    /// instead of the pre-scenario state.
     pub(crate) fn scenario_snapshot_knob(&self, id: u64, kind: KnobKind) {
         if !self.scenario_is_running() {
             return;
@@ -297,23 +303,66 @@ impl MicrogridSite {
     /// second `scenario_stop` finds it empty and restores/broadcasts
     /// nothing.
     ///
+    /// Three phases, in this order, because the middle one is what
+    /// makes a restored knob READ correctly:
+    ///
+    /// 1. restore — write each snapshot back into its component;
+    /// 2. re-resolve — with `ctx`, call `refresh_inputs` on every
+    ///    component that got something back. A snapshot carries the
+    ///    live `DynamicScalar` AND the cached number it last resolved
+    ///    to, frozen at capture time; whatever the underlying lambda
+    ///    or symbol means NOW (a scenario cue may well have moved it)
+    ///    only lands in that cache on a refresh. Without this pass a
+    ///    caller reading the component the instant `(scenario-stop)`
+    ///    returns — `run_scenario_stepped` does exactly that — sees a
+    ///    stale value that self-corrects one refresh tick later, and
+    ///    the broadcast below would ship that stale number to the UI;
+    /// 3. broadcast — emit `KnobChanged` per restored knob, reading
+    ///    the now-current value back off the component.
+    ///
+    /// `ctx` is `None` for callers with no interpreter at hand (unit
+    /// tests, and any future non-Lisp stop path): phase 2 is skipped
+    /// and a dynamic source reads its capture-time value until the
+    /// next refresh pass, exactly as before. The `(scenario-stop)`
+    /// defun — every real stop path, the HTTP route included — always
+    /// passes one.
+    ///
     /// Lock order: the baseline map is drained under its own lock
-    /// BEFORE any component is touched — `restore_knob` and the
-    /// knob-reading calls below never run while that lock is held, so
-    /// there's no window where the baseline lock is held alongside a
-    /// component's own lock.
-    pub(crate) fn scenario_stop(&self, now: DateTime<Utc>) {
+    /// BEFORE any component is touched — `restore_knob`, the refresh
+    /// pass and the knob-reading calls below never run while that
+    /// lock is held, so there's no window where the baseline lock is
+    /// held alongside a component's own lock.
+    pub(crate) fn scenario_stop(&self, now: DateTime<Utc>, ctx: Option<&mut TulispContext>) {
         self.inner.scenario.write().stop(now);
         self.scenario_close_csv();
         let baseline = std::mem::take(&mut *self.inner.scenario_knob_baseline.write());
+        let mut restored: Vec<(u64, KnobKind)> = Vec::new();
         for ((id, kind), snap) in baseline {
             let Some(component) = self.get(id) else {
                 continue;
             };
-            if !component.restore_knob(snap) {
-                continue;
+            if component.restore_knob(snap) {
+                restored.push((id, kind));
             }
-            self.broadcast_restored_knob(id, kind, component.as_ref());
+        }
+        if let Some(ctx) = ctx {
+            // One refresh per component, not per knob: a meter whose
+            // two axes were both restored re-resolves both in one call.
+            let mut seen: Vec<u64> = Vec::new();
+            for (id, _) in &restored {
+                if seen.contains(id) {
+                    continue;
+                }
+                seen.push(*id);
+                if let Some(component) = self.get(*id) {
+                    component.refresh_inputs(ctx);
+                }
+            }
+        }
+        for (id, kind) in restored {
+            if let Some(component) = self.get(id) {
+                self.broadcast_restored_knob(id, kind, component.as_ref());
+            }
         }
     }
 
@@ -545,7 +594,7 @@ mod tests {
         w.scenario_start("s".into(), now);
         // The scenario drives the meter WITHOUT ever snapshotting it.
         w.get(1).unwrap().set_active_power_override(5000.0);
-        w.scenario_stop(now);
+        w.scenario_stop(now, None);
 
         assert_eq!(
             w.get(1).unwrap().meter_power_reading().unwrap().value,
@@ -570,7 +619,7 @@ mod tests {
         w.scenario_snapshot_knob(2, KnobKind::MeterPower); // no-op: already captured
         w.get(2).unwrap().set_active_power_override(7000.0);
 
-        w.scenario_stop(now);
+        w.scenario_stop(now, None);
         assert_eq!(
             w.get(2).unwrap().meter_power_reading().unwrap().value,
             1200.0,
@@ -590,7 +639,7 @@ mod tests {
         w.scenario_start("s3".into(), now);
         w.scenario_snapshot_knob(3, KnobKind::MeterPower);
         w.get(3).unwrap().set_active_power_override(4000.0);
-        w.scenario_stop(now);
+        w.scenario_stop(now, None);
         assert_eq!(
             w.get(3).unwrap().meter_power_reading().unwrap().value,
             1500.0
@@ -599,7 +648,7 @@ mod tests {
         // Subscribe only AFTER the first stop's broadcasts have
         // already gone out, so the receiver starts empty.
         let mut rx = w.subscribe_events();
-        w.scenario_stop(now);
+        w.scenario_stop(now, None);
         assert!(
             rx.try_recv().is_err(),
             "a second stop must not rebroadcast a restored knob"
@@ -621,7 +670,7 @@ mod tests {
         w.remove_component(4);
         // Fresh component under the same id, never snapshotted this run.
         w.register(meter_with_power(4, 555.0));
-        w.scenario_stop(now);
+        w.scenario_stop(now, None);
 
         assert_eq!(
             w.get(4).unwrap().meter_power_reading().unwrap().value,
@@ -646,7 +695,7 @@ mod tests {
         w.register(meter_with_power(5, 777.0));
         w.scenario_start("s6".into(), now);
         // No snapshot taken in this fresh run.
-        w.scenario_stop(now);
+        w.scenario_stop(now, None);
 
         assert_eq!(
             w.get(5).unwrap().meter_power_reading().unwrap().value,
@@ -680,7 +729,7 @@ mod tests {
         w.get(6).unwrap().set_power_factor(0.8, true);
 
         let mut rx = w.subscribe_events();
-        w.scenario_stop(now);
+        w.scenario_stop(now, None);
 
         let mut saw_power = false;
         let mut saw_reactive = false;
