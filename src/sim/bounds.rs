@@ -112,12 +112,13 @@ impl VecBounds {
         prev_upper.unwrap_or(value)
     }
 
-    /// Add two single-bucket bound containers element-wise. Microsim's
-    /// general-case add (handling multi-bucket exclusion zones) is
-    /// overkill for switchyard's current needs — when both sides are
-    /// `[lower, upper]` we just sum the like-signed edges and pick the
-    /// extreme on the cross-signed ones, matching the behaviour the
-    /// inverter aggregation needs.
+    /// Add bound containers element-wise into one `[lower, upper]`
+    /// band. A multi-band item is collapsed to its hull (lowest
+    /// lower, highest upper) first — microsim's general-case add
+    /// (tracking multi-band exclusion zones through the sum) is
+    /// overkill for a gate: the hull never rejects a reachable
+    /// value, and a value inside a child's interior gap is still
+    /// pulled to a band edge by that child's own clamp.
     ///
     /// Children with no bounds are skipped; if EVERY child is
     /// empty, the result is an empty `VecBounds` (not `[0, 0]`),
@@ -127,14 +128,24 @@ impl VecBounds {
         let mut upper = 0.0_f32;
         let mut any = false;
         for vb in items {
-            let Some(b) = vb.0.first().cloned() else {
+            if vb.0.is_empty() {
                 continue;
-            };
+            }
             any = true;
-            if let Some(l) = b.lower {
+            // An edge joins the hull only when EVERY band has it:
+            // one absent edge makes that whole side unbounded, and
+            // an unbounded side contributes nothing to the sum (the
+            // same as before for single-band items).
+            if let Some(l) =
+                vb.0.iter()
+                    .try_fold(f32::INFINITY, |a, b| b.lower.map(|l| a.min(l)))
+            {
                 lower += l;
             }
-            if let Some(u) = b.upper {
+            if let Some(u) =
+                vb.0.iter()
+                    .try_fold(f32::NEG_INFINITY, |a, b| b.upper.map(|u| a.max(u)))
+            {
                 upper += u;
             }
         }
@@ -436,6 +447,53 @@ mod tests {
             low.intersect(&high).0.is_empty(),
             "a disjoint pair still empties the intersection"
         );
+    }
+
+    /// A multi-band child contributes its hull to the sum, not just
+    /// its first band — a `[[-10,-5],[5,10]]` inverter summed with a
+    /// `[0,2]` sibling gates on `[-10, 12]`, so a setpoint reachable
+    /// via the second band is not rejected.
+    #[test]
+    fn sum_single_takes_the_hull_of_a_multi_band_child() {
+        let multi = VecBounds::new(vec![
+            Bounds {
+                lower: Some(-10.0),
+                upper: Some(-5.0),
+            },
+            Bounds {
+                lower: Some(5.0),
+                upper: Some(10.0),
+            },
+        ]);
+        let single = VecBounds::single(0.0, 2.0);
+        let sum = VecBounds::sum_single([multi, single]);
+        assert_eq!(sum.0.len(), 1);
+        assert_eq!((sum.0[0].lower, sum.0[0].upper), (Some(-10.0), Some(12.0)));
+    }
+
+    /// One absent edge in ANY band makes that side of the child's
+    /// hull unbounded, so it contributes nothing to the sum — the
+    /// other band's finite edge must NOT be summed in its place —
+    /// that would tighten the gate beyond the contribute-nothing
+    /// conservatism an unbounded side already deliberately gets.
+    #[test]
+    fn sum_single_half_open_band_unbounds_that_side_of_the_hull() {
+        let half_open = VecBounds::new(vec![
+            Bounds {
+                lower: None,
+                upper: Some(-100.0),
+            },
+            Bounds {
+                lower: Some(500.0),
+                upper: Some(1000.0),
+            },
+        ]);
+        let single = VecBounds::single(0.0, 2.0);
+        let sum = VecBounds::sum_single([half_open, single]);
+        assert_eq!(sum.0.len(), 1);
+        // Lower: the half-open child skips (unbounded below — the
+        // buggy form summed the 500); upper: hull max 1000 + 2.
+        assert_eq!((sum.0[0].lower, sum.0[0].upper), (Some(0.0), Some(1002.0)));
     }
 
     #[test]

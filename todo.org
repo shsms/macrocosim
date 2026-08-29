@@ -562,7 +562,11 @@ two TTL guarantees handed to clients clock against different references.
 
 ** Structural / concurrency
 
-*** TODO [#B] sum_single silently drops multi-band bounds            :bounds:
+*** DONE [#B] sum_single silently drops multi-band bounds            :bounds:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 15:57] \\
+  Collapses each child's bands to their hull before summing; the gate never rejects a reachable value and interior gaps stay enforced by each child's own clamp. Pinned by sum_single_takes_the_hull_of_a_multi_band_child.
+:END:
 =VecBounds::sum_single= (=src/sim/bounds.rs=) keeps only =.first()= of
 each child's bounds, so =aggregate_child_bounds= (the gateway setpoint
 gate) ignores later bands of a multi-band inverter. Single-band today,
