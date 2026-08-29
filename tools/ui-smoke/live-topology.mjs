@@ -1357,6 +1357,75 @@ const persisted = await page.evaluate(async () => {
 check("e2e: off state survives reload", persisted === false);
 await page.evaluate(() => localStorage.removeItem("switchyard-topology-live"));
 
+// ── e2e: weather panel ──────────────────────────────────────────────
+// Runs LAST: the weather this section installs (and the sunrise/sunset
+// override below) persists on the site for the rest of the run.
+// Berlin's PV (id 200) passes :sunlight% explicitly and is driven by a
+// set-solar-sunlight timer (examples/berlin-demo.lisp), so it's Manual
+// and its power does not follow weather — assert the panel's own
+// site-% readout, not inverter power.
+await page.click("#weather-btn");
+check(
+  "e2e: weather panel opens",
+  await page.evaluate(() => document.getElementById("panel-weather-btn")?.classList.contains("open") === true),
+);
+// berlin-demo.lisp never calls (make-weather) — the site starts with
+// no weather, so the panel opens on its empty state.
+await waitFor(async () => (await page.locator("#weather-create").count()) > 0, 10000);
+await page.click("#weather-create");
+// Creating installs the default sky; the panel repaints from the POST
+// response synchronously, so the live skeleton's readout shows up
+// without waiting on the 3 s poll.
+await waitFor(async () => (await page.locator("#weather-pct").count()) > 0, 10000);
+
+// This smoke runs at wall-clock UTC: the default 06:00-20:00 window
+// would leave clear-sky at 0 outside daylight hours and the cloud
+// check below would be flaky depending on when the run happens.
+// Widen the window via the panel's own fields (Enter-committing, the
+// inspector's edit-in-place contract — weather-panel.js wireField) so
+// the run is always inside daylight.
+await page.fill("#weather-sunrise", "00:00");
+await page.press("#weather-sunrise", "Enter");
+await page.fill("#weather-sunset", "23:59");
+await page.press("#weather-sunset", "Enter");
+const daylightText = await waitFor(async () => {
+  const t = await page.evaluate(() => document.getElementById("weather-clear-sky")?.textContent);
+  return t && t.includes("00:00") && t.includes("23:59") ? t : null;
+}, 10000);
+check(
+  "e2e: sunrise/sunset commit widens the daylight window",
+  Boolean(daylightText) && daylightText.includes("00:00") && daylightText.includes("23:59"),
+  daylightText,
+);
+
+const preCloudPct = await waitFor(async () => {
+  const t = await page.evaluate(() => document.getElementById("weather-pct")?.textContent);
+  const v = Number(t);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}, 10000);
+check(
+  "e2e: the site-% readout is positive inside the widened daylight window",
+  Number.isFinite(preCloudPct) && preCloudPct > 0,
+  String(preCloudPct),
+);
+
+// A deep (100%), long cloud with a short ramp: bites fast, and stays
+// down long enough for the assertion below to land inside it.
+await page.fill("#weather-cloud-depth", "100");
+await page.fill("#weather-cloud-duration", "3600");
+await page.fill("#weather-cloud-ramp", "5");
+await page.click("#weather-cloud-fire");
+const postCloudPct = await waitFor(async () => {
+  const t = await page.evaluate(() => document.getElementById("weather-pct")?.textContent);
+  const v = Number(t);
+  return Number.isFinite(v) && v < preCloudPct - 1 ? v : null;
+}, 20000);
+check(
+  "e2e: the panel readout drops after firing a deep cloud",
+  Number.isFinite(postCloudPct) && postCloudPct < preCloudPct,
+  `${preCloudPct}% -> ${postCloudPct}%`,
+);
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }

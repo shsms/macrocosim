@@ -224,6 +224,21 @@ UI").
   step` then `sleep until next_due`; re-anchor only when behind. Per-stream
   `:stream-jitter-pct` perturbs each step; mean is exactly the configured
   interval.
+- **Site weather is one singleton per microgrid, not per-component.**
+  `(make-weather …)` installs a parametric clear-sky day (a sunrise/sunset
+  window, a sine peaking at `:peak%`) plus an optional ambient cloud
+  generator; `(set-weather …)` retunes any of it in place; `(pass-cloud
+  DEPTH DURATION &optional RAMP)` scripts one deterministic cloud;
+  `(weather-status)` reads the sky back as an alist (`src/lisp/defuns/weather.rs`,
+  `src/sim/weather.rs`). A solar inverter with no `:sunlight%` follows the
+  site's weather (`:weather-lag-s` / `:weather-jitter-pct` lag and roughen
+  the sample it reads — Follow-only; `:array-peak-w` sizes the DC array
+  whichever source the sunlight comes from); passing
+  `:sunlight%` explicitly makes it Manual instead, and
+  `(clear-solar-sunlight ID)` is the way back to Follow. `GET`/`POST
+  /api/weather` mirror the same four doors for the weather panel (day
+  curve, live site-% readout, pass-a-cloud trigger), which has no Lisp
+  console of its own.
 
 ## Build / run / test
 

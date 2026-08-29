@@ -65,6 +65,20 @@ exercises the simulator:
 | `(set-meter-reactive-power ID VAL)`    | drive a meter's `:reactive-power` (number / lambda / `'symbol`)  |
 | `(set-meter-power-factor ID PF &OPTIONAL LEADING)` | drive a meter's `:power-factor` (true cos φ in `(0, 1]`); non-nil LEADING negates the derived Q |
 
+Site weather is a singleton, not a per-component knob (see AGENTS.md),
+so it isn't in the table above — but `(pass-cloud …)` is the door a
+scenario cue reaches for to script a passing cloud over the array:
+
+```lisp
+(pass-cloud 80 600 60)  ; 80% depth, 10 minutes, 1-minute ramp in/out
+```
+
+It needs weather installed first — `(make-weather)` gives the default
+06:00–20:00 UTC clear-sky day — and only bites a solar inverter that is
+following the sky (no `:sunlight%` of its own); one driven by
+`set-solar-sunlight`, like `examples/berlin-demo.lisp`'s PV, is Manual
+and ignores it.
+
 `(set-meter-power 100 (lambda () (csv-lookup …)))` and
 `(set-meter-power 100 'consumer-power)` install the lambda or
 the symbol as the source — the scheduler re-resolves it once per
@@ -73,8 +87,9 @@ dynamic source back to a constant.
 
 Inside a running scenario the five knob setters — `set-meter-power`,
 `set-meter-reactive-power`, `set-meter-power-factor`,
-`set-solar-sunlight`, `set-boiler-demand`, plus the two
-`clear-meter-*` — are TRANSIENT: the knob's previous value is
+`set-solar-sunlight`, `set-boiler-demand`, plus the three clears —
+`clear-meter-power`, `clear-meter-reactive` and
+`clear-solar-sunlight` — are TRANSIENT: the knob's previous value is
 captured the first time the run touches it, and `(scenario-stop)`
 puts it back. The other stimuli here are not: `set-battery-soc`,
 `set-boiler-pressure`, the health / mode setters and the setpoint
