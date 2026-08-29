@@ -656,15 +656,21 @@ mod tests {
     }
 
     /// The one mismatch case worth a test: `Sunlight` and
-    /// `BoilerDemand` carry the same payload — a bare `DynamicScalar`
-    /// — and are told apart only by their variant. A sunlight
-    /// snapshot handed to a boiler must be refused, not written into
-    /// its demand slot. Every other cross-knob pairing is refused by
+    /// `BoilerDemand` are the two scalar knobs a scenario drives the
+    /// same way, and are told apart only by their variant — a
+    /// sunlight snapshot wrapping the very same `DynamicScalar` a
+    /// boiler demand would carry must be refused, not written into
+    /// the demand slot. Every other cross-knob pairing is refused by
     /// the same single `match` on the variant.
     #[test]
     fn restore_knob_rejects_a_sunlight_snapshot() {
+        use crate::sim::inverter::solar_inverter::SunlightSource;
         let b = boiler(SteamBoilerConfig::default());
-        assert!(!b.restore_knob(KnobSnapshot::Sunlight(DynamicScalar::constant(1.0))));
+        assert!(
+            !b.restore_knob(KnobSnapshot::Sunlight(SunlightSource::manual(
+                DynamicScalar::constant(1.0)
+            )))
+        );
         assert_eq!(b.demand_reading().unwrap().value, 0.0);
     }
 }

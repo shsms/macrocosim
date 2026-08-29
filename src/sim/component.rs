@@ -6,6 +6,7 @@ use tulisp::TulispContext;
 use crate::sim::{
     bounds::VecBounds,
     dynamic_scalar::DynamicScalar,
+    inverter::solar_inverter::SunlightSource,
     meter::{ConstructedReactive, ReactiveSource},
     microgrid_site::MicrogridSite,
 };
@@ -322,13 +323,17 @@ pub enum KnobKind {
 /// with.
 pub enum KnobSnapshot {
     /// Solar inverter sunlight %: the source slot is never optional
-    /// on this component (it's always at least a constant), so a bare
-    /// `DynamicScalar` is the whole story. Distinct from
-    /// [`Self::BoilerDemand`] despite the identical payload, so the
-    /// type — not a `kind` argument travelling alongside it — is what
-    /// keeps a boiler's snapshot from being written into an
-    /// inverter's slot.
-    Sunlight(DynamicScalar),
+    /// on this component (it's always at least a constant), so no
+    /// `Option` here — but the payload carries the whole
+    /// [`SunlightSource`], `Follow` included, not just the driven
+    /// scalar. That is what lets restore land the exact pre-scenario
+    /// state: an inverter that was tracking the weather goes back to
+    /// tracking the weather, rather than being frozen at whatever
+    /// constant the sky happened to be at snapshot time. Distinct
+    /// from [`Self::BoilerDemand`] so the type — not a `kind`
+    /// argument travelling alongside it — is what keeps a boiler's
+    /// snapshot from being written into an inverter's slot.
+    Sunlight(SunlightSource),
     /// Steam boiler steam demand (kg/h): same shape as
     /// [`Self::Sunlight`], different knob.
     BoilerDemand(DynamicScalar),
@@ -688,6 +693,18 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// used by `(set-solar-sunlight id (lambda () …))`. Default
     /// no-op for non-solar components.
     fn set_sunlight_source(&self, _scalar: DynamicScalar) {}
+
+    /// Drop whatever was driving the solar inverter's `:sunlight%` —
+    /// a constant poke or a Lisp expression — and return it to
+    /// following the site's weather. The PV analogue of
+    /// [`Self::clear_active_power_source`]: the one-way trip
+    /// `set_sunlight_pct` / `set_sunlight_source` otherwise has no
+    /// way back. Returns whether the component supports the stimulus
+    /// (a solar inverter always does, even with nothing to clear);
+    /// the default is an unsupported no-op.
+    fn clear_sunlight_source(&self) -> bool {
+        false
+    }
 
     /// Steam boiler: constant steam demand in kg/h. Collapses any
     /// prior dynamic source, like `set_sunlight_pct`.
