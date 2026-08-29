@@ -22,7 +22,7 @@ use chrono::{DateTime, Timelike, Utc};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
-use crate::sim::sim_clock::parse_time_of_day;
+use crate::sim::{MicrogridSite, sim_clock::parse_time_of_day};
 
 /// How long an expired [`CloudEvent`] is kept in the list after it
 /// ends, so a lagged reader (an inverter reading `pct_at(now -
@@ -468,6 +468,206 @@ pub mod validate {
     }
 }
 
+/// Which door a [`WeatherPatch`] arrived through. It changes nothing
+/// about what is checked — only how a rejection is worded, since each
+/// surface names the same field in its own vocabulary (`:peak%` in a
+/// Lisp form, `peak_pct` in a JSON body) and a Lisp error also names
+/// the defun the author actually typed.
+#[derive(Clone, Copy)]
+pub enum WeatherDoor<'a> {
+    /// A Lisp form, carrying its own name — `"make-weather"` or
+    /// `"set-weather"`.
+    Lisp(&'a str),
+    /// The HTTP weather route.
+    Http,
+}
+
+impl WeatherDoor<'_> {
+    /// How this door introduces an error about one field: the Lisp
+    /// kwarg or the JSON field name, followed by the message.
+    ///
+    /// `with_form` is why there are two spellings rather than one:
+    /// the Lisp doors put the form name in front of the checks that
+    /// read as being about the form as a whole (the window, `:peak%`,
+    /// `:cloud-rate`) but not in front of the range kwargs. That
+    /// split is historical, and is kept so no existing message moves.
+    fn label(&self, kw: &str, json: &str, with_form: bool) -> String {
+        match self {
+            Self::Lisp(form) if with_form => format!("{form}: {kw}"),
+            Self::Lisp(_) => kw.to_string(),
+            Self::Http => format!("{json}:"),
+        }
+    }
+}
+
+/// One update to a [`WeatherConfig`]: every field optional, already
+/// parsed out of whatever wire shape it arrived in.
+///
+/// Both weather doors — the Lisp `(make-weather)` / `(set-weather)`
+/// forms in `src/lisp/defuns/weather.rs` and `POST /api/weather` in
+/// `src/ui/handlers/weather.rs` — carry the same fields, fold them in
+/// the same order, run the same checks, and share the same "a
+/// rejected request changes nothing" contract. So each door only
+/// parses its own spelling (an `"HH:MM"` string or bare seconds and a
+/// number-or-`(lo hi)` range from Lisp; JSON strings and `[lo, hi]`
+/// pairs over HTTP) into this struct. Everything past that point —
+/// the fold order, the validation, the sunrise/sunset pair check and
+/// the create-or-update install decision — lives here, written once.
+#[derive(Default)]
+pub struct WeatherPatch {
+    /// Time of day (UTC) the clear-sky curve turns on.
+    pub sunrise: Option<Duration>,
+    /// Time of day (UTC) the clear-sky curve turns off.
+    pub sunset: Option<Duration>,
+    /// Clear-sky output at solar noon, percent.
+    pub peak_pct: Option<f32>,
+    /// Ambient cloud arrival rate as the caller wrote it, before
+    /// [`validate::cloud_rate`] turns it into the config's own
+    /// `Option` shape (where zero means "off").
+    pub cloud_rate_per_h: Option<f32>,
+    /// Ambient cloud depth `(lo, hi)`, percent.
+    pub cloud_depth: Option<(f32, f32)>,
+    /// Ambient cloud total duration `(lo, hi)`, seconds.
+    pub cloud_duration: Option<(f32, f32)>,
+    /// Ambient cloud ramp-in/ramp-out `(lo, hi)`, seconds.
+    pub cloud_ramp: Option<(f32, f32)>,
+    /// Ambient generator seed. Setting it REBUILDS the weather — see
+    /// [`Self::install`]. The HTTP door has no field for it.
+    pub seed: Option<u64>,
+}
+
+impl WeatherPatch {
+    /// Fold this patch into `cfg`, validating as it goes. `cfg` is
+    /// the caller's working copy, so a rejected patch leaves the
+    /// site's live weather untouched. Errors are worded in `door`'s
+    /// own field vocabulary.
+    pub fn apply_to(&self, cfg: &mut WeatherConfig, door: WeatherDoor<'_>) -> Result<(), String> {
+        if let Some(v) = self.sunrise {
+            cfg.sunrise = v;
+        }
+        if let Some(v) = self.sunset {
+            cfg.sunset = v;
+        }
+        // Checked after both land, so a patch moving the whole window
+        // ("06:00"→"21:00" over a 05:00–20:00 config) is judged on the
+        // pair it produces rather than on the half it happens to set
+        // first.
+        let at = door.label(":sunrise/:sunset —", "sunrise/sunset", true);
+        validate::sunrise_before_sunset(cfg.sunrise, cfg.sunset)
+            .map_err(|e| format!("{at} {e}"))?;
+        if let Some(v) = self.peak_pct {
+            // A negative peak inverts the clear-sky arch, which drives
+            // `min_avail` positive — the band collapses and every
+            // following array parks at 0 instead of generating, with
+            // nothing in the telemetry to say why.
+            let at = door.label(":peak%", "peak_pct", true);
+            validate::peak_pct(v).map_err(|e| format!("{at} {e}"))?;
+            cfg.peak_pct = v;
+        }
+        if let Some(v) = self.cloud_rate_per_h {
+            // 0 is the natural "no ambient clouds" spelling from Lisp,
+            // where `None` has no keyword of its own — but a NEGATIVE
+            // rate is a mistake, not a second spelling of "off", so it
+            // says so rather than silently disabling the generator.
+            let at = door.label(":cloud-rate", "cloud_rate_per_h", true);
+            cfg.cloud_rate_per_h = validate::cloud_rate(v).map_err(|e| format!("{at} {e}"))?;
+        }
+        if let Some(range) = self.cloud_depth {
+            let at = door.label(":cloud-depth", "cloud_depth", false);
+            validate::depth_range(range).map_err(|e| format!("{at} {e}"))?;
+            cfg.cloud_depth = range;
+        }
+        if let Some(range) = self.cloud_duration {
+            let at = door.label(":cloud-duration", "cloud_duration", false);
+            validate::secs_range(range).map_err(|e| format!("{at} {e}"))?;
+            cfg.cloud_duration = range;
+        }
+        if let Some(range) = self.cloud_ramp {
+            let at = door.label(":cloud-ramp", "cloud_ramp", false);
+            validate::secs_range(range).map_err(|e| format!("{at} {e}"))?;
+            cfg.cloud_ramp = range;
+        }
+        if let Some(seed) = self.seed {
+            cfg.seed = Some(seed);
+        }
+        Ok(())
+    }
+
+    /// Fold this patch into the site's weather and install the
+    /// result. A PARTIAL update of what is already there — only the
+    /// fields the patch carries move, and the event list and anchor
+    /// survive — or a fresh [`Weather`] over
+    /// [`WeatherConfig::default`] when the site has no weather yet,
+    /// which is what makes `(set-weather :cloud-rate 6)` (and its
+    /// HTTP twin) a valid way in on a fresh site.
+    ///
+    /// A seed is the exception: an RNG cannot be re-seeded in place
+    /// without disturbing the stream, so passing one rebuilds the
+    /// `Weather` outright — a deliberate reset of the ambient event
+    /// stream, which is exactly what "re-seed" means to a scenario
+    /// that wants reproducibility from here on.
+    ///
+    /// Nothing is written until validation passes, so a rejected
+    /// patch leaves the live weather exactly as it was.
+    ///
+    /// This form reads the site itself, which is what the Lisp doors
+    /// want — nothing has looked yet when `(set-weather …)` runs. A
+    /// caller that has ALREADY looked must hand that reading to
+    /// [`Self::install_over`] instead of letting this take a second,
+    /// possibly different one.
+    pub fn install(&self, site: &MicrogridSite, door: WeatherDoor<'_>) -> Result<(), String> {
+        let existing = site.with_weather(|w| w.config().clone());
+        self.install_over(site, door, existing)
+    }
+
+    /// [`Self::install`] against a reading the caller already took:
+    /// `existing` is that caller's own look at the site's weather
+    /// config, `None` meaning it found none. It decides create versus
+    /// update AND supplies the base the patch folds over, so both
+    /// come from the same observation.
+    ///
+    /// Passing the reading in rather than taking a fresh one is the
+    /// whole point. The HTTP door has to look before it installs, to
+    /// turn away a cloud-only body; if a concurrent `reset()` — a hot
+    /// reload, or `(reset-microgrid)` — clears the slot in between,
+    /// installing against what the caller SAW takes the update arm,
+    /// `with_weather` no-ops on the now-empty slot, and the request
+    /// lands nowhere. That is correct: a reset's clear is scoped to
+    /// the run, and the request it interrupted reports the conflict
+    /// rather than undoing it. Re-probing here would find no weather,
+    /// take the create arm, and resurrect the sky the reset had just
+    /// cleared.
+    ///
+    /// A seed re-seeds by rebuilding the `Weather` outright, but that
+    /// rebuild obeys the same rule: on the update arm it goes in
+    /// through `with_weather`, replacing a live sky in place and
+    /// no-opping on a slot a reset has emptied. Only the create arm —
+    /// the caller genuinely saw no weather — installs into an empty
+    /// slot.
+    pub fn install_over(
+        &self,
+        site: &MicrogridSite,
+        door: WeatherDoor<'_>,
+        existing: Option<WeatherConfig>,
+    ) -> Result<(), String> {
+        let existed = existing.is_some();
+        let mut cfg = existing.unwrap_or_default();
+        self.apply_to(&mut cfg, door)?;
+        if !existed {
+            site.set_weather(Some(Weather::new(cfg)));
+        } else if self.seed.is_some() {
+            // An RNG cannot be re-seeded in place without disturbing
+            // the stream, so this replaces the whole `Weather` — but
+            // through the occupied slot, so a reset that landed since
+            // the caller's reading is not undone by it.
+            site.with_weather(|w| *w = Weather::new(cfg));
+        } else {
+            site.with_weather(|w| *w.config_mut() = cfg);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +833,65 @@ mod tests {
         assert_eq!(w.events().len(), 1, "expired but inside the margin");
         w.advance(at(12, 0));
         assert!(w.events().is_empty(), "past the margin");
+    }
+
+    /// The create-or-update decision belongs to the caller's own
+    /// reading of the site, not to a fresh probe inside the install:
+    /// a `reset()` landing mid-request must not be undone by the very
+    /// request it interrupted. This stands in for that race
+    /// deterministically — install over an `existing` that says
+    /// "there was weather" onto a site that no longer has any, which
+    /// is exactly the state a concurrent `reset()` leaves behind. The
+    /// update arm has to win: `with_weather` no-ops on the empty
+    /// slot, nothing is written, and the HTTP door's missing snapshot
+    /// becomes its 409. Re-probing inside `install_over` would take
+    /// the create arm here and answer 200 over a resurrected sky.
+    #[test]
+    fn install_over_a_stale_reading_does_not_resurrect_cleared_weather() {
+        let site = MicrogridSite::new();
+        let patch = WeatherPatch {
+            peak_pct: Some(80.0),
+            ..Default::default()
+        };
+
+        // What the caller saw before the reset cleared the slot.
+        let seen_before_the_reset = Some(WeatherConfig::default());
+        patch
+            .install_over(&site, WeatherDoor::Http, seen_before_the_reset.clone())
+            .expect("a valid patch");
+        assert!(
+            site.with_weather(|_| ()).is_none(),
+            "the reset's cleared weather must stay cleared",
+        );
+
+        // A seed rebuilds the `Weather` outright rather than editing
+        // it in place, which is the one arm that could still reach
+        // for `set_weather` and put a sky back. It must not: the
+        // rebuild is an update of what the caller saw, so an emptied
+        // slot swallows it too.
+        let reseed = WeatherPatch {
+            peak_pct: Some(80.0),
+            seed: Some(7),
+            ..Default::default()
+        };
+        reseed
+            .install_over(&site, WeatherDoor::Http, seen_before_the_reset)
+            .expect("a valid patch");
+        assert!(
+            site.with_weather(|_| ()).is_none(),
+            "a re-seed must not resurrect the cleared weather either",
+        );
+
+        // The other half of the contract: asked to look for itself,
+        // the self-probing form finds nothing and does create.
+        patch
+            .install(&site, WeatherDoor::Http)
+            .expect("a valid patch");
+        assert_eq!(
+            site.with_weather(|w| w.config().peak_pct),
+            Some(80.0),
+            "a genuinely weatherless site still gets a fresh sky",
+        );
     }
 
     /// Direct construction bypasses the doors — nothing stops a test

@@ -20,8 +20,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::lisp::Config;
+use crate::sim::microgrid_site::MicrogridSite;
 use crate::sim::sim_clock::parse_time_of_day;
-use crate::sim::weather::{self as weather, Weather, WeatherConfig};
+use crate::sim::weather::{self as weather, WeatherPatch};
 
 use super::control::{ControlError, reject, site_for};
 
@@ -151,52 +152,69 @@ impl WeatherPostRequest {
     }
 }
 
-/// Fold the request over `cfg`, validating with the same rules
-/// `(set-weather)` applies (see `crate::sim::weather::validate`).
-/// `cfg` is a working copy — a rejected request leaves the site's
-/// live weather untouched.
-fn apply_config(cfg: &mut WeatherConfig, req: &WeatherPostRequest) -> Result<(), String> {
-    if let Some(s) = &req.sunrise {
-        cfg.sunrise = parse_time_of_day(s)
-            .ok_or_else(|| format!("sunrise: malformed time {s:?} — expected \"HH:MM\""))?;
-    }
-    if let Some(s) = &req.sunset {
-        cfg.sunset = parse_time_of_day(s)
-            .ok_or_else(|| format!("sunset: malformed time {s:?} — expected \"HH:MM\""))?;
-    }
-    // Checked after both land, so a request moving the whole window
-    // is judged on the pair it produces rather than the half set
-    // first — same ordering as the Lisp doors.
-    weather::validate::sunrise_before_sunset(cfg.sunrise, cfg.sunset)
-        .map_err(|e| format!("sunrise/sunset: {e}"))?;
-    if let Some(v) = req.peak_pct {
-        let v = v as f32;
-        weather::validate::peak_pct(v).map_err(|e| format!("peak_pct: {e}"))?;
-        cfg.peak_pct = v;
-    }
-    if let Some(v) = req.cloud_rate_per_h {
-        let v = v as f32;
-        cfg.cloud_rate_per_h =
-            weather::validate::cloud_rate(v).map_err(|e| format!("cloud_rate_per_h: {e}"))?;
-    }
-    if let Some(range) = req.cloud_depth {
-        weather::validate::depth_range(range).map_err(|e| format!("cloud_depth: {e}"))?;
-        cfg.cloud_depth = range;
-    }
-    if let Some(range) = req.cloud_duration {
-        weather::validate::secs_range(range).map_err(|e| format!("cloud_duration: {e}"))?;
-        cfg.cloud_duration = range;
-    }
-    if let Some(range) = req.cloud_ramp {
-        weather::validate::secs_range(range).map_err(|e| format!("cloud_ramp: {e}"))?;
-        cfg.cloud_ramp = range;
-    }
-    Ok(())
+/// `"HH:MM"` → a time of day, naming the JSON field it came from.
+fn hhmm_field(field: &str, s: &str) -> Result<std::time::Duration, String> {
+    parse_time_of_day(s)
+        .ok_or_else(|| format!("{field}: malformed time {s:?} — expected \"HH:MM\""))
+}
+
+/// Parse the request body's JSON shapes into a [`WeatherPatch`]. Only
+/// the wire shapes are this door's business — `"HH:MM"` strings and
+/// plain `[lo, hi]` pairs (no need for Lisp's number-or-list
+/// shorthand). The fold order, the numeric validation and the
+/// sunrise/sunset pair check all belong to the patch, shared with the
+/// `(make-weather)` / `(set-weather)` doors, so a request rejected in
+/// the console is rejected here too and vice versa.
+fn patch_of(req: &WeatherPostRequest) -> Result<WeatherPatch, String> {
+    Ok(WeatherPatch {
+        sunrise: req
+            .sunrise
+            .as_deref()
+            .map(|s| hhmm_field("sunrise", s))
+            .transpose()?,
+        sunset: req
+            .sunset
+            .as_deref()
+            .map(|s| hhmm_field("sunset", s))
+            .transpose()?,
+        peak_pct: req.peak_pct.map(|v| v as f32),
+        cloud_rate_per_h: req.cloud_rate_per_h.map(|v| v as f32),
+        cloud_depth: req.cloud_depth,
+        cloud_duration: req.cloud_duration,
+        cloud_ramp: req.cloud_ramp,
+        // No JSON field for it: re-seeding the ambient generator is a
+        // console operation, not something the panel offers.
+        seed: None,
+    })
 }
 
 fn apply_weather(config: &Config, mg_id: Option<u64>, req: &WeatherPostRequest) -> WeatherResult {
     let site = site_for(config, mg_id)?;
 
+    // The site's weather config, read ONCE. It answers both questions
+    // this handler has — whether the site models weather at all (a
+    // cloud-only body has to be turned away rather than creating one
+    // on the way past) and what the patch folds over — and the
+    // install below is handed this same reading rather than taking
+    // its own, so a `reset()` landing mid-request can't be half-seen.
+    // Taking it here and passing it down is what makes the decision
+    // testable against a reading that no longer matches the site.
+    let existing = site.with_weather(|w| w.config().clone());
+    apply_weather_over(&site, req, existing)
+}
+
+/// The half of [`apply_weather`] that runs against the caller's own
+/// reading: `existing` is the look taken above, and every decision
+/// below — create versus update, and whether a cloud-only body is
+/// turned away — is made on it rather than on a second probe. A
+/// `reset()` landing between the read and here leaves `existing`
+/// stale on purpose; the install then no-ops on the empty slot and
+/// the missing snapshot becomes the 409.
+fn apply_weather_over(
+    site: &MicrogridSite,
+    req: &WeatherPostRequest,
+    existing: Option<weather::WeatherConfig>,
+) -> WeatherResult {
     // Validate everything first, apply after — same contract as
     // apply_status/apply_drive in control.rs: a bad pass_cloud must
     // not leave a config change applied, and vice versa.
@@ -209,7 +227,6 @@ fn apply_weather(config: &Config, mg_id: Option<u64>, req: &WeatherPostRequest) 
         .transpose()
         .map_err(|e| reject(StatusCode::BAD_REQUEST, format!("pass_cloud: {e}")))?;
 
-    let existing = site.with_weather(|w| w.config().clone());
     let had_weather = existing.is_some();
 
     // A cloud-only request on a weatherless site is the one shape
@@ -227,14 +244,13 @@ fn apply_weather(config: &Config, mg_id: Option<u64>, req: &WeatherPostRequest) 
         ));
     }
 
-    let mut cfg = existing.unwrap_or_default();
-    apply_config(&mut cfg, req).map_err(|e| reject(StatusCode::BAD_REQUEST, e))?;
-
-    if had_weather {
-        site.with_weather(|w| *w.config_mut() = cfg);
-    } else {
-        site.set_weather(Some(Weather::new(cfg)));
-    }
+    // Partial update over what the site has, or a fresh default sky
+    // when it has none — the shared create-or-update rule, the same
+    // one `(set-weather …)` goes through, decided on the reading
+    // taken above.
+    patch_of(req)
+        .and_then(|patch| patch.install_over(site, weather::WeatherDoor::Http, existing))
+        .map_err(|e| reject(StatusCode::BAD_REQUEST, e))?;
 
     if let Some((depth_pct, duration, ramp)) = pass_cloud {
         site.with_weather(|w| w.pass_cloud(depth_pct, duration, ramp));
@@ -248,7 +264,7 @@ fn apply_weather(config: &Config, mg_id: Option<u64>, req: &WeatherPostRequest) 
     // config change and the scripted cloud both went nowhere; the
     // missing snapshot is simply where that becomes visible. Report
     // the conflict instead of panicking on an `expect`.
-    snapshot(&site).map(Json).ok_or_else(|| {
+    snapshot(site).map(Json).ok_or_else(|| {
         reject(
             StatusCode::CONFLICT,
             "weather was removed while applying".to_string(),
@@ -269,4 +285,57 @@ pub(in crate::ui) async fn weather_post_for_mg(
     Json(req): Json<WeatherPostRequest>,
 ) -> WeatherResult {
     apply_weather(&config, Some(mg_id), &req)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wiring itself, pinned: this door hands its ONE reading to
+    /// `install_over` rather than letting the install re-probe. The
+    /// difference only shows in the race window, so the whole
+    /// end-to-end suite passes with the self-probing `install` back
+    /// in place — nothing above the sim layer notices. This is the
+    /// test that does: a reading saying "there was weather" against a
+    /// site a `reset()` has since cleared. The update arm has to win,
+    /// the site has to stay weatherless, and the answer has to be the
+    /// 409 the missing snapshot produces. Re-probing would take the
+    /// create arm, resurrect the sky the reset cleared, and answer
+    /// 200 over it.
+    #[test]
+    fn a_stale_reading_lands_nowhere_and_answers_409() {
+        let site = MicrogridSite::new();
+        let req: WeatherPostRequest =
+            serde_json::from_str(r#"{"peak_pct": 80.0}"#).expect("a valid body");
+
+        // What the handler read before the reset emptied the slot.
+        let seen_before_the_reset = Some(weather::WeatherConfig::default());
+        let status = apply_weather_over(&site, &req, seen_before_the_reset)
+            .err()
+            .map(|(s, _)| s);
+        assert_eq!(
+            status,
+            Some(StatusCode::CONFLICT),
+            "a stale reading has to report the conflict, not a 200 or a 400",
+        );
+        assert!(
+            site.with_weather(|_| ()).is_none(),
+            "the reset's cleared weather must stay cleared",
+        );
+
+        // The other half: on a site that really has weather, the same
+        // body applies and answers with the updated snapshot.
+        site.set_weather(Some(weather::Weather::new(
+            weather::WeatherConfig::default(),
+        )));
+        let existing = site.with_weather(|w| w.config().clone());
+        let peak = apply_weather_over(&site, &req, existing)
+            .ok()
+            .map(|body| body.peak_pct);
+        assert_eq!(
+            peak,
+            Some(80.0),
+            "a live site still takes the update and answers with it",
+        );
+    }
 }

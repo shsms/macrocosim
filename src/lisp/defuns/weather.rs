@@ -10,7 +10,7 @@ use tulisp::{Error, TulispContext, TulispObject};
 use crate::lisp::value::LispValue;
 use crate::sim::microgrids::SharedSiteRouter;
 use crate::sim::sim_clock::parse_time_of_day;
-use crate::sim::weather::{self as weather, Weather, WeatherConfig};
+use crate::sim::weather::{self as weather, Weather, WeatherConfig, WeatherDoor, WeatherPatch};
 
 tulisp::AsPlist! {
     /// Plist payload shared by `(make-weather …)` and
@@ -73,18 +73,6 @@ fn range_arg(kw: &str, v: &LispValue) -> Result<(f32, f32), Error> {
     )))
 }
 
-/// A range of a physical duration: both ends must be a real,
-/// non-negative number of seconds. Same guard `pass-cloud` applies to
-/// the same two quantities — a NaN would poison every `uniform` draw
-/// and a negative would make `Duration::from_secs_f32` panic downstream.
-/// Delegates to [`crate::sim::weather::validate::secs_range`], shared
-/// with the HTTP weather routes.
-fn checked_secs_range(kw: &str, range: (f32, f32)) -> Result<(f32, f32), Error> {
-    crate::sim::weather::validate::secs_range(range)
-        .map(|()| range)
-        .map_err(|e| Error::invalid_argument(format!("{kw} {e}")))
-}
-
 /// A time-of-day kwarg: an `"HH:MM"` string, or a bare number of
 /// seconds since midnight. The number spelling matches what
 /// `(parse-time-of-day)` already accepts, so a scenario can compute
@@ -106,65 +94,31 @@ fn time_of_day_arg(kw: &str, v: &LispValue) -> Result<Duration, Error> {
     })
 }
 
-/// Depth is a percentage of the sky blocked, so both ends of the
-/// range have to be a real percentage — a negative depth would
-/// *brighten* the array and >100 would drive `pct_at` negative.
-/// Delegates to [`crate::sim::weather::validate::depth_range`],
-/// shared with the HTTP weather routes.
-fn checked_depth(range: (f32, f32)) -> Result<(f32, f32), Error> {
-    crate::sim::weather::validate::depth_range(range)
-        .map(|()| range)
-        .map_err(|e| Error::invalid_argument(format!(":cloud-depth {e}")))
-}
-
-/// Fold the plist over `cfg`, validating as it goes. Takes a working
-/// copy so a rejected form leaves the site's live weather untouched.
-/// `door` is the defun name the caller came through, so an error
-/// message names the form the author actually typed.
-fn apply_args(door: &str, cfg: &mut WeatherConfig, a: &WeatherArgs) -> Result<(), Error> {
-    if let Some(v) = a.sunrise.as_ref() {
-        cfg.sunrise = time_of_day_arg(":sunrise", v)?;
-    }
-    if let Some(v) = a.sunset.as_ref() {
-        cfg.sunset = time_of_day_arg(":sunset", v)?;
-    }
-    // Checked after both land, so a form moving the whole window
-    // ("06:00"→"21:00" over a 05:00–20:00 config) is judged on the
-    // pair it produces rather than on the half it happens to set
-    // first.
-    weather::validate::sunrise_before_sunset(cfg.sunrise, cfg.sunset)
-        .map_err(|e| Error::invalid_argument(format!("{door}: :sunrise/:sunset — {e}")))?;
-    if let Some(v) = a.peak_pct {
-        // A negative peak inverts the clear-sky arch, which drives
-        // `min_avail` positive — the band collapses and every
-        // following array parks at 0 instead of generating, with
-        // nothing in the telemetry to say why.
-        weather::validate::peak_pct(v as f32)
-            .map_err(|e| Error::invalid_argument(format!("{door}: :peak% {e}")))?;
-        cfg.peak_pct = v as f32;
-    }
-    if let Some(v) = a.cloud_rate {
-        // 0 is the natural "no ambient clouds" spelling from Lisp,
-        // where `None` has no keyword of its own — but a NEGATIVE
-        // rate is a mistake, not a second spelling of "off", so it
-        // says so rather than silently disabling the generator.
-        cfg.cloud_rate_per_h = weather::validate::cloud_rate(v as f32)
-            .map_err(|e| Error::invalid_argument(format!("{door}: :cloud-rate {e}")))?;
-    }
-    if let Some(v) = a.cloud_depth.as_ref() {
-        cfg.cloud_depth = checked_depth(range_arg(":cloud-depth", v)?)?;
-    }
-    if let Some(v) = a.cloud_duration.as_ref() {
-        cfg.cloud_duration =
-            checked_secs_range(":cloud-duration", range_arg(":cloud-duration", v)?)?;
-    }
-    if let Some(v) = a.cloud_ramp.as_ref() {
-        cfg.cloud_ramp = checked_secs_range(":cloud-ramp", range_arg(":cloud-ramp", v)?)?;
-    }
-    if let Some(v) = a.seed {
-        cfg.seed = Some(v as u64);
-    }
-    Ok(())
+/// Parse the plist's Lisp spellings into a [`WeatherPatch`]. Only
+/// the wire shapes are this door's business — `"HH:MM"` or bare
+/// seconds for a time, a number or a `(lo hi)` list for a range. The
+/// fold order, the numeric validation and the sunrise/sunset pair
+/// check all belong to the patch, shared with the HTTP weather route.
+fn patch_args(a: &WeatherArgs) -> Result<WeatherPatch, Error> {
+    let range = |kw, v: &Option<LispValue>| v.as_ref().map(|v| range_arg(kw, v)).transpose();
+    Ok(WeatherPatch {
+        sunrise: a
+            .sunrise
+            .as_ref()
+            .map(|v| time_of_day_arg(":sunrise", v))
+            .transpose()?,
+        sunset: a
+            .sunset
+            .as_ref()
+            .map(|v| time_of_day_arg(":sunset", v))
+            .transpose()?,
+        peak_pct: a.peak_pct.map(|v| v as f32),
+        cloud_rate_per_h: a.cloud_rate.map(|v| v as f32),
+        cloud_depth: range(":cloud-depth", &a.cloud_depth)?,
+        cloud_duration: range(":cloud-duration", &a.cloud_duration)?,
+        cloud_ramp: range(":cloud-ramp", &a.cloud_ramp)?,
+        seed: a.seed.map(|v| v as u64),
+    })
 }
 
 pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
@@ -178,7 +132,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         move |args: tulisp::Plist<WeatherArgs>| -> Result<bool, Error> {
             let a = args.into_inner();
             let mut cfg = WeatherConfig::default();
-            apply_args("make-weather", &mut cfg, &a)?;
+            patch_args(&a)?
+                .apply_to(&mut cfg, WeatherDoor::Lisp("make-weather"))
+                .map_err(Error::invalid_argument)?;
             r.site().set_weather(Some(Weather::new(cfg)));
             Ok(true)
         },
@@ -199,16 +155,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         "set-weather",
         move |args: tulisp::Plist<WeatherArgs>| -> Result<bool, Error> {
             let a = args.into_inner();
-            let w = r.site();
-            let existing = w.with_weather(|wx| wx.config().clone());
-            let existed = existing.is_some();
-            let mut cfg = existing.unwrap_or_default();
-            apply_args("set-weather", &mut cfg, &a)?;
-            if !existed || a.seed.is_some() {
-                w.set_weather(Some(Weather::new(cfg)));
-            } else {
-                w.with_weather(|wx| *wx.config_mut() = cfg);
-            }
+            patch_args(&a)?
+                .install(&r.site(), WeatherDoor::Lisp("set-weather"))
+                .map_err(Error::invalid_argument)?;
             Ok(true)
         },
     );
