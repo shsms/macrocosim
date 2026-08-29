@@ -258,6 +258,65 @@ async fn errored_component_rejects_power_and_bounds() {
     assert_eq!(bounds_err.code(), tonic::Code::Unavailable);
 }
 
+/// A degraded component streams its health as the state code: the
+/// `:health 'error` inverter reports ERROR in Normal telemetry mode,
+/// so it is distinguishable from a healthy parked device — which
+/// reports the power-derived state instead. Pins the health override
+/// in the stream loop; without it both would read as idle.
+#[tokio::test(flavor = "multi_thread")]
+async fn health_drives_the_streamed_state_code() {
+    use switchyard::proto::common::microgrid::electrical_components::ElectricalComponentStateCode;
+
+    fn states(resp: &ReceiveElectricalComponentTelemetryStreamResponse) -> Vec<i32> {
+        resp.telemetry
+            .as_ref()
+            .map(|t| {
+                t.state_snapshots
+                    .iter()
+                    .flat_map(|s| s.states.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    async fn first_sample(
+        c: &mut MicrogridClient<tonic::transport::Channel>,
+        id: u64,
+    ) -> ReceiveElectricalComponentTelemetryStreamResponse {
+        let mut stream = c
+            .receive_electrical_component_telemetry_stream(
+                ReceiveElectricalComponentTelemetryStreamRequest {
+                    electrical_component_id: id,
+                    filter: None,
+                },
+            )
+            .await
+            .expect("subscribe")
+            .into_inner();
+        tokio::time::timeout(std::time::Duration::from_secs(5), stream.message())
+            .await
+            .expect("a sample within 5s")
+            .expect("stream poll")
+            .expect("one sample")
+    }
+
+    let s = TestServer::start(ERRORED_INVERTER_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+
+    let error_code = ElectricalComponentStateCode::Error as i32;
+    assert_eq!(
+        states(&first_sample(&mut c, 4).await),
+        vec![error_code],
+        "the errored inverter must stream ERROR, not a power-derived state"
+    );
+
+    let battery_states = states(&first_sample(&mut c, 3).await);
+    assert!(
+        !battery_states.is_empty() && !battery_states.contains(&error_code),
+        "the healthy battery keeps its power-derived state, got {battery_states:?}"
+    );
+}
+
 /// An out-of-range `request_lifetime` is a protocol error that must be
 /// rejected *before* the setpoint is applied — otherwise the component
 /// runs at the commanded power with no expiry timer while the client

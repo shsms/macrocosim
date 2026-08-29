@@ -542,7 +542,11 @@ is deliberate (see grid.rs's telemetry doc comment). If CHP comes
 back, the steam-boiler graduation (steam_boiler.rs, 2026-08-29) is
 the template.
 
-*** TODO [#B] Telemetry state-code is decoupled from health       :telemetry:
+*** DONE [#B] Telemetry state-code is decoupled from health       :telemetry:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 16:02] \\
+  Stale: the stream loop has overridden component_state from Health::state_label since 2217d88 (2026-04-30) — error/standby parse to the proto ERROR/STANDBY codes in Normal mode too. Now pinned by grpc::health_drives_the_streamed_state_code; health drives the state snapshot, TelemetryMode stays the stream-shape knob.
+:END:
 =component_state= is derived from power sign (=power_state(p)= →
 idle/charging/discharging); the ERROR =ElectricalComponentStateCode= only
 comes from =TelemetryMode::ErrorEmpty= (=proto_conv.rs:292=). So an
