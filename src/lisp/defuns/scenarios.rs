@@ -499,17 +499,16 @@ pub(super) fn register_lifecycle(
             // server behaves like a fresh stepped run. Compare on the
             // full-precision f64; `actual` keeps the f32 the
             // history/`ScenarioCheck` layer records.
-            let actual;
-            let passed;
-            if metric == Metric::EnergyWh {
+            let (passed, actual) = if metric == Metric::EnergyWh {
                 let e = w.component_energy_since_scenario_wh(id);
-                passed = e.is_some_and(|v| expectation.passes(v));
-                actual = e.map(|v| v as f32);
+                (
+                    e.is_some_and(|v| expectation.passes(v)),
+                    e.map(|v| v as f32),
+                )
             } else {
                 let v = w.get(id).and_then(|c| c.telemetry(&w).metric_value(metric));
-                passed = v.is_some_and(|v| expectation.passes(v as f64));
-                actual = v;
-            }
+                (v.is_some_and(|v| expectation.passes(v as f64)), v)
+            };
             w.scenario_record_check(ScenarioCheck {
                 ts: nowsrc.now(),
                 component_id: id,
