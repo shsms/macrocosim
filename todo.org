@@ -678,7 +678,11 @@ non-local change.
 
 ** Correctness
 
-*** TODO [#B] Setpoint expiry-vs-renewal race can wipe a fresh command :concurrency:api:
+*** DONE [#B] Setpoint expiry-vs-renewal race can wipe a fresh command :concurrency:api:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 07:29] \\
+  Closed by =TimeoutTracker::actuate_and_arm= / =reset_expired_with= — both windows now run under one lock-held step.
+:END:
 
 The 100 ms timeout loop first drains expired =(id, axis)= keys
 (=TimeoutTracker::remove_expired=), then calls =reset_setpoint_axis=
@@ -1875,3 +1879,15 @@ cfg. Decide per-knob whether live-value serialization is wanted.
 =short_category= now labels boilers, but Converter, HVAC, Breaker,
 PowerTransformer, WindTurbine (and any other lifted category) still
 fall to the "?" catch-all in swctl's listing output.
+
+** DONE Stale setpoint deadlines survive reset and component removal :concurrency:api:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-08-29 Sa 09:48] \\
+  Closed by =TimeoutTracker::clear= / =TimeoutTracker::remove_component=: =reset()= clears the whole map alongside its other run-scoped wipes, =remove_component= drops both of the departing id's axes, and =register_arc= scrubs the id beside its setpoint_logs scrub so a re-created component can't inherit the previous occupant's expiry.
+:END:
+
+Neither MicrogridSite::reset() nor remove_component purges
+TimeoutTracker entries; after a hot reload re-registers the same
+id, a pre-reload deadline can fire and reset a fresh component's
+axis that was never commanded. Pre-existing (the old drain path had
+the same hole), surfaced during the 2026-08-29 race fix review.

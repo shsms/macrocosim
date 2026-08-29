@@ -280,20 +280,23 @@ impl MicrogridServer {
             self.config.metadata().default_request_lifetime,
         )?;
 
-        let result = match power_type {
-            PowerType::Active => component.set_active_setpoint(req.power),
-            PowerType::Reactive => component.set_reactive_setpoint(req.power),
-            PowerType::Unspecified => unreachable!(),
-        };
-
-        if let Err(e) = result {
-            return Err(setpoint_error_to_status(e));
-        }
-
-        // The TTL is per power axis: this request's expiry resets only
-        // the axis it set, leaving a longer-lived command on the other
-        // axis running.
-        site.add_timeout(req.electrical_component_id, axis, duration);
+        // Actuate and arm the TTL atomically: `actuate_and_arm` holds
+        // the deadline-map lock across both, so a concurrent expiry
+        // sweep can't observe the setpoint applied but the deadline
+        // still unarmed. The TTL is per power axis: this request's
+        // expiry resets only the axis it set, leaving a longer-lived
+        // command on the other axis running.
+        site.actuate_and_arm(
+            req.electrical_component_id,
+            axis,
+            duration,
+            || match power_type {
+                PowerType::Active => component.set_active_setpoint(req.power),
+                PowerType::Reactive => component.set_reactive_setpoint(req.power),
+                PowerType::Unspecified => unreachable!(),
+            },
+        )
+        .map_err(setpoint_error_to_status)?;
 
         // Per the proto, a successful response carries the expiry the
         // TTL was armed with so a client can time its refresh.

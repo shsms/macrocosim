@@ -336,35 +336,65 @@ impl MicrogridSite {
 
     // ─── Setpoint timeouts ────────────────────────────────────────────
     //
-    // Each accepted setpoint schedules a deadline on its own power
-    // axis; on expiry the Config loop pulls the (id, axis) out via
-    // `drain_expired_timeouts` and calls `reset_setpoint_axis` on the
-    // component — the other axis's command keeps running.
+    // Each accepted setpoint atomically actuates and schedules a
+    // deadline on its own power axis via `actuate_and_arm`; on expiry
+    // the Config loop calls `reset_expired_setpoints`, which
+    // atomically drains and resets each (id, axis) pair — the other
+    // axis's command keeps running.
 
-    /// Schedule a setpoint expiry for `id`'s `axis` at
-    /// `now + lifetime`. Replaces any previously-scheduled deadline
-    /// for that (id, axis) — "latest set wins" per axis.
-    pub fn add_timeout(
+    /// Actuate `f` (the setpoint write on `id`'s `axis`) and, only if
+    /// it succeeds, arm a deadline for it at `now + lifetime` — both
+    /// under the tracker's lock, so a concurrent expiry sweep can
+    /// never observe the setpoint applied but the deadline unarmed
+    /// (or vice versa). Replaces any previously-scheduled deadline for
+    /// that (id, axis) — "latest set wins" per axis. A failed `f`
+    /// arms nothing, matching [`crate::timeout_tracker::TimeoutTracker::actuate_and_arm`].
+    ///
+    /// Lock order: tracker → components-map → axis mutexes. `f` is
+    /// expected to be a bare actuation on an already-resolved
+    /// component — it must not call back into `self.get` (components
+    /// map) or another tracker method while this lock is held.
+    pub fn actuate_and_arm<E>(
         &self,
         id: u64,
         axis: crate::timeout_tracker::SetpointAxis,
         lifetime: Duration,
-    ) {
-        self.inner.timeout_tracker.add(id, axis, lifetime);
+        f: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.inner
+            .timeout_tracker
+            .actuate_and_arm(id, axis, lifetime, f)
     }
 
-    /// Drain any deadlines that have elapsed and return their
-    /// (id, axis) pairs. Called by `Config`'s timeout loop, which
-    /// then calls `reset_setpoint_axis` on each.
-    pub fn drain_expired_timeouts(&self) -> Vec<(u64, crate::timeout_tracker::SetpointAxis)> {
-        self.inner.timeout_tracker.remove_expired()
+    /// Atomically drain every elapsed deadline and reset its axis.
+    /// Called by `Config`'s timeout loop once per tick. Looks up the
+    /// component (`self.get`, the components-map lock) and calls
+    /// `reset_setpoint_axis` (an axis mutex) from inside the
+    /// tracker's lock — safe under the tracker → components-map →
+    /// axis mutexes order since both are acquired strictly after the
+    /// tracker lock, never independently before it elsewhere in this
+    /// codebase. Expired (id, axis) pairs are only collected while
+    /// the lock is held; the `log::info!` for each fires afterward,
+    /// once the lock has been released, so logging never happens
+    /// while holding the tracker mutex.
+    pub fn reset_expired_setpoints(&self) {
+        let mut expired = Vec::new();
+        self.inner.timeout_tracker.reset_expired_with(|id, axis| {
+            if let Some(c) = self.get(id) {
+                c.reset_setpoint_axis(axis);
+            }
+            expired.push((id, axis));
+        });
+        for (id, axis) in expired {
+            log::info!("Request timeout for component {id} ({axis:?}) — resetting that axis");
+        }
     }
 
     /// Time left before `id`'s `axis` setpoint expires — `None` when
     /// that axis isn't tracked (a persistent setpoint set with no
     /// lifetime) or its deadline already passed. Read-only mirror of
-    /// [`Self::add_timeout`]/[`Self::drain_expired_timeouts`] for the
-    /// `/api/component` snapshot's `remaining_ms` field.
+    /// [`Self::actuate_and_arm`]/[`Self::reset_expired_setpoints`] for
+    /// the `/api/component` snapshot's `remaining_ms` field.
     pub fn setpoint_remaining(
         &self,
         id: u64,
@@ -541,6 +571,12 @@ impl MicrogridSite {
         self.inner.scenario.write().energy_baseline_wh.remove(&id);
         self.inner.histories.write().remove(&id);
         self.inner.setpoint_logs.write().remove(&id);
+        // Same rationale for the setpoint deadlines: a removal that
+        // raced an in-flight setpoint can leave an armed (id, axis)
+        // behind, and the fresh component under this id was never
+        // commanded — letting that deadline fire would reset an axis
+        // nobody drove.
+        self.inner.timeout_tracker.remove_component(id);
         ComponentHandle::from_arc(c)
     }
 
@@ -862,6 +898,11 @@ impl MicrogridSite {
         self.inner.histories.write().clear();
         self.inner.component_energy.write().clear();
         self.inner.setpoint_logs.write().clear();
+        // Armed setpoint deadlines are run-scoped too: one armed before
+        // the reset would otherwise fire afterwards against whatever
+        // component the reloaded config registers under the same id,
+        // resetting a command the NEW run accepted.
+        self.inner.timeout_tracker.clear();
         *self.inner.scenario.write() = ScenarioJournal::default();
         // `clear()` drops every sink; each BufWriter flushes on drop.
         self.inner.scenario_csv.write().clear();
@@ -901,6 +942,10 @@ impl MicrogridSite {
         self.inner.operational_modes.write().remove(&id);
         self.inner.setpoint_logs.write().remove(&id);
         self.inner.name_overrides.write().remove(&id);
+        // Both axes' deadlines: a live one outliving the component
+        // would fire against a re-registered id and reset a command
+        // the new occupant accepted.
+        self.inner.timeout_tracker.remove_component(id);
         was_present
     }
 
@@ -1661,6 +1706,65 @@ mod tests {
         assert_eq!(edges, vec![(1, 3)]);
         // Removing a missing id is a no-op that returns false.
         assert!(!w.remove_component(99));
+    }
+
+    /// A setpoint deadline must not outlive the run, the component, or
+    /// the id's previous occupant: `reset`, `remove_component` and a
+    /// re-`register` of the same id each purge it. Without this a
+    /// pre-reset deadline fires afterwards and resets an axis the NEW
+    /// run's client commanded (or never commanded at all).
+    #[test]
+    fn stale_setpoint_deadlines_do_not_survive_reset_or_removal() {
+        use crate::timeout_tracker::SetpointAxis;
+
+        let arm = |w: &MicrogridSite, id: u64| {
+            for axis in [SetpointAxis::Active, SetpointAxis::Reactive] {
+                w.actuate_and_arm(id, axis, Duration::from_secs(3600), || Ok::<(), ()>(()))
+                    .unwrap();
+            }
+            assert!(w.setpoint_remaining(id, SetpointAxis::Active).is_some());
+            assert!(w.setpoint_remaining(id, SetpointAxis::Reactive).is_some());
+        };
+        let assert_clear = |w: &MicrogridSite, id: u64, what: &str| {
+            assert_eq!(
+                w.setpoint_remaining(id, SetpointAxis::Active),
+                None,
+                "{what} must purge the active deadline"
+            );
+            assert_eq!(
+                w.setpoint_remaining(id, SetpointAxis::Reactive),
+                None,
+                "{what} must purge the reactive deadline"
+            );
+        };
+
+        // 1. reset() wipes every armed deadline.
+        let w = MicrogridSite::new();
+        w.register(Stub::new(1));
+        arm(&w, 1);
+        w.reset();
+        assert_clear(&w, 1, "reset");
+
+        // 2. remove_component drops that id's deadlines only.
+        let w = MicrogridSite::new();
+        w.register(Stub::new(1));
+        w.register(Stub::new(2));
+        arm(&w, 1);
+        arm(&w, 2);
+        assert!(w.remove_component(1));
+        assert_clear(&w, 1, "remove_component");
+        assert!(
+            w.setpoint_remaining(2, SetpointAxis::Active).is_some(),
+            "another component's deadline must survive a removal"
+        );
+
+        // 3. Re-registering an id scrubs whatever a raced removal left
+        //    behind — the fresh component was never commanded.
+        let w = MicrogridSite::new();
+        w.register(Stub::new(1));
+        arm(&w, 1);
+        w.register(Stub::new(1));
+        assert_clear(&w, 1, "register_arc");
     }
 
     #[test]

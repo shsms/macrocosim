@@ -123,15 +123,14 @@ pub(super) fn register(
                         .map_err(|m| Error::invalid_argument(format!("set-active-power: {m}")))?;
                 }
             }
-            component
-                .set_active_setpoint(watts)
-                .map_err(|e| Error::invalid_argument(format!("set-active-power: {e}")))?;
             let lifetime = lifetime_from_arg(lifetime_ms, &metadata);
-            w.add_timeout(
+            w.actuate_and_arm(
                 id as u64,
                 crate::timeout_tracker::SetpointAxis::Active,
                 lifetime,
-            );
+                || component.set_active_setpoint(watts),
+            )
+            .map_err(|e| Error::invalid_argument(format!("set-active-power: {e}")))?;
             Ok(true)
         },
     );
@@ -177,15 +176,14 @@ pub(super) fn register(
                         .map_err(|m| Error::invalid_argument(format!("set-reactive-power: {m}")))?;
                 }
             }
-            component
-                .set_reactive_setpoint(vars)
-                .map_err(|e| Error::invalid_argument(format!("set-reactive-power: {e}")))?;
             let lifetime = lifetime_from_arg(lifetime_ms, &metadata_q);
-            w.add_timeout(
+            w.actuate_and_arm(
                 id as u64,
                 crate::timeout_tracker::SetpointAxis::Reactive,
                 lifetime,
-            );
+                || component.set_reactive_setpoint(vars),
+            )
+            .map_err(|e| Error::invalid_argument(format!("set-reactive-power: {e}")))?;
             Ok(true)
         },
     );
@@ -193,29 +191,37 @@ pub(super) fn register(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::super::super::test_support::config_with;
 
     /// set-active-power applies a setpoint and arms the timeout tracker.
-    /// We can verify both by checking that MicrogridSite registers a deadline
-    /// for the targeted component after the call.
+    /// We verify both: the deadline is armed (`setpoint_remaining`),
+    /// and once it elapses, `reset_expired_setpoints` actually resets
+    /// the axis back to idle (checked via the applied power, since
+    /// `reset_expired_setpoints` no longer exposes the drained keys).
     #[test]
     fn set_active_power_applies_setpoint_and_arms_timeout() {
+        use crate::timeout_tracker::SetpointAxis;
         let (cfg, _dir) = config_with(
             "(setq b1 (%make-battery :id 1 :rated-lower -5000.0 :rated-upper 5000.0))
              (%make-battery-inverter :id 2 :rated-lower -5000.0 :rated-upper 5000.0
                                        :successors (list b1))",
         );
+        let site = cfg.site();
+        let inv = site.get(2).unwrap();
         // 30-second lifetime — applies the setpoint and arms the
         // tracker; nothing should be expired yet.
         cfg.eval("(set-active-power 2 1500.0 30000)").unwrap();
-        assert_eq!(cfg.site().drain_expired_timeouts(), Vec::new());
-        // Lifetime 0 → instantly elapses; the next drain returns id.
+        assert!(site.setpoint_remaining(2, SetpointAxis::Active).is_some());
+        // Lifetime 0 → instantly elapses; the sweep resets the axis.
         cfg.eval("(set-active-power 2 1500.0 0)").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
-        assert_eq!(
-            cfg.site().drain_expired_timeouts(),
-            vec![(2, crate::timeout_tracker::SetpointAxis::Active)]
-        );
+        assert_eq!(site.setpoint_remaining(2, SetpointAxis::Active), None);
+        site.reset_expired_setpoints();
+        inv.tick(&site, chrono::Utc::now(), Duration::from_millis(100));
+        let p = inv.aggregate_power_w(&site);
+        assert!(p.abs() < 1.0, "expected reset to 0 W, got {p}");
     }
 
     /// set-active-power gates against the *intersection* of the
@@ -305,18 +311,23 @@ mod tests {
                                    :successors (list b1))";
 
     /// set-reactive-power applies a setpoint and arms the *reactive*
-    /// axis of the timeout tracker, leaving the active axis alone.
+    /// axis of the timeout tracker, leaving the active axis alone; once
+    /// it elapses, the sweep resets that axis back to idle.
     #[test]
     fn set_reactive_power_applies_setpoint_and_arms_reactive_timeout() {
+        use crate::timeout_tracker::SetpointAxis;
         let (cfg, _dir) = config_with(REACTIVE_SITE);
+        let site = cfg.site();
+        let inv = site.get(2).unwrap();
         cfg.eval("(set-reactive-power 2 1500.0 30000)").unwrap();
-        assert_eq!(cfg.site().drain_expired_timeouts(), Vec::new());
+        assert!(site.setpoint_remaining(2, SetpointAxis::Reactive).is_some());
         cfg.eval("(set-reactive-power 2 1500.0 0)").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
-        assert_eq!(
-            cfg.site().drain_expired_timeouts(),
-            vec![(2, crate::timeout_tracker::SetpointAxis::Reactive)]
-        );
+        assert_eq!(site.setpoint_remaining(2, SetpointAxis::Reactive), None);
+        site.reset_expired_setpoints();
+        inv.tick(&site, chrono::Utc::now(), Duration::from_millis(100));
+        let q = inv.aggregate_reactive_var(&site);
+        assert!(q.abs() < 1.0, "expected reactive reset to 0 VAr, got {q}");
     }
 
     /// Outside the inverter's live reactive band the request is

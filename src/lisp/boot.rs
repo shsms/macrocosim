@@ -912,9 +912,10 @@ impl Config {
             //
             // `interval_at` rather than `interval` so the *first*
             // tick lands at +100 ms instead of immediately. Tests
-            // that arm a deadline + check `drain_expired_timeouts`
-            // synchronously rely on the BG task not racing them at
-            // t=0.
+            // that arm a deadline + then synchronously check its
+            // effect (e.g. via `reset_expired_setpoints` or
+            // `setpoint_remaining`) rely on the BG task not racing
+            // them at t=0.
             let start = tokio::time::Instant::now() + Duration::from_millis(100);
             let mut tick = tokio::time::interval_at(start, Duration::from_millis(100));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -926,14 +927,11 @@ impl Config {
                 let sites: Vec<MicrogridSite> =
                     registry.lock().values().map(|e| e.site.clone()).collect();
                 for site in sites {
-                    for (id, axis) in site.drain_expired_timeouts() {
-                        log::info!(
-                            "Request timeout for component {id} ({axis:?}) — resetting that axis"
-                        );
-                        if let Some(c) = site.get(id) {
-                            c.reset_setpoint_axis(axis);
-                        }
-                    }
+                    // Atomic drain+reset: `reset_expired_setpoints`
+                    // holds the tracker's lock across both, so a
+                    // renewal that lands mid-sweep can't be wiped by a
+                    // reset armed for the stale deadline it replaced.
+                    site.reset_expired_setpoints();
                 }
             }
         });
