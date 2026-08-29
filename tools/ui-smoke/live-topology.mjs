@@ -1378,6 +1378,26 @@ await page.click("#weather-create");
 // without waiting on the 3 s poll.
 await waitFor(async () => (await page.locator("#weather-pct").count()) > 0, 10000);
 
+// The spinner convention (AGENTS.md) is revert-silent: drop the CSS and
+// nothing here fails, the arrows just come back. Pin it in the computed
+// style — an Enter-commit knob hides them, and the button-committed
+// pass-a-cloud row is the documented exception that keeps them.
+const spinnerStyles = await page.evaluate(() => ({
+  peak: getComputedStyle(document.getElementById("weather-peak-pct")).appearance,
+  fire: getComputedStyle(document.getElementById("weather-cloud-depth")).appearance,
+  fireClass: document.getElementById("weather-cloud-depth").classList.contains("wfield-fire"),
+}));
+check(
+  "e2e: an Enter-commit weather knob hides its native spinner",
+  spinnerStyles.peak === "textfield",
+  spinnerStyles.peak,
+);
+check(
+  "e2e: the button-committed pass-a-cloud field keeps its spinner",
+  spinnerStyles.fire !== "textfield" && spinnerStyles.fireClass === true,
+  `${spinnerStyles.fire} / wfield-fire=${spinnerStyles.fireClass}`,
+);
+
 // This smoke runs at wall-clock UTC: the default 06:00-20:00 window
 // would leave clear-sky at 0 outside daylight hours and the cloud
 // check below would be flaky depending on when the run happens.

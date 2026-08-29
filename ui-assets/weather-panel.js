@@ -299,6 +299,15 @@ function paintField(inp, text) {
 // applied.
 function wireField(inp, commit) {
   inp.dataset.live = inp.value;
+  // The hidden spinner's sibling affordance: in Firefox a wheel over a
+  // focused type=number steps it, which is the same uncommitted change
+  // an arrow click was — invisible, and reverted by the next poll. Arrow
+  // KEYS still step, deliberately: those are keyboard edits, one Enter
+  // from a commit. Non-passive so preventDefault holds; number fields
+  // only, so a wheel over a text field still scrolls the panel.
+  if (inp.type === "number") {
+    inp.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
+  }
   inp.addEventListener("focus", () => {
     inp.dataset.editing = "1";
   });
@@ -407,11 +416,11 @@ function liveHtml() {
         <h3>Pass a cloud</h3>
         <div class="wcloud-row">
           <label for="weather-cloud-depth">depth %</label>
-          <input id="weather-cloud-depth" class="wfield-input" type="number" step="any" value="60" />
+          <input id="weather-cloud-depth" class="wfield-input wfield-fire" type="number" step="any" value="60" />
           <label for="weather-cloud-duration">for s</label>
-          <input id="weather-cloud-duration" class="wfield-input" type="number" step="any" value="600" />
+          <input id="weather-cloud-duration" class="wfield-input wfield-fire" type="number" step="any" value="600" />
           <label for="weather-cloud-ramp">ramp s</label>
-          <input id="weather-cloud-ramp" class="wfield-input" type="number" step="any" value="60" />
+          <input id="weather-cloud-ramp" class="wfield-input wfield-fire" type="number" step="any" value="60" />
           <button type="button" class="pill" id="weather-cloud-fire">fire</button>
         </div>
       </section>

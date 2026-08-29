@@ -529,6 +529,15 @@ function renderInspect(d, parentIds, childIds) {
     inp.dataset.live = inp.value;
     const flag = inp.closest("dd")?.querySelector(".knob-flag-input");
     if (flag) flag.dataset.live = flag.checked ? "1" : "0";
+    // Same reason the native spinners are hidden (style.css): in Firefox
+    // a wheel over a focused type=number steps the value without
+    // committing it, and the next snapshot reverts it. Arrow KEYS are
+    // left alone — those are deliberate keyboard edits, one Enter from a
+    // commit. Non-passive so preventDefault holds; number fields only,
+    // so a wheel over a text knob still scrolls the inspector.
+    if (inp.type === "number") {
+      inp.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
+    }
     inp.addEventListener("focus", () => {
       inp.dataset.editing = "1";
     });

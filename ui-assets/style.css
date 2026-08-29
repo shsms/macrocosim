@@ -1537,6 +1537,25 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #inspect .knob-input:focus { outline: 1px solid var(--accent); }
 
+/* Enter-commit numeric fields hide the browser's spinner arrows: an
+   arrow click changes the value WITHOUT committing it (commits are
+   Enter-only; blur and the next poll revert), so the affordance only
+   misleads. Inputs that commit via a button keep theirs — dialogs,
+   and the pass-a-cloud row, which shares .wfield-input's look but
+   fires through its own button and so carries .wfield-fire to opt
+   back in. */
+#inspect .knob-input[type="number"],
+.wfield-input[type="number"]:not(.wfield-fire) {
+  appearance: textfield;
+}
+#inspect .knob-input::-webkit-inner-spin-button,
+#inspect .knob-input::-webkit-outer-spin-button,
+.wfield-input:not(.wfield-fire)::-webkit-inner-spin-button,
+.wfield-input:not(.wfield-fire)::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
 /* A knob's optional boolean flag (power factor's `leading`) sits on
    the same line as its input instead of wrapping under it — the
    input is width:100 %, so the row becomes a flex line and the input

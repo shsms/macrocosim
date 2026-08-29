@@ -266,6 +266,16 @@ node tools/formula-ast-test.mjs  # formula-ast.js parser + renderer
 node tools/metrics-store-test.mjs  # metrics-store.js ring/PF/format
 ```
 
+UI input convention: a numeric field that commits on Enter (inspector
+knobs, weather config fields) must hide the browser's native spinner
+arrows (`appearance: textfield` + the `-webkit-*-spin-button` rules in
+`style.css`) and ignore wheel scrolling (a non-passive `wheel` listener
+calling `preventDefault`, Firefox steps a focused number field on a
+wheel) — either affordance changes the value without committing it, and
+the next poll or blur silently reverts. Arrow KEYS keep stepping: those
+are deliberate keyboard edits, one Enter from a commit. Fields that
+commit via a button (dialogs, pass-a-cloud) may keep both.
+
 Each registered microgrid binds its own gRPC port; the first
 defaults to `[::1]:8800` and subsequent microgrids step by ten
 (`:8810`, `:8820`, …). Override via `:grpc-port` on
