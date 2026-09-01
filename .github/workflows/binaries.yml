@@ -1,0 +1,80 @@
+name: binaries
+
+# Build standalone switchyard binaries for hand-off to Windows / macOS
+# users who don't have a Rust toolchain. Manual trigger only: these
+# builds are slow and nothing in the repo depends on them. Download the
+# artifact zip from the run's Summary page.
+#
+#   switchyard-windows-x86_64  ->  switchyard.exe
+#   switchyard-macos-universal ->  switchyard-macos.tar.gz (Apple Silicon
+#                                  + Intel in one binary; the tarball
+#                                  keeps the exec bit, which a bare
+#                                  upload-artifact file would lose)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x86_64, os: windows-latest }
+          - { name: macos-universal, os: macos-14 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive # vendored proto roots
+
+      # build.rs shells out to protoc via tonic-prost-build.
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc --no-progress -y
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cargo build --release --bin switchyard
+          target/release/switchyard.exe --help
+          mkdir dist
+          copy target\release\switchyard.exe dist\
+
+      # macos-14 is an Apple Silicon runner; the Intel half is a cross
+      # build (all deps are pure Rust, so no foreign toolchain needed).
+      - name: Build (macOS, universal)
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build --release --bin switchyard --target aarch64-apple-darwin
+          cargo build --release --bin switchyard --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create -output dist/switchyard \
+            target/aarch64-apple-darwin/release/switchyard \
+            target/x86_64-apple-darwin/release/switchyard
+          lipo -info dist/switchyard
+          dist/switchyard --help
+          tar -czf switchyard-macos.tar.gz -C dist switchyard
+          rm dist/switchyard && mv switchyard-macos.tar.gz dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: switchyard-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
