@@ -65,11 +65,13 @@ is wiring the topology + animating the environment.
   floating-card shell every panel (inspector, formulas, metrics,
   weather, REPL, logs, Defaults, Report) opens in — static-markup
   cards are listed in its `STATIC_PANELS`, per-panel width and spawn
-  corner in `PANEL_DEFAULTS`; any card docks into the bottom strip
-  `#dock-bottom` as a tile (`dockPanel` / `floatPanel` / `layoutStrip`,
-  persisted under `sw-panel-dock-<name>` and `sw-strip-bottom`);
+  corner in `PANEL_DEFAULTS`; any card docks into the bottom or right
+  strip (`#dock-bottom`, `#dock-right`; `STRIPS` holds each strip's
+  ids, axis and sizes; `dockPanel(name, edge)` / `floatPanel` /
+  `layoutStrip(edge)`; persisted under `sw-panel-dock-<name>` and
+  `sw-strip-<edge>`);
   `splitter.js` the drag-to-resize
-  handshake the dock strips will use; `strip-model.js` their DOM-free
+  handshake the dock strips use; `strip-model.js` their DOM-free
   arithmetic (shares, order, size clamp); `vendor/fonts/` the
   vendored IBM Plex faces (OFL))
   - Reactive power reads at parity with active power across the SPA:

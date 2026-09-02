@@ -3,10 +3,11 @@
 // ("metrics-btn"), the REPL ("repl-btn"), the log tail ("logs-btn"),
 // the Defaults editor, the live Scenario report — is
 // its own concurrently-openable, draggable, resizable card floating
-// over #panel-dock. Any card can also dock into the bottom strip
-// (`#dock-bottom`) as a tile — same element, `docked` class, laid out
-// by `layoutStrip` — and float back out. The cards are absolute
-// floats, not a column: opening one never changes another's size.
+// over #panel-dock. Any card can also dock into the bottom or right
+// strip (`#dock-bottom`, `#dock-right`) as a tile — same element,
+// `docked` class, laid out by `layoutStrip` — and float back out. The
+// cards are absolute floats, not a column: opening one never changes
+// another's size.
 // Re-opening an open panel just re-renders it (running its teardown
 // first); closing runs
 // teardown and hides the card. The shell never knows what's inside a
@@ -17,7 +18,8 @@ import { makeSplitter } from "./splitter.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
 // name → { el, contentEl, teardown, pos, cascade, isStatic, refitTimer,
-// docked, floatStyle }
+// dock, floatStyle }
+// dock is the edge the card is docked to, or null while it floats;
 // floatStyle parks the card's inline float geometry while it is
 // docked.
 // pos carries `bottom`: which dock edge the stored dx/dy were
@@ -74,17 +76,49 @@ const STATIC_PANELS = {
 const CORNER_INSET = 40;
 const ROW_GAP = 8;
 
-// The bottom dock strip: a docked card's tile row along the bottom
-// of main. Height is persisted with the strip; each panel remembers
-// whether it lives there.
+// A dock strip per edge. `size` is the strip's height (bottom) or
+// width (right); `axis` is the direction that size runs in, so the
+// tiles run along the other one and the tile splitters cut across
+// it. Each strip persists its size, tile order and shares under
+// `key`; each panel remembers its edge under DOCK_KEY_PREFIX.
 const DOCK_KEY_PREFIX = "sw-panel-dock-";
-const STRIP_KEY = "sw-strip-bottom";
-const STRIP_DEFAULT = 260;
-const STRIP_MIN = 120;
-const STRIP_MAX_FRAC = 0.8;
-// A tile cannot be squeezed below this share of the strip.
+const STRIPS = {
+  bottom: {
+    el: "dock-bottom",
+    splitter: "dock-bottom-splitter",
+    key: "sw-strip-bottom",
+    bodyClass: "has-bottom-dock",
+    axis: "y",
+    size: 260,
+    min: 120,
+    maxFrac: 0.8,
+    title: "Dock to the bottom",
+  },
+  right: {
+    el: "dock-right",
+    splitter: "dock-right-splitter",
+    key: "sw-strip-right",
+    bodyClass: "has-right-dock",
+    axis: "x",
+    size: 560,
+    min: 320,
+    maxFrac: 0.6,
+    title: "Dock to the right",
+  },
+};
+// A tile cannot be squeezed below this share of its strip.
 const TILE_MIN_SHARE = 0.15;
-const stripEl = () => document.getElementById("dock-bottom");
+const stripEl = (edge) => document.getElementById(STRIPS[edge].el);
+// A strip's extent along `axis`, and main's: the bounds a size is
+// clamped against.
+const extentOf = (el, axis) => (axis === "y" ? el.getBoundingClientRect().height : el.getBoundingClientRect().width);
+// The same pair the other way round: writing an extent along `axis`,
+// and the axis the tiles (and so the tile splitters' drags) run
+// along, which is the other one.
+const setExtent = (el, axis, px) => {
+  el.style[axis === "y" ? "height" : "width"] = px;
+};
+const crossAxis = (edge) => (STRIPS[edge].axis === "y" ? "x" : "y");
 
 // Every card lives in the dock, and the dock's box is both the drag
 // floor and the height bound.
@@ -116,7 +150,7 @@ function ensurePanel(name) {
     el.innerHTML = `
       <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
       <button class="float-close" type="button" title="Close (Esc)">×</button>
-      <button class="float-dock" type="button" title="Dock to the bottom">⤓</button>
+      <button class="float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
       <div class="panel-content"></div>`;
     dockEl().appendChild(el);
     contentEl = el.querySelector(".panel-content");
@@ -128,9 +162,22 @@ function ensurePanel(name) {
   el.querySelector(".panel-drag").dataset.title = el.getAttribute("aria-label") ?? name;
   // The strip reads a tile's panel name off the card itself.
   el.dataset.panelName = name;
-  el.querySelector(".float-dock").addEventListener("click", () => {
-    if (panels.get(name)?.docked) floatPanel(name);
-    else dockPanel(name);
+  const dockBtn = el.querySelector(".float-dock");
+  // The menu's own outside-press closer sits on the document; a press
+  // on this button must not reach it, or the toggle below would only
+  // ever see a closed menu and re-open it.
+  dockBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+  dockBtn.addEventListener("click", (e) => {
+    const rec = panels.get(name);
+    // A tile's button floats it with no menu of its own, but an
+    // unrelated menu may be open: the pointerdown above keeps the
+    // document's outside-press closer from seeing this press, so
+    // dismiss it here.
+    if (rec?.dock) {
+      closeDockMenu();
+      floatPanel(name);
+    } else if (openMenu?.dataset.panel === name) closeDockMenu();
+    else dockMenu(name, e.currentTarget);
   });
   const width = PANEL_DEFAULTS[name]?.width;
   if (width) el.style.width = `${width}px`;
@@ -152,7 +199,7 @@ function ensurePanel(name) {
     cascade: !stored,
     isStatic,
     refitTimer: 0,
-    docked: false,
+    dock: null,
     floatStyle: "",
   };
   // A bottom-left card hangs from the dock's bottom edge (see
@@ -173,10 +220,10 @@ function ensurePanel(name) {
       // inside REFIT_SETTLE would otherwise be sanitized as a
       // display:none zero box, and clampOffset would write that
       // nonsense back into p.pos. closePanel cancels it too.
-      if (p.docked || !el.classList.contains("open") || el.style.height) return;
+      if (p.dock || !el.classList.contains("open") || el.style.height) return;
       clearTimeout(p.refitTimer);
       p.refitTimer = setTimeout(() => {
-        if (p.docked || !el.classList.contains("open") || el.style.height) return;
+        if (p.dock || !el.classList.contains("open") || el.style.height) return;
         sanitizePanel(p, name, false);
       }, REFIT_SETTLE);
     }).observe(el);
@@ -238,8 +285,8 @@ function wireDrag(el, name, p) {
   strip.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     strip.setPointerCapture(e.pointerId);
-    if (p.docked) {
-      reorderDrag(el, strip, e.pointerId);
+    if (p.dock) {
+      reorderDrag(el, strip, p.dock, e.pointerId);
       return;
     }
     const startX = e.clientX - p.pos.dx;
@@ -270,17 +317,19 @@ function wireDrag(el, name, p) {
 // Dragging a tile's head along the strip moves the tile: it takes
 // the slot whose midpoint the pointer has crossed, the strip re-lays
 // itself out on release, and the new order is stored.
-function reorderDrag(el, strip, pointerId) {
+function reorderDrag(el, head, edge, pointerId) {
+  const along = crossAxis(edge);
   el.classList.add("reordering");
   const move = (ev) => {
-    const others = openTiles().filter((t) => t !== el);
+    const others = openTiles(edge).filter((t) => t !== el);
+    const here = along === "x" ? ev.clientX : ev.clientY;
     const idx = others.filter((t) => {
       const r = t.getBoundingClientRect();
-      return ev.clientX > (r.left + r.right) / 2;
+      return here > (along === "x" ? (r.left + r.right) / 2 : (r.top + r.bottom) / 2);
     }).length;
-    const current = openTiles().indexOf(el);
+    const current = openTiles(edge).indexOf(el);
     if (idx === current) return;
-    stripEl().insertBefore(el, others[idx] ?? null);
+    stripEl(edge).insertBefore(el, others[idx] ?? null);
     // Moving the tile re-parents the head that captured the pointer,
     // which can release the capture. Without it the gesture's own
     // pointerup may never reach the head: `stop` would never run, the
@@ -288,22 +337,22 @@ function reorderDrag(el, strip, pointerId) {
     // pointermove would go on re-ordering the strip under a plain
     // hover. Re-take it every time the tile moves.
     try {
-      strip.setPointerCapture(pointerId);
+      head.setPointerCapture(pointerId);
     } catch (_) {
       // Still held, or the pointer is already gone — nothing to do.
     }
   };
   const stop = () => {
-    strip.removeEventListener("pointermove", move);
-    strip.removeEventListener("pointerup", stop);
-    strip.removeEventListener("pointercancel", stop);
+    head.removeEventListener("pointermove", move);
+    head.removeEventListener("pointerup", stop);
+    head.removeEventListener("pointercancel", stop);
     el.classList.remove("reordering");
-    saveOrderFromDom();
-    layoutStrip();
+    saveOrderFromDom(edge);
+    layoutStrip(edge);
   };
-  strip.addEventListener("pointermove", move);
-  strip.addEventListener("pointerup", stop);
-  strip.addEventListener("pointercancel", stop);
+  head.addEventListener("pointermove", move);
+  head.addEventListener("pointerup", stop);
+  head.addEventListener("pointercancel", stop);
 }
 
 // What the gripper stores is a CAP, not a height: the card's height
@@ -408,7 +457,7 @@ function saveSize(name, h) {
 // it again, with `persist` on.
 function sanitizePanel(p, name, persist = true) {
   // A tile's geometry is the strip's business.
-  if (p.docked) return;
+  if (p.dock) return;
   const { el } = p;
   const stored = loadSize(name);
   if (stored != null) {
@@ -466,7 +515,7 @@ function bottomLeftSpawn(el, name) {
   for (const other of openStack) {
     // A docked card is a tile in the strip, not an occupant of this
     // row — its full-width rect would otherwise crowd the row out.
-    if (other === name || PANEL_DEFAULTS[other]?.spawn !== "bottom-left" || panels.get(other).docked)
+    if (other === name || PANEL_DEFAULTS[other]?.spawn !== "bottom-left" || panels.get(other).dock)
       continue;
     const r = panels.get(other).el.getBoundingClientRect();
     taken.push({ left: r.left - dockLeft, right: r.right - dockLeft });
@@ -490,17 +539,18 @@ function bottomLeftSpawn(el, name) {
   return { dx: -(dock.clientWidth - width - x), dy: -CORNER_INSET };
 }
 
-// Dock `name` into the bottom strip as a tile: the card leaves the
+// Dock `name` into the `edge` strip as a tile: the card leaves the
 // float dock for the strip, parks its inline float geometry for the
-// trip back, and the strip lays itself out again. It lands in its
-// stored slot, or at the right end if it has none.
-function dockPanel(name) {
+// trip back, and the strip lays itself out again. A card already in
+// the other strip goes through the float state on the way.
+function dockPanel(name, edge = "bottom") {
   const p = panels.get(name);
-  if (!p || p.docked) return;
-  ensureStripSplitter();
+  if (!p || p.dock === edge) return;
+  if (p.dock) floatPanel(name);
+  ensureStripSplitter(edge);
   p.floatStyle = p.el.style.cssText;
   p.el.style.cssText = "";
-  p.docked = true;
+  p.dock = edge;
   p.el.classList.add("docked");
   const dockBtn = p.el.querySelector(".float-dock");
   dockBtn.title = "Float";
@@ -508,32 +558,34 @@ function dockPanel(name) {
   // Into its slot in the strip's stored order when it has one (a
   // closed tile keeps it); a panel not in that order yet goes on the
   // end.
-  const order = stripOrder();
+  const order = stripOrder(edge);
   const idx = order.indexOf(name);
-  const siblings = [...stripEl().querySelectorAll(".float-panel")];
+  const strip = stripEl(edge);
+  const siblings = [...strip.querySelectorAll(".float-panel")];
   const before = idx < 0 ? null : (siblings.find((s) => order.indexOf(tileName(s)) > idx) ?? null);
-  stripEl().insertBefore(p.el, before);
-  if (idx < 0) saveStrip({ order: [...order, name] });
-  saveDock(name, { mode: "bottom" });
-  layoutStrip();
+  strip.insertBefore(p.el, before);
+  if (idx < 0) saveStrip(edge, { order: [...order, name] });
+  saveDock(name, { mode: edge });
+  layoutStrip(edge);
 }
 
-// Float `name` back out of the strip: back into the float dock with
-// the geometry it had, then the usual open-time sanitize (it is
-// visible again, so it can be measured).
+// Float `name` back out of its strip: back into the float dock with
+// the geometry it had, then placed (never placed before) or
+// sanitized (it is visible again, so it can be measured).
 function floatPanel(name) {
   const p = panels.get(name);
-  if (!p?.docked) return;
-  p.docked = false;
+  if (!p?.dock) return;
+  const edge = p.dock;
+  p.dock = null;
   p.el.classList.remove("docked");
   const dockBtn = p.el.querySelector(".float-dock");
-  dockBtn.title = "Dock to the bottom";
+  dockBtn.title = "Dock…";
   dockBtn.textContent = "⤓";
   dockEl().appendChild(p.el);
   p.el.style.cssText = p.floatStyle;
   p.floatStyle = "";
   saveDock(name, { mode: "float" });
-  layoutStrip();
+  layoutStrip(edge);
   // A card auto-docked from storage has never been placed as a float,
   // so it takes the usual cascade rather than the dock's bare corner.
   if (!openStack.includes(name)) return;
@@ -541,134 +593,148 @@ function floatPanel(name) {
   else sanitizePanel(p, name);
 }
 
-// Lay the strip out from what it holds: shown, at its stored height,
-// while any open tile is in it; hidden and heightless otherwise. The
+// Lay a strip out from what it holds: shown, at its stored size,
+// while any open tile is in it; hidden and sizeless otherwise. The
 // open tiles take the strip in the stored order with their stored
 // shares (flex-grow, so they add up to the strip whatever it is),
 // and a splitter sits between each pair.
-function layoutStrip() {
-  const strip = stripEl();
-  for (const s of strip.querySelectorAll(".tile-splitter")) s.remove();
-  const tiles = openTiles();
-  document.body.classList.toggle("has-bottom-dock", tiles.length > 0);
-  strip.style.height = tiles.length ? `${stripSize()}px` : "";
-  const shares = normalizedShares(storedShares(), tiles.map(tileName));
+function layoutStrip(edge) {
+  const cfg = STRIPS[edge];
+  const strip = stripEl(edge);
+  for (const s of strip.querySelectorAll(".tile-splitter")) {
+    s.dispose?.();
+    s.remove();
+  }
+  const tiles = openTiles(edge);
+  const was = document.body.classList.contains(cfg.bodyClass);
+  document.body.classList.toggle(cfg.bodyClass, tiles.length > 0);
+  setExtent(strip, cfg.axis, tiles.length ? `${stripSize(edge)}px` : "");
+  const shares = normalizedShares(storedShares(edge), tiles.map(tileName));
   tiles.forEach((tile, i) => {
     tile.style.flex = `${shares[tileName(tile)]} 1 0`;
-    if (i > 0) strip.insertBefore(makeTileSplitter(tiles[i - 1], tile), tile);
+    if (i > 0) strip.insertBefore(makeTileSplitter(edge, tiles[i - 1], tile), tile);
   });
+  // A strip appearing or vanishing resizes the float dock beside it,
+  // which is the box every floating card is clamped against — the
+  // same thing a window resize does to them.
+  if (was !== (tiles.length > 0)) refitFloating();
 }
 
 // Open tiles in strip order (DOM order is the order of record;
 // dockPanel and the reorder drag keep the stored order in step).
-const openTiles = () => [...stripEl().querySelectorAll(".float-panel.open")];
+const openTiles = (edge) => [...stripEl(edge).querySelectorAll(".float-panel.open")];
 const tileName = (el) => el.dataset.panelName;
 
-// The bar between two tiles: dragging it trades width between them.
-function makeTileSplitter(left, right) {
+// The bar between two tiles: dragging it trades space between them,
+// along the strip — width in the bottom strip, height in the right.
+function makeTileSplitter(edge, first, second) {
+  const along = crossAxis(edge);
   const sp = document.createElement("div");
   sp.className = "tile-splitter";
   sp.title = "Drag to resize the tiles";
-  // makeSplitter sizes the element after the handle: the right
-  // tile. Widths are read live and written back as shares of the
-  // pair, so a window resize keeps the proportion.
-  makeSplitter({
-    axis: "x",
+  // makeSplitter sizes the element after the handle: `second`. Sizes
+  // are read live and written back as shares of the pair, so a
+  // window resize keeps the proportion.
+  sp.dispose = makeSplitter({
+    axis: along,
     splitter: sp,
-    getStart: () => right.getBoundingClientRect().width,
-    apply: (w) => {
-      const l = tileName(left);
-      const r = tileName(right);
-      const shares = normalizedShares(storedShares(), openTiles().map(tileName));
-      const pair = shares[l] + shares[r];
-      const pairPx = left.getBoundingClientRect().width + right.getBoundingClientRect().width;
-      shares[r] = pair * (w / pairPx);
-      shares[l] = pair - shares[r];
-      left.style.flex = `${shares[l]} 1 0`;
-      right.style.flex = `${shares[r]} 1 0`;
-      // Merged, not replaced: a panel floated out of the strip keeps
-      // its share for the trip back.
-      saveStrip({ shares: { ...storedShares(), ...shares } });
+    getStart: () => extentOf(second, along),
+    apply: (v) => {
+      const a = tileName(first);
+      const b = tileName(second);
+      const shares = normalizedShares(storedShares(edge), openTiles(edge).map(tileName));
+      const pair = shares[a] + shares[b];
+      const pairPx = extentOf(first, along) + extentOf(second, along);
+      shares[b] = pair * (v / pairPx);
+      shares[a] = pair - shares[b];
+      first.style.flex = `${shares[a]} 1 0`;
+      second.style.flex = `${shares[b]} 1 0`;
+      // Merged over the stored map: a floated-out tile keeps its share.
+      saveStrip(edge, { shares: { ...storedShares(edge), ...shares } });
     },
-    clamp: (w) => {
-      const pairPx = left.getBoundingClientRect().width + right.getBoundingClientRect().width;
-      const min = stripEl().getBoundingClientRect().width * TILE_MIN_SHARE;
-      return Math.max(min, Math.min(pairPx - min, w));
+    clamp: (v) => {
+      const pairPx = extentOf(first, along) + extentOf(second, along);
+      const min = extentOf(stripEl(edge), along) * TILE_MIN_SHARE;
+      return Math.max(min, Math.min(pairPx - min, v));
     },
   });
   return sp;
 }
 
-// The strip's stored order, as panel names.
-function stripOrder() {
-  const order = loadStrip()?.order;
+// A strip's stored order, as panel names.
+function stripOrder(edge) {
+  const order = loadStrip(edge)?.order;
   return Array.isArray(order) ? order.filter((n) => typeof n === "string") : [];
 }
-// The strip's cards in DOM order — open or not, so a closed tile keeps
-// its slot; mergeOrder keeps the stored names that are not in the
-// strip at all, so a panel floated out has an entry to be re-docked
-// into.
-function saveOrderFromDom() {
-  const present = [...stripEl().querySelectorAll(".float-panel")].map(tileName);
-  saveStrip({ order: mergeOrder(present, stripOrder()) });
+// Every card in the strip, open or not, so a closed tile keeps its
+// slot; mergeOrder keeps the names stored but no longer in the strip.
+function saveOrderFromDom(edge) {
+  const present = [...stripEl(edge).querySelectorAll(".float-panel")].map(tileName);
+  saveStrip(edge, { order: mergeOrder(present, stripOrder(edge)) });
 }
 
-// The stored height, clamped against main as it is now (see
-// clampStripSize).
-function stripSize() {
-  const bounds = { min: STRIP_MIN, maxFrac: STRIP_MAX_FRAC, fallback: STRIP_DEFAULT };
-  const main = document.getElementById("app");
-  return clampStripSize(loadStrip()?.size, bounds, main.getBoundingClientRect().height);
-}
+// A strip size held inside the strip's own bounds, measured against
+// main as it is now (see clampStripSize) — what the stored size is
+// read through, and what the splitter drag is clamped by.
+const clampStrip = (edge, v) => {
+  const cfg = STRIPS[edge];
+  const bounds = { min: cfg.min, maxFrac: cfg.maxFrac, fallback: cfg.size };
+  return clampStripSize(v, bounds, extentOf(document.getElementById("app"), cfg.axis));
+};
+// The stored size, so clamped.
+const stripSize = (edge) => clampStrip(edge, loadStrip(edge)?.size);
 
-// The strip splitter is wired once, on the first dock, when the strip
-// is first needed; main's height bounds the drag. The drag re-fits
-// the floating cards once it settles, the same way a window resize
-// does: the height it takes comes out of the float dock, which is the
-// box every floating card is clamped against.
+// A strip's splitter is wired once, on the first dock into it. The
+// drag re-fits the floating cards once it settles, the same way
+// layoutStrip does when a strip appears or vanishes: the strip is
+// taking its space from the float dock, which is the box every card
+// is clamped against. One timer for both strips — only one splitter
+// can be under the pointer.
 let stripRefitTimer = 0;
-let stripWired = false;
-function ensureStripSplitter() {
-  if (stripWired) return;
-  stripWired = true;
-  const main = document.getElementById("app");
+const stripsWired = new Set();
+function ensureStripSplitter(edge) {
+  if (stripsWired.has(edge)) return;
+  stripsWired.add(edge);
+  const cfg = STRIPS[edge];
   makeSplitter({
-    axis: "y",
-    splitter: document.getElementById("dock-bottom-splitter"),
-    getStart: () => stripEl().getBoundingClientRect().height,
-    apply: (h) => {
-      stripEl().style.height = `${h}px`;
-      saveStrip({ size: Math.round(h) });
+    axis: cfg.axis,
+    splitter: document.getElementById(cfg.splitter),
+    getStart: () => extentOf(stripEl(edge), cfg.axis),
+    apply: (v) => {
+      setExtent(stripEl(edge), cfg.axis, `${v}px`);
+      saveStrip(edge, { size: Math.round(v) });
       clearTimeout(stripRefitTimer);
       stripRefitTimer = setTimeout(refitFloating, REFIT_SETTLE);
     },
-    clamp: (h) => Math.max(STRIP_MIN, Math.min(main.getBoundingClientRect().height * STRIP_MAX_FRAC, h)),
+    clamp: (v) => clampStrip(edge, v),
   });
 }
 
-function loadStrip() {
+function loadStrip(edge) {
   try {
-    const raw = JSON.parse(localStorage.getItem(STRIP_KEY));
+    const raw = JSON.parse(localStorage.getItem(STRIPS[edge].key));
     return raw && typeof raw === "object" ? raw : null;
   } catch (_) {
     return null;
   }
 }
-function saveStrip(patch) {
+function saveStrip(edge, patch) {
   try {
-    localStorage.setItem(STRIP_KEY, JSON.stringify({ ...(loadStrip() ?? {}), ...patch }));
+    localStorage.setItem(STRIPS[edge].key, JSON.stringify({ ...(loadStrip(edge) ?? {}), ...patch }));
   } catch (_) {
     // Storage unavailable — the strip just doesn't stick.
   }
 }
-// The strip's stored shares as the model wants them: a plain map,
-// empty when the strip has none.
-const storedShares = () => loadStrip()?.shares ?? {};
+// A strip's stored shares as the model wants them: a plain map, empty
+// when the strip has none.
+const storedShares = (edge) => loadStrip(edge)?.shares ?? {};
 
 function loadDock(name) {
   try {
     const raw = JSON.parse(localStorage.getItem(DOCK_KEY_PREFIX + name));
-    return raw?.mode === "bottom" ? raw : null;
+    // Own properties only: `"toString" in STRIPS` is true, and docking
+    // to that edge would throw the moment a strip config was read.
+    return Object.hasOwn(STRIPS, raw?.mode) ? raw : null;
   } catch (_) {
     return null;
   }
@@ -681,8 +747,93 @@ function saveDock(name, v) {
   }
 }
 
+// The menu a floating card's dock button opens: one entry per
+// strip. Anything pressed outside it closes it, as does Escape; a
+// press inside stays inside so the entry's click still fires.
+let openMenu = null;
+// The button the open menu belongs to: the menu takes focus when it
+// opens, so something has to hand it back.
+let openMenuBtn = null;
+function closeDockMenu() {
+  // Cleared BEFORE the node goes: removing it blurs whichever entry
+  // had focus, and that focusout closer calls back in here. Re-entering
+  // with openMenu still set would try to remove the same node twice,
+  // and the second remove lands mid-removal and throws.
+  const menu = openMenu;
+  const btn = openMenuBtn;
+  openMenu = null;
+  openMenuBtn = null;
+  document.removeEventListener("pointerdown", closeDockMenu);
+  document.removeEventListener("keydown", onMenuKey, true);
+  // Focus goes back where the menu took it from, on every close path —
+  // removing the node while an entry holds focus would drop the user
+  // on <body> instead. Before the removal on purpose: the focusout
+  // that fires carries the button as its relatedTarget, which the
+  // closer below already exempts. Only when the menu still holds
+  // focus (a click elsewhere has already moved it on), and only to a
+  // button still in the document (its card may have closed).
+  if (menu?.contains(document.activeElement) && btn?.isConnected) btn.focus();
+  menu?.remove();
+}
+// Escape belongs to the menu while it is up, not to the panel behind
+// it. app.js's Esc handler is a document listener installed at load,
+// so it would run first on the way up; this one captures instead and
+// stops the event before the bubble phase ever reaches it.
+function onMenuKey(e) {
+  if (e.key !== "Escape") return;
+  e.stopPropagation();
+  closeDockMenu();
+}
+function dockMenu(name, btn) {
+  closeDockMenu();
+  const menu = document.createElement("div");
+  menu.className = "dock-menu";
+  menu.dataset.panel = name;
+  menu.setAttribute("role", "menu");
+  menu.addEventListener("pointerdown", (e) => e.stopPropagation());
+  // Focus leaving the menu closes it: the button is keyboard-openable,
+  // so Tab has to be a way back out. The button itself is the one
+  // exception — it takes focus on the press that is about to run its
+  // own toggle, and closing here would leave that toggle re-opening a
+  // menu the user meant to dismiss.
+  menu.addEventListener("focusout", (e) => {
+    if (!menu.contains(e.relatedTarget) && e.relatedTarget !== btn) closeDockMenu();
+  });
+  for (const edge of Object.keys(STRIPS)) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "dock-menu-item";
+    item.setAttribute("role", "menuitem");
+    item.textContent = STRIPS[edge].title;
+    item.addEventListener("click", () => {
+      closeDockMenu();
+      dockPanel(name, edge);
+    });
+    menu.appendChild(item);
+  }
+  const r = btn.getBoundingClientRect();
+  document.body.appendChild(menu);
+  // Placed at the button, then held inside the window: a top-right
+  // card's button sits a menu's width from the right edge, and the
+  // menu would hang off it. Measured after the append — an unattached
+  // menu has no offsetWidth to clamp against.
+  menu.style.left = `${Math.max(0, Math.min(r.left, window.innerWidth - menu.offsetWidth - 4))}px`;
+  menu.style.top = `${Math.max(0, Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 4))}px`;
+  // Opened from the keyboard the menu has to be usable from it, so the
+  // first entry takes focus; closeDockMenu hands it back to the button
+  // however the menu goes away.
+  menu.querySelector(".dock-menu-item")?.focus();
+  openMenu = menu;
+  openMenuBtn = btn;
+  // The press that opened this menu is already past, so both closers
+  // can go on now: neither can see it.
+  document.addEventListener("pointerdown", closeDockMenu);
+  document.addEventListener("keydown", onMenuKey, true);
+}
+
 // Fit every open floating card to the dock as it is now — a
 // transient fit, not the user's placement, so nothing is persisted.
+// A docked tile is the strip's business and sanitizePanel skips it.
 function refitFloating() {
   for (const name of openStack) {
     const p = panels.get(name);
@@ -697,19 +848,20 @@ function refitFloating() {
 // Nothing re-clamped for that, so an open card could be left stranded
 // — its strip past the window edge, unreachable and unrecoverable
 // short of closing the panel. Re-fit every open card once the gesture
-// settles — a transient fit, since the window forced it and the user
-// gets their own placement back when the window comes back. Installed
-// once, at module scope: the listener outlives any one panel, and does
-// nothing while none are open.
+// settles, and the user gets their own placement back when the window
+// comes back. Installed once, at module scope: the listener outlives
+// any one panel, and does nothing while none are open.
 let refitTimer = 0;
 window.addEventListener("resize", () => {
   clearTimeout(refitTimer);
   if (openStack.length === 0) return;
   refitTimer = setTimeout(() => {
     refitFloating();
-    // The strip's height is a stored number, so a shorter window has
-    // to re-clamp it against the new ceiling (stripSize).
-    if (stripEl()?.querySelector(".float-panel.open")) layoutStrip();
+    // A strip's size is a stored number, so a smaller window has to
+    // re-clamp it against the new ceiling (stripSize).
+    for (const edge of Object.keys(STRIPS)) {
+      if (stripEl(edge)?.querySelector(".float-panel.open")) layoutStrip(edge);
+    }
   }, REFIT_SETTLE);
 });
 
@@ -737,8 +889,9 @@ export function openPanel(name, render, teardown = null) {
   if (opening) {
     // A panel that lives in the strip goes back to its tile; anything
     // else is placed as a float.
-    if (p.docked) layoutStrip();
-    else if (loadDock(name)) dockPanel(name);
+    const stored = loadDock(name);
+    if (p.dock) layoutStrip(p.dock);
+    else if (stored) dockPanel(name, stored.mode);
     else placePanel(p, name, order);
   }
   syncButton(name, true);
@@ -763,10 +916,12 @@ export function closePanel(name) {
   // A resize that landed just before this close left a refit armed;
   // it would measure the hidden card as a zero box.
   clearTimeout(p.refitTimer);
+  // The card is going away; its dock menu must not outlive it.
+  if (openMenu?.dataset.panel === name) closeDockMenu();
   p.el.classList.remove("open");
   // A closed tile keeps its slot but no longer counts; the strip may
   // empty.
-  if (p.docked) layoutStrip();
+  if (p.dock) layoutStrip(p.dock);
   openStack.splice(openStack.indexOf(name), 1);
   syncButton(name, false);
 }

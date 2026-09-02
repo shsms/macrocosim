@@ -191,7 +191,7 @@
         <aside id="inspector" class="float-panel" aria-label="inspector">
           <div id="inspector-drag" class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
           <button id="inspector-close" class="float-close" type="button" title="Close (Esc)">×</button>
-          <button class="float-dock" type="button" title="Dock to the bottom">⤓</button>
+          <button class="float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
           <div id="inspect" class="panel-content">
             <p class="hint">Click a node to inspect. Right-click for the context menu.</p>
           </div>
@@ -199,7 +199,7 @@
         <aside id="repl" class="float-panel" aria-label="repl">
           <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
           <button class="float-close" type="button" title="Close (Esc)">×</button>
-          <button class="float-dock" type="button" title="Dock to the bottom">⤓</button>
+          <button class="float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
           <div id="repl-body" class="panel-content">
             <div id="repl-output"></div>
             <form id="repl-form">
@@ -222,7 +222,7 @@
         <aside id="logs-panel" class="float-panel" aria-label="logs">
           <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
           <button class="float-close" type="button" title="Close (Esc)">×</button>
-          <button class="float-dock" type="button" title="Dock to the bottom">⤓</button>
+          <button class="float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
           <div id="logs-body" class="panel-content">
             <div class="logs-head">
               <label for="logs-level" class="ctl-label">show</label>
@@ -242,6 +242,11 @@
            docked both stay display:none and main's rows collapse. -->
       <div id="dock-bottom-splitter" title="Drag to resize the dock"></div>
       <div id="dock-bottom" role="region" aria-label="bottom dock"></div>
+      <!-- The right dock strip: the same as the bottom one, rotated —
+           tiles stack top to bottom, the splitter left of it drags
+           its width. -->
+      <div id="dock-right-splitter" title="Drag to resize the dock"></div>
+      <div id="dock-right" role="region" aria-label="right dock"></div>
     </main>
     <noscript>This UI requires JavaScript.</noscript>
     <div id="ctx-menu" hidden></div>
@@ -518,7 +523,7 @@
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
           <li><strong>Inspector</strong> — one of the floating panels, alongside the formula explorer, metrics, weather, the REPL, the log tail, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
-          <li><strong>Docking</strong> — every panel's <em>⤓</em> button docks it into a strip along the bottom of the window, where it becomes a tile and stops covering the canvas; the strip appears only while it holds a tile, and the bar above it drags to change its height. The tile's <em>⤒</em> floats it back to where it was. Several docked panels share the strip side by side: drag the bar between two tiles to trade width, drag a tile's head along the strip to reorder. A docked panel that you close comes back docked.</li>
+          <li><strong>Docking</strong> — every panel's <em>⤓</em> button offers to dock it into a strip along the bottom or down the right edge of the window, where it becomes a tile and stops covering the canvas; a strip appears only while it holds a tile, and the bar beside it drags to change its size. The tile's <em>⤒</em> floats it back to where it was. Several docked panels share a strip: drag the bar between two tiles to trade space, drag a tile's head along the strip to reorder. A docked panel that you close comes back docked.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in its own floating panel; edits write to <code>enterprise.lisp</code>.</li>

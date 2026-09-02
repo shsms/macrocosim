@@ -358,14 +358,21 @@ main {
      0 off a selection); the REPL and the log tail are floating panels
      in the dock. The two bottom rows are the dock strip and its
      splitter; both are display:none while nothing is docked, so they
-     take no height. */
-  grid-template-columns: 1fr;
+     take no height. The right column pair is the right dock strip and
+     its splitter, beside the canvas and above the bottom strip; like
+     the bottom pair they are display:none while empty. */
+  /* minmax(0, …) on the canvas column, not a bare 1fr: a bare 1fr
+     takes the widest min-content in the cell as its floor — the
+     floating canvas-controls strip is a nowrap row about 1000px wide
+     — and the whole grid, the full-width bottom strip included, would
+     be pushed past main once the right strip claimed its column. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   grid-template-rows: auto 1fr auto auto;
   grid-template-areas:
-    "mgheader"
-    "topology"
-    "bottom-splitter"
-    "bottom";
+    "mgheader mgheader mgheader"
+    "topology right-splitter right"
+    "bottom-splitter bottom-splitter bottom-splitter"
+    "bottom bottom bottom";
   gap: 0;
   height: calc(100vh - 41px - 28px); /* viewport minus header minus pulse bar */
   /* Same reason as on body: keeps the canvas from pushing the
@@ -1001,6 +1008,32 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 }
 body.has-bottom-dock #dock-bottom-splitter { display: block; }
 body.has-bottom-dock #dock-bottom { display: flex; flex-direction: row; }
+/* The right dock strip: a column of tiles beside the canvas. Width
+   is inline (side-panel.js), the splitter sits to its left. */
+#dock-right-splitter {
+  grid-area: right-splitter;
+  display: none;
+  width: 5px;
+  background: var(--border);
+  cursor: col-resize;
+}
+#dock-right-splitter:hover, #dock-right-splitter.dragging { background: var(--accent); }
+#dock-right {
+  grid-area: right;
+  display: none;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-elev);
+}
+body.has-right-dock #dock-right-splitter { display: block; }
+body.has-right-dock #dock-right { display: flex; flex-direction: column; }
+/* In the right strip a tile is a row: full width, height by share. */
+#dock-right .float-panel.docked {
+  height: auto;
+  width: 100%;
+  border-right: none;
+}
+#dock-right .tile-splitter { cursor: row-resize; }
 /* A docked card is a tile in the strip instead of a float over the
    canvas. The shell strips its inline transform / width / cap on the
    way in (dockPanel) and restores them on the way out, so these
@@ -1114,6 +1147,31 @@ body.has-bottom-dock #dock-bottom { display: flex; flex-direction: row; }
 .tile-splitter:hover, .tile-splitter.dragging { background: var(--accent); }
 /* The tile being dragged along the strip. */
 .float-panel.docked.reordering { opacity: 0.85; outline: 1px solid var(--accent); }
+/* The dock menu a floating card's ⤓ opens: one entry per strip. */
+.dock-menu {
+  position: fixed;
+  z-index: 900;
+  min-width: 160px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  padding: 4px 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+.dock-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  padding: 4px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.dock-menu-item:hover { background: var(--accent); color: var(--bg); }
 .float-head {
   display: flex;
   align-items: center;
@@ -2407,6 +2465,12 @@ dialog#dispatch-dialog { max-width: 640px; }
   padding: 4px 8px;
   align-items: center;
   gap: 6px;
+  /* The canvas column does not widen to fit this strip (see main's
+     grid-template-columns), so it wraps onto a second row rather than
+     running off the left edge when the right dock strip narrows the
+     canvas. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 6px;

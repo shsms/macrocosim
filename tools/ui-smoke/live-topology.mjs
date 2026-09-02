@@ -1727,7 +1727,10 @@ let st = await stripState();
 check("e2e: the strip is empty and takes no height before anything docks", !st.has && st.stripH === 0 && st.splitterH === 0, JSON.stringify(st));
 const canvasBefore = st.canvasH;
 const floatRectBefore = await page.evaluate(() => { const r = document.getElementById("panel-metrics-btn").getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top) }; });
+// A floating card's dock button offers an edge; the tile checks
+// below are all about the bottom strip, so take that entry.
 await page.click("#panel-metrics-btn .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
 st = await stripState();
 check("e2e: docking the metrics panel puts it in the strip at the default height", st.has && st.tiles.length === 1 && st.tiles[0] === "panel-metrics-btn" && Math.abs(st.stripH - 260) <= 1 && st.splitterH === 5, JSON.stringify(st));
 check("e2e: a docked tile's dock button flips to the float glyph", (await page.textContent("#panel-metrics-btn .float-dock")).trim() === "⤒", await page.textContent("#panel-metrics-btn .float-dock"));
@@ -1764,7 +1767,9 @@ check("e2e: floating clears the persisted dock mode", await page.evaluate(() => 
 // appends after it and metrics drops back into the left slot.
 await page.click("#logs-btn");
 await page.click("#logs-panel .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
 await page.click("#panel-metrics-btn .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
 const tilesOf = async () =>
   await page.evaluate(() => {
     const strip = document.getElementById("dock-bottom");
@@ -1785,6 +1790,7 @@ check("e2e: two tiles split the strip evenly", Math.abs(tl.widths[0] - tl.widths
 // not change mode.
 await page.keyboard.press("`");
 await page.click("#repl .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
 tl = await tilesOf();
 check("e2e: a third docked tile takes one third of the strip", tl.widths.length === 3 && Math.abs(tl.widths[2] - tl.sw / 3) <= 6, JSON.stringify(tl));
 await page.click("#repl .float-dock");
@@ -1818,9 +1824,108 @@ await page.click("#logs-btn");
 await page.click("#metrics-btn");
 tl = await tilesOf();
 check("e2e: order and shares survive a reload", tl.order.join() === "logs-panel,panel-metrics-btn" && tl.widths[0] < tl.widths[1], JSON.stringify(tl));
-// Leave the strip empty for whatever follows.
+// Float both tiles back out: the right-strip checks below start from
+// both cards open and floating, and an empty bottom strip.
 await page.click("#panel-metrics-btn .float-dock");
 await page.click("#logs-panel .float-dock");
+
+// The right strip: reached through the dock menu, tiles stack top to
+// bottom, the splitter left of it drags its width.
+const rightState = async () =>
+  await page.evaluate(() => {
+    const strip = document.getElementById("dock-right");
+    const sp = document.getElementById("dock-right-splitter");
+    const tiles = [...strip.querySelectorAll(".float-panel.open")];
+    return {
+      has: document.body.classList.contains("has-right-dock"),
+      w: Math.round(strip.getBoundingClientRect().width),
+      spW: Math.round(sp.getBoundingClientRect().width),
+      tiles: tiles.map((e) => e.id),
+      heights: tiles.map((e) => Math.round(e.getBoundingClientRect().height)),
+      widths: tiles.map((e) => Math.round(e.getBoundingClientRect().width)),
+      splitters: strip.querySelectorAll(".tile-splitter").length,
+      canvasW: Math.round(document.getElementById("panel-dock").getBoundingClientRect().width),
+      stored: JSON.parse(localStorage.getItem("sw-strip-right") ?? "null"),
+    };
+  });
+// Both tiles are floating again here (the previous checks floated
+// them back); metrics is open and floating, logs is open and floating.
+let rs = await rightState();
+const canvasWBefore = rs.canvasW;
+check("e2e: the right strip is absent until something docks there", !rs.has && rs.w === 0 && rs.spW === 0, JSON.stringify(rs));
+await page.click("#panel-metrics-btn .float-dock");
+const menuItems = await page.evaluate(() => [...document.querySelectorAll(".dock-menu .dock-menu-item")].map((b) => b.textContent));
+check("e2e: a floating card's dock button opens a two-edge menu", menuItems.join("|") === "Dock to the bottom|Dock to the right", JSON.stringify(menuItems));
+// Escape dismisses the menu and stops there — the panel behind it
+// stays open, so the global Esc never sees the key.
+await page.keyboard.press("Escape");
+check(
+  "e2e: Escape closes the dock menu without closing the panel behind it",
+  await page.evaluate(() => document.querySelector(".dock-menu") === null && document.getElementById("panel-metrics-btn").classList.contains("open")),
+);
+// The button is reachable by Tab, so the menu it opens has to be
+// usable from the keyboard too: Enter opens it with its first entry
+// focused, and closing it puts focus back on the button rather than
+// dropping the user on <body>.
+await page.focus("#panel-metrics-btn .float-dock");
+await page.keyboard.press("Enter");
+const menuFocus = await page.evaluate(() => document.activeElement?.className ?? "none");
+await page.keyboard.press("Escape");
+const backFocus = await page.evaluate(() => document.activeElement?.className ?? "none");
+check(
+  "e2e: Enter on the dock button opens the menu with its first entry focused, Escape hands focus back",
+  menuFocus.split(" ").includes("dock-menu-item") && backFocus.split(" ").includes("float-dock"),
+  `${menuFocus} -> ${backFocus}`,
+);
+await page.click("#panel-metrics-btn .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("right")');
+rs = await rightState();
+check("e2e: docking to the right puts the card in the right strip at 560px", rs.has && rs.tiles.join() === "panel-metrics-btn" && Math.abs(rs.w - 560) <= 1 && rs.spW === 5, JSON.stringify(rs));
+check("e2e: the right strip takes its column from the canvas", rs.canvasW <= canvasWBefore - 560, `${canvasWBefore} -> ${rs.canvasW}`);
+check("e2e: dock mode persists as right", await page.evaluate(() => JSON.parse(localStorage.getItem("sw-panel-dock-metrics-btn") ?? "null")?.mode === "right"));
+// Width: drag the right strip's splitter 100px left.
+const rsp = await page.evaluate(() => { const r = document.getElementById("dock-right-splitter").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+await page.mouse.move(rsp.x, rsp.y);
+await page.mouse.down();
+for (let i = 1; i <= 10; i++) { await page.mouse.move(rsp.x - 10 * i, rsp.y); await page.waitForTimeout(15); }
+await page.mouse.up();
+rs = await rightState();
+check("e2e: dragging the right splitter re-sizes the strip and persists it", Math.abs(rs.w - 660) <= 2 && rs.stored?.size === rs.w, JSON.stringify(rs));
+// A second tile stacks below, full width, with a row splitter.
+await page.click("#logs-panel .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("right")');
+rs = await rightState();
+check("e2e: a second right tile stacks below the first with a splitter between", rs.tiles.join() === "panel-metrics-btn,logs-panel" && rs.splitters === 1 && Math.abs(rs.widths[0] - rs.w) <= 1 && Math.abs(rs.widths[1] - rs.w) <= 1 && Math.abs(rs.heights[0] - rs.heights[1]) <= 6, JSON.stringify(rs));
+// Drag the tile splitter 120px down: the top tile grows.
+const rts = await page.evaluate(() => { const r = document.querySelector("#dock-right .tile-splitter").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+await page.mouse.move(rts.x, rts.y);
+await page.mouse.down();
+for (let i = 1; i <= 10; i++) { await page.mouse.move(rts.x, rts.y + 12 * i); await page.waitForTimeout(15); }
+await page.mouse.up();
+rs = await rightState();
+check("e2e: dragging a right tile splitter trades height between the tiles", rs.heights[0] - rs.heights[1] >= 220 && rs.stored?.shares?.["metrics-btn"] > rs.stored?.shares?.["logs-btn"], JSON.stringify(rs));
+// Bottom and right at once: dock the REPL to the bottom while both sit on the right.
+await page.keyboard.press("`");
+await page.click("#repl .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
+const both = await page.evaluate(() => ({
+  bottom: document.body.classList.contains("has-bottom-dock"),
+  right: document.body.classList.contains("has-right-dock"),
+  bottomTiles: [...document.querySelectorAll("#dock-bottom .float-panel.open")].map((e) => e.id),
+  bottomW: Math.round(document.getElementById("dock-bottom").getBoundingClientRect().width),
+  mainW: Math.round(document.getElementById("app").getBoundingClientRect().width),
+}));
+check("e2e: the bottom strip spans the full width under the right strip", both.bottom && both.right && both.bottomTiles.join() === "repl" && Math.abs(both.bottomW - both.mainW) <= 1, JSON.stringify(both));
+// A docked tile's button floats it straight back, no menu.
+await page.click("#repl .float-dock");
+check("e2e: a tile's dock button floats it without a menu", (await page.evaluate(() => document.querySelector(".dock-menu") === null && !document.body.classList.contains("has-bottom-dock"))));
+await page.keyboard.press("Escape");
+await page.click("#panel-metrics-btn .float-dock");
+await page.click("#logs-panel .float-dock");
+rs = await rightState();
+check("e2e: floating both right tiles empties the right strip", !rs.has && rs.w === 0, JSON.stringify(rs));
+
+// Leave the strip empty for whatever follows.
 await page.click("#logs-btn");
 await page.click("#metrics-btn");
 
