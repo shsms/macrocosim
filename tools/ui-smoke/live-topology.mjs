@@ -1591,7 +1591,12 @@ const panelOpen = async (id) =>
 check("e2e: the REPL and Logs panels start closed", (await panelOpen("repl")) === false && (await panelOpen("logs-panel")) === false);
 check(
   "e2e: no drawer row is left in main",
-  await page.evaluate(() => document.getElementById("drawer-splitter") === null && getComputedStyle(document.getElementById("app")).gridTemplateRows.split(" ").length === 2),
+  await page.evaluate(() => {
+    // mgheader + topology, plus the two bottom-dock rows, which
+    // measure 0px while nothing is docked (side-panel.js layoutStrip).
+    const rows = getComputedStyle(document.getElementById("app")).gridTemplateRows.split(" ");
+    return document.getElementById("drawer-splitter") === null && rows.length === 4 && rows.slice(2).every((r) => Number.parseFloat(r) === 0);
+  }),
 );
 await page.click("#logs-btn");
 check("e2e: the logs pill opens the Logs panel", await panelOpen("logs-panel"));
@@ -1692,6 +1697,68 @@ check(
 await page.keyboard.press("Escape");
 await page.keyboard.press("1");
 await page.click(DEMO_CARD).catch(() => {});
+
+// ── e2e: the bottom dock strip ───────────────────────────────────
+// Any card docks into a strip along the bottom of main via its dock
+// button, and floats back out via the same button. The strip takes
+// rows from the canvas only while it holds an open tile.
+const stripState = async () =>
+  await page.evaluate(() => {
+    const strip = document.getElementById("dock-bottom");
+    const sp = document.getElementById("dock-bottom-splitter");
+    return {
+      has: document.body.classList.contains("has-bottom-dock"),
+      stripH: Math.round(strip.getBoundingClientRect().height),
+      splitterH: Math.round(sp.getBoundingClientRect().height),
+      tiles: [...strip.querySelectorAll(".float-panel.open")].map((e) => e.id),
+      canvasH: Math.round(document.getElementById("panel-dock").getBoundingClientRect().height),
+      stored: JSON.parse(localStorage.getItem("sw-strip-bottom") ?? "null"),
+    };
+  });
+// Start from a known floating state: metrics open, floating. The
+// Escape that closed the REPL above leaves its textarea focused for a
+// beat, so the mode chord before this can be swallowed — click the
+// chrome buttons instead, which lands on a selected microgrid's
+// Topology either way (that is where the panel pills live).
+await page.click('.mode-btn[data-mode="microgrids"]');
+await page.click(DEMO_CARD);
+if (!(await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open")))) await page.click("#metrics-btn");
+let st = await stripState();
+check("e2e: the strip is empty and takes no height before anything docks", !st.has && st.stripH === 0 && st.splitterH === 0, JSON.stringify(st));
+const canvasBefore = st.canvasH;
+const floatRectBefore = await page.evaluate(() => { const r = document.getElementById("panel-metrics-btn").getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top) }; });
+await page.click("#panel-metrics-btn .float-dock");
+st = await stripState();
+check("e2e: docking the metrics panel puts it in the strip at the default height", st.has && st.tiles.length === 1 && st.tiles[0] === "panel-metrics-btn" && Math.abs(st.stripH - 260) <= 1 && st.splitterH === 5, JSON.stringify(st));
+check("e2e: a docked tile's dock button flips to the float glyph", (await page.textContent("#panel-metrics-btn .float-dock")).trim() === "⤒", await page.textContent("#panel-metrics-btn .float-dock"));
+check("e2e: the strip takes its rows from the canvas", st.canvasH <= canvasBefore - 260, `${canvasBefore} -> ${st.canvasH}`);
+const tileBox = await page.evaluate(() => { const t = document.getElementById("panel-metrics-btn").getBoundingClientRect(); const s = document.getElementById("dock-bottom").getBoundingClientRect(); return { w: t.width, sw: s.width, h: t.height, sh: s.height }; });
+check("e2e: a lone tile fills the strip", Math.abs(tileBox.w - tileBox.sw) <= 1 && Math.abs(tileBox.h - tileBox.sh) <= 1, JSON.stringify(tileBox));
+check("e2e: a docked chart re-sizes to the tile", await waitFor(async () => { const w = await chartWidthAt(); return w.slot > 1000 && Math.abs(w.canvas - w.slot) <= 2 ? true : null; }, 5000).catch(() => false));
+check("e2e: dock state persists per panel", await page.evaluate(() => JSON.parse(localStorage.getItem("sw-panel-dock-metrics-btn") ?? "null")?.mode === "bottom"));
+// Strip height: drag the splitter up by 100px.
+const spBox = await page.evaluate(() => { const r = document.getElementById("dock-bottom-splitter").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+await page.mouse.move(spBox.x, spBox.y);
+await page.mouse.down();
+for (let i = 1; i <= 10; i++) { await page.mouse.move(spBox.x, spBox.y - 10 * i); await page.waitForTimeout(15); }
+await page.mouse.up();
+st = await stripState();
+check("e2e: dragging the strip splitter re-sizes the strip and persists it", Math.abs(st.stripH - 360) <= 2 && st.stored?.size === st.stripH, JSON.stringify(st));
+// Close while docked: the strip empties; reopen: it re-docks.
+await page.click("#metrics-btn");
+st = await stripState();
+check("e2e: closing the only docked tile empties the strip", !st.has && st.stripH === 0 && st.tiles.length === 0, JSON.stringify(st));
+await page.click("#metrics-btn");
+st = await stripState();
+check("e2e: a docked panel re-docks when reopened, at the saved height", st.has && st.tiles[0] === "panel-metrics-btn" && Math.abs(st.stripH - 360) <= 2, JSON.stringify(st));
+// Float it back: strip gone, card back where it floated.
+await page.click("#panel-metrics-btn .float-dock");
+st = await stripState();
+const floatRectAfter = await page.evaluate(() => { const r = document.getElementById("panel-metrics-btn").getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top) }; });
+check("e2e: floating the tile back empties the strip and restores its floating placement", !st.has && st.stripH === 0 && Math.abs(floatRectAfter.left - floatRectBefore.left) <= 1 && Math.abs(floatRectAfter.top - floatRectBefore.top) <= 1, JSON.stringify({ st, floatRectBefore, floatRectAfter }));
+check("e2e: the floated card's dock button flips back to the dock glyph", (await page.textContent("#panel-metrics-btn .float-dock")).trim() === "⤓", await page.textContent("#panel-metrics-btn .float-dock"));
+check("e2e: floating clears the persisted dock mode", await page.evaluate(() => JSON.parse(localStorage.getItem("sw-panel-dock-metrics-btn") ?? "null")?.mode === "float"));
+await page.click("#metrics-btn");
 
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();

@@ -356,12 +356,16 @@ main {
      `topology` area (same grid cell, pinned to a side) rather than
      occupying a docked column. mg-header is auto height (collapses to
      0 off a selection); the REPL and the log tail are floating panels
-     in the dock. */
+     in the dock. The two bottom rows are the dock strip and its
+     splitter; both are display:none while nothing is docked, so they
+     take no height. */
   grid-template-columns: 1fr;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto auto;
   grid-template-areas:
     "mgheader"
-    "topology";
+    "topology"
+    "bottom-splitter"
+    "bottom";
   gap: 0;
   height: calc(100vh - 41px - 28px); /* viewport minus header minus pulse bar */
   /* Same reason as on body: keeps the canvas from pushing the
@@ -976,6 +980,69 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
    dock's bottom edge instead of its top: content growing or
    shrinking moves their top, and their bottom stays put. */
 .float-panel.anchor-bottom { top: auto; bottom: 0; }
+/* The bottom dock strip (side-panel.js): a row of docked cards, each
+   a tile, splitters between them. Its height is inline — set by the
+   strip splitter above it and persisted — and both hide while nothing
+   is docked so their grid rows collapse to nothing. */
+#dock-bottom-splitter {
+  grid-area: bottom-splitter;
+  display: none;
+  height: 5px;
+  background: var(--border);
+  cursor: row-resize;
+}
+#dock-bottom-splitter:hover, #dock-bottom-splitter.dragging { background: var(--accent); }
+#dock-bottom {
+  grid-area: bottom;
+  display: none;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-elev);
+}
+body.has-bottom-dock #dock-bottom-splitter { display: block; }
+body.has-bottom-dock #dock-bottom { display: flex; flex-direction: row; }
+/* A docked card is a tile in the strip instead of a float over the
+   canvas. The shell strips its inline transform / width / cap on the
+   way in (dockPanel) and restores them on the way out, so these
+   rules only have to undo the float geometry. */
+.float-panel.docked {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  width: auto;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 0;
+  resize: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+}
+.float-panel.docked:last-child { border-right: none; }
+/* The two static cards with a floating floor give it up as tiles. */
+#repl.docked, #logs-panel.docked { min-height: 0; }
+/* And so do the bands inside them, or they clip the tile's own floor. */
+#repl.docked #repl-output, #logs-panel.docked #logs { min-height: 0; }
+/* The tile head: the grab strip grows a title (the card's landmark
+   label) and room for its buttons; the grip stays as the handle. */
+.float-panel.docked .panel-drag {
+  height: 24px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 64px 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.float-panel.docked .panel-drag::before { content: attr(data-title); }
+.float-panel.docked .float-close { top: 1px; }
 .panel-content {
   flex: 1 1 auto;
   min-height: 0;
@@ -1021,6 +1088,23 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   border-radius: 4px;
 }
 .float-close:hover { color: var(--fg); background: var(--bg); }
+/* Dock / float toggle, left of the ×. */
+.float-dock {
+  position: absolute;
+  top: 7px;
+  right: 34px;
+  z-index: 1;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.float-dock:hover { color: var(--fg); background: var(--bg); }
+.float-panel.docked .float-dock { top: 2px; }
 .float-head {
   display: flex;
   align-items: center;

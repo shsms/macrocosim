@@ -191,6 +191,7 @@
         <aside id="inspector" class="float-panel" aria-label="inspector">
           <div id="inspector-drag" class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
           <button id="inspector-close" class="float-close" type="button" title="Close (Esc)">×</button>
+          <button class="float-dock" type="button" title="Dock to the bottom">⤓</button>
           <div id="inspect" class="panel-content">
             <p class="hint">Click a node to inspect. Right-click for the context menu.</p>
           </div>
@@ -198,6 +199,7 @@
         <aside id="repl" class="float-panel" aria-label="repl">
           <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
           <button class="float-close" type="button" title="Close (Esc)">×</button>
+          <button class="float-dock" type="button" title="Dock to the bottom">⤓</button>
           <div id="repl-body" class="panel-content">
             <div id="repl-output"></div>
             <form id="repl-form">
@@ -220,6 +222,7 @@
         <aside id="logs-panel" class="float-panel" aria-label="logs">
           <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
           <button class="float-close" type="button" title="Close (Esc)">×</button>
+          <button class="float-dock" type="button" title="Dock to the bottom">⤓</button>
           <div id="logs-body" class="panel-content">
             <div class="logs-head">
               <label for="logs-level" class="ctl-label">show</label>
@@ -234,6 +237,11 @@
           </div>
         </aside>
       </div>
+      <!-- The bottom dock strip: cards dock here as side-by-side tiles
+           (side-panel.js dockPanel / layoutStrip). While nothing is
+           docked both stay display:none and main's rows collapse. -->
+      <div id="dock-bottom-splitter" title="Drag to resize the dock"></div>
+      <div id="dock-bottom" role="region" aria-label="bottom dock"></div>
     </main>
     <noscript>This UI requires JavaScript.</noscript>
     <div id="ctx-menu" hidden></div>
@@ -510,6 +518,7 @@
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
           <li><strong>Inspector</strong> — one of the floating panels, alongside the formula explorer, metrics, weather, the REPL, the log tail, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
+          <li><strong>Docking</strong> — every panel's <em>⤓</em> button docks it into a strip along the bottom of the window, where it becomes a tile and stops covering the canvas; the strip appears only while it holds a tile, and the bar above it drags to change its height. The tile's <em>⤒</em> floats it back to where it was. A docked panel that you close comes back docked.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in its own floating panel; edits write to <code>enterprise.lisp</code>.</li>

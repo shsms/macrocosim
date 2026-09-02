@@ -3,14 +3,22 @@
 // ("metrics-btn"), the REPL ("repl-btn"), the log tail ("logs-btn"),
 // the Defaults editor, the live Scenario report — is
 // its own concurrently-openable, draggable, resizable card floating
-// over #panel-dock. The cards are absolute floats, not a column:
-// opening one never changes another's size. Re-opening an open panel
-// just re-renders it (running its teardown first); closing runs
+// over #panel-dock. Any card can also dock into the bottom strip
+// (`#dock-bottom`) as a tile — same element, `docked` class, laid out
+// by `layoutStrip` — and float back out. The cards are absolute
+// floats, not a column: opening one never changes another's size.
+// Re-opening an open panel just re-renders it (running its teardown
+// first); closing runs
 // teardown and hides the card. The shell never knows what's inside a
 // panel; each tenant supplies its own teardown since only it knows
 // what live resources (charts, timers) it owns.
 
-// name → { el, contentEl, teardown, pos, cascade, isStatic, refitTimer }
+import { makeSplitter } from "./splitter.js";
+
+// name → { el, contentEl, teardown, pos, cascade, isStatic, refitTimer,
+// docked, floatStyle }
+// floatStyle parks the card's inline float geometry while it is
+// docked.
 // pos carries `bottom`: which dock edge the stored dx/dy were
 // measured against, so a reload re-anchors the card the way its saved
 // offset expects (see .anchor-bottom, savePos).
@@ -65,6 +73,16 @@ const STATIC_PANELS = {
 const CORNER_INSET = 40;
 const ROW_GAP = 8;
 
+// The bottom dock strip: a docked card's tile row along the bottom
+// of main. Height is persisted with the strip; each panel remembers
+// whether it lives there.
+const DOCK_KEY_PREFIX = "sw-panel-dock-";
+const STRIP_KEY = "sw-strip-bottom";
+const STRIP_DEFAULT = 260;
+const STRIP_MIN = 120;
+const STRIP_MAX_FRAC = 0.8;
+const stripEl = () => document.getElementById("dock-bottom");
+
 // Every card lives in the dock, and the dock's box is both the drag
 // floor and the height bound.
 const dockEl = () => document.getElementById("panel-dock");
@@ -95,11 +113,20 @@ function ensurePanel(name) {
     el.innerHTML = `
       <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
       <button class="float-close" type="button" title="Close (Esc)">×</button>
+      <button class="float-dock" type="button" title="Dock to the bottom">⤓</button>
       <div class="panel-content"></div>`;
     dockEl().appendChild(el);
     contentEl = el.querySelector(".panel-content");
     el.querySelector(".float-close").addEventListener("click", () => closePanel(name));
   }
+  // The tile head shows the card's landmark label as its title: the
+  // grab strip's own ::before renders it, and attr() only reads the
+  // attributes of the element it is on.
+  el.querySelector(".panel-drag").dataset.title = el.getAttribute("aria-label") ?? name;
+  el.querySelector(".float-dock").addEventListener("click", () => {
+    if (panels.get(name)?.docked) floatPanel(name);
+    else dockPanel(name);
+  });
   const width = PANEL_DEFAULTS[name]?.width;
   if (width) el.style.width = `${width}px`;
   const stored = loadPos(name);
@@ -120,6 +147,8 @@ function ensurePanel(name) {
     cascade: !stored,
     isStatic,
     refitTimer: 0,
+    docked: false,
+    floatStyle: "",
   };
   // A bottom-left card hangs from the dock's bottom edge (see
   // .anchor-bottom), so content growing or shrinking — a log tail
@@ -139,10 +168,10 @@ function ensurePanel(name) {
       // inside REFIT_SETTLE would otherwise be sanitized as a
       // display:none zero box, and clampOffset would write that
       // nonsense back into p.pos. closePanel cancels it too.
-      if (!el.classList.contains("open") || el.style.height) return;
+      if (p.docked || !el.classList.contains("open") || el.style.height) return;
       clearTimeout(p.refitTimer);
       p.refitTimer = setTimeout(() => {
-        if (!el.classList.contains("open") || el.style.height) return;
+        if (p.docked || !el.classList.contains("open") || el.style.height) return;
         sanitizePanel(p, name, false);
       }, REFIT_SETTLE);
     }).observe(el);
@@ -330,6 +359,8 @@ function saveSize(name, h) {
 // against a much-changed window costs nothing: the next open sanitizes
 // it again, with `persist` on.
 function sanitizePanel(p, name, persist = true) {
+  // A tile's geometry is the strip's business.
+  if (p.docked) return;
   const { el } = p;
   const stored = loadSize(name);
   if (stored != null) {
@@ -385,7 +416,10 @@ function bottomLeftSpawn(el, name) {
   const dockLeft = dock.getBoundingClientRect().left;
   const taken = [];
   for (const other of openStack) {
-    if (other === name || PANEL_DEFAULTS[other]?.spawn !== "bottom-left") continue;
+    // A docked card is a tile in the strip, not an occupant of this
+    // row — its full-width rect would otherwise crowd the row out.
+    if (other === name || PANEL_DEFAULTS[other]?.spawn !== "bottom-left" || panels.get(other).docked)
+      continue;
     const r = panels.get(other).el.getBoundingClientRect();
     taken.push({ left: r.left - dockLeft, right: r.right - dockLeft });
   }
@@ -408,6 +442,132 @@ function bottomLeftSpawn(el, name) {
   return { dx: -(dock.clientWidth - width - x), dy: -CORNER_INSET };
 }
 
+// Dock `name` into the bottom strip as a tile: the card leaves the
+// float dock for the strip, parks its inline float geometry for the
+// trip back, and the strip lays itself out again. Appended at the
+// right end.
+function dockPanel(name) {
+  const p = panels.get(name);
+  if (!p || p.docked) return;
+  ensureStripSplitter();
+  p.floatStyle = p.el.style.cssText;
+  p.el.style.cssText = "";
+  p.docked = true;
+  p.el.classList.add("docked");
+  const dockBtn = p.el.querySelector(".float-dock");
+  dockBtn.title = "Float";
+  dockBtn.textContent = "⤒";
+  stripEl().appendChild(p.el);
+  saveDock(name, { mode: "bottom" });
+  layoutStrip();
+}
+
+// Float `name` back out of the strip: back into the float dock with
+// the geometry it had, then the usual open-time sanitize (it is
+// visible again, so it can be measured).
+function floatPanel(name) {
+  const p = panels.get(name);
+  if (!p?.docked) return;
+  p.docked = false;
+  p.el.classList.remove("docked");
+  const dockBtn = p.el.querySelector(".float-dock");
+  dockBtn.title = "Dock to the bottom";
+  dockBtn.textContent = "⤓";
+  dockEl().appendChild(p.el);
+  p.el.style.cssText = p.floatStyle;
+  p.floatStyle = "";
+  saveDock(name, { mode: "float" });
+  layoutStrip();
+  // A card auto-docked from storage has never been placed as a float,
+  // so it takes the usual cascade rather than the dock's bare corner.
+  if (!openStack.includes(name)) return;
+  if (p.cascade) placePanel(p, name, openStack.length - 1);
+  else sanitizePanel(p, name);
+}
+
+// Lay the strip out from what it holds: shown, at its stored height,
+// while any open tile is in it; hidden and heightless otherwise.
+function layoutStrip() {
+  const strip = stripEl();
+  const tiles = [...strip.querySelectorAll(".float-panel.open")];
+  document.body.classList.toggle("has-bottom-dock", tiles.length > 0);
+  strip.style.height = tiles.length ? `${stripSize()}px` : "";
+}
+
+// The stored height, held between the floor and a ceiling measured
+// live: a size saved on a taller window may be most of a short one.
+function stripSize() {
+  const size = loadStrip()?.size;
+  const want = Number.isFinite(size) ? Math.max(STRIP_MIN, size) : STRIP_DEFAULT;
+  const main = document.getElementById("app");
+  return Math.min(want, main.getBoundingClientRect().height * STRIP_MAX_FRAC);
+}
+
+// The strip splitter is wired once, on the first dock, when the strip
+// is first needed; main's height bounds the drag. The drag re-fits
+// the floating cards once it settles, the same way a window resize
+// does: the height it takes comes out of the float dock, which is the
+// box every floating card is clamped against.
+let stripRefitTimer = 0;
+let stripWired = false;
+function ensureStripSplitter() {
+  if (stripWired) return;
+  stripWired = true;
+  const main = document.getElementById("app");
+  makeSplitter({
+    axis: "y",
+    splitter: document.getElementById("dock-bottom-splitter"),
+    getStart: () => stripEl().getBoundingClientRect().height,
+    apply: (h) => {
+      stripEl().style.height = `${h}px`;
+      saveStrip({ size: Math.round(h) });
+      clearTimeout(stripRefitTimer);
+      stripRefitTimer = setTimeout(refitFloating, REFIT_SETTLE);
+    },
+    clamp: (h) => Math.max(STRIP_MIN, Math.min(main.getBoundingClientRect().height * STRIP_MAX_FRAC, h)),
+  });
+}
+
+function loadStrip() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STRIP_KEY));
+    return raw && typeof raw === "object" ? raw : null;
+  } catch (_) {
+    return null;
+  }
+}
+function saveStrip(patch) {
+  try {
+    localStorage.setItem(STRIP_KEY, JSON.stringify({ ...(loadStrip() ?? {}), ...patch }));
+  } catch (_) {
+    // Storage unavailable — the strip just doesn't stick.
+  }
+}
+function loadDock(name) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DOCK_KEY_PREFIX + name));
+    return raw?.mode === "bottom" ? raw : null;
+  } catch (_) {
+    return null;
+  }
+}
+function saveDock(name, v) {
+  try {
+    localStorage.setItem(DOCK_KEY_PREFIX + name, JSON.stringify(v));
+  } catch (_) {
+    // Storage unavailable — the dock mode just doesn't stick.
+  }
+}
+
+// Fit every open floating card to the dock as it is now — a
+// transient fit, not the user's placement, so nothing is persisted.
+function refitFloating() {
+  for (const name of openStack) {
+    const p = panels.get(name);
+    if (p) sanitizePanel(p, name, false);
+  }
+}
+
 // Sanitizing at open time only sees the geometry of that moment. The
 // window moves it afterwards: a narrower viewport takes the card's
 // edge off screen, wrapping chrome pushes the dock's top edge down,
@@ -424,10 +584,10 @@ window.addEventListener("resize", () => {
   clearTimeout(refitTimer);
   if (openStack.length === 0) return;
   refitTimer = setTimeout(() => {
-    for (const name of openStack) {
-      const p = panels.get(name);
-      if (p) sanitizePanel(p, name, false);
-    }
+    refitFloating();
+    // The strip's height is a stored number, so a shorter window has
+    // to re-clamp it against the new ceiling (stripSize).
+    if (stripEl()?.querySelector(".float-panel.open")) layoutStrip();
   }, REFIT_SETTLE);
 });
 
@@ -452,7 +612,13 @@ export function openPanel(name, render, teardown = null) {
   p.el.classList.add("open");
   // A re-render keeps where the panel already is; only a fresh open
   // re-places it (the card has to be visible to be measured).
-  if (opening) placePanel(p, name, order);
+  if (opening) {
+    // A panel that lives in the strip goes back to its tile; anything
+    // else is placed as a float.
+    if (p.docked) layoutStrip();
+    else if (loadDock(name)) dockPanel(name);
+    else placePanel(p, name, order);
+  }
   syncButton(name, true);
   render(p.contentEl);
 }
@@ -476,6 +642,9 @@ export function closePanel(name) {
   // it would measure the hidden card as a zero box.
   clearTimeout(p.refitTimer);
   p.el.classList.remove("open");
+  // A closed tile keeps its slot but no longer counts; the strip may
+  // empty.
+  if (p.docked) layoutStrip();
   openStack.splice(openStack.indexOf(name), 1);
   syncButton(name, false);
 }
