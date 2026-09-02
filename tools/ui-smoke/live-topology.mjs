@@ -752,6 +752,20 @@ check("e2e: the Power card mounts a uPlot canvas", (await page.locator('.mcard[d
 // Widths come from side-panel.js's PANEL_DEFAULTS, not per-panel CSS.
 const metricsWidth = await page.evaluate(() => document.getElementById("panel-metrics-btn").getBoundingClientRect().width);
 check("e2e: the metrics panel takes its 430px width from PANEL_DEFAULTS", Math.abs(metricsWidth - 430) <= 1 && (await page.evaluate(() => document.getElementById("panel-metrics-btn").style.width === "430px")), `${metricsWidth}`);
+// Charts follow their slot: widen the card and the Power chart's
+// canvas must follow within a frame or two.
+const chartWidthAt = async () =>
+  await page.evaluate(() => {
+    const slot = document.querySelector('.mcard[data-card="power"] .mchart');
+    return { slot: slot.clientWidth, canvas: slot.querySelector("canvas")?.clientWidth ?? 0 };
+  });
+await page.evaluate(() => { document.getElementById("panel-metrics-btn").style.width = "640px"; });
+const widened = await waitFor(async () => {
+  const w = await chartWidthAt();
+  return w.slot > 500 && Math.abs(w.canvas - w.slot) <= 2 ? w : null;
+}, 5000).catch(() => null);
+check("e2e: a metrics chart re-sizes to its slot when the card widens", widened !== null, JSON.stringify(widened ?? (await chartWidthAt())));
+await page.evaluate(() => { document.getElementById("panel-metrics-btn").style.width = "430px"; });
 const reactiveSummary = await waitFor(async () => {
   const t = await page.evaluate(() => document.querySelector('[data-summary="reactive"]')?.textContent);
   return t && /VAr/.test(t) ? t : null;
@@ -944,6 +958,29 @@ check(
   JSON.stringify(gcpCards),
 );
 check("e2e: the GCP Charts card mounts a canvas", (await page.locator("#card-charts canvas").count()) > 0);
+// The inspector's charts follow their card, the same contract the
+// metrics and weather ones have: inspect.js observes #inspect and
+// re-sizes every live plot to the slot it sits in.
+const inspChartsAt = async () =>
+  await page.evaluate(() =>
+    [...document.querySelectorAll("#inspect .uplot")].map((u) => ({
+      slot: u.parentElement.clientWidth,
+      canvas: u.querySelector("canvas")?.clientWidth ?? 0,
+    })),
+  );
+const inspNarrow = await inspChartsAt();
+await page.evaluate(() => { document.getElementById("inspector").style.width = "640px"; });
+const inspWide = await waitFor(async () => {
+  const cs = await inspChartsAt();
+  const grown = cs.length === inspNarrow.length && cs.every((c, i) => c.slot > inspNarrow[i].slot + 100);
+  return grown && cs.every((c) => Math.abs(c.canvas - c.slot) <= 2) ? cs : null;
+}, 5000).catch(() => null);
+check(
+  "e2e: the inspector's charts re-size to the card when it widens",
+  inspNarrow.length > 0 && inspWide !== null,
+  JSON.stringify({ inspNarrow, wide: inspWide ?? (await inspChartsAt()) }),
+);
+await page.evaluate(() => { document.getElementById("inspector").style.width = ""; });
 await page.evaluate(async () => {
   const { topology } = await import("/assets/topology.js");
   topology.select([]);
@@ -1399,6 +1436,27 @@ await page.click("#weather-create");
 // response synchronously, so the live skeleton's readout shows up
 // without waiting on the 3 s poll.
 await waitFor(async () => (await page.locator("#weather-pct").count()) > 0, 10000);
+
+// The day chart follows its slot: widen the card and the canvas must
+// track it (weather-panel.js observes the panel's content root).
+await waitFor(async () => (await page.locator("#weather-chart canvas").count()) > 0, 10000);
+const weatherChartAt = async () =>
+  await page.evaluate(() => {
+    const slot = document.getElementById("weather-chart");
+    return { slot: slot.clientWidth, canvas: slot.querySelector("canvas")?.clientWidth ?? 0 };
+  });
+const weatherNarrow = await weatherChartAt();
+await page.evaluate(() => { document.getElementById("panel-weather-btn").style.width = "640px"; });
+const weatherWide = await waitFor(async () => {
+  const w = await weatherChartAt();
+  return w.slot > weatherNarrow.slot + 100 && Math.abs(w.canvas - w.slot) <= 2 ? w : null;
+}, 5000).catch(() => null);
+check(
+  "e2e: a weather chart re-sizes to its slot when the card widens",
+  weatherWide !== null,
+  JSON.stringify({ weatherNarrow, wide: weatherWide ?? (await weatherChartAt()) }),
+);
+await page.evaluate(() => { document.getElementById("panel-weather-btn").style.width = ""; });
 
 // The spinner convention (AGENTS.md) is revert-silent: drop the CSS and
 // nothing here fails, the arrows just come back. Pin it in the computed

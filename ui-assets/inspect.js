@@ -69,6 +69,19 @@ export const refitCharts = () => {
   if (parent) gridChart.plot.setSize({ width: parent.clientWidth, height: 140 });
 };
 
+// The inspector's charts follow their card's width the same way the
+// metrics and weather charts do: observe the content root once, and
+// coalesce a burst of resize notifications into one refit per frame.
+let refitQueued = false;
+new ResizeObserver(() => {
+  if (refitQueued) return;
+  refitQueued = true;
+  requestAnimationFrame(() => {
+    refitQueued = false;
+    refitCharts();
+  });
+}).observe(document.getElementById("inspect"));
+
 export const liveCharts = (() => {
   let active = null; // { id, charts: Map<metric, {plot, xs, ys, scale}> }
   return {

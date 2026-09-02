@@ -1,14 +1,12 @@
-// Drag-to-resize handshake shared by the layout splitters. It has no
-// importer yet; the dock strips (spec Phase 2) will.
-
-import { refitCharts } from "./inspect.js";
+// Drag-to-resize handshake shared by the layout splitters. side-panel.js
+// imports it for the dock strips.
 
 /// Generic drag-to-resize handler for the layout splitters (the dock
 /// strips, spec Phase 2): capture the
 /// starting state on mousedown, compute a delta on mousemove,
-/// hand it back to the caller as a clamped px value, refit any
-/// open uPlot charts on every frame so they keep up with the
-/// container width.
+/// hand it back to the caller as a clamped px value; the charts
+/// inside re-size themselves to their containers (each panel
+/// observes its own).
 ///
 ///   axis: "x" | "y"             which mouse coord to track
 ///   splitter: HTMLElement       drag handle
@@ -45,7 +43,6 @@ export function makeSplitter({ axis, splitter, getStart, apply, clamp }) {
     moved = true;
     const viewport = isHoriz ? window.innerHeight : window.innerWidth;
     apply(clamp(startSize + delta, viewport));
-    refitCharts();
   });
   document.addEventListener("mouseup", () => {
     if (!dragging) return;

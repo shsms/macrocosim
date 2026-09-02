@@ -36,6 +36,7 @@ const DAY_S = 86400;
 // result).
 let contentEl = null;
 let plot = null;
+let sizeObserver = null;
 let pollTimer = 0;
 // Which skeleton is currently painted — "" (nothing yet), "empty"
 // (404, the create prompt) or "live". A refresh only re-paints the
@@ -701,6 +702,14 @@ function eventsHtml(w) {
 // focused field survive the poll.
 function paintLiveSkeleton() {
   contentEl.innerHTML = liveHtml();
+  // The day chart follows its slot's width (see metrics-panel.js).
+  sizeObserver?.disconnect();
+  sizeObserver = new ResizeObserver(() => {
+    const slot = document.getElementById("weather-chart");
+    if (!plot || !slot?.clientWidth || slot.clientWidth === plot.width) return;
+    plot.setSize({ width: slot.clientWidth, height: plot.height });
+  });
+  sizeObserver.observe(contentEl);
   for (const f of FIELDS) {
     wireField(document.getElementById(f.id), () => commitField(f));
   }
@@ -876,6 +885,8 @@ function render(el) {
 function teardown() {
   clearInterval(pollTimer);
   pollTimer = 0;
+  sizeObserver?.disconnect();
+  sizeObserver = null;
   plot?.destroy();
   plot = null;
   contentEl = null;

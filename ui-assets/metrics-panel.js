@@ -102,6 +102,11 @@ const cssColor = (v) => getComputedStyle(document.documentElement).getPropertyVa
 // two back so the data it hands setData() keeps the shape the plot was
 // built with.
 let plots = new Map();
+// Charts size themselves to their slot when built; this re-sizes
+// them when the slot changes width afterwards — the card docked into
+// a strip, a strip splitter dragged, the card's width set by the
+// shell. One observer on the content root covers every card.
+let sizeObserver = null;
 let unsubscribe = null;
 let repaintQueued = false;
 
@@ -513,6 +518,16 @@ function render(contentEl) {
       ${CARDS.map(cardHtml).join("")}
     </div>`;
 
+  sizeObserver?.disconnect();
+  sizeObserver = new ResizeObserver(() => {
+    for (const [key, entry] of plots) {
+      const slot = contentEl.querySelector(`[data-chart="${key}"]`);
+      if (!slot?.clientWidth || slot.clientWidth === entry.plot.width) continue;
+      entry.plot.setSize({ width: slot.clientWidth, height: entry.plot.height });
+    }
+  });
+  sizeObserver.observe(contentEl);
+
   contentEl.querySelector(".metrics-panel").addEventListener("click", (ev) => {
     const win = ev.target.closest("[data-window]");
     if (win) {
@@ -568,6 +583,8 @@ function teardown() {
   unsubscribe?.();
   unsubscribe = null;
   metricsStore.stopAutoReseed();
+  sizeObserver?.disconnect();
+  sizeObserver = null;
   destroyPlots();
 }
 
