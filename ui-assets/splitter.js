@@ -58,19 +58,36 @@ function makeSplitter({ axis, splitter, getStart, apply, clamp }) {
   });
 }
 
-/// Horizontal splitter between topology row and bottom drawer.
-/// Updates main's grid-template-rows to resize the drawer. The
-/// height persists; double-clicking the splitter collapses the
-/// drawer to just the REPL input row (logs + output hidden, also
-/// persisted) so the content panes get the vertical space back.
+/// Horizontal splitter between topology row and bottom drawer, and
+/// the two pulse-bar chips that decide what the drawer shows. Both
+/// are off until the user turns them on, so a fresh browser gives the
+/// canvas the whole main area:
+///   `repl` — the drawer itself (input row + eval output). Off, the
+///            drawer and its splitter leave main's grid entirely.
+///   `logs` — the log tail above the REPL. Off, the drawer is just
+///            the input row plus the last result, and main's row for
+///            it is `auto`; on, the drawer takes the dragged height.
+/// The dragged height persists on its own; double-clicking the
+/// splitter toggles `logs`, and dragging with logs off turns them on
+/// at the dragged size.
 export function setupDrawerSplitter() {
   const main = document.getElementById("app");
   const drawer = document.getElementById("repl");
   const splitter = document.getElementById("drawer-splitter");
   const HEIGHT_KEY = "switchyard-drawer-h";
-  const COLLAPSED_KEY = "switchyard-drawer-collapsed";
+  const LOGS_KEY = "switchyard-drawer-logs";
+  const REPL_KEY = "switchyard-drawer-repl";
   const MIN_DRAWER = 120;
   const MIN_TOP_FRAC = 0.2; // keep at least 20% of main for the canvas
+  const logsChip = document.getElementById("logs-toggle");
+  const replChip = document.getElementById("repl-toggle");
+
+  const shown = (key) => localStorage.getItem(key) === "1";
+  const remember = (key, on) => localStorage.setItem(key, on ? "1" : "0");
+  const savedHeight = () => {
+    const h = Number(localStorage.getItem(HEIGHT_KEY));
+    return Number.isFinite(h) && h >= MIN_DRAWER ? h : 260;
+  };
 
   const applyH = (h) => {
     // Main's grid template has FOUR rows: the auto mgheader, the
@@ -83,42 +100,57 @@ export function setupDrawerSplitter() {
     // window than it was saved on.
     main.style.gridTemplateRows = `auto 1fr 5px min(${h}px, 75%)`;
   };
-  const setCollapsed = (on) => {
-    document.body.classList.toggle("drawer-collapsed", on);
-    if (on) {
-      // `auto` sizes the row to the repl form alone (logs + output
-      // are display:none under the body class).
-      main.style.gridTemplateRows = "auto 1fr 5px auto";
-      localStorage.setItem(COLLAPSED_KEY, "1");
-    } else {
-      const saved = Number(localStorage.getItem(HEIGHT_KEY));
-      applyH(Number.isFinite(saved) && saved >= MIN_DRAWER ? saved : 260);
-      localStorage.removeItem(COLLAPSED_KEY);
+  // One place derives the grid rows and body flags from the two
+  // stored switches, so every toggle path lands on the same layout.
+  const layout = () => {
+    const repl = shown(REPL_KEY);
+    const logs = shown(LOGS_KEY);
+    document.body.classList.toggle("repl-hidden", !repl);
+    document.body.classList.toggle("drawer-collapsed", !logs);
+    if (!repl) main.style.gridTemplateRows = "auto 1fr 0 0";
+    else if (!logs) main.style.gridTemplateRows = "auto 1fr 5px auto";
+    else applyH(savedHeight());
+    logsChip?.classList.toggle("active", logs);
+    replChip?.classList.toggle("active", repl);
+    // Lines appended while the tail was display:none could not
+    // scroll it (its scrollHeight was 0), so it would reopen on its
+    // oldest lines; pin it to the newest the moment it shows.
+    if (repl && logs) {
+      const logsEl = document.getElementById("logs");
+      logsEl.scrollTop = logsEl.scrollHeight;
     }
     refitCharts();
   };
+  const setLogs = (on) => {
+    remember(LOGS_KEY, on);
+    // Asking for the log tail is asking for the drawer it lives in.
+    if (on) remember(REPL_KEY, true);
+    layout();
+  };
+  const setRepl = (on) => {
+    remember(REPL_KEY, on);
+    // Hiding the drawer hides the tail with it, so the logs chip
+    // never stays lit over nothing.
+    if (!on) remember(LOGS_KEY, false);
+    layout();
+  };
 
-  const savedH = Number(localStorage.getItem(HEIGHT_KEY));
-  if (Number.isFinite(savedH) && savedH >= MIN_DRAWER) applyH(savedH);
-  if (localStorage.getItem(COLLAPSED_KEY)) setCollapsed(true);
+  layout();
+  logsChip?.addEventListener("click", () => setLogs(!shown(LOGS_KEY)));
+  replChip?.addEventListener("click", () => setRepl(!shown(REPL_KEY)));
 
-  splitter.title = "Drag to resize · double-click to collapse";
-  splitter.addEventListener("dblclick", () => {
-    setCollapsed(!document.body.classList.contains("drawer-collapsed"));
-  });
+  splitter.title = "Drag to resize · double-click to toggle the log tail";
+  splitter.addEventListener("dblclick", () => setLogs(!shown(LOGS_KEY)));
 
   makeSplitter({
     axis: "y",
     splitter,
     getStart: () => drawer.getBoundingClientRect().height,
     apply: (h) => {
-      // Dragging a collapsed drawer expands it at the dragged size.
-      if (document.body.classList.contains("drawer-collapsed")) {
-        document.body.classList.remove("drawer-collapsed");
-        localStorage.removeItem(COLLAPSED_KEY);
-      }
-      applyH(h);
       localStorage.setItem(HEIGHT_KEY, String(Math.round(h)));
+      // Dragging a collapsed drawer expands it at the dragged size.
+      if (!shown(LOGS_KEY)) setLogs(true);
+      else applyH(h);
     },
     clamp: (h, vh) => {
       const mainH = main.getBoundingClientRect().height;
@@ -130,4 +162,3 @@ export function setupDrawerSplitter() {
     },
   });
 }
-

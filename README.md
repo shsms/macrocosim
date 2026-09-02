@@ -40,8 +40,9 @@ The binary takes zero or more Lisp scripts. Each script is a
 self-contained world — `examples/berlin-demo.lisp` wires a demo
 topology, animates its AC environment, and registers seven starter
 scenarios; saving the file hot-reloads the world. With no scripts
-the engine boots bare: UI + REPL up, no microgrids, and you load a
-script on demand from the Microgrids tab or the REPL:
+the engine boots bare: UI up, no microgrids, and you load a script
+on demand from the Microgrids tab or the REPL (the pulse bar's `repl`
+chip opens it):
 
 ```lisp
 (load "examples/berlin-demo.lisp")

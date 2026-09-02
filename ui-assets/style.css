@@ -2322,10 +2322,18 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   margin: 4px 0;
 }
 
-/* Collapsed drawer: only the REPL input row stays; the log tail and
-   eval output give their space back to the content panes. */
+/* Collapsed drawer (the pulse bar's `logs` chip off): the log tail
+   gives its space back to the content panes and the eval output band
+   stays only while it holds a result — an empty band would be a
+   hint-only row taking canvas height for nothing. */
 body.drawer-collapsed #logs,
-body.drawer-collapsed #repl-output {
+body.drawer-collapsed #repl-output:empty {
+  display: none;
+}
+/* Hidden drawer (the `repl` chip off): drawer and splitter both go,
+   and main's grid rows are rewritten to 0 by splitter.js. */
+body.repl-hidden #repl,
+body.repl-hidden #drawer-splitter {
   display: none;
 }
 

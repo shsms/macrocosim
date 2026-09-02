@@ -1496,6 +1496,50 @@ const grown = await waitFor(async () => {
 check("e2e: a drag taller than the cap grows the panel and re-caps it", grown !== null && grown.h > cappedH + 50, JSON.stringify(grown));
 await page.click("#metrics-btn");
 
+// ── e2e: the drawer chips ─────────────────────────────────────────
+// The log tail and the REPL drawer sit behind two pulse-bar chips,
+// both off by default. `logs` implies the drawer, and hiding the
+// drawer takes the tail with it, so a chip never stays lit over
+// nothing.
+const drawerState = async () =>
+  await page.evaluate(() => {
+    const vis = (id) => document.getElementById(id).getBoundingClientRect().height > 0;
+    const lit = (id) => document.getElementById(id).classList.contains("active");
+    return {
+      repl: vis("repl"),
+      logs: vis("logs"),
+      replChip: lit("repl-toggle"),
+      logsChip: lit("logs-toggle"),
+      rows: document.getElementById("app").style.gridTemplateRows,
+    };
+  });
+let ds = await drawerState();
+check("e2e: the drawer is hidden by default", !ds.repl && !ds.logs && !ds.replChip && !ds.logsChip, JSON.stringify(ds));
+await page.click("#logs-toggle");
+ds = await drawerState();
+check(
+  "e2e: the logs chip shows the drawer with the tail at the saved height",
+  ds.repl && ds.logs && ds.replChip && ds.logsChip && /min\(260px, 75%\)$/.test(ds.rows),
+  JSON.stringify(ds),
+);
+check(
+  "e2e: the log tail opens pinned to its newest line",
+  await page.evaluate(() => {
+    const l = document.getElementById("logs");
+    return l.children.length > 0 && Math.abs(l.scrollTop + l.clientHeight - l.scrollHeight) < 2;
+  }),
+);
+await page.reload({ waitUntil: "networkidle" });
+ds = await drawerState();
+check("e2e: the drawer chips persist across a reload", ds.repl && ds.logs && ds.replChip && ds.logsChip, JSON.stringify(ds));
+await page.click("#repl-toggle");
+ds = await drawerState();
+check(
+  "e2e: hiding the drawer takes the tail and its chip with it",
+  !ds.repl && !ds.logs && !ds.replChip && !ds.logsChip && ds.rows === "auto 1fr 0px 0px",
+  JSON.stringify(ds),
+);
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }

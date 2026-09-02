@@ -44,6 +44,8 @@
         <span class="pulse-pill" id="pulse-loopback">…</span>
       </span>
       <span class="pulse-spacer"></span>
+      <span class="pulse-chip" id="logs-toggle" title="show / hide the log tail in the drawer">logs</span>
+      <span class="pulse-chip" id="repl-toggle" title="show / hide the REPL drawer">repl</span>
       <span class="pulse-chip" id="tz-toggle" title="toggle between local sim zone and UTC">local</span>
       <span class="pulse-chip" id="density-toggle" title="toggle compact density">compact</span>
       <span class="pulse-clock" id="pulse-clock">--:--:--</span>
@@ -451,7 +453,7 @@
       <div id="help-dialog-content">
         <h4>Modes</h4>
         <ul class="help-list">
-          <li>The chrome's <em>Microgrids</em> / <em>Scenarios</em> buttons swap the main pane. The REPL drawer stays visible in both. Press <kbd>1</kbd> for Microgrids, <kbd>2</kbd> for Scenarios.</li>
+          <li>The chrome's <em>Microgrids</em> / <em>Scenarios</em> buttons swap the main pane. The REPL drawer, when shown, stays in both. Press <kbd>1</kbd> for Microgrids, <kbd>2</kbd> for Scenarios.</li>
           <li>Mode preference persists in <code>localStorage</code>; refresh restores the last-picked mode + last-selected microgrid.</li>
         </ul>
         <h4>Microgrids</h4>
@@ -465,7 +467,7 @@
         <h4>Aggregations</h4>
         <ul class="help-list">
           <li>The <em>metrics</em> pill (top-right of the canvas) opens live site metrics — power, reactive power / PF, frequency — read from the same <code>frequenz-microgrid</code> client a production control app would use. The <em>formulas</em> pill next to it shows how each of those aggregates is derived from the topology; every <code>#N</code> in a formula is a link back to the canvas.</li>
-          <li>Pulse-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>density</em> + <em>TZ</em> toggle visual options.</li>
+          <li>Pulse-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>logs</em> / <em>repl</em> show the log tail and the REPL drawer (both hidden by default — the canvas gets the space); <em>density</em> + <em>TZ</em> toggle visual options.</li>
         </ul>
         <h4>Snapshots</h4>
         <ul class="help-list">
@@ -496,7 +498,7 @@
         <h4>REPL</h4>
         <ul class="help-list">
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> — eval. <kbd>Tab</kbd> — complete.</li>
-          <li>Drag the splitter between the topology row and the drawer to resize; double-click it to collapse the drawer to just the REPL input.</li>
+          <li>The pulse bar's <em>repl</em> chip shows the drawer, <em>logs</em> the log tail inside it. Drag the splitter above the drawer to resize; double-click it to toggle the log tail. With logs hidden the drawer is the input row plus the last result.</li>
         </ul>
       </div>
     </dialog>
