@@ -14,6 +14,7 @@
 // what live resources (charts, timers) it owns.
 
 import { makeSplitter } from "./splitter.js";
+import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
 // name → { el, contentEl, teardown, pos, cascade, isStatic, refitTimer,
 // docked, floatStyle }
@@ -81,6 +82,8 @@ const STRIP_KEY = "sw-strip-bottom";
 const STRIP_DEFAULT = 260;
 const STRIP_MIN = 120;
 const STRIP_MAX_FRAC = 0.8;
+// A tile cannot be squeezed below this share of the strip.
+const TILE_MIN_SHARE = 0.15;
 const stripEl = () => document.getElementById("dock-bottom");
 
 // Every card lives in the dock, and the dock's box is both the drag
@@ -123,6 +126,8 @@ function ensurePanel(name) {
   // grab strip's own ::before renders it, and attr() only reads the
   // attributes of the element it is on.
   el.querySelector(".panel-drag").dataset.title = el.getAttribute("aria-label") ?? name;
+  // The strip reads a tile's panel name off the card itself.
+  el.dataset.panelName = name;
   el.querySelector(".float-dock").addEventListener("click", () => {
     if (panels.get(name)?.docked) floatPanel(name);
     else dockPanel(name);
@@ -233,6 +238,10 @@ function wireDrag(el, name, p) {
   strip.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     strip.setPointerCapture(e.pointerId);
+    if (p.docked) {
+      reorderDrag(el, strip, e.pointerId);
+      return;
+    }
     const startX = e.clientX - p.pos.dx;
     const startY = e.clientY - p.pos.dy;
     // Measured once per gesture: re-reading it per pointermove would
@@ -256,6 +265,45 @@ function wireDrag(el, name, p) {
     strip.addEventListener("pointerup", stop, { once: true });
     strip.addEventListener("pointercancel", stop, { once: true });
   });
+}
+
+// Dragging a tile's head along the strip moves the tile: it takes
+// the slot whose midpoint the pointer has crossed, the strip re-lays
+// itself out on release, and the new order is stored.
+function reorderDrag(el, strip, pointerId) {
+  el.classList.add("reordering");
+  const move = (ev) => {
+    const others = openTiles().filter((t) => t !== el);
+    const idx = others.filter((t) => {
+      const r = t.getBoundingClientRect();
+      return ev.clientX > (r.left + r.right) / 2;
+    }).length;
+    const current = openTiles().indexOf(el);
+    if (idx === current) return;
+    stripEl().insertBefore(el, others[idx] ?? null);
+    // Moving the tile re-parents the head that captured the pointer,
+    // which can release the capture. Without it the gesture's own
+    // pointerup may never reach the head: `stop` would never run, the
+    // tile would keep the .reordering class, and the still-attached
+    // pointermove would go on re-ordering the strip under a plain
+    // hover. Re-take it every time the tile moves.
+    try {
+      strip.setPointerCapture(pointerId);
+    } catch (_) {
+      // Still held, or the pointer is already gone — nothing to do.
+    }
+  };
+  const stop = () => {
+    strip.removeEventListener("pointermove", move);
+    strip.removeEventListener("pointerup", stop);
+    strip.removeEventListener("pointercancel", stop);
+    el.classList.remove("reordering");
+    saveOrderFromDom();
+    layoutStrip();
+  };
+  strip.addEventListener("pointermove", move);
+  strip.addEventListener("pointerup", stop);
+  strip.addEventListener("pointercancel", stop);
 }
 
 // What the gripper stores is a CAP, not a height: the card's height
@@ -444,8 +492,8 @@ function bottomLeftSpawn(el, name) {
 
 // Dock `name` into the bottom strip as a tile: the card leaves the
 // float dock for the strip, parks its inline float geometry for the
-// trip back, and the strip lays itself out again. Appended at the
-// right end.
+// trip back, and the strip lays itself out again. It lands in its
+// stored slot, or at the right end if it has none.
 function dockPanel(name) {
   const p = panels.get(name);
   if (!p || p.docked) return;
@@ -457,7 +505,15 @@ function dockPanel(name) {
   const dockBtn = p.el.querySelector(".float-dock");
   dockBtn.title = "Float";
   dockBtn.textContent = "⤒";
-  stripEl().appendChild(p.el);
+  // Into its slot in the strip's stored order when it has one (a
+  // closed tile keeps it); a panel not in that order yet goes on the
+  // end.
+  const order = stripOrder();
+  const idx = order.indexOf(name);
+  const siblings = [...stripEl().querySelectorAll(".float-panel")];
+  const before = idx < 0 ? null : (siblings.find((s) => order.indexOf(tileName(s)) > idx) ?? null);
+  stripEl().insertBefore(p.el, before);
+  if (idx < 0) saveStrip({ order: [...order, name] });
   saveDock(name, { mode: "bottom" });
   layoutStrip();
 }
@@ -486,21 +542,83 @@ function floatPanel(name) {
 }
 
 // Lay the strip out from what it holds: shown, at its stored height,
-// while any open tile is in it; hidden and heightless otherwise.
+// while any open tile is in it; hidden and heightless otherwise. The
+// open tiles take the strip in the stored order with their stored
+// shares (flex-grow, so they add up to the strip whatever it is),
+// and a splitter sits between each pair.
 function layoutStrip() {
   const strip = stripEl();
-  const tiles = [...strip.querySelectorAll(".float-panel.open")];
+  for (const s of strip.querySelectorAll(".tile-splitter")) s.remove();
+  const tiles = openTiles();
   document.body.classList.toggle("has-bottom-dock", tiles.length > 0);
   strip.style.height = tiles.length ? `${stripSize()}px` : "";
+  const shares = normalizedShares(storedShares(), tiles.map(tileName));
+  tiles.forEach((tile, i) => {
+    tile.style.flex = `${shares[tileName(tile)]} 1 0`;
+    if (i > 0) strip.insertBefore(makeTileSplitter(tiles[i - 1], tile), tile);
+  });
 }
 
-// The stored height, held between the floor and a ceiling measured
-// live: a size saved on a taller window may be most of a short one.
+// Open tiles in strip order (DOM order is the order of record;
+// dockPanel and the reorder drag keep the stored order in step).
+const openTiles = () => [...stripEl().querySelectorAll(".float-panel.open")];
+const tileName = (el) => el.dataset.panelName;
+
+// The bar between two tiles: dragging it trades width between them.
+function makeTileSplitter(left, right) {
+  const sp = document.createElement("div");
+  sp.className = "tile-splitter";
+  sp.title = "Drag to resize the tiles";
+  // makeSplitter sizes the element after the handle: the right
+  // tile. Widths are read live and written back as shares of the
+  // pair, so a window resize keeps the proportion.
+  makeSplitter({
+    axis: "x",
+    splitter: sp,
+    getStart: () => right.getBoundingClientRect().width,
+    apply: (w) => {
+      const l = tileName(left);
+      const r = tileName(right);
+      const shares = normalizedShares(storedShares(), openTiles().map(tileName));
+      const pair = shares[l] + shares[r];
+      const pairPx = left.getBoundingClientRect().width + right.getBoundingClientRect().width;
+      shares[r] = pair * (w / pairPx);
+      shares[l] = pair - shares[r];
+      left.style.flex = `${shares[l]} 1 0`;
+      right.style.flex = `${shares[r]} 1 0`;
+      // Merged, not replaced: a panel floated out of the strip keeps
+      // its share for the trip back.
+      saveStrip({ shares: { ...storedShares(), ...shares } });
+    },
+    clamp: (w) => {
+      const pairPx = left.getBoundingClientRect().width + right.getBoundingClientRect().width;
+      const min = stripEl().getBoundingClientRect().width * TILE_MIN_SHARE;
+      return Math.max(min, Math.min(pairPx - min, w));
+    },
+  });
+  return sp;
+}
+
+// The strip's stored order, as panel names.
+function stripOrder() {
+  const order = loadStrip()?.order;
+  return Array.isArray(order) ? order.filter((n) => typeof n === "string") : [];
+}
+// The strip's cards in DOM order — open or not, so a closed tile keeps
+// its slot; mergeOrder keeps the stored names that are not in the
+// strip at all, so a panel floated out has an entry to be re-docked
+// into.
+function saveOrderFromDom() {
+  const present = [...stripEl().querySelectorAll(".float-panel")].map(tileName);
+  saveStrip({ order: mergeOrder(present, stripOrder()) });
+}
+
+// The stored height, clamped against main as it is now (see
+// clampStripSize).
 function stripSize() {
-  const size = loadStrip()?.size;
-  const want = Number.isFinite(size) ? Math.max(STRIP_MIN, size) : STRIP_DEFAULT;
+  const bounds = { min: STRIP_MIN, maxFrac: STRIP_MAX_FRAC, fallback: STRIP_DEFAULT };
   const main = document.getElementById("app");
-  return Math.min(want, main.getBoundingClientRect().height * STRIP_MAX_FRAC);
+  return clampStripSize(loadStrip()?.size, bounds, main.getBoundingClientRect().height);
 }
 
 // The strip splitter is wired once, on the first dock, when the strip
@@ -543,6 +661,10 @@ function saveStrip(patch) {
     // Storage unavailable — the strip just doesn't stick.
   }
 }
+// The strip's stored shares as the model wants them: a plain map,
+// empty when the strip has none.
+const storedShares = () => loadStrip()?.shares ?? {};
+
 function loadDock(name) {
   try {
     const raw = JSON.parse(localStorage.getItem(DOCK_KEY_PREFIX + name));

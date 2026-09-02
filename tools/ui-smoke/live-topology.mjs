@@ -1758,6 +1758,70 @@ const floatRectAfter = await page.evaluate(() => { const r = document.getElement
 check("e2e: floating the tile back empties the strip and restores its floating placement", !st.has && st.stripH === 0 && Math.abs(floatRectAfter.left - floatRectBefore.left) <= 1 && Math.abs(floatRectAfter.top - floatRectBefore.top) <= 1, JSON.stringify({ st, floatRectBefore, floatRectAfter }));
 check("e2e: the floated card's dock button flips back to the dock glyph", (await page.textContent("#panel-metrics-btn .float-dock")).trim() === "⤓", await page.textContent("#panel-metrics-btn .float-dock"));
 check("e2e: floating clears the persisted dock mode", await page.evaluate(() => JSON.parse(localStorage.getItem("sw-panel-dock-metrics-btn") ?? "null")?.mode === "float"));
+// Two tiles: shares, a splitter between them, reorder by dragging a
+// tile head, all persisted. Metrics kept its slot in the stored order
+// when it floated back out above, so the freshly docked logs tile
+// appends after it and metrics drops back into the left slot.
+await page.click("#logs-btn");
+await page.click("#logs-panel .float-dock");
+await page.click("#panel-metrics-btn .float-dock");
+const tilesOf = async () =>
+  await page.evaluate(() => {
+    const strip = document.getElementById("dock-bottom");
+    const sw = strip.getBoundingClientRect().width;
+    return {
+      order: [...strip.querySelectorAll(".float-panel.open")].map((e) => e.id),
+      widths: [...strip.querySelectorAll(".float-panel.open")].map((e) => Math.round(e.getBoundingClientRect().width)),
+      splitters: strip.querySelectorAll(".tile-splitter").length,
+      sw: Math.round(sw),
+      stored: JSON.parse(localStorage.getItem("sw-strip-bottom") ?? "null"),
+    };
+  });
+let tl = await tilesOf();
+check("e2e: a second docked panel appends at the right end and a re-docked one takes its stored slot, with a splitter between", tl.order.join() === "panel-metrics-btn,logs-panel" && tl.stored?.order?.join() === "metrics-btn,logs-btn" && tl.splitters === 1, JSON.stringify(tl));
+check("e2e: two tiles split the strip evenly", Math.abs(tl.widths[0] - tl.widths[1]) <= 6 && tl.widths[0] + tl.widths[1] >= tl.sw - 12, JSON.stringify(tl));
+// A third tile takes exactly its 1/n and the sitting two scale down
+// into the rest. The backtick summons the REPL from anywhere; it does
+// not change mode.
+await page.keyboard.press("`");
+await page.click("#repl .float-dock");
+tl = await tilesOf();
+check("e2e: a third docked tile takes one third of the strip", tl.widths.length === 3 && Math.abs(tl.widths[2] - tl.sw / 3) <= 6, JSON.stringify(tl));
+await page.click("#repl .float-dock");
+await page.keyboard.press("Escape");
+// The pair re-normalises to half the strip each now the third tile is
+// gone; re-read so the layout has settled before the splitter is
+// measured.
+tl = await tilesOf();
+// Drag the tile splitter 200px right: the left tile grows.
+const tsBox = await page.evaluate(() => { const r = document.querySelector("#dock-bottom .tile-splitter").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+await page.mouse.move(tsBox.x, tsBox.y);
+await page.mouse.down();
+for (let i = 1; i <= 10; i++) { await page.mouse.move(tsBox.x + 20 * i, tsBox.y); await page.waitForTimeout(15); }
+await page.mouse.up();
+tl = await tilesOf();
+check("e2e: dragging the tile splitter moves width between the tiles and persists the shares", tl.widths[0] - tl.widths[1] >= 380 && tl.stored?.shares?.["metrics-btn"] > tl.stored?.shares?.["logs-btn"], JSON.stringify(tl));
+// Reorder: drag the logs tile's head to the left of the metrics tile.
+// The drag ends over the head in its new slot, so the gesture's own
+// pointerup still lands on it however the browser treats the capture
+// across the move.
+const headBox = await page.evaluate(() => { const r = document.querySelector("#logs-panel .panel-drag").getBoundingClientRect(); return { x: r.left + 40, y: r.top + r.height / 2 }; });
+await page.mouse.move(headBox.x, headBox.y);
+await page.mouse.down();
+for (let i = 1; i <= 10; i++) { await page.mouse.move(headBox.x - 90 * i, headBox.y); await page.waitForTimeout(15); }
+await page.mouse.up();
+tl = await tilesOf();
+check("e2e: dragging a tile head past its neighbour reorders the strip and persists the order, keeping the floated-out tile's slot", tl.order.join() === "logs-panel,panel-metrics-btn" && tl.stored?.order?.join() === "logs-btn,metrics-btn,repl-btn", JSON.stringify(tl));
+await page.reload({ waitUntil: "networkidle" });
+await page.click(DEMO_CARD).catch(() => {});
+await page.click("#logs-btn");
+await page.click("#metrics-btn");
+tl = await tilesOf();
+check("e2e: order and shares survive a reload", tl.order.join() === "logs-panel,panel-metrics-btn" && tl.widths[0] < tl.widths[1], JSON.stringify(tl));
+// Leave the strip empty for whatever follows.
+await page.click("#panel-metrics-btn .float-dock");
+await page.click("#logs-panel .float-dock");
+await page.click("#logs-btn");
 await page.click("#metrics-btn");
 
 check("no page errors", errors.length === 0, JSON.stringify(errors));

@@ -75,6 +75,11 @@ jobs:
       - name: weather-panel tests
         run: node tools/weather-panel-test.mjs
 
+      # The dock strips' pure model: how tiles share a strip, what
+      # order survives a tile leaving, and the size clamp.
+      - name: panel-dock tests
+        run: node tools/panel-dock-test.mjs
+
       # Executes the whole ES-module import graph under a DOM shim —
       # catches a TDZ / class-ordering error or a renamed export that
       # serving the file happily would not.

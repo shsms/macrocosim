@@ -69,7 +69,8 @@ is wiring the topology + animating the environment.
   `#dock-bottom` as a tile (`dockPanel` / `floatPanel` / `layoutStrip`,
   persisted under `sw-panel-dock-<name>` and `sw-strip-bottom`);
   `splitter.js` the drag-to-resize
-  handshake the dock strips will use; `vendor/fonts/` the
+  handshake the dock strips will use; `strip-model.js` their DOM-free
+  arithmetic (shares, order, size clamp); `vendor/fonts/` the
   vendored IBM Plex faces (OFL))
   - Reactive power reads at parity with active power across the SPA:
     the hover card draws a Q envelope bar under the P one (same
@@ -265,7 +266,7 @@ cargo run --bin swctl -- set-power 1001 5000
 `ui-assets/` changes: `npx @biomejs/biome check ui-assets` (config in
 `biome.json`) — `npx biome` alone resolves to an unrelated no-op
 package on the npm registry, not this project's linter, so always
-spell out `@biomejs/biome`. Plus four node-only gates that need
+spell out `@biomejs/biome`. Plus five node-only gates that need
 neither a browser nor a running server:
 
 ```sh
@@ -275,6 +276,7 @@ node tools/boot-smoke.mjs        # imports app.js under a DOM shim:
 node tools/formula-ast-test.mjs  # formula-ast.js parser + renderer
 node tools/metrics-store-test.mjs  # metrics-store.js ring/PF/format
 node tools/weather-panel-test.mjs  # weather-panel.js cloud list vs curve
+node tools/panel-dock-test.mjs   # strip-model.js tile shares/order/size
 ```
 
 UI input convention: a numeric field that commits on Enter (inspector

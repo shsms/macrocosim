@@ -1105,6 +1105,15 @@ body.has-bottom-dock #dock-bottom { display: flex; flex-direction: row; }
 }
 .float-dock:hover { color: var(--fg); background: var(--bg); }
 .float-panel.docked .float-dock { top: 2px; }
+/* Column splitter between two tiles (side-panel.js layoutStrip). */
+.tile-splitter {
+  flex: 0 0 5px;
+  background: var(--border);
+  cursor: col-resize;
+}
+.tile-splitter:hover, .tile-splitter.dragging { background: var(--accent); }
+/* The tile being dragged along the strip. */
+.float-panel.docked.reordering { opacity: 0.85; outline: 1px solid var(--accent); }
 .float-head {
   display: flex;
   align-items: center;
