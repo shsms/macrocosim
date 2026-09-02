@@ -31,6 +31,12 @@ const CARDS = [
         band: ["battery_pool_bounds_lower", "battery_pool_bounds_upper"],
       },
       { stream: "pv_power", label: "pv", color: "--cat-inverter-solar" },
+      {
+        stream: "steam_boiler_pool_power",
+        label: "steam boiler",
+        color: "--cat-steam-boiler",
+        band: ["steam_boiler_pool_bounds_lower", "steam_boiler_pool_bounds_upper"],
+      },
       { stream: "consumer_power", label: "consumer", color: "--flow-import" },
       { stream: "producer_power", label: "producer", color: "--flow-export" },
     ],
@@ -90,7 +96,7 @@ const cssColor = (v) => getComputedStyle(document.documentElement).getPropertyVa
 // One live uPlot per unfolded card; rebuilt (not re-dataed) on any
 // config change — window, series toggle, PF overlay, unfold — and
 // destroyed on fold/close. plots: card key → { plot, unit, div,
-// activeKeys, hasBand, withPf }: the axis-label, y-scale and
+// activeKeys, bandKeys, withPf }: the axis-label, y-scale and
 // data-shape decisions frozen at build time. repaint() re-derives the
 // first three to notice when they have gone stale, and feeds the last
 // two back so the data it hands setData() keeps the shape the plot was
@@ -233,26 +239,26 @@ function cardFrame(card, secs, currentDiv = 1, shape = null) {
   const isPower = unit === "W" || unit === "var";
   const { div, prefix } = isPower ? chooseDiv(all, currentDiv) : { div: 1, prefix: "" };
   const scaled = (stream) => ysOf(stream).map((v) => (v == null ? null : v / div));
-  // Battery envelope: lower/upper bounds as invisible series with a
-  // translucent band between them, behind the battery trace. Both
-  // edges need two samples in the window before the band earns its
-  // place: one point has no area to fill, and an envelope drawn from
-  // it would still stretch the shared y-axis out to the pool's rated
-  // power and squash every trace for nothing. The bounds forwarder
-  // republishes only when the envelope moves, so on an idle site
-  // that is exactly what the window holds.
-  const bandCfg = active.find((s) => s.band);
+  // Pool envelopes (battery, steam boiler): lower/upper bounds as
+  // invisible series with a translucent band between them, behind
+  // the pool's trace. Both edges need two samples in the window
+  // before a band earns its place: one point has no area to fill,
+  // and an envelope drawn from it would still stretch the shared
+  // y-axis out to the pool's rated power and squash every trace for
+  // nothing. The bounds forwarder republishes only when the envelope
+  // moves, so on an idle site that is exactly what the window holds.
   const bandPoints = (b) => ysOf(b).filter((v) => v != null).length;
-  // If the band-owning trace was toggled off out-of-band, bandCfg is gone
-  // even though the pinned shape still expects a band; fall through so the
-  // frame survives this tick and the activeKeys check right after rebuilds.
-  const hasBand = shape
-    ? shape.hasBand && !!bandCfg
-    : bandCfg?.band.every((b) => bandPoints(b) >= 2) === true;
+  // If a band-owning trace was toggled off out-of-band, it is gone
+  // from `active` even though the pinned shape still expects its
+  // band; drop it so the frame survives this tick and the activeKeys
+  // check right after rebuilds.
+  const banded = shape
+    ? active.filter((s) => s.band && shape.bandKeys.includes(s.stream))
+    : active.filter((s) => s.band?.every((b) => bandPoints(b) >= 2));
   const withPf = shape ? shape.withPf : card.pfOverlay === true && pfOn();
   const data = [xs];
   for (const s of active) data.push(scaled(s.stream));
-  if (hasBand) data.push(scaled(bandCfg.band[1]), scaled(bandCfg.band[0]));
+  for (const s of banded) data.push(scaled(s.band[1]), scaled(s.band[0]));
   if (withPf) {
     for (const s of active) {
       const p = ysOf(s.p);
@@ -260,7 +266,7 @@ function cardFrame(card, secs, currentDiv = 1, shape = null) {
       data.push(q.map((qv, i) => pfValue(p[i], qv)));
     }
   }
-  return { active, unit, div, prefix, hasBand, withPf, data };
+  return { active, unit, div, prefix, banded, withPf, data };
 }
 
 function buildChart(card, slot) {
@@ -272,7 +278,7 @@ function buildChart(card, slot) {
   // tick, so neither side has to guess the shape — and repaint() can
   // tell a plot built against a different series set from a live one.
   const secs = windowSecs();
-  const { active, unit, div, prefix, hasBand, withPf, data } = cardFrame(card, secs);
+  const { active, unit, div, prefix, banded, withPf, data } = cardFrame(card, secs);
   if (!active.length) {
     slot.innerHTML = '<p class="hint">all series toggled off</p>';
     return;
@@ -294,7 +300,7 @@ function buildChart(card, slot) {
     })),
   ];
   const bands = [];
-  if (hasBand) {
+  banded.forEach((s, i) => {
     // spanGaps on the edges only: a bound holds until it is
     // republished, so a gap between two bound samples is the same
     // envelope, not missing data — unlike the traces, where a gap
@@ -303,14 +309,15 @@ function buildChart(card, slot) {
       { stroke: "transparent", points: { show: false }, spanGaps: true },
       { stroke: "transparent", points: { show: false }, spanGaps: true },
     );
-    // data indices: 0 = xs, 1..active.length = traces, then hi, lo.
-    // uPlot fills a band from series[0] down to series[1] (its
-    // default dir), so the upper bound has to be listed first.
-    bands.push({
-      series: [active.length + 1, active.length + 2],
-      fill: "rgba(241, 149, 91, 0.10)",
-    });
-  }
+    // data indices: 0 = xs, 1..active.length = traces, then one
+    // (hi, lo) pair per banded trace in `banded` order. uPlot fills
+    // a band from series[0] down to series[1] (its default dir), so
+    // the upper bound has to be listed first.
+    const hi = active.length + 2 * i + 1;
+    // The band is its trace's colour at a tenth opacity: the palette
+    // is 6-digit hex, so an alpha byte appended makes the fill.
+    bands.push({ series: [hi, hi + 1], fill: `${cssColor(s.color)}1a` });
+  });
   // PF overlay: dashed per-source PF on a right-hand 0.85–1.02
   // scale, derived at draw time from the matching P and Q rings.
   const axes = [
@@ -357,7 +364,7 @@ function buildChart(card, slot) {
     unit,
     div,
     activeKeys: activeKeysOf(active),
-    hasBand,
+    bandKeys: banded.map((s) => s.stream),
     withPf,
   });
 }

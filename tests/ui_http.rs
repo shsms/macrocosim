@@ -775,3 +775,69 @@ async fn drive_clear_sunlight_returns_to_weather_and_rejects_non_solar() {
         .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
 }
+
+/// The steam boiler pool rides the loopback like the battery pool:
+/// an aggregate power stream, a bounds envelope flattened into two
+/// point streams, and a cumulative energy companion. Meter 5 fronts
+/// the boiler so the pool formula reads the metered line; the
+/// boiler's own reading is only the fallback.
+#[tokio::test(flavor = "multi_thread")]
+async fn steam_boiler_pool_streams_reach_the_loopback_snapshot() {
+    let topology = r#"
+(%make-grid-connection-point :id 1
+    :successors
+    (list (%make-meter :id 2
+                        :successors
+                        (list (%make-meter :id 5
+                                           :successors
+                                           (list (%make-steam-boiler :id 6)))))))
+"#;
+    let s = TestServer::start(topology).await;
+    let client = reqwest::Client::new();
+
+    let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
+    let id = mgs
+        .as_array()
+        .expect("microgrids array")
+        .first()
+        .expect("one microgrid")["id"]
+        .as_u64()
+        .expect("microgrid id");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let snapshot = loop {
+        let body = json(
+            &client,
+            format!("{}/api/mg/{id}/microgrid/latest", s.ui_url),
+        )
+        .await;
+        let converged = ["steam_boiler_pool_power", "steam_boiler_pool_bounds_upper"]
+            .iter()
+            .all(|k| body[k]["value"].as_f64().is_some_and(|v| v.is_finite()));
+        if converged || tokio::time::Instant::now() >= deadline {
+            break body;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+
+    let power = &snapshot["steam_boiler_pool_power"];
+    let value = power["value"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("steam_boiler_pool_power never converged: {snapshot}"));
+    assert!(value.is_finite(), "value not finite: {snapshot}");
+    assert_eq!(power["quantity"], "Power", "{snapshot}");
+    assert_eq!(power["unit"], "W", "{snapshot}");
+
+    let lower = snapshot["steam_boiler_pool_bounds_lower"]["value"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("no lower bound: {snapshot}"));
+    let upper = snapshot["steam_boiler_pool_bounds_upper"]["value"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("no upper bound: {snapshot}"));
+    assert!(lower <= upper, "inverted envelope: {snapshot}");
+
+    assert_eq!(
+        snapshot["steam_boiler_pool_energy"]["unit"], "Wh",
+        "energy companion missing: {snapshot}"
+    );
+}

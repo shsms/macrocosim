@@ -296,41 +296,85 @@ async fn subscribe_power_forwarders(
     {
         handles.push(h);
     }
-    // BatteryPool takes &mut self for power() / power_bounds() (it
-    // caches subscriber refs); build it once and let it go out of
-    // scope after both subscriptions resolve.
+    // BatteryPool and SteamBoilerPool have the same shape — an
+    // aggregate power formula plus a bounds envelope — and both take
+    // &mut self for power() / power_bounds() (they cache subscriber
+    // refs): build each once and let it go out of scope after both
+    // subscriptions resolve.
     match microgrid.battery_pool(None) {
         Ok(mut pool) => {
-            if let Some(h) =
-                subscribe_power_forwarder("battery_pool_power", pool.power(), site, state.clone())
-                    .await
-            {
-                handles.push(h);
-            }
-            // power_bounds returns a Vec<Bounds<Power>>; the
-            // forwarder flattens the first envelope into two
-            // separate streams so the existing point-sample
-            // infrastructure (cache + sparkline) renders both
-            // halves without an envelope-shaped payload variant.
-            handles.push(spawn_bounds_forwarder(pool.power_bounds(), site, state));
+            spawn_pool_forwarders(
+                "battery_pool_power",
+                ["battery_pool_bounds_lower", "battery_pool_bounds_upper"],
+                pool.power(),
+                pool.power_bounds(),
+                site,
+                state.clone(),
+                &mut handles,
+            )
+            .await;
         }
-        Err(e) => log::info!("microgrid loopback: battery pool absent — skipping: {e}"),
+        Err(e) => log::info!("microgrid loopback: battery pool unavailable — skipping: {e}"),
+    }
+    match microgrid.steam_boiler_pool(None) {
+        Ok(mut pool) => {
+            spawn_pool_forwarders(
+                "steam_boiler_pool_power",
+                [
+                    "steam_boiler_pool_bounds_lower",
+                    "steam_boiler_pool_bounds_upper",
+                ],
+                pool.power(),
+                pool.power_bounds(),
+                site,
+                state,
+                &mut handles,
+            )
+            .await;
+        }
+        Err(e) => log::info!("microgrid loopback: steam boiler pool unavailable — skipping: {e}"),
     }
     handles
 }
 
-/// Forward a `Vec<Bounds<Power>>` stream as two point streams
-/// `battery_pool_bounds_lower` + `battery_pool_bounds_upper`. The
-/// upstream tracker emits a fresh Vec on every telemetry snapshot,
-/// so the cadence matches the power forwarders' 1 Hz; sparklines
-/// alongside the pool power tile track the same time axis.
+/// Forward a pool's aggregate power formula as the `power_stream`
+/// point stream, and its bounds envelope as the two `bounds_streams`
+/// (see `spawn_bounds_forwarder`). The envelope is flattened into
+/// two point streams so the existing point-sample infrastructure
+/// (cache + sparkline) renders both halves without an
+/// envelope-shaped payload variant.
+async fn spawn_pool_forwarders(
+    power_stream: &'static str,
+    bounds_streams: [&'static str; 2],
+    power: Result<frequenz_microgrid::Formula<Power>, frequenz_microgrid::Error>,
+    bounds: tokio::sync::broadcast::Receiver<Vec<frequenz_microgrid::Bounds<Power>>>,
+    site: &MicrogridSite,
+    state: SharedMicrogrid,
+    handles: &mut Vec<JoinHandle<()>>,
+) {
+    // The two travel together: a pool whose power stream could not
+    // be subscribed gets no envelope stream either.
+    let Some(h) = subscribe_power_forwarder(power_stream, power, site, state.clone()).await else {
+        return;
+    };
+    handles.push(h);
+    handles.push(spawn_bounds_forwarder(bounds_streams, bounds, site, state));
+}
+
+/// Forward a pool's `Vec<Bounds<Power>>` stream as the two point
+/// streams named in `[lower, upper]` (`battery_pool_bounds_lower` +
+/// `battery_pool_bounds_upper`, and the `steam_boiler_pool_` pair).
+/// The upstream tracker emits a fresh Vec on every telemetry
+/// snapshot, so the cadence matches the power forwarders' 1 Hz;
+/// sparklines alongside the pool power tile track the same time axis.
 ///
-/// When the Vec is empty (no batteries in the pool) both halves
+/// When the Vec is empty (no components in the pool) both halves
 /// publish `None`. When it has multiple disjoint regions we keep
 /// only the outermost envelope — single-region is by far the
 /// common case and a multi-region split is a niche signal that the
 /// developer-facing dashboard isn't designed around.
 fn spawn_bounds_forwarder(
+    [lower_stream, upper_stream]: [&'static str; 2],
     mut rx: tokio::sync::broadcast::Receiver<Vec<frequenz_microgrid::Bounds<Power>>>,
     site: &MicrogridSite,
     state: SharedMicrogrid,
@@ -343,30 +387,18 @@ fn spawn_bounds_forwarder(
                     let lower = outer_bound(&envelopes, |b| b.lower(), f32::min);
                     let upper = outer_bound(&envelopes, |b| b.upper(), f32::max);
                     let ts_ms = chrono::Utc::now().timestamp_millis();
-                    publish_scalar(
-                        "battery_pool_bounds_lower",
-                        "Power",
-                        "W",
-                        lower,
-                        ts_ms,
-                        &site,
-                        &state,
-                    );
-                    publish_scalar(
-                        "battery_pool_bounds_upper",
-                        "Power",
-                        "W",
-                        upper,
-                        ts_ms,
-                        &site,
-                        &state,
-                    );
+                    publish_scalar(lower_stream, "Power", "W", lower, ts_ms, &site, &state);
+                    publish_scalar(upper_stream, "Power", "W", upper, ts_ms, &site, &state);
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    log::warn!("microgrid loopback: battery_pool_bounds lagged {n} samples");
+                    log::warn!(
+                        "microgrid loopback: {lower_stream}/{upper_stream} lagged {n} samples"
+                    );
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    log::info!("microgrid loopback: battery_pool_bounds closed; forwarder exiting");
+                    log::info!(
+                        "microgrid loopback: {lower_stream}/{upper_stream} closed; forwarder exiting"
+                    );
                     return;
                 }
             }
@@ -581,6 +613,7 @@ fn energy_stream_for(power_stream: &str) -> Option<&'static str> {
         "producer_power" => "producer_energy",
         "pv_power" => "pv_energy",
         "battery_pool_power" => "battery_pool_energy",
+        "steam_boiler_pool_power" => "steam_boiler_pool_energy",
         _ => return None,
     })
 }
@@ -751,8 +784,13 @@ mod tests {
             energy_stream_for("battery_pool_power"),
             Some("battery_pool_energy")
         );
+        assert_eq!(
+            energy_stream_for("steam_boiler_pool_power"),
+            Some("steam_boiler_pool_energy")
+        );
         // Bounds envelopes and unknown streams don't integrate.
         assert_eq!(energy_stream_for("active_power_lower_bound_w"), None);
+        assert_eq!(energy_stream_for("steam_boiler_pool_bounds_lower"), None);
     }
 
     #[test]
