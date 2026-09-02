@@ -921,7 +921,11 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
    viewport-minus-chrome box that spans the canvas cell; cards spawn
    CASCADE_BASE (40px) down into it and, per .float-panel below, bound
    their own height 40px short of it, so a full-height card ends flush
-   with the dock's bottom edge instead of overhanging it. */
+   with the dock's bottom edge instead of overhanging it. The same
+   shave is what keeps a bottom-anchored card's top inside the dock:
+   it hangs CORNER_INSET up from the bottom edge, so its top clears
+   the dock's own top edge only while CORNER_INSET and CASCADE_BASE
+   (side-panel.js) stay equal to each other and to this 40px. */
 #panel-dock {
   grid-area: topology;
   /* min-height/min-width: 0 keep the dock out of the `topology` cell's
@@ -954,7 +958,11 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
      top edge, so a max-height resolved against the dock's own 100%
      would let a full card overhang the dock's bottom by that same
      40px. Shorting the bound by the spawn offset keeps a full card
-     flush with the dock bottom instead. Keep this paired with
+     flush with the dock bottom instead, and keeps a full
+     .anchor-bottom card's top — it hangs CORNER_INSET (the same 40px)
+     up from the dock's bottom — level with the dock's top rather than
+     above it, which is why CASCADE_BASE and CORNER_INSET in
+     side-panel.js have to stay equal. Keep this paired with
      side-panel.js's applyCap(), which has to shave the same 40px off
      its inline max-height or the inline value would win and undo it. */
   max-height: calc(100% - 40px);
@@ -972,6 +980,10 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   overflow: hidden;
 }
 .float-panel.open { display: flex; flex-direction: column; }
+/* Bottom-left cards (side-panel.js PANEL_DEFAULTS) hang from the
+   dock's bottom edge instead of its top: content growing or
+   shrinking moves their top, and their bottom stays put. */
+.float-panel.anchor-bottom { top: auto; bottom: 0; }
 .panel-content {
   flex: 1 1 auto;
   min-height: 0;
@@ -1386,12 +1398,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   text-decoration: line-through;
   text-decoration-color: var(--flow-dim);
 }
-/* The generated .float-panel cards size to one width for all; the
-   metrics charts want a little more room than the 420 px default. */
-#panel-metrics-btn {
-  width: 430px;
-}
-
 /* ── Weather panel ───────────────────────────────────────────────
    One card: the day's sunlight curve, the live readout, the config
    knobs, a pass-a-cloud trigger and the tracked cloud list. Class

@@ -730,6 +730,9 @@ const chipValue = await waitFor(async () => {
 }, 15000);
 check("e2e: at least one metrics chip shows a live value", Array.isArray(chipValue), JSON.stringify(chipValue));
 check("e2e: the Power card mounts a uPlot canvas", (await page.locator('.mcard[data-card="power"] canvas').count()) > 0);
+// Widths come from side-panel.js's PANEL_DEFAULTS, not per-panel CSS.
+const metricsWidth = await page.evaluate(() => document.getElementById("panel-metrics-btn").getBoundingClientRect().width);
+check("e2e: the metrics panel takes its 430px width from PANEL_DEFAULTS", Math.abs(metricsWidth - 430) <= 1 && (await page.evaluate(() => document.getElementById("panel-metrics-btn").style.width === "430px")), `${metricsWidth}`);
 const reactiveSummary = await waitFor(async () => {
   const t = await page.evaluate(() => document.querySelector('[data-summary="reactive"]')?.textContent);
   return t && /VAr/.test(t) ? t : null;

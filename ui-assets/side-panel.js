@@ -1,6 +1,7 @@
 // The floating panel shell. Each named panel — the node inspector
 // ("node"), the formula explorer ("formula-btn"), the metrics panel
-// ("metrics-btn"), the Defaults editor, the live Scenario report — is
+// ("metrics-btn"), the REPL ("repl-btn"), the log tail ("logs-btn"),
+// the Defaults editor, the live Scenario report — is
 // its own concurrently-openable, draggable, resizable card floating
 // over #panel-dock. The cards are absolute floats, not a column:
 // opening one never changes another's size. Re-opening an open panel
@@ -9,7 +10,10 @@
 // panel; each tenant supplies its own teardown since only it knows
 // what live resources (charts, timers) it owns.
 
-// name → { el, contentEl, teardown, pos, cascade }
+// name → { el, contentEl, teardown, pos, cascade, isStatic, refitTimer }
+// pos carries `bottom`: which dock edge the stored dx/dy were
+// measured against, so a reload re-anchors the card the way its saved
+// offset expects (see .anchor-bottom, savePos).
 const panels = new Map();
 // Open panels, oldest first — Esc closes the newest.
 const openStack = [];
@@ -40,6 +44,23 @@ const RESIZE_SETTLE = 280;
 // cards on each one would measure geometry that is still moving.
 const REFIT_SETTLE = 180;
 
+// Per-panel defaults: the card's width, and where an unplaced card
+// spawns. Unlisted panels take the stylesheet's 420px and the
+// top-right cascade.
+const PANEL_DEFAULTS = {
+  "metrics-btn": { width: 430 },
+};
+// Panels whose markup is static in index.html, so a module can keep
+// addressing their elements by id: name → [card id, content id].
+const STATIC_PANELS = {
+  node: ["inspector", "inspect"],
+};
+// A bottom-left card sits this far in from the dock's left and
+// bottom edges; further bottom-left cards line up to its right with
+// ROW_GAP between them.
+const CORNER_INSET = 40;
+const ROW_GAP = 8;
+
 // Every card lives in the dock, and the dock's box is both the drag
 // floor and the height bound.
 const dockEl = () => document.getElementById("panel-dock");
@@ -47,13 +68,19 @@ const dockEl = () => document.getElementById("panel-dock");
 function ensurePanel(name) {
   let p = panels.get(name);
   if (p) return p;
+  const isStatic = name in STATIC_PANELS;
   let el;
   let contentEl;
-  if (name === "node") {
-    // The inspector's markup is static in index.html so inspect.js's
-    // getElementById world keeps working untouched.
-    el = document.getElementById("inspector");
-    contentEl = document.getElementById("inspect");
+  if (isStatic) {
+    const [cardId, contentId] = STATIC_PANELS[name];
+    el = document.getElementById(cardId);
+    contentEl = document.getElementById(contentId);
+    // The inspector wires its own close button (app.js, it also
+    // deselects the node); every other static card uses the shared
+    // one.
+    if (name !== "node") {
+      el.querySelector(".float-close").addEventListener("click", () => closePanel(name));
+    }
   } else {
     el = document.createElement("aside");
     el.className = "float-panel";
@@ -69,10 +96,53 @@ function ensurePanel(name) {
     contentEl = el.querySelector(".panel-content");
     el.querySelector(".float-close").addEventListener("click", () => closePanel(name));
   }
+  const width = PANEL_DEFAULTS[name]?.width;
+  if (width) el.style.width = `${width}px`;
   const stored = loadPos(name);
+  // Which dock edge the card hangs from. A stored offset was measured
+  // against one particular edge, so it decides; only an unplaced card
+  // takes the anchor its spawn implies. Getting this backwards after a
+  // reload would re-anchor a card whose saved dx/dy mean the other
+  // edge, and throw it across the dock.
+  const bottomAnchored = stored ? stored.bottom : PANEL_DEFAULTS[name]?.spawn === "bottom-left";
+  el.classList.toggle("anchor-bottom", bottomAnchored);
   // Without a stored position the panel is still unplaced, so its
   // first open cascades off whatever is already open.
-  p = { el, contentEl, teardown: null, pos: stored ?? { dx: 0, dy: 0 }, cascade: !stored };
+  p = {
+    el,
+    contentEl,
+    teardown: null,
+    pos: stored ?? { dx: 0, dy: 0, bottom: bottomAnchored },
+    cascade: !stored,
+    isStatic,
+    refitTimer: 0,
+  };
+  // A bottom-left card hangs from the dock's bottom edge (see
+  // .anchor-bottom), so content growing or shrinking — a log tail
+  // filling, a cleared one — moves its top and keeps its bottom. That
+  // makes content the one thing that can push the card's grab strip
+  // up out of the dock without anyone touching it, and the window
+  // listener below only fires for the window. So watch the card's own
+  // box too, and re-fit it once the growth settles. Wired for every
+  // card that can land on that edge, since one may also be sitting in
+  // the top-right cascade for now (placePanel).
+  if (PANEL_DEFAULTS[name]?.spawn === "bottom-left") {
+    new ResizeObserver(() => {
+      // A hidden card measures as nothing, and an inline height is
+      // wireResize's in-gesture signal — the user is holding the
+      // gripper and a re-fit would fight the drag. Checked again when
+      // the timer fires, not just here: a card closed or grabbed
+      // inside REFIT_SETTLE would otherwise be sanitized as a
+      // display:none zero box, and clampOffset would write that
+      // nonsense back into p.pos. closePanel cancels it too.
+      if (!el.classList.contains("open") || el.style.height) return;
+      clearTimeout(p.refitTimer);
+      p.refitTimer = setTimeout(() => {
+        if (!el.classList.contains("open") || el.style.height) return;
+        sanitizePanel(p, name, false);
+      }, REFIT_SETTLE);
+    }).observe(el);
+  }
   wireDrag(el, name, p);
   wireResize(el, name);
   panels.set(name, p);
@@ -132,11 +202,16 @@ function wireDrag(el, name, p) {
     strip.setPointerCapture(e.pointerId);
     const startX = e.clientX - p.pos.dx;
     const startY = e.clientY - p.pos.dy;
-    // Measured once: the anchor cannot move mid-drag, and re-reading
-    // it per pointermove would force a layout on every frame.
+    // Measured once per gesture: re-reading it per pointermove would
+    // force a layout on every frame. A bottom-anchored card whose
+    // content changes mid-drag does move its untransformed top under
+    // this anchor; its resize observer re-fits it once that growth
+    // settles, which may well be mid-drag — harmless, since that
+    // re-fit persists nothing and the next pointermove writes the
+    // offset from this anchor again.
     const anchor = anchorOf(el, p.pos);
     const move = (ev) => {
-      p.pos = clampOffset(anchor, ev.clientX - startX, ev.clientY - startY);
+      p.pos = { ...clampOffset(anchor, ev.clientX - startX, ev.clientY - startY), bottom: p.pos.bottom };
       applyPos(el, p.pos);
     };
     const stop = () => {
@@ -159,8 +234,8 @@ const capOf = (el, h) =>
   Math.max(MIN_HEIGHT, Math.min(h, el.parentElement?.clientHeight ?? window.innerHeight));
 
 // `min(cap, 100% - CASCADE_BASE)` rather than the bare cap: the
-// dock's own bound has to keep winning as the window or the repl
-// drawer resizes, and an inline max-height would otherwise override
+// dock's own bound has to keep winning as the window resizes, and an
+// inline max-height would otherwise override
 // the stylesheet's — including the stylesheet's own 40px shave (kept
 // in sync with CASCADE_BASE here), which a bare `100%` would silently
 // undo for every capped panel.
@@ -199,14 +274,20 @@ function wireResize(el, name) {
 function loadPos(name) {
   try {
     const raw = JSON.parse(localStorage.getItem(POS_KEY_PREFIX + name));
-    return raw && Number.isFinite(raw.dx) && Number.isFinite(raw.dy) ? raw : null;
+    if (!raw || !Number.isFinite(raw.dx) || !Number.isFinite(raw.dy)) return null;
+    // `bottom` post-dates the other two: an offset stored before it
+    // existed was measured against the top edge.
+    return { dx: raw.dx, dy: raw.dy, bottom: raw.bottom === true };
   } catch (_) {
     return null;
   }
 }
 function savePos(name, pos) {
   try {
-    localStorage.setItem(POS_KEY_PREFIX + name, JSON.stringify({ dx: pos.dx, dy: pos.dy }));
+    localStorage.setItem(
+      POS_KEY_PREFIX + name,
+      JSON.stringify({ dx: pos.dx, dy: pos.dy, bottom: pos.bottom === true }),
+    );
   } catch (_) {
     // Storage unavailable — the position just doesn't stick.
   }
@@ -255,7 +336,7 @@ function sanitizePanel(p, name, persist = true) {
   applyPos(el, p.pos);
   const clamped = fitOffset(anchorOf(el, p.pos), p.pos.dx, p.pos.dy);
   if (clamped.dx === p.pos.dx && clamped.dy === p.pos.dy) return;
-  p.pos = clamped;
+  p.pos = { ...clamped, bottom: p.pos.bottom };
   applyPos(el, p.pos);
   // Only a position the user chose is worth correcting on disk; a
   // clamped cascade is this open's arithmetic, not their placement.
@@ -263,10 +344,64 @@ function sanitizePanel(p, name, persist = true) {
 }
 
 // Place the card as it opens: an unplaced one cascades off the panels
-// already open, then the same sanitize every open card gets.
+// already open — top-right by default, or in a row along the dock's
+// bottom edge for the panels PANEL_DEFAULTS puts there — then the
+// same sanitize every open card gets.
 function placePanel(p, name, order) {
-  if (p.cascade) p.pos = { dx: 0, dy: CASCADE_BASE + CASCADE_STEP * order };
+  if (p.cascade) {
+    const bottomLeft = PANEL_DEFAULTS[name]?.spawn === "bottom-left";
+    const spot = bottomLeft ? bottomLeftSpawn(p.el, name) : null;
+    // A bottom-left card too wide for what is left of the row has
+    // nowhere down there to go — clamping it back would just drop it
+    // on a neighbour — so it joins the top-right cascade instead, and
+    // is top-anchored for as long as it sits there. A later re-open
+    // asks again, against whatever is open then.
+    p.pos = spot
+      ? { ...spot, bottom: true }
+      : { dx: 0, dy: CASCADE_BASE + CASCADE_STEP * order, bottom: false };
+    // The offset is saved with the edge it was measured against, so
+    // the class has to follow it here and on the next ensurePanel.
+    p.el.classList.toggle("anchor-bottom", p.pos.bottom);
+  }
   sanitizePanel(p, name);
+}
+
+// The offset that puts a bottom-anchored card CORNER_INSET up from the
+// dock's bottom edge and CORNER_INSET in from its left, to the right
+// of every bottom-left card already open: they sit in a row along the
+// bottom. Cards are anchored top-right by default (see .float-panel),
+// so dx is negative; a bottom-anchored card's dy lifts it off the
+// bottom edge. Occupancy, not a running sum of the other cards'
+// widths: closing the leftmost card frees its slot while the ones
+// still open keep theirs, so the row has to be read from where those
+// cards actually sit. Returns null when the card fits nowhere in the
+// row — see placePanel, which cascades it top-right instead.
+function bottomLeftSpawn(el, name) {
+  const dock = dockEl();
+  const dockLeft = dock.getBoundingClientRect().left;
+  const taken = [];
+  for (const other of openStack) {
+    if (other === name || PANEL_DEFAULTS[other]?.spawn !== "bottom-left") continue;
+    const r = panels.get(other).el.getBoundingClientRect();
+    taken.push({ left: r.left - dockLeft, right: r.right - dockLeft });
+  }
+  const width = el.offsetWidth;
+  // Walk right past every card the slot collides with. Each move can
+  // bring a card that was clear back into range, so re-check them all
+  // until a pass moves nothing; x only ever grows past one more card,
+  // so the walk ends.
+  let x = CORNER_INSET;
+  for (let moved = true; moved; ) {
+    moved = false;
+    for (const t of taken) {
+      if (x < t.right + ROW_GAP && x + width + ROW_GAP > t.left) {
+        x = t.right + ROW_GAP;
+        moved = true;
+      }
+    }
+  }
+  if (x + width > dock.clientWidth) return null;
+  return { dx: -(dock.clientWidth - width - x), dy: -CORNER_INSET };
 }
 
 // Sanitizing at open time only sees the geometry of that moment. The
@@ -325,10 +460,17 @@ export function closePanel(name) {
   const teardown = p.teardown;
   p.teardown = null;
   teardown?.();
-  p.contentEl.innerHTML =
-    name === "node"
-      ? '<p class="hint">Click a node to inspect. Right-click for the context menu.</p>'
-      : "";
+  // A generated card's content is rebuilt by render() on the next
+  // open; a static card keeps its markup (the inspector resets to
+  // its hint).
+  if (name === "node") {
+    p.contentEl.innerHTML = '<p class="hint">Click a node to inspect. Right-click for the context menu.</p>';
+  } else if (!p.isStatic) {
+    p.contentEl.innerHTML = "";
+  }
+  // A resize that landed just before this close left a refit armed;
+  // it would measure the hidden card as a zero box.
+  clearTimeout(p.refitTimer);
   p.el.classList.remove("open");
   openStack.splice(openStack.indexOf(name), 1);
   syncButton(name, false);
