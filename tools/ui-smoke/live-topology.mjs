@@ -1472,6 +1472,30 @@ check(
 // Hand-checked instead (see the branch's report), and the arithmetic
 // under it is covered DOM-free by tools/weather-panel-test.mjs.
 
+// ── e2e: growing a capped panel back ─────────────────────────────
+// A drag stores a max-height cap. With one in force, a drag
+// downward writes a taller inline height while max-height pins the
+// box, so the gesture is noticed off the style attribute: the cap
+// clears mid-drag and the settled height becomes the new cap.
+if (await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === true)) {
+  await page.click("#metrics-btn");
+}
+await page.evaluate(() => localStorage.setItem("sw-panel-size-metrics-btn", JSON.stringify({ h: 120 })));
+await page.click("#metrics-btn");
+const cappedH = await page.evaluate(() => document.getElementById("panel-metrics-btn").getBoundingClientRect().height);
+check("e2e: a stored cap pins the metrics panel's height", Math.abs(cappedH - 120) <= 2, `${cappedH}`);
+// What the native resize handle does on every tick of a drag.
+await page.evaluate(() => { document.getElementById("panel-metrics-btn").style.height = "320px"; });
+const grown = await waitFor(async () => {
+  const s = await page.evaluate(() => ({
+    h: document.getElementById("panel-metrics-btn").getBoundingClientRect().height,
+    stored: JSON.parse(localStorage.getItem("sw-panel-size-metrics-btn") ?? "null")?.h ?? null,
+  }));
+  return s.stored !== null && s.stored > 120 ? s : null;
+}, 5000).catch(() => null);
+check("e2e: a drag taller than the cap grows the panel and re-caps it", grown !== null && grown.h > cappedH + 50, JSON.stringify(grown));
+await page.click("#metrics-btn");
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }

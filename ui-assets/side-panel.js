@@ -172,7 +172,10 @@ function applyCap(el, cap) {
 // for it, so the observer is how we notice. An inline height is the
 // one signal that a height is the user's doing and not the content's
 // — content growth leaves the style empty, and the conversion below
-// clears it again.
+// clears it again. It watches the style attribute, not the box: with
+// a cap in force a drag downward writes a taller inline height while
+// max-height keeps the box pinned, so a size observer never fires,
+// the cap never clears, and the drag looks dead in that direction.
 function wireResize(el, name) {
   let timer = 0;
   const settle = () => {
@@ -183,14 +186,14 @@ function wireResize(el, name) {
     applyCap(el, cap);
     saveSize(name, cap);
   };
-  new ResizeObserver(() => {
+  new MutationObserver(() => {
     if (!el.style.height) return;
     // Let the card follow the pointer while the gesture runs: the old
     // cap would otherwise pin it and the drag would look dead.
     el.style.maxHeight = "";
     clearTimeout(timer);
     timer = setTimeout(settle, RESIZE_SETTLE);
-  }).observe(el);
+  }).observe(el, { attributes: true, attributeFilter: ["style"] });
 }
 
 function loadPos(name) {

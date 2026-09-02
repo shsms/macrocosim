@@ -34,6 +34,7 @@ globalThis.addEventListener = () => {};
 globalThis.getComputedStyle = stub();
 globalThis.CSS = stub();
 globalThis.ResizeObserver = stub();
+globalThis.MutationObserver = stub();
 globalThis.fetch = () => new Promise(() => {});
 
 // app.js and routing.js import each other (app.js for its own

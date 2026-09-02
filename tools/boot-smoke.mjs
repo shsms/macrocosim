@@ -48,6 +48,7 @@ globalThis.addEventListener = () => {};
 globalThis.getComputedStyle = stub();
 globalThis.CSS = stub();
 globalThis.ResizeObserver = stub();
+globalThis.MutationObserver = stub();
 globalThis.fetch = () => new Promise(() => {});
 
 await import(new URL("../ui-assets/app.js", import.meta.url).href);
