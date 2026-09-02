@@ -221,6 +221,15 @@
           <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
           <button class="float-close" type="button" title="Close (Esc)">×</button>
           <div id="logs-body" class="panel-content">
+            <div class="logs-head">
+              <label for="logs-level" class="ctl-label">show</label>
+              <select id="logs-level" title="Hide log lines below this level">
+                <option value="debug">debug+</option>
+                <option value="info">info+</option>
+                <option value="warn">warn+</option>
+              </select>
+              <button type="button" id="logs-clear" class="pill" title="Empty the tail">clear</button>
+            </div>
             <div id="logs"></div>
           </div>
         </aside>
@@ -509,7 +518,7 @@
         <h4>REPL</h4>
         <ul class="help-list">
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> — eval. <kbd>Tab</kbd> — complete.</li>
-          <li>The <em>repl</em> and <em>logs</em> pills on a microgrid's Topology view open the REPL and the server log tail as floating panels — drag, resize and close them like any other card. A backtick opens the REPL from anywhere; <kbd>Esc</kbd> in its input closes it.</li>
+          <li>The <em>repl</em> and <em>logs</em> pills on a microgrid's Topology view open the REPL and the server log tail as floating panels — drag, resize and close them like any other card. A backtick opens the REPL from anywhere; <kbd>Esc</kbd> in its input closes it. The Logs panel's <em>show</em> dropdown sets a minimum level (lines below it stay hidden) and <em>clear</em> empties the tail.</li>
         </ul>
       </div>
     </dialog>

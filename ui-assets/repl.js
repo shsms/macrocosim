@@ -45,6 +45,28 @@ export async function backfillLogs() {
   } catch (_) {}
 }
 
+// The Logs panel head: the minimum level goes on #logs as a class the
+// stylesheet reads, and persists; clear empties the tail (new lines
+// keep arriving).
+const LOGS_LEVEL_KEY = "sw-logs-level";
+
+export function setupLogsPanel() {
+  const box = document.getElementById("logs");
+  const level = document.getElementById("logs-level");
+  // The select's own options are the list of levels: a level added
+  // there gets its min-* class handled here without a second edit.
+  const LOG_LEVELS = [...level.options].map((o) => o.value);
+  const apply = () => {
+    for (const l of LOG_LEVELS) box.classList.toggle(`min-${l}`, l === level.value);
+    localStorage.setItem(LOGS_LEVEL_KEY, level.value);
+  };
+  const stored = localStorage.getItem(LOGS_LEVEL_KEY);
+  level.value = LOG_LEVELS.includes(stored) ? stored : "info";
+  level.addEventListener("change", apply);
+  apply();
+  document.getElementById("logs-clear").addEventListener("click", () => box.replaceChildren());
+}
+
 // Hardcoded completion candidates for the REPL. Until tulisp exposes
 // obarray enumeration upstream, this list has to track the surface
 // switchyard exposes by hand. Drop-in replacement: hit /api/symbols

@@ -31,7 +31,7 @@ import {
 import { setupInspectorChips, showComponent } from "./inspect.js";
 import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
-import { backfillLogs, openWebSocket, setupRepl } from "./repl.js";
+import { backfillLogs, openWebSocket, setupLogsPanel, setupRepl } from "./repl.js";
 import {
   jumpToTopology,
   mgPath,
@@ -513,6 +513,7 @@ async function init() {
   } catch {
     // Storage unavailable — there is nothing stale to drop either.
   }
+  setupLogsPanel();
   setupWeatherPanel();
   scenariosPanel.setup();
   dispatchesPanel.setup();

@@ -1558,6 +1558,36 @@ check(
     return l.children.length > 0 && Math.abs(l.scrollTop + l.clientHeight - l.scrollHeight) < 2;
   }),
 );
+// The head row: a minimum level (a class on #logs the stylesheet
+// reads) and a clear button.
+const infoLineDisplay = async () =>
+  await page.evaluate(() => {
+    const line = document.querySelector("#logs .log-line.info");
+    return line ? getComputedStyle(line).display : "none-found";
+  });
+check("e2e: the log tail shows info lines at its default level", (await infoLineDisplay()) === "flex" && (await page.evaluate(() => document.getElementById("logs").classList.contains("min-info"))));
+await page.selectOption("#logs-level", "warn");
+check("e2e: raising the minimum level to warn hides info lines", (await infoLineDisplay()) === "none");
+await page.reload({ waitUntil: "networkidle" });
+await page.click(DEMO_CARD).catch(() => {});
+await page.click("#logs-btn");
+check("e2e: the minimum level persists across a reload", await page.evaluate(() => document.getElementById("logs-level").value === "warn" && document.getElementById("logs").classList.contains("min-warn")));
+await page.selectOption("#logs-level", "info");
+// Clearing is the one shrink the tail does on command, so it is where
+// the bottom-anchor invariant is checkable: the card hangs off the
+// dock's bottom edge, so losing content must move its top, not its
+// bottom.
+const logsBottomBefore = await page.evaluate(() => document.getElementById("logs-panel").getBoundingClientRect().bottom);
+await page.click("#logs-clear");
+const logsBottomAfter = await page.evaluate(() => document.getElementById("logs-panel").getBoundingClientRect().bottom);
+check(
+  "e2e: a bottom-anchored card keeps its bottom edge when its content shrinks",
+  Math.abs(logsBottomAfter - logsBottomBefore) <= 1,
+  `${logsBottomBefore} -> ${logsBottomAfter}`,
+);
+// A live /ws/events line can land between the click and this read, so
+// assert the tail was emptied, not that it stayed empty.
+check("e2e: clear empties the tail", await page.evaluate(() => document.getElementById("logs").children.length < 5));
 await page.keyboard.press("`");
 check("e2e: a backtick opens the REPL panel and focuses its input", (await panelOpen("repl")) && (await page.evaluate(() => document.activeElement?.id === "repl-input")));
 const replBox = await page.evaluate(() => {

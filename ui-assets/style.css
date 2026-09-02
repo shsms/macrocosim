@@ -1108,6 +1108,40 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-family: var(--font-mono);
   font-size: 14px;
 }
+.logs-head {
+  /* Never shrink: a capped card clips the tail below, not the head. */
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.logs-head select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 1px 4px;
+}
+.logs-head .pill { margin-left: auto; }
+/* The minimum level: #logs carries one min-* class and the lines
+   below that level stay in the DOM (they still count against the
+   500-row cap) but do not show. The pairs below are written out by
+   hand — the JS builds its level list from the select's own options,
+   not from this rule, so a new level needs a row added here too. */
+#logs.min-debug .log-line.trace,
+#logs.min-info .log-line.debug,
+#logs.min-info .log-line.trace,
+#logs.min-warn .log-line.debug,
+#logs.min-warn .log-line.trace,
+#logs.min-warn .log-line.info {
+  display: none;
+}
 
 .log-line {
   display: flex;
