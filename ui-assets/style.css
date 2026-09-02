@@ -355,14 +355,13 @@ main {
      full width; the panel dock + add panel float over the
      `topology` area (same grid cell, pinned to a side) rather than
      occupying a docked column. mg-header is auto height (collapses to
-     0 off a selection); the repl drawer's row size is JS-rewritten. */
+     0 off a selection); the REPL and the log tail are floating panels
+     in the dock. */
   grid-template-columns: 1fr;
-  grid-template-rows: auto 1fr 5px 260px;
+  grid-template-rows: auto 1fr;
   grid-template-areas:
     "mgheader"
-    "topology"
-    "drawer-splitter"
-    "repl";
+    "topology";
   gap: 0;
   height: calc(100vh - 41px - 28px); /* viewport minus header minus pulse bar */
   /* Same reason as on body: keeps the canvas from pushing the
@@ -893,13 +892,6 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   font-family: var(--mono, ui-monospace, "Cascadia Mono", monospace);
 }
 
-#drawer-splitter {
-  grid-area: drawer-splitter;
-  background: var(--border);
-  cursor: row-resize;
-}
-#drawer-splitter:hover, #drawer-splitter.dragging { background: var(--accent); }
-
 /* ── Floating panels ─────────────────────────────────────────────────
    The panel dock and the Add-component panel (left) share the
    `topology` grid cell with the active pane, so they float over the
@@ -1080,26 +1072,40 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   display: block;
 }
 
-#repl {
-  grid-area: repl;
+/* REPL panel: eval output over the input row. The card hugs its
+   content up to the gripper's cap or the dock bound; the output
+   band's floor leaves room for the completion popup
+   (#repl-completions, 220px) above the input. The card's own floor
+   has to hold the drag strip, that 240px output floor and the input
+   form, or a cap dragged (or restored) below it would squeeze the
+   form out of the card and leave the REPL unusable. */
+#repl { min-height: 340px; }
+#repl-body {
   display: flex;
   flex-direction: column;
-  background: var(--bg-elev);
-  border-top: 1px solid var(--border);
+  padding: 0;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: 16px;
 }
 
+/* Logs panel: the tail scrolls inside the card. Its floor holds the
+   drag strip, the head row and the tail's own 160px floor, so a cap
+   below it cannot squeeze the head away. */
+#logs-panel { min-height: 240px; }
+#logs-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
 #logs {
-  /* Log panel claims all space the REPL output isn't using. Default
-     gives logs everything (repl-output collapses to a thin rest-state
-     band when there's no recent eval); the horizontal splitter lets
-     the user trade space between them. */
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 160px;
   overflow-y: auto;
   padding: 0.4rem 0.75rem;
   background: var(--bg);
+  font-family: var(--font-mono);
   font-size: 14px;
 }
 
@@ -1120,14 +1126,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .log-line .log-msg { flex: 1; }
 
 #repl-output {
-  /* Fixed band at the bottom of the drawer for eval results. The
-     log panel above flex-grows into the rest of the drawer and is
-     resized via the drawer splitter above the drawer instead. */
-  flex: 0 0 80px;
+  flex: 1 1 auto;
+  min-height: 240px;
   overflow-y: auto;
   padding: 0.5rem 0.75rem;
   background: var(--bg-elev);
-  border-top: 1px solid var(--border);
 }
 #repl-output:empty::before {
   /* Empty rest state hint — disappears the moment a result lands. */
@@ -1143,6 +1146,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .repl-error    { color: var(--bad); white-space: pre-wrap; }
 
 #repl-form {
+  /* Never shrink: the output band above is the flexible part, so a
+     capped card clips its own scrollback, not the input row. */
+  flex: 0 0 auto;
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
@@ -2326,21 +2332,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #ctx-menu .ctx-separator {
   border-top: 1px solid var(--border);
   margin: 4px 0;
-}
-
-/* Collapsed drawer (the pulse bar's `logs` chip off): the log tail
-   gives its space back to the content panes and the eval output band
-   stays only while it holds a result — an empty band would be a
-   hint-only row taking canvas height for nothing. */
-body.drawer-collapsed #logs,
-body.drawer-collapsed #repl-output:empty {
-  display: none;
-}
-/* Hidden drawer (the `repl` chip off): drawer and splitter both go,
-   and main's grid rows are rewritten to 0 by splitter.js. */
-body.repl-hidden #repl,
-body.repl-hidden #drawer-splitter {
-  display: none;
 }
 
 /* Cards: one bordered block per section of a floating panel. */

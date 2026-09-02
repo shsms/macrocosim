@@ -1,4 +1,4 @@
-// REPL drawer: live syntax-highlighted Lisp input, autocomplete,
+// REPL panel: live syntax-highlighted Lisp input, autocomplete,
 // the log-line tap above it, and the WebSocket pump that fans out
 // /ws/events frames to liveCharts / the metrics store / pulseBar /
 // the log panel.
@@ -14,10 +14,11 @@ import {
   wordAtCursor,
 } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
+import { closePanel } from "./side-panel.js";
 import { topology } from "./topology.js";
 
 
-// Log panel above the REPL. /api/logs gives the load-time backfill
+// The Logs panel's tail. /api/logs gives the load-time backfill
 // (ring of recent records); /ws/events kind:"log" appends each new
 // record live. Capped at 500 DOM rows so a chatty session doesn't
 // freeze the panel.
@@ -242,6 +243,13 @@ export function setupRepl() {
         renderCompletions();
         return;
       }
+    }
+    // With no completion popup to dismiss, Esc closes the panel,
+    // matching Esc on every other card.
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closePanel("repl-btn");
+      return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();

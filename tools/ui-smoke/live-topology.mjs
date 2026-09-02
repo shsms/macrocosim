@@ -411,11 +411,30 @@ check(
 );
 
 // Escape settles the dialog's promise as a cancel — nothing posted.
+// It also stops at the dialog: app.js's global Esc bails out while a
+// `dialog[open]` is up, so the cancel must not peel a floating panel
+// off the dock behind it. The REPL is the panel to prove that with
+// here — the panel pills live on a microgrid's Topology view and this
+// section runs on the list, but a backtick opens the REPL anywhere.
 const idsBeforeCancel = (await mgIds()).length;
+// Back to the list BEFORE the panel opens: a real route change
+// dismisses every floating card (routing.js), and the import that just
+// landed selected its new microgrid, so openImport navigates.
+await backToMgList();
+// The submit above can leave a dialog field focused, and the backtick
+// shortcut stands down inside a text field.
+await page.evaluate(() => document.activeElement?.blur());
+await page.keyboard.press("`");
+await waitFor(async () => await page.evaluate(() => document.getElementById("repl").classList.contains("open")), 5000);
 await openImport(99405);
 await page.keyboard.press("Escape");
 await waitFor(async () => !(await importDialogOpen()), 5000).catch(() => {});
 check("e2e: Escape closes the import dialog", !(await importDialogOpen()));
+check(
+  "e2e: Escape on the import dialog leaves the panel behind it open",
+  await page.evaluate(() => document.getElementById("repl").classList.contains("open")),
+);
+await page.click("#repl .float-close");
 check(
   "e2e: a cancelled import registers nothing",
   (await mgIds()).length === idsBeforeCancel,
@@ -1499,49 +1518,92 @@ const grown = await waitFor(async () => {
 check("e2e: a drag taller than the cap grows the panel and re-caps it", grown !== null && grown.h > cappedH + 50, JSON.stringify(grown));
 await page.click("#metrics-btn");
 
-// ── e2e: the drawer chips ─────────────────────────────────────────
-// The log tail and the REPL drawer sit behind two pulse-bar chips,
-// both off by default. `logs` implies the drawer, and hiding the
-// drawer takes the tail with it, so a chip never stays lit over
-// nothing.
-const drawerState = async () =>
-  await page.evaluate(() => {
-    const vis = (id) => document.getElementById(id).getBoundingClientRect().height > 0;
-    const lit = (id) => document.getElementById(id).classList.contains("active");
-    return {
-      repl: vis("repl"),
-      logs: vis("logs"),
-      replChip: lit("repl-toggle"),
-      logsChip: lit("logs-toggle"),
-      rows: document.getElementById("app").style.gridTemplateRows,
-    };
-  });
-let ds = await drawerState();
-check("e2e: the drawer is hidden by default", !ds.repl && !ds.logs && !ds.replChip && !ds.logsChip, JSON.stringify(ds));
-await page.click("#logs-toggle");
-ds = await drawerState();
+// ── e2e: the REPL and Logs panels ────────────────────────────────
+// Static-markup floating panels off the PANELS pills, closed by
+// default. The REPL also answers a backtick from anywhere, since its
+// pill only shows on the Topology subview.
+// null, not false, when the card is missing: "closed" is asserted as
+// `=== false` below, so a renamed or deleted card fails here instead
+// of passing as a panel that is merely not open.
+const panelOpen = async (id) =>
+  await page.evaluate((i) => {
+    const el = document.getElementById(i);
+    return el ? el.classList.contains("open") : null;
+  }, id);
+check("e2e: the REPL and Logs panels start closed", (await panelOpen("repl")) === false && (await panelOpen("logs-panel")) === false);
 check(
-  "e2e: the logs chip shows the drawer with the tail at the saved height",
-  ds.repl && ds.logs && ds.replChip && ds.logsChip && /min\(260px, 75%\)$/.test(ds.rows),
-  JSON.stringify(ds),
+  "e2e: no drawer row is left in main",
+  await page.evaluate(() => document.getElementById("drawer-splitter") === null && getComputedStyle(document.getElementById("app")).gridTemplateRows.split(" ").length === 2),
+);
+await page.click("#logs-btn");
+check("e2e: the logs pill opens the Logs panel", await panelOpen("logs-panel"));
+const logsBox = await page.evaluate(() => {
+  const r = document.getElementById("logs-panel").getBoundingClientRect();
+  const d = document.getElementById("panel-dock").getBoundingClientRect();
+  return { w: r.width, left: r.left - d.left, bottom: d.bottom - r.bottom };
+});
+check(
+  "e2e: the Logs panel spawns 720px wide, 40px in from the dock's bottom-left corner",
+  Math.abs(logsBox.w - 720) <= 1 && Math.abs(logsBox.left - 40) <= 1 && Math.abs(logsBox.bottom - 40) <= 1,
+  JSON.stringify(logsBox),
 );
 check(
   "e2e: the log tail opens pinned to its newest line",
   await page.evaluate(() => {
     const l = document.getElementById("logs");
+    // A tail that fits in the card is pinned to its newest line for
+    // free — fail loudly instead, so this stops proving anything the
+    // day the backfill no longer overflows.
+    if (l.scrollHeight <= l.clientHeight) return false;
     return l.children.length > 0 && Math.abs(l.scrollTop + l.clientHeight - l.scrollHeight) < 2;
   }),
 );
-await page.reload({ waitUntil: "networkidle" });
-ds = await drawerState();
-check("e2e: the drawer chips persist across a reload", ds.repl && ds.logs && ds.replChip && ds.logsChip, JSON.stringify(ds));
-await page.click("#repl-toggle");
-ds = await drawerState();
+await page.keyboard.press("`");
+check("e2e: a backtick opens the REPL panel and focuses its input", (await panelOpen("repl")) && (await page.evaluate(() => document.activeElement?.id === "repl-input")));
+const replBox = await page.evaluate(() => {
+  const r = document.getElementById("repl").getBoundingClientRect();
+  const l = document.getElementById("logs-panel").getBoundingClientRect();
+  return { w: r.width, gap: r.left - l.right, bottomDiff: r.bottom - l.bottom };
+});
+check("e2e: the REPL panel spawns 560px wide, 8px to the right of the Logs panel along the bottom", Math.abs(replBox.w - 560) <= 1 && Math.abs(replBox.gap - 8) <= 1 && Math.abs(replBox.bottomDiff) <= 1, JSON.stringify(replBox));
+await page.fill("#repl-input", "(+ 1 2)");
+await page.keyboard.press("Control+Enter");
+const replOut = await waitFor(async () => {
+  const t = await page.evaluate(() => document.getElementById("repl-output").textContent);
+  return /\b3\b/.test(t) ? t : null;
+}, 10000);
+check("e2e: an eval in the REPL panel lands its result in the output band", /\b3\b/.test(replOut ?? ""), replOut);
+await page.fill("#repl-input", "");
+await page.type("#repl-input", "(make-");
+const popup = await waitFor(async () =>
+  await page.evaluate(() => {
+    const ul = document.getElementById("repl-completions");
+    if (ul.hidden || ul.children.length === 0) return null;
+    const u = ul.getBoundingClientRect();
+    const card = document.getElementById("repl").getBoundingClientRect();
+    return { entries: ul.children.length, top: u.top - card.top, bottom: card.bottom - u.bottom };
+  }), 5000).catch(() => null);
+check("e2e: the completion popup fits inside the default-sized REPL card", popup !== null && popup.entries > 5 && popup.top >= 0 && popup.bottom >= 0, JSON.stringify(popup));
+await page.keyboard.press("Escape"); // dismisses the popup
+await page.fill("#repl-input", "");
+await page.keyboard.press("Escape");
+check("e2e: Escape in the REPL input closes the panel", (await panelOpen("repl")) === false);
+await page.click("#logs-btn");
+check("e2e: the logs pill closes the Logs panel", (await panelOpen("logs-panel")) === false);
+// Off the Topology subview there is no pill; the backtick still works.
+await page.keyboard.press("2");
+await page.keyboard.press("`");
+// The card has to be on screen there, not just carrying the class:
+// the Scenarios pane replaces the topology canvas, and the panel dock
+// the cards float in shares that grid cell.
 check(
-  "e2e: hiding the drawer takes the tail and its chip with it",
-  !ds.repl && !ds.logs && !ds.replChip && !ds.logsChip && ds.rows === "auto 1fr 0px 0px",
-  JSON.stringify(ds),
+  "e2e: the backtick opens the REPL in Scenarios mode",
+  (await panelOpen("repl")) === true &&
+    (await page.evaluate(() => document.body.dataset.mode === "scenarios" && document.getElementById("repl").getBoundingClientRect().height > 0)),
 );
+await page.keyboard.press("Escape");
+await page.keyboard.press("1");
+await page.click(DEMO_CARD).catch(() => {});
 
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();

@@ -43,8 +43,7 @@ import {
   setupReplMgChip,
   visibleSubview,
 } from "./routing.js";
-import { closePanel, closeTopPanel, isPanelOpen } from "./side-panel.js";
-import { setupDrawerSplitter } from "./splitter.js";
+import { closePanel, closeTopPanel, isPanelOpen, makeSidePanelToggle, openPanel } from "./side-panel.js";
 import { topology } from "./topology.js";
 import { setupWeatherPanel } from "./weather-panel.js";
 
@@ -396,7 +395,6 @@ async function init() {
   setupScenarioReportToggle();
   setupFloatingPanels();
   setupInspectorChips();
-  setupDrawerSplitter();
   setupSnapshotsDialog();
   backfillLogs();
   // The topology canvas calls back to showComponent (from inspect.js)
@@ -421,6 +419,13 @@ async function init() {
   const valuesBtn = document.querySelector("#topology-controls .values-btn");
   if (valuesBtn) valuesBtn.classList.toggle("active", topology.valuesOn());
   setupFormulaToggle();
+  const focusRepl = () => document.getElementById("repl-input").focus();
+  // Lines appended while the tail was display:none could not scroll
+  // it, so it would open on its oldest lines.
+  const pinLogTail = () => {
+    const logs = document.getElementById("logs");
+    logs.scrollTop = logs.scrollHeight;
+  };
   // Editor-style keyboard shortcuts. All check that focus isn't in
   // a text editor (REPL textarea, dialog inputs) before firing, so
   // typing remains unaffected.
@@ -433,6 +438,15 @@ async function init() {
     const escOnCheckbox =
       e.key === "Escape" && e.target.matches?.('input[type="checkbox"], input[type="radio"]');
     if (inEditable && !escOnCheckbox) return;
+    // A modal owns the keyboard while it is up — its own Esc closes it.
+    if (document.querySelector("dialog[open]")) return;
+    // Backtick summons the REPL from anywhere: its pill lives on the
+    // Topology controls, but evals are not Topology-bound.
+    if (e.key === "`" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      openPanel("repl-btn", focusRepl);
+      return;
+    }
     // The editing shortcuts drive the Topology canvas's selection.
     // Anywhere else they must stay inert — Delete pressed on the
     // Dispatches sub-tab, the Scenarios mode, or the microgrid list
@@ -487,6 +501,18 @@ async function init() {
   setupModeToggle();
   setupReplMgChip();
   setupMetricsPanel();
+  // REPL and Logs are static-markup panels (side-panel.js
+  // STATIC_PANELS): the render callbacks only focus or pin, the
+  // markup is already in place.
+  makeSidePanelToggle("repl-btn", focusRepl);
+  makeSidePanelToggle("logs-btn", pinLogTail);
+  try {
+    // The drawer these panels replaced left its height and its two
+    // open flags behind; nothing reads them now.
+    for (const k of ["switchyard-drawer-h", "switchyard-drawer-logs", "switchyard-drawer-repl"]) localStorage.removeItem(k);
+  } catch {
+    // Storage unavailable — there is nothing stale to drop either.
+  }
   setupWeatherPanel();
   scenariosPanel.setup();
   dispatchesPanel.setup();

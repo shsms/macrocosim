@@ -778,9 +778,9 @@ export function createGraphCanvas(containerId, adapter = {}) {
       edgesDS = new vis.DataSet(edges);
       const el = container();
       network = new vis.Network(el, { nodes: nodesDS, edges: edgesDS }, visOptions);
-      // Re-frame whenever the container resizes — switching subviews
-      // (display:none → display:block) and dragging the drawer
-      // splitter all fall through here. Without this, vis-
+      // Re-frame whenever the container resizes — the subview's own
+      // display flip (display:none → display:block) is what resizes
+      // this container, and it falls through here. Without this, vis-
       // network's camera sticks to whatever extent was captured on
       // first paint and a graph that was wider than the canvas at
       // construction shows only half of itself afterwards.

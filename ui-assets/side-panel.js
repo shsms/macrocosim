@@ -49,11 +49,15 @@ const REFIT_SETTLE = 180;
 // top-right cascade.
 const PANEL_DEFAULTS = {
   "metrics-btn": { width: 430 },
+  "repl-btn": { width: 560, spawn: "bottom-left" },
+  "logs-btn": { width: 720, spawn: "bottom-left" },
 };
 // Panels whose markup is static in index.html, so a module can keep
 // addressing their elements by id: name → [card id, content id].
 const STATIC_PANELS = {
   node: ["inspector", "inspect"],
+  "repl-btn": ["repl", "repl-body"],
+  "logs-btn": ["logs-panel", "logs-body"],
 };
 // A bottom-left card sits this far in from the dock's left and
 // bottom edges; further bottom-left cards line up to its right with

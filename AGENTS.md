@@ -61,7 +61,12 @@ is wiring the topology + animating the environment.
   text, number formatting, the dead band and edge flow; `pill.js`
   owns the node model and canvas renderer both graph canvases draw
   with, and the zoom tiers (full / hero / marker); `hovercard.js`
-  the node hover card (pure model + DOM widget); `vendor/fonts/` the
+  the node hover card (pure model + DOM widget); `side-panel.js` the
+  floating-card shell every panel (inspector, formulas, metrics,
+  weather, REPL, logs, Defaults, Report) opens in — static-markup
+  cards are listed in its `STATIC_PANELS`, per-panel width and spawn
+  corner in `PANEL_DEFAULTS`; `splitter.js` the drag-to-resize
+  handshake the dock strips will use; `vendor/fonts/` the
   vendored IBM Plex faces (OFL))
   - Reactive power reads at parity with active power across the SPA:
     the hover card draws a Q envelope bar under the P one (same

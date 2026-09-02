@@ -41,8 +41,8 @@ self-contained world — `examples/berlin-demo.lisp` wires a demo
 topology, animates its AC environment, and registers seven starter
 scenarios; saving the file hot-reloads the world. With no scripts
 the engine boots bare: UI up, no microgrids, and you load a script
-on demand from the Microgrids tab or the REPL (the pulse bar's `repl`
-chip opens it):
+on demand from the Microgrids tab or the REPL (the `repl` pill on a
+microgrid's Topology view, or a backtick anywhere, opens it):
 
 ```lisp
 (load "examples/berlin-demo.lisp")

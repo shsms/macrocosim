@@ -44,8 +44,6 @@
         <span class="pulse-pill" id="pulse-loopback">…</span>
       </span>
       <span class="pulse-spacer"></span>
-      <span class="pulse-chip" id="logs-toggle" title="show / hide the log tail in the drawer">logs</span>
-      <span class="pulse-chip" id="repl-toggle" title="show / hide the REPL drawer">repl</span>
       <span class="pulse-chip" id="tz-toggle" title="toggle between local sim zone and UTC">local</span>
       <span class="pulse-chip" id="density-toggle" title="toggle compact density">compact</span>
       <span class="pulse-clock" id="pulse-clock">--:--:--</span>
@@ -151,6 +149,10 @@
                 title="Derived site metrics: power, reactive power / PF, frequency — live charts">metrics</button>
         <button type="button" id="weather-btn" class="pill"
                 title="Site weather: the day's sunlight curve, cloud settings, and a pass-a-cloud trigger">weather</button>
+        <button type="button" id="repl-btn" class="pill"
+                title="Lisp REPL against the selected microgrid — backtick opens it from anywhere">repl</button>
+        <button type="button" id="logs-btn" class="pill"
+                title="The server's log tail">logs</button>
       </div>
       <!-- Floating left: summon the Add-component panel (topology only). -->
       <button id="add-toggle" class="canvas-btn" type="button"
@@ -193,27 +195,36 @@
             <p class="hint">Click a node to inspect. Right-click for the context menu.</p>
           </div>
         </aside>
-      </div>
-      <div id="drawer-splitter" title="Drag to resize"></div>
-      <section id="repl">
-        <div id="logs"></div>
-        <div id="repl-output"></div>
-        <form id="repl-form">
-          <button type="button" id="repl-mg-chip" class="repl-mg-chip" title="REPL targets this microgrid — click to jump"></button>
-          <div id="repl-input-wrap">
-            <!-- Rainbow-paren overlay. The textarea sits on top with
-                 transparent text; this layer renders the same content
-                 with depth-coloured parens. aria-hidden because it's
-                 a visual mirror of the textarea, not its own input. -->
-            <pre id="repl-input-overlay" aria-hidden="true"></pre>
-            <textarea id="repl-input" rows="2" spellcheck="false"
-                      autocomplete="off"
-                      placeholder="(eval lisp here — ctrl/cmd+enter to run, tab to complete)"></textarea>
-            <ul id="repl-completions" hidden></ul>
+        <aside id="repl" class="float-panel" aria-label="repl">
+          <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
+          <button class="float-close" type="button" title="Close (Esc)">×</button>
+          <div id="repl-body" class="panel-content">
+            <div id="repl-output"></div>
+            <form id="repl-form">
+              <button type="button" id="repl-mg-chip" class="repl-mg-chip" title="REPL targets this microgrid — click to jump"></button>
+              <div id="repl-input-wrap">
+                <!-- Rainbow-paren overlay. The textarea sits on top with
+                     transparent text; this layer renders the same content
+                     with depth-coloured parens. aria-hidden because it's
+                     a visual mirror of the textarea, not its own input. -->
+                <pre id="repl-input-overlay" aria-hidden="true"></pre>
+                <textarea id="repl-input" rows="2" spellcheck="false"
+                          autocomplete="off"
+                          placeholder="(eval lisp here — ctrl/cmd+enter to run, tab to complete)"></textarea>
+                <ul id="repl-completions" hidden></ul>
+              </div>
+              <button type="submit">Eval</button>
+            </form>
           </div>
-          <button type="submit">Eval</button>
-        </form>
-      </section>
+        </aside>
+        <aside id="logs-panel" class="float-panel" aria-label="logs">
+          <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
+          <button class="float-close" type="button" title="Close (Esc)">×</button>
+          <div id="logs-body" class="panel-content">
+            <div id="logs"></div>
+          </div>
+        </aside>
+      </div>
     </main>
     <noscript>This UI requires JavaScript.</noscript>
     <div id="ctx-menu" hidden></div>
@@ -453,7 +464,7 @@
       <div id="help-dialog-content">
         <h4>Modes</h4>
         <ul class="help-list">
-          <li>The chrome's <em>Microgrids</em> / <em>Scenarios</em> buttons swap the main pane. The REPL drawer, when shown, stays in both. Press <kbd>1</kbd> for Microgrids, <kbd>2</kbd> for Scenarios.</li>
+          <li>The chrome's <em>Microgrids</em> / <em>Scenarios</em> buttons swap the main pane. The REPL panel opens in either mode: from the <em>repl</em> pill on a microgrid's Topology view, or with a backtick anywhere. Press <kbd>1</kbd> for Microgrids, <kbd>2</kbd> for Scenarios.</li>
           <li>Mode preference persists in <code>localStorage</code>; refresh restores the last-picked mode + last-selected microgrid.</li>
         </ul>
         <h4>Microgrids</h4>
@@ -467,7 +478,7 @@
         <h4>Aggregations</h4>
         <ul class="help-list">
           <li>The <em>metrics</em> pill (top-right of the canvas) opens live site metrics — power, reactive power / PF, frequency — read from the same <code>frequenz-microgrid</code> client a production control app would use. The <em>formulas</em> pill next to it shows how each of those aggregates is derived from the topology; every <code>#N</code> in a formula is a link back to the canvas.</li>
-          <li>Pulse-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>logs</em> / <em>repl</em> show the log tail and the REPL drawer (both hidden by default — the canvas gets the space); <em>density</em> + <em>TZ</em> toggle visual options.</li>
+          <li>Pulse-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>density</em> + <em>TZ</em> toggle visual options.</li>
         </ul>
         <h4>Snapshots</h4>
         <ul class="help-list">
@@ -485,11 +496,11 @@
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>C</kbd> — copy selection. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>V</kbd> — paste. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>X</kbd> — cut. Each paste re-uses the last copy; clipboard captures structure only (categories + internal edges), so clones use category defaults.</li>
           <li><kbd>Del</kbd> / <kbd>Backspace</kbd> — delete selection. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>A</kbd> — select all visible. <kbd>Esc</kbd> — deselect.</li>
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> — undo the last canvas edit. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Y</kbd>) — redo. The history lives on the server, one step per structural edit of the microgrid's managed file, so it survives page reloads and is shared by every open tab.</li>
-          <li>The <em>panels</em> group (top-right of the canvas) summons the two canvas-side floating panels. <em>formulas</em> opens the formula explorer: pick a metric, hover a part of the formula to highlight its components on the canvas (subtracted parts show red), click a <code>#N</code> to jump to that component. The <em>Engine options</em> card changes how the formula is generated; all options are view-local. <em>metrics</em> opens the site metrics panel: foldable Power / Reactive power / Frequency cards, each a live chart over the derived aggregate streams, with chips that read out the latest value and toggle their series off the chart.</li>
+          <li>The <em>panels</em> group (top-right of the canvas) summons the canvas-side floating panels (formulas, metrics, weather, repl, logs). <em>formulas</em> opens the formula explorer: pick a metric, hover a part of the formula to highlight its components on the canvas (subtracted parts show red), click a <code>#N</code> to jump to that component. The <em>Engine options</em> card changes how the formula is generated; all options are view-local. <em>metrics</em> opens the site metrics panel: foldable Power / Reactive power / Frequency cards, each a live chart over the derived aggregate streams, with chips that read out the latest value and toggle their series off the chart.</li>
         </ul>
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
-          <li><strong>Inspector</strong> — one of the floating panels on the right, alongside the formula explorer, the metrics panel, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
+          <li><strong>Inspector</strong> — one of the floating panels, alongside the formula explorer, metrics, weather, the REPL, the log tail, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in its own floating panel; edits write to <code>enterprise.lisp</code>.</li>
@@ -498,7 +509,7 @@
         <h4>REPL</h4>
         <ul class="help-list">
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> — eval. <kbd>Tab</kbd> — complete.</li>
-          <li>The pulse bar's <em>repl</em> chip shows the drawer, <em>logs</em> the log tail inside it. Drag the splitter above the drawer to resize; double-click it to toggle the log tail. With logs hidden the drawer is the input row plus the last result.</li>
+          <li>The <em>repl</em> and <em>logs</em> pills on a microgrid's Topology view open the REPL and the server log tail as floating panels — drag, resize and close them like any other card. A backtick opens the REPL from anywhere; <kbd>Esc</kbd> in its input closes it.</li>
         </ul>
       </div>
     </dialog>
