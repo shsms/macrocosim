@@ -197,7 +197,7 @@ jobs:
             cat /tmp/mc-e2e.log
             exit 1
           fi
-          echo "SW_UI=http://$(jq -r .ui "$SD/endpoints.json")" >> "$GITHUB_ENV"
+          echo "MACROCOSIM_UI=http://$(jq -r .ui "$SD/endpoints.json")" >> "$GITHUB_ENV"
 
       - name: Live topology smoke
         run: node tools/ui-smoke/live-topology.mjs

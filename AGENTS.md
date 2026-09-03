@@ -86,7 +86,7 @@ is wiring the topology + animating the environment.
     `set-reactive-power` on inverters and `set-meter-reactive-power`
     / `set-meter-power-factor` (with a `leading` checkbox) on meters.
 - `tools/ui-smoke/` — Playwright smoke scripts against a live server
-  (`SW_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`).
+  (`MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`).
   The `ui-e2e` job in `.github/workflows/ci.yml` runs the e2e half on
   pushes to main and PRs targeting main; it's also runnable by hand
   the same way. The e2e half drives the Berlin demo (microgrid 2200)
@@ -99,7 +99,7 @@ is wiring the topology + animating the environment.
   ./target/debug/macrocosim --state-dir "$SD" --ephemeral-ports \
       --emit-endpoints="$SD/endpoints.json" "$SD/microgrids/2200.lisp" &
   until [ -f "$SD/endpoints.json" ]; do sleep 0.2; done
-  SW_UI=http://$(jq -r .ui "$SD/endpoints.json") \
+  MACROCOSIM_UI=http://$(jq -r .ui "$SD/endpoints.json") \
       node tools/ui-smoke/live-topology.mjs
   ```
 - `src/server.rs` — `Microgrid` gRPC service

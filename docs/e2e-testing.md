@@ -41,10 +41,10 @@ state.
 # 1. boot the simulator; ephemeral ports keep parallel CI jobs from clashing,
 #    and the endpoints file is the readiness signal.
 macrocosim graph.lisp --ephemeral-ports --emit-endpoints=endpoints.json &
-SW=$!
+SIM=$!
 # wait until bound; bail out if the simulator died at boot instead
 # of hanging the job until CI's global timeout.
-until [ -s endpoints.json ]; do kill -0 $SW 2>/dev/null || exit 1; sleep 0.1; done
+until [ -s endpoints.json ]; do kill -0 $SIM 2>/dev/null || exit 1; sleep 0.1; done
 
 GRPC=$(jq -r '.microgrids[0].grpc' endpoints.json)   # e.g. [::1]:41979
 UI=$(jq -r '.ui' endpoints.json)                     # e.g. 127.0.0.1:33565
@@ -57,7 +57,7 @@ APP=$!
 macroctl --ui-addr "http://$UI" scenario run my-scenario --wait --assert
 RC=$?
 
-kill $APP $SW
+kill $APP $SIM
 exit $RC
 ```
 
