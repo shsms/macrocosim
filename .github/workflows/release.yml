@@ -35,14 +35,15 @@ permissions:
   contents: read
 
 jobs:
-  # On a tag, refuse to build anything unless the tag, Cargo.toml and
-  # pyproject.toml agree on the version — a stale 0.0.0 must never reach
-  # PyPI. Always runs (so `wheels` can `need` it); a no-op off tags.
+  # On a tag, refuse to build anything unless the tag matches Cargo.toml's
+  # version (the wheel takes its version from there too, so a stale number
+  # can never reach PyPI). Always runs (so `wheels` can `need` it); a no-op
+  # off tags.
   check-version:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Tag matches the manifests
+      - name: Tag matches Cargo.toml
         run: |
           case "$GITHUB_REF" in
             refs/tags/v*) ;;
@@ -50,10 +51,9 @@ jobs:
           esac
           tag="${GITHUB_REF_NAME#v}"
           cargo=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]*)".*/\1/')
-          py=$(grep -m1 '^version = ' python/pyproject.toml | sed -E 's/.*"([^"]*)".*/\1/')
-          echo "tag=$tag cargo=$cargo pyproject=$py"
-          [ "$tag" = "$cargo" ] && [ "$tag" = "$py" ] || {
-            echo "::error::version mismatch — bump Cargo.toml and python/pyproject.toml to $tag"
+          echo "tag=$tag cargo=$cargo"
+          [ "$tag" = "$cargo" ] || {
+            echo "::error::tag v$tag does not match Cargo.toml version $cargo"
             exit 1
           }
 

@@ -350,7 +350,8 @@ gRPC / HTTP or the Python client is a separate program, so not GPL-covered.
 Remaining before a public release:
 - Register the PyPI trusted publisher (owner / repo / =release.yml= /
   environment =pypi=) and create the =pypi= environment in the repo settings.
-- Bump both manifests off =0.0.0= / =0.1.0= to the first release version.
+- Tag =v0.1.0= (the version lives in =Cargo.toml= only; the wheel derives
+  its PEP 440 version from it, so an alpha is =0.1.0-alpha.1= → =0.1.0a1=).
 - Optional: a Docker image (GPL) consumers run in CI — no source, no linking.
 - A crates.io publish of macrocosim itself also needs the vendored proto build
   buildable from the published crate (git submodule today), and the

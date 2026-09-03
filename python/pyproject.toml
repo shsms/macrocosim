@@ -4,7 +4,9 @@ build-backend = "maturin"
 
 [project]
 name = "macrocosim"
-version = "0.0.0"
+# The version comes from ../Cargo.toml (maturin converts a semver
+# pre-release like 0.1.0-alpha.1 to PEP 440's 0.1.0a1).
+dynamic = ["version"]
 description = "Python integration-testing client for the macrocosim microgrid simulator"
 readme = "README.md"
 # The Python code is MIT. The wheel also bundles the macrocosim + macroctl
