@@ -100,9 +100,14 @@ jobs:
           args: --release --out dist
           # protoc INSIDE the manylinux container (the host's isn't visible
           # there) — curl the release, as frequenz-api-microgrid's CI does.
+          # The x86_64 image is RPM-based; the aarch64 cross image is Ubuntu
+          # (apt, no unzip), so install unzip with whichever tool exists.
           before-script-linux: |
             PB=28.3
-            command -v unzip >/dev/null || { dnf -y install unzip || yum -y install unzip; }
+            command -v unzip >/dev/null || {
+              if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq unzip;
+              else dnf -y install unzip || yum -y install unzip; fi
+            }
             curl -sSL -o /tmp/protoc.zip \
               "https://github.com/protocolbuffers/protobuf/releases/download/v${PB}/protoc-${PB}-linux-$(uname -m).zip"
             unzip -o /tmp/protoc.zip -d /usr/local
