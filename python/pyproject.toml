@@ -7,6 +7,10 @@ name = "macrocosim"
 version = "0.0.0"
 description = "Python integration-testing client for the macrocosim microgrid simulator"
 readme = "README.md"
+# The Python code is MIT. The wheel also bundles the macrocosim + macroctl
+# binaries, which are GPL-3.0-only (see LICENSE-GPL-3.0 and the README).
+license = "MIT"
+license-files = ["LICENSE-MIT", "LICENSE-GPL-3.0"]
 requires-python = ">=3.11"
 # The core (process launch + the HTTP /api control plane) needs only httpx.
 # The gRPC Microgrid client stays an optional extra (it pulls grpcio) — add

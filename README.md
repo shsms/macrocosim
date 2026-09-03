@@ -149,6 +149,13 @@ gateway intersects bounds for setpoint validation.
 - [`scenarios/README.md`](scenarios/README.md) — scenario framework
   reference.
 
+## License
+
+The simulator (this crate and the `macrocosim` / `macroctl` binaries) is
+[GPL-3.0-only](LICENSE). The Python client under [`python/`](python/) is
+[MIT](python/LICENSE-MIT); its wheel bundles the GPL binaries and ships their
+license alongside.
+
 ---
 
 This project was previously called `switchyard`.

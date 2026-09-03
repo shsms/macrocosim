@@ -342,9 +342,12 @@ environment), and creates the GitHub Release with per-platform standalone
 binary bundles (+ a lipo'd macOS universal) and the wheels attached.
 Pushes to main run the build half as a check; dispatch is the dry run.
 
+Licensing DONE: the crate + binaries are =GPL-3.0-only= (tulisp is, and is
+linked in); the Python client is =MIT=, and its wheel ships both license
+texts next to the bundled binaries. An app driving the simulator over
+gRPC / HTTP or the Python client is a separate program, so not GPL-covered.
+
 Remaining before a public release:
-- Set =GPL-3.0-or-later= + add a =LICENSE= file (Cargo + pyproject); the wheel
-  bundles GPL binaries, so this gates a PyPI *and* a crates.io publish.
 - Register the PyPI trusted publisher (owner / repo / =release.yml= /
   environment =pypi=) and create the =pypi= environment in the repo settings.
 - Bump both manifests off =0.0.0= / =0.1.0= to the first release version.
@@ -414,8 +417,7 @@ the =macrocosim= + =macroctl= binaries (=pip install macrocosim= just works);
 uv-native dev; the tulisp family is on crates.io (0.29.0 / 0.1.0).
 
 Deferred follow-ups: an async surface (sync-only today); the PyPI publish
-itself (the release.yml pipeline is in place; needs =GPL-3.0-or-later= set
-first — see D5); a library↔binary version-compat check; typed wrappers for the dispatch / assets
+itself (the release.yml pipeline and the licenses are in place — see D5); a library↔binary version-compat check; typed wrappers for the dispatch / assets
 APIs and a =timeline(hold/ramp)= drive helper; and deterministic
 app-in-the-loop (a clock-step RPC, ties to D8).
 

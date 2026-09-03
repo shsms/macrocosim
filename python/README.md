@@ -246,3 +246,12 @@ for the design and roadmap. Building, launching, reading and mutating are
 synchronous; the settle-aware `expect` assertions are `async` (so they compose
 with an app under test on the same event loop). Runnable `examples/` cover each
 piece; `examples/pytest_demo/` is a live suite.
+
+## License
+
+The Python package is [MIT](LICENSE-MIT). The wheel also bundles the
+`macrocosim` and `macroctl` binaries, which are
+[GPL-3.0-only](LICENSE-GPL-3.0); their source is the
+[macrocosim repository](https://github.com/shsms/macrocosim) at the
+release's git tag: `v0.1.0` for wheel version 0.1.0, and for a pre-release
+the semver form of the PEP 440 version, so `v0.1.0-alpha.1` for 0.1.0a1.
