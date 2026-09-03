@@ -1,0 +1,277 @@
+name: release
+
+# Build the platform wheels (macrocosim + macroctl bundled via maturin), the
+# sdist, and a standalone binary bundle per platform. A `v*` tag additionally
+# publishes the wheels + sdist to PyPI (trusted publishing under the `pypi`
+# GitHub environment, which must exist in the repo settings and match the
+# publisher registered on PyPI for this repo + workflow file) and creates the
+# GitHub Release for the tag with every bundle and wheel attached.
+#
+# Pushes to main that touch the build inputs, and manual dispatch, run the
+# build half only — a check that the next tag will not surprise us, and a
+# dry run before tagging.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+    branches: [main]
+    # Not evaluated for tag pushes (GitHub ignores `paths` there), so the
+    # tag path always runs the full workflow.
+    paths:
+      - 'src/**'
+      - 'sim/**' # include_str!'d into the binary
+      - 'ui-assets/**' # rust-embed'ed into the binary
+      - 'submodules/**' # proto roots build.rs compiles
+      - '.gitmodules'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'python/src/**'
+      - 'python/pyproject.toml'
+      - 'python/uv.lock'
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  # On a tag, refuse to build anything unless the tag, Cargo.toml and
+  # pyproject.toml agree on the version — a stale 0.0.0 must never reach
+  # PyPI. Always runs (so `wheels` can `need` it); a no-op off tags.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the manifests
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v*) ;;
+            *) echo "not a tag push; nothing to check"; exit 0 ;;
+          esac
+          tag="${GITHUB_REF_NAME#v}"
+          cargo=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/.*"([^"]*)".*/\1/')
+          py=$(grep -m1 '^version = ' python/pyproject.toml | sed -E 's/.*"([^"]*)".*/\1/')
+          echo "tag=$tag cargo=$cargo pyproject=$py"
+          [ "$tag" = "$cargo" ] && [ "$tag" = "$py" ] || {
+            echo "::error::version mismatch — bump Cargo.toml and python/pyproject.toml to $tag"
+            exit 1
+          }
+
+  wheels:
+    name: wheel (${{ matrix.bundle }})
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # `smoke`: the host's Python can pip-install the wheel, so run the
+      # import + PATH check. `exec`: the host can execute the built binary,
+      # so run it once after bundling.
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: auto, smoke: true, exec: true, bundle: linux-x86_64 }
+          # Cross-compiled in a manylinux cross container; the x86_64 host can
+          # neither install nor run the aarch64 result.
+          - { os: ubuntu-latest, target: aarch64, manylinux: auto, smoke: false, exec: false, bundle: linux-aarch64 }
+          - { os: macos-14, target: aarch64, smoke: true, exec: true, bundle: macos-aarch64 }
+          # Cross-built on the Apple Silicon runner (all deps are pure Rust,
+          # so no foreign toolchain). pip won't install an x86_64 wheel on an
+          # arm64 Python, but Rosetta runs the binary.
+          - { os: macos-14, target: x86_64, smoke: false, exec: true, bundle: macos-x86_64 }
+          - { os: windows-latest, target: x86_64, smoke: true, exec: true, bundle: windows-x86_64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive # vendored proto roots
+
+      # build.rs shells out to protoc via tonic-prost-build.
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc --no-progress -y
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --out dist
+          # protoc INSIDE the manylinux container (the host's isn't visible
+          # there) — curl the release, as frequenz-api-microgrid's CI does.
+          before-script-linux: |
+            PB=28.3
+            command -v unzip >/dev/null || { dnf -y install unzip || yum -y install unzip; }
+            curl -sSL -o /tmp/protoc.zip \
+              "https://github.com/protocolbuffers/protobuf/releases/download/v${PB}/protoc-${PB}-linux-$(uname -m).zip"
+            unzip -o /tmp/protoc.zip -d /usr/local
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Smoke-test the wheel
+        if: matrix.smoke
+        shell: bash
+        run: |
+          # Install the built wheel by explicit path. A plain
+          # `pip install macrocosim` could pull a foreign package with
+          # the same name from PyPI; only the extras' dependencies
+          # should come from there.
+          whl=$(python -c 'import glob; print(glob.glob("python/dist/*.whl")[0])')
+          python -m pip install "${whl}[grpc]"
+          python - <<'PY'
+          import macrocosim  # noqa: F401
+          from macrocosim.runtime import which_binary
+          assert which_binary("macrocosim") and which_binary("macroctl"), (
+              "bundled binaries not found on PATH"
+          )
+          print("wheel OK: macrocosim + macroctl bundled and discoverable")
+          PY
+
+      # The hosted arm64 macOS image is expected to ship Rosetta 2; make
+      # sure, since the exec check below depends on it.
+      - name: Ensure Rosetta (x86_64 binary on the arm64 runner)
+        if: matrix.bundle == 'macos-x86_64'
+        run: pgrep -q oahd || sudo softwareupdate --install-rosetta --agree-to-license
+
+      # The standalone bundle is the wheel's own binaries, unpacked: one
+      # compile per platform feeds both PyPI and the GitHub Release. A
+      # tarball (keeps the exec bit) on POSIX, a zip on Windows.
+      - name: Bundle the binaries
+        shell: bash
+        env:
+          BUNDLE: ${{ matrix.bundle }}
+          EXEC: ${{ matrix.exec }}
+        run: |
+          python - <<'PY'
+          import glob, os, re, shutil, sys, zipfile
+          whl = glob.glob("python/dist/*.whl")[0]
+          version = re.match(r"macrocosim-([^-]+)-", os.path.basename(whl)).group(1)
+          out = f"macrocosim-{version}-{os.environ['BUNDLE']}"
+          stage = os.path.join("bundle", out)
+          os.makedirs(stage, exist_ok=True)
+          with zipfile.ZipFile(whl) as z:
+              names = [n for n in z.namelist() if ".data/scripts/" in n]
+              assert len(names) == 2, names
+              for n in names:
+                  dst = os.path.join(stage, os.path.basename(n))
+                  with z.open(n) as src, open(dst, "wb") as f:
+                      shutil.copyfileobj(src, f)
+                  os.chmod(dst, 0o755)
+          fmt = "zip" if sys.platform == "win32" else "gztar"
+          path = shutil.make_archive(os.path.join("bundle", out), fmt, "bundle", out)
+          print("bundled", path, sorted(os.listdir(stage)))
+          PY
+          # Prove the binary actually runs, where the host can run it.
+          if [ "$EXEC" = true ]; then
+            bundle/macrocosim-*-"$BUNDLE"/macrocosim --help > /dev/null
+            bundle/macrocosim-*-"$BUNDLE"/macroctl --help > /dev/null
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.bundle }}
+          path: python/dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.bundle }}
+          path: |
+            bundle/*.tar.gz
+            bundle/*.zip
+
+  # One macOS download for people who don't know their chip: lipo the two
+  # macOS bundles into universal binaries.
+  macos-universal:
+    needs: wheels
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-macos-*
+          path: in
+          merge-multiple: true
+      - name: lipo
+        run: |
+          set -x
+          mkdir -p arm x86 out
+          tar -xzf in/*-macos-aarch64.tar.gz -C arm --strip-components=1
+          tar -xzf in/*-macos-x86_64.tar.gz -C x86 --strip-components=1
+          name=$(basename in/*-macos-aarch64.tar.gz .tar.gz | sed 's/-macos-aarch64$/-macos-universal/')
+          mkdir "out/$name"
+          for bin in macrocosim macroctl; do
+            lipo -create -output "out/$name/$bin" "arm/$bin" "x86/$bin"
+            lipo -info "out/$name/$bin"
+            "out/$name/$bin" --help > /dev/null
+          done
+          tar -czf "out/$name.tar.gz" -C out "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-macos-universal
+          path: out/*.tar.gz
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: python/dist/*.tar.gz
+
+  publish-pypi:
+    name: publish to PyPI
+    # A tag *push* only: a manual dispatch pointed at a tag must stay a
+    # dry run.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/macrocosim
+    permissions:
+      contents: read
+      id-token: write # mint the OIDC token PyPI's trusted publisher checks
+    steps:
+      - name: Collect wheels + sdist
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '{wheel-*,sdist}'
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  # After PyPI, so a failed upload leaves no half-release behind. Notes are
+  # GitHub's auto-generated PR list; edit the Release afterwards if wanted.
+  github-release:
+    name: GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [publish-pypi, macos-universal]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Collect bundles, wheels + sdist
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - run: ls -l assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: assets/*

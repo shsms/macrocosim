@@ -86,6 +86,40 @@ jobs:
       - name: boot smoke
         run: node tools/boot-smoke.mjs
 
+  # Lint, format-check, and type-check the Python client under python/.
+  # Dev tools + dependencies only: `--no-install-project` skips building
+  # the maturin (Rust) wheel — ruff and ty analyze the source and only
+  # need the dependencies resolvable, so the job stays fast (no cargo,
+  # protoc, or submodules). Cheap enough to run on every PR unfiltered.
+  python-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: python/uv.lock
+
+      - name: Sync dev tools
+        run: uv sync --no-install-project
+
+      # `--no-sync` keeps `uv run` from re-syncing WITH the project,
+      # which would defeat `--no-install-project` above and kick off
+      # the maturin build after all.
+      - name: Ruff lint
+        run: uv run --no-sync ruff check src tests examples
+
+      - name: Ruff format
+        run: uv run --no-sync ruff format --check src tests examples
+
+      - name: Type check (ty, all rules as errors)
+        run: uv run --no-sync ty check --error all src
+
   # Live browser smoke: boots the binary against a scratch Berlin-demo
   # microgrid (same recipe AGENTS.md documents for running
   # tools/ui-smoke/live-topology.mjs by hand) and drives the real SPA

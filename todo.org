@@ -334,11 +334,20 @@ is now published to crates.io (=tulisp= 0.29.0, =tulisp-async= / =tulisp-fmt=
 0.1.0) and macrocosim depends on them there — the old git-deps blocker is
 cleared.
 
+Release pipeline DONE (=.github/workflows/release.yml=): a =v*= tag push
+checks the tag against both manifests, builds the wheel matrix (linux
+x86_64 / aarch64 via manylinux, macOS arm64 / x86_64, windows x86_64) plus
+the sdist, publishes to PyPI via trusted publishing (the =pypi= GitHub
+environment), and creates the GitHub Release with per-platform standalone
+binary bundles (+ a lipo'd macOS universal) and the wheels attached.
+Pushes to main run the build half as a check; dispatch is the dry run.
+
 Remaining before a public release:
 - Set =GPL-3.0-or-later= + add a =LICENSE= file (Cargo + pyproject); the wheel
   bundles GPL binaries, so this gates a PyPI *and* a crates.io publish.
-- A per-OS/arch wheel CI matrix (maturin / cibuildwheel) + a Python test/lint
-  job; today only a hand-built linux-x86_64 wheel exists.
+- Register the PyPI trusted publisher (owner / repo / =release.yml= /
+  environment =pypi=) and create the =pypi= environment in the repo settings.
+- Bump both manifests off =0.0.0= / =0.1.0= to the first release version.
 - Optional: a Docker image (GPL) consumers run in CI — no source, no linking.
 - A crates.io publish of macrocosim itself also needs the vendored proto build
   buildable from the published crate (git submodule today), and the
@@ -404,9 +413,9 @@ pytest plugin, and packaging. Shipped as a =maturin= platform wheel bundling
 the =macrocosim= + =macroctl= binaries (=pip install macrocosim= just works);
 uv-native dev; the tulisp family is on crates.io (0.29.0 / 0.1.0).
 
-Deferred follow-ups: an async surface (sync-only today); a per-OS/arch wheel
-CI matrix + PyPI publish (needs =GPL-3.0-or-later= set first — see D5); a
-library↔binary version-compat check; typed wrappers for the dispatch / assets
+Deferred follow-ups: an async surface (sync-only today); the PyPI publish
+itself (the release.yml pipeline is in place; needs =GPL-3.0-or-later= set
+first — see D5); a library↔binary version-compat check; typed wrappers for the dispatch / assets
 APIs and a =timeline(hold/ramp)= drive helper; and deterministic
 app-in-the-loop (a clock-step RPC, ties to D8).
 
@@ -965,18 +974,21 @@ was fixed in =fa39fc3=.)
 
 ** Packaging / housekeeping
 
-*** TODO [#B] PyPI name =macrocosim= is taken            :packaging:python:
+*** DONE [#B] PyPI name collision blocks the publish       :packaging:python:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-03 Do 12:47]
+:END:
 
-PyPI already has =macrocosim= (a GPL network-teaching framework,
-v1.0.1), so =pip install macrocosim= installs the foreign package
-and the planned publish (Y track / D5) cannot happen under this
-name. Rename or namespace (e.g. =macrocosim-sim=) before any
-release. The wheels.yml smoke test installs by wheel path since
-=e0d48bd=, so CI no longer trips over it.
+PyPI already had the project's original name (a GPL network-teaching
+framework, v1.0.1), so a pip install under it fetched the foreign
+package and the planned publish (Y track / D5) could not happen.
+Resolved by renaming the project to =macrocosim= / =macroctl=; the
+release.yml smoke test installs by wheel path since =e0d48bd=, so CI
+never trips over a same-named foreign package either way.
 
 *** TODO [#C] sdist is shipped but never verified installable   :packaging:
 
-=wheels.yml= builds an sdist with =manifest-path = "../Cargo.toml"=
+=release.yml= builds an sdist with =manifest-path = "../Cargo.toml"=
 while =build.rs= needs the vendored proto submodules — the sdist
 likely cannot rebuild outside the repo, and nothing smoke-tests
 it. Either include the proto trees in the sdist and smoke-test the
@@ -1268,13 +1280,17 @@ clock (~1 Wh/s at the 3.6 kW setpoint) — a ~2 s scheduler stall
 pushes past 12. Decision: widen the tolerance, or add a fixture flag
 that skips background physics for manually-ticked tests.
 
-*** TODO [#C] wheels.yml path filter omits python/src/**      :packaging:ci:
-The pull_request filter covers packaging manifests but not the pure-
-Python package the wheel bundles, so a PR breaking =runtime.py='s
-import passes python.yml (lint/type only) and surfaces at the next
-tag build. The filter's comment documents the cost tradeoff for the
-Rust globs only. Decision: add =python/src/**= (each entry is a full
-wheel-matrix build) or note the exclusion as deliberate.
+*** DONE [#C] wheel workflow path filter omits python/src/**   :packaging:ci:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-03 Do 12:47]
+:END:
+The old wheels.yml pull_request filter covered packaging manifests but
+not the pure-Python package the wheel bundles, so a PR breaking
+=runtime.py='s import passed the lint/type job and surfaced at the
+next tag build. Superseded by release.yml: the wheel matrix no longer
+runs on PRs at all, but on every push to main touching =src/**=,
+=build.rs=, the manifests, or =python/src/**= — so a breaking merge
+shows up on main, before a tag.
 
 * Open design questions
 
