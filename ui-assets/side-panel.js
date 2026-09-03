@@ -18,10 +18,14 @@ import { makeSplitter } from "./splitter.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
 // name → { el, contentEl, teardown, pos, cascade, isStatic, refitTimer,
-// dock, floatStyle }
+// dock, floatStyle, dragging }
 // dock is the edge the card is docked to, or null while it floats;
 // floatStyle parks the card's inline float geometry while it is
 // docked.
+// dragging is true for as long as a pointer holds the card's head —
+// either drag, and across the hand-over between them. The card is
+// following the pointer then, so nothing else may move it:
+// sanitizePanel, the one thing that does, gates on this.
 // pos carries `bottom`: which dock edge the stored dx/dy were
 // measured against, so a reload re-anchors the card the way its saved
 // offset expects (see .anchor-bottom, savePos).
@@ -108,6 +112,14 @@ const STRIPS = {
 };
 // A tile cannot be squeezed below this share of its strip.
 const TILE_MIN_SHARE = 0.15;
+// Drag-to-dock: the outer SNAP_ZONE px of the dock's bottom and right
+// edges dock a dragged card on release. Drag-out: a tile head pulled
+// DRAG_OUT px past its strip's inner edge floats the card. A zone
+// only arms once the drag has travelled DRAG_ARM px, so a card
+// already sitting flush against one cannot be docked by a nudge.
+const SNAP_ZONE = 40;
+const DRAG_OUT = 24;
+const DRAG_ARM = 8;
 const stripEl = (edge) => document.getElementById(STRIPS[edge].el);
 // A strip's extent along `axis`, and main's: the bounds a size is
 // clamped against.
@@ -201,6 +213,7 @@ function ensurePanel(name) {
     refitTimer: 0,
     dock: null,
     floatStyle: "",
+    dragging: false,
   };
   // A bottom-left card hangs from the dock's bottom edge (see
   // .anchor-bottom), so content growing or shrinking — a log tail
@@ -215,15 +228,18 @@ function ensurePanel(name) {
     new ResizeObserver(() => {
       // A hidden card measures as nothing, and an inline height is
       // wireResize's in-gesture signal — the user is holding the
-      // gripper and a re-fit would fight the drag. Checked again when
-      // the timer fires, not just here: a card closed or grabbed
-      // inside REFIT_SETTLE would otherwise be sanitized as a
-      // display:none zero box, and clampOffset would write that
-      // nonsense back into p.pos. closePanel cancels it too.
-      if (p.dock || !el.classList.contains("open") || el.style.height) return;
+      // gripper and a re-fit would fight the drag. p.dragging is the
+      // same story for the head: a drag-out re-parents the card, which
+      // resizes it, and the re-fit would land REFIT_SETTLE into a
+      // gesture that is still holding the card. Checked again when the
+      // timer fires, not just here: a card closed or grabbed inside
+      // REFIT_SETTLE would otherwise be sanitized as a display:none
+      // zero box, and clampOffset would write that nonsense back into
+      // p.pos. closePanel cancels it too.
+      if (p.dragging || p.dock || !el.classList.contains("open") || el.style.height) return;
       clearTimeout(p.refitTimer);
       p.refitTimer = setTimeout(() => {
-        if (p.dock || !el.classList.contains("open") || el.style.height) return;
+        if (p.dragging || p.dock || !el.classList.contains("open") || el.style.height) return;
         sanitizePanel(p, name, false);
       }, REFIT_SETTLE);
     }).observe(el);
@@ -279,53 +295,158 @@ function applyPos(el, pos) {
 }
 
 // Drag-to-move via the grab strip; the offset is a transform on the
-// panel, persisted per panel so it sticks across sessions.
+// panel, persisted per panel so it sticks across sessions. A docked
+// card's head drags the tile along its strip instead, until it is
+// pulled out.
 function wireDrag(el, name, p) {
   const strip = el.querySelector(".panel-drag");
   strip.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     strip.setPointerCapture(e.pointerId);
-    if (p.dock) {
-      reorderDrag(el, strip, p.dock, e.pointerId);
+    if (p.dock) reorderDrag(el, strip, p.dock, name, p, e.pointerId);
+    else beginFloatDrag(el, strip, name, p, e);
+  });
+}
+
+// The float drag proper, from wherever the pointer already is. The
+// anchor is measured once per gesture: re-reading it per pointermove
+// would force a layout on every frame. A bottom-anchored card whose
+// content changes mid-drag does move its untransformed top under
+// this anchor; its resize observer re-fits it once that growth
+// settles, which may well be mid-drag — harmless, since that re-fit
+// persists nothing and the next pointermove writes the offset from
+// this anchor again. Over a snap zone the zone arms, and release
+// there docks the card instead of leaving it.
+//
+// `suppressEdge` is the edge a tile was just dragged out of: the
+// hand-over lands the pointer inside that edge's own snap zone (the
+// strip's inner edge is only DRAG_OUT px from it), so arming there
+// straight away would re-dock the card the gesture just freed. The
+// zone is dead until the pointer has been somewhere else once.
+function beginFloatDrag(el, strip, name, p, e, suppressEdge = null) {
+  p.dragging = true;
+  const startX = e.clientX - p.pos.dx;
+  const startY = e.clientY - p.pos.dy;
+  const anchor = anchorOf(el, p.pos);
+  // Where the card floated before the gesture. A drag that ends in a
+  // zone docks the card, and docking is not a placement: the drop
+  // point is a point on the dock's rim, so persisting it would send a
+  // later ⤒ back to the rim with the card mostly off screen.
+  const before = { ...p.pos };
+  let zone = null;
+  let suppressed = suppressEdge;
+  // The zone under the pointer, once the drag has travelled far
+  // enough to be a drag at all — and once the pointer has left the
+  // suppressed edge, if there is one.
+  const zoneAt = (ev) => {
+    if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < DRAG_ARM) return null;
+    const at = snapZoneAt(ev.clientX, ev.clientY);
+    if (!suppressed) return at;
+    if (at === suppressed) return null;
+    suppressed = null;
+    return at;
+  };
+  const move = (ev) => {
+    p.pos = { ...clampOffset(anchor, ev.clientX - startX, ev.clientY - startY), bottom: p.pos.bottom };
+    applyPos(el, p.pos);
+    zone = zoneAt(ev);
+    armSnapZone(zone);
+  };
+  // The release point decides, not the last move the card followed: a
+  // pointerup can land somewhere no pointermove reported.
+  const up = (ev) => {
+    zone = zoneAt(ev);
+    stop();
+  };
+  // A cancelled gesture is not a drop, so it docks nothing.
+  const cancel = () => {
+    zone = null;
+    stop();
+  };
+  const stop = () => {
+    p.dragging = false;
+    strip.removeEventListener("pointermove", move);
+    strip.removeEventListener("pointerup", up);
+    strip.removeEventListener("pointercancel", cancel);
+    armSnapZone(null);
+    if (zone) {
+      p.pos = before;
+      applyPos(el, p.pos);
+      savePos(name, p.pos);
+      // That position is the card's placement now, so a float back
+      // out of the strip goes there rather than cascading.
+      p.cascade = false;
+      dockPanel(name, zone);
       return;
     }
-    const startX = e.clientX - p.pos.dx;
-    const startY = e.clientY - p.pos.dy;
-    // Measured once per gesture: re-reading it per pointermove would
-    // force a layout on every frame. A bottom-anchored card whose
-    // content changes mid-drag does move its untransformed top under
-    // this anchor; its resize observer re-fits it once that growth
-    // settles, which may well be mid-drag — harmless, since that
-    // re-fit persists nothing and the next pointermove writes the
-    // offset from this anchor again.
-    const anchor = anchorOf(el, p.pos);
-    const move = (ev) => {
-      p.pos = { ...clampOffset(anchor, ev.clientX - startX, ev.clientY - startY), bottom: p.pos.bottom };
-      applyPos(el, p.pos);
-    };
-    const stop = () => {
-      strip.removeEventListener("pointermove", move);
-      p.cascade = false;
-      savePos(name, p.pos);
-    };
-    strip.addEventListener("pointermove", move);
-    strip.addEventListener("pointerup", stop, { once: true });
-    strip.addEventListener("pointercancel", stop, { once: true });
-  });
+    p.cascade = false;
+    savePos(name, p.pos);
+  };
+  strip.addEventListener("pointermove", move);
+  strip.addEventListener("pointerup", up);
+  strip.addEventListener("pointercancel", cancel);
+}
+
+// Which snap zone the pointer is in, if any: the dock's bottom edge
+// wins over its right one in the corner.
+function snapZoneAt(x, y) {
+  const d = dockEl().getBoundingClientRect();
+  if (x < d.left || x > d.right || y < d.top || y > d.bottom) return null;
+  if (y > d.bottom - SNAP_ZONE) return "bottom";
+  if (x > d.right - SNAP_ZONE) return "right";
+  return null;
+}
+function armSnapZone(edge) {
+  for (const z of dockEl().querySelectorAll(".snap-zone")) {
+    z.classList.toggle("armed", z.dataset.edge === edge);
+  }
 }
 
 // Dragging a tile's head along the strip moves the tile: it takes
 // the slot whose midpoint the pointer has crossed, the strip re-lays
-// itself out on release, and the new order is stored.
-function reorderDrag(el, head, edge, pointerId) {
+// itself out on release, and the new order is stored. Pulled past
+// the strip's inner edge, the card floats under the pointer and the
+// same gesture carries on as a float drag.
+function reorderDrag(el, head, edge, name, p, pointerId) {
+  p.dragging = true;
   const along = crossAxis(edge);
   el.classList.add("reordering");
   const move = (ev) => {
+    const r = stripEl(edge).getBoundingClientRect();
+    // The strip's inner edge is the one the canvas is on: the top of
+    // a bottom strip (tiles run along x), the left of a right one.
+    const out = along === "x" ? ev.clientY < r.top - DRAG_OUT : ev.clientX < r.left - DRAG_OUT;
+    if (out) {
+      stop();
+      floatPanel(name);
+      // Moving the card back to the float dock re-parents the head
+      // that captured the pointer, and Chromium releases the capture
+      // on that move. Re-take it, or the handed-over float drag never
+      // sees another pointermove and the card is stranded where the
+      // gesture left the strip.
+      try {
+        head.setPointerCapture(pointerId);
+      } catch (_) {
+        // The pointer is already gone — the drag ends at the float.
+      }
+      // Under the pointer: the head's middle at the pointer's x, its
+      // vertical middle at the pointer's y.
+      const a = anchorOf(el, p.pos);
+      p.pos = {
+        ...clampOffset(a, ev.clientX - a.left - el.offsetWidth / 2, ev.clientY - a.top - head.offsetHeight / 2),
+        bottom: p.pos.bottom,
+      };
+      applyPos(el, p.pos);
+      p.cascade = false;
+      savePos(name, p.pos);
+      beginFloatDrag(el, head, name, p, ev, edge);
+      return;
+    }
     const others = openTiles(edge).filter((t) => t !== el);
     const here = along === "x" ? ev.clientX : ev.clientY;
     const idx = others.filter((t) => {
-      const r = t.getBoundingClientRect();
-      return here > (along === "x" ? (r.left + r.right) / 2 : (r.top + r.bottom) / 2);
+      const b = t.getBoundingClientRect();
+      return here > (along === "x" ? (b.left + b.right) / 2 : (b.top + b.bottom) / 2);
     }).length;
     const current = openTiles(edge).indexOf(el);
     if (idx === current) return;
@@ -343,6 +464,9 @@ function reorderDrag(el, head, edge, pointerId) {
     }
   };
   const stop = () => {
+    // Dropped for the hand-over too, which raises it again the moment
+    // beginFloatDrag takes the gesture over.
+    p.dragging = false;
     head.removeEventListener("pointermove", move);
     head.removeEventListener("pointerup", stop);
     head.removeEventListener("pointercancel", stop);
@@ -456,8 +580,14 @@ function saveSize(name, h) {
 // against a much-changed window costs nothing: the next open sanitizes
 // it again, with `persist` on.
 function sanitizePanel(p, name, persist = true) {
-  // A tile's geometry is the strip's business.
-  if (p.dock) return;
+  // A tile's geometry is the strip's business, and a card the pointer
+  // is holding is the gesture's: it is already following the pointer,
+  // and every caller here would move it out from under one. This is
+  // the single gate — refitFloating reaches a held card from three
+  // sides (a strip appearing or vanishing, the window-resize settle,
+  // the strip splitter's settle), not just off the card's own
+  // observer.
+  if (p.dock || p.dragging) return;
   const { el } = p;
   const stored = loadSize(name);
   if (stored != null) {

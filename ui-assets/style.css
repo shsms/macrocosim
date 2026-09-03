@@ -1172,6 +1172,19 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   font: inherit;
 }
 .dock-menu-item:hover { background: var(--accent); color: var(--bg); }
+/* Snap zones along the dock's bottom and right edges; only an armed
+   one paints, and none takes pointer events. */
+.snap-zone {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  background: rgba(121, 184, 255, 0.10);
+  border: 0 dashed var(--accent);
+}
+/* The 40px extents keep in step with SNAP_ZONE in side-panel.js. */
+.snap-zone[data-edge="bottom"] { left: 0; right: 0; bottom: 0; height: 40px; border-top-width: 2px; }
+.snap-zone[data-edge="right"] { top: 0; bottom: 0; right: 0; width: 40px; border-left-width: 2px; }
+.snap-zone.armed { display: block; }
 .float-head {
   display: flex;
   align-items: center;

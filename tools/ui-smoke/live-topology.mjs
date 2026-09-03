@@ -1925,6 +1925,126 @@ await page.click("#logs-panel .float-dock");
 rs = await rightState();
 check("e2e: floating both right tiles empties the right strip", !rs.has && rs.w === 0, JSON.stringify(rs));
 
+// Gestures: drag a floating card's head into the dock's bottom zone
+// to dock it; drag a tile's head out of the strip to float it.
+const headOf = async (sel) => await page.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, sel);
+const dockRect = await page.evaluate(() => { const r = document.getElementById("panel-dock").getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; });
+// A float drag that ends clear of every zone commits where it left
+// the card, so there is a stored float position for the dock drag
+// below to leave alone. Nothing has stored one for this card since
+// the reload above, and an unstored position would make that check
+// pass on two nulls.
+let h = await headOf("#panel-metrics-btn .panel-drag");
+await page.mouse.move(h.x, h.y);
+await page.mouse.down();
+await page.mouse.move(h.x - 30, h.y + 30, { steps: 4 });
+await page.mouse.up();
+const posBefore = await page.evaluate(() => localStorage.getItem("sw-panel-pos-metrics-btn"));
+h = await headOf("#panel-metrics-btn .panel-drag");
+await page.mouse.move(h.x, h.y);
+await page.mouse.down();
+await page.mouse.move(h.x, h.y + 40);
+await page.mouse.move(h.x, dockRect.bottom - 20, { steps: 8 });
+const armed = await page.evaluate(() => [...document.querySelectorAll(".snap-zone.armed")].map((z) => z.dataset.edge));
+check("e2e: dragging a card into the bottom zone arms it", armed.join() === "bottom", JSON.stringify(armed));
+// Back out of the zone with the pointer still down: the zone gives up
+// the arm again, and only a release inside one docks.
+await page.mouse.move(h.x, h.y + 40, { steps: 8 });
+const disarmed = await page.evaluate(() => [...document.querySelectorAll(".snap-zone.armed")].map((z) => z.dataset.edge));
+check("e2e: dragging back out of the zone disarms it", disarmed.length === 0, JSON.stringify(disarmed));
+await page.mouse.move(h.x, dockRect.bottom - 20, { steps: 8 });
+await page.mouse.up();
+st = await stripState();
+check("e2e: releasing in the bottom zone docks the card there", st.has && st.tiles.join() === "panel-metrics-btn" && (await page.evaluate(() => document.querySelectorAll(".snap-zone.armed").length === 0)), JSON.stringify(st));
+const posAfter = await page.evaluate(() => localStorage.getItem("sw-panel-pos-metrics-btn"));
+check("e2e: docking by drag leaves the stored float position alone", posAfter !== null && posAfter === posBefore, JSON.stringify({ posBefore, posAfter }));
+// Drag the tile's head up out of the strip: it floats under the pointer.
+h = await headOf("#panel-metrics-btn .panel-drag");
+await page.mouse.move(h.x, h.y);
+await page.mouse.down();
+await page.mouse.move(h.x, h.y - 10);
+await page.mouse.move(h.x, h.y - 160, { steps: 8 });
+const floated = await page.evaluate(() => {
+  const el = document.getElementById("panel-metrics-btn");
+  const r = el.querySelector(".panel-drag").getBoundingClientRect();
+  return { docked: el.classList.contains("docked"), inDock: el.parentElement.id === "panel-dock", headY: Math.round(r.top + r.height / 2) };
+});
+check("e2e: dragging a tile head out of the strip floats it under the pointer", !floated.docked && floated.inDock && Math.abs(floated.headY - (h.y - 160)) <= 12, JSON.stringify({ floated, target: h.y - 160 }));
+await page.mouse.move(h.x + 120, h.y - 160, { steps: 4 });
+await page.mouse.up();
+const afterDrag = await page.evaluate(() => { const r = document.getElementById("panel-metrics-btn").querySelector(".panel-drag").getBoundingClientRect(); return Math.round(r.left + r.width / 2); });
+check("e2e: the drag continues as a float drag after the hand-over", Math.abs(afterDrag - (h.x + 120)) <= 12, `${afterDrag} vs ${h.x + 120}`);
+st = await stripState();
+check("e2e: the strip is empty again after the drag-out", !st.has && st.tiles.length === 0, JSON.stringify(st));
+// A short pull-out is still a pull-out. The hand-over happens once
+// the pointer is DRAG_OUT past the strip's inner edge, which is a few
+// px INSIDE the dock's own bottom snap zone, so a card pulled just
+// clear of the strip and dropped there must stay floating instead of
+// snapping straight back into the strip it just left.
+await page.click("#panel-metrics-btn .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
+h = await headOf("#panel-metrics-btn .panel-drag");
+await page.mouse.move(h.x, h.y);
+await page.mouse.down();
+await page.mouse.move(h.x, h.y - 40);
+await page.mouse.move(h.x, h.y - 50, { steps: 4 });
+const shortPull = await page.evaluate(() => ({
+  armed: [...document.querySelectorAll(".snap-zone.armed")].map((z) => z.dataset.edge),
+  inDock: document.getElementById("panel-metrics-btn").parentElement.id === "panel-dock",
+}));
+await page.mouse.up();
+st = await stripState();
+check(
+  "e2e: a short pull-out does not re-dock the card",
+  shortPull.inDock && shortPull.armed.length === 0 && !st.has && st.tiles.length === 0,
+  JSON.stringify({ shortPull, st }),
+);
+// Park the card back up the dock before the next gesture: that one
+// drags along the head's own y, and the bottom zone wins over the
+// right one in the corner.
+h = await headOf("#panel-metrics-btn .panel-drag");
+await page.mouse.move(h.x, h.y);
+await page.mouse.down();
+await page.mouse.move(h.x, dockRect.top + 120, { steps: 6 });
+await page.mouse.up();
+// The right zone the same way.
+h = await headOf("#panel-metrics-btn .panel-drag");
+await page.mouse.move(h.x, h.y);
+await page.mouse.down();
+await page.mouse.move(h.x + 40, h.y);
+await page.mouse.move(dockRect.right - 20, h.y, { steps: 8 });
+const rightArmed = await page.evaluate(() => [...document.querySelectorAll(".snap-zone.armed")].map((z) => z.dataset.edge));
+check("e2e: dragging a card into the right zone arms it", rightArmed.join() === "right", JSON.stringify(rightArmed));
+await page.mouse.up();
+const rightDocked = await page.evaluate(() => ({ has: document.body.classList.contains("has-right-dock"), tile: document.querySelector("#dock-right .float-panel.open")?.id ?? null }));
+check("e2e: releasing in the right zone docks the card on the right", rightDocked.has && rightDocked.tile === "panel-metrics-btn", JSON.stringify(rightDocked));
+await page.click("#panel-metrics-btn .float-dock");
+
+// Nothing but the pointer may move a card the pointer is holding. A
+// bottom-left card (Logs) carries a ResizeObserver that re-fits it
+// REFIT_SETTLE after its box changes, and a drag-out changes that box
+// mid-gesture — so the re-fit lands while the head is still held. The
+// pull-out here ends near the window's left edge, where the 720px card
+// hangs off it: exactly what a re-fit pulls back on (fitOffset puts a
+// card nobody is holding wholly on screen). Held still past the
+// settle, the card must not move.
+await page.click("#logs-panel .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
+h = await headOf("#logs-panel .panel-drag");
+await page.mouse.move(h.x, h.y);
+await page.mouse.down();
+await page.mouse.move(h.x, h.y - 10);
+await page.mouse.move(dockRect.left + 30, h.y - 160, { steps: 8 });
+const heldBefore = await headOf("#logs-panel .panel-drag");
+await page.waitForTimeout(400);
+const heldAfter = await headOf("#logs-panel .panel-drag");
+await page.mouse.up();
+check(
+  "e2e: a held-still card is not moved by the refit after a drag-out",
+  Math.abs(heldAfter.x - heldBefore.x) <= 2 && Math.abs(heldAfter.y - heldBefore.y) <= 2,
+  JSON.stringify({ heldBefore, heldAfter }),
+);
+
 // Leave the strip empty for whatever follows.
 await page.click("#logs-btn");
 await page.click("#metrics-btn");

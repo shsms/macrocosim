@@ -188,6 +188,11 @@
            is only their positioning context over the canvas — it never
            becomes a layout column. -->
       <div id="panel-dock">
+        <!-- Snap zones: the dock's bottom and right edges light up
+             while a card's head is dragged over them (side-panel.js);
+             releasing there docks the card. -->
+        <div class="snap-zone" data-edge="bottom"></div>
+        <div class="snap-zone" data-edge="right"></div>
         <aside id="inspector" class="float-panel" aria-label="inspector">
           <div id="inspector-drag" class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
           <button id="inspector-close" class="float-close" type="button" title="Close (Esc)">×</button>
@@ -523,7 +528,7 @@
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
           <li><strong>Inspector</strong> — one of the floating panels, alongside the formula explorer, metrics, weather, the REPL, the log tail, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
-          <li><strong>Docking</strong> — every panel's <em>⤓</em> button offers to dock it into a strip along the bottom or down the right edge of the window, where it becomes a tile and stops covering the canvas; a strip appears only while it holds a tile, and the bar beside it drags to change its size. The tile's <em>⤒</em> floats it back to where it was. Several docked panels share a strip: drag the bar between two tiles to trade space, drag a tile's head along the strip to reorder. A docked panel that you close comes back docked.</li>
+          <li><strong>Docking</strong> — every panel's <em>⤓</em> button offers to dock it into a strip along the bottom or down the right edge of the window, where it becomes a tile and stops covering the canvas; a strip appears only while it holds a tile, and the bar beside it drags to change its size. The tile's <em>⤒</em> floats it back to where it was. Several docked panels share a strip: drag the bar between two tiles to trade space, drag a tile's head along the strip to reorder. A docked panel that you close comes back docked. You can also drag a floating panel's grab strip onto the bottom or right edge of the canvas to dock it there, and drag a tile's head out of its strip to float it again.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in its own floating panel; edits write to <code>enterprise.lisp</code>.</li>
