@@ -23,7 +23,7 @@ use serde::Serialize;
 use simplelog::SharedLogger;
 use tokio::sync::broadcast;
 
-/// Process-wide log tap. Set by `bin/switchyard.rs` at startup;
+/// Process-wide log tap. Set by `bin/macrocosim.rs` at startup;
 /// `Option`-shaped so library tests that don't go through main can
 /// run without a panic at first log call.
 pub static LOG_TAP: OnceLock<LogTap> = OnceLock::new();
@@ -210,7 +210,7 @@ mod tests {
             &log::Record::builder()
                 .args(format_args!("keep me"))
                 .level(log::Level::Info)
-                .target("switchyard::ui")
+                .target("macrocosim::ui")
                 .build(),
         );
         let snap = tap.snapshot();

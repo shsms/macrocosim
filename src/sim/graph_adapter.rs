@@ -1,4 +1,4 @@
-//! Adapter between switchyard's component / connection types and the
+//! Adapter between macrocosim's component / connection types and the
 //! [`frequenz_microgrid_component_graph`] crate's [`Node`] / [`Edge`]
 //! traits.
 //!
@@ -15,18 +15,18 @@
 //! re-snapshotting on every request.
 //!
 //! Category mapping notes:
-//! - Switchyard's `Category::Inverter` carries the AC/DC/storage
+//! - Macrocosim's `Category::Inverter` carries the AC/DC/storage
 //!   distinction via `subtype()` returning `"battery"` / `"solar"`.
 //!   Map those to [`InverterType::Battery`] / [`InverterType::Pv`].
-//! - Switchyard's `Category::Battery` doesn't carry chemistry yet —
+//! - Macrocosim's `Category::Battery` doesn't carry chemistry yet —
 //!   it falls through to [`BatteryType::Unspecified`].
-//! - Switchyard's `Category::EvCharger` similarly falls through to
+//! - Macrocosim's `Category::EvCharger` similarly falls through to
 //!   [`EvChargerType::Unspecified`] unless `subtype()` returns
 //!   `"ac"` / `"dc"` / `"hybrid"`.
 //!
 //! Hidden components (e.g. the consumer meter at id 100 in the
 //! sample config) are *excluded* from the validation graph because
-//! switchyard models them as aggregating off-graph — a parent
+//! macrocosim models them as aggregating off-graph — a parent
 //! meter sums their power even though no explicit connection edge
 //! ties them in. To the graph crate that looks like an orphan
 //! node. `MicrogridSite::connections()` already filters hidden endpoints
@@ -41,7 +41,7 @@ use frequenz_microgrid_component_graph::{
 
 use crate::sim::{component::Category, microgrid_site::MicrogridSite};
 
-/// Plain-data view of one switchyard component, sized for the graph
+/// Plain-data view of one macrocosim component, sized for the graph
 /// crate's `Node` trait. Cloned cheaply (three scalars).
 #[derive(Debug, Clone, Copy)]
 pub struct GraphNode {
@@ -80,8 +80,8 @@ fn lift_mode(mode: crate::sim::OperationalMode) -> OperationalMode {
     }
 }
 
-/// Plain-data view of one switchyard connection. The graph crate
-/// owns the storage; switchyard's `MicrogridSite` keeps its
+/// Plain-data view of one macrocosim connection. The graph crate
+/// owns the storage; macrocosim's `MicrogridSite` keeps its
 /// `Vec<(u64, u64)>` parent/child shape for the rest of the codebase.
 #[derive(Debug, Clone, Copy)]
 pub struct GraphEdge {
@@ -99,7 +99,7 @@ impl Edge for GraphEdge {
     }
 }
 
-/// Lift a switchyard `(Category, subtype)` pair into the graph crate's
+/// Lift a macrocosim `(Category, subtype)` pair into the graph crate's
 /// nested `ComponentCategory` enum. Unrecognised subtypes fall through
 /// to the `Unspecified` variant of the nested enum — graph validation
 /// is permissive for unspecified types, which matches the

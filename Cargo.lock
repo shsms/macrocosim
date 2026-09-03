@@ -1118,6 +1118,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "macrocosim"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "frequenz-microgrid",
+ "frequenz-microgrid-component-graph",
+ "futures",
+ "log",
+ "notify",
+ "parking_lot",
+ "prost",
+ "prost-types",
+ "rand 0.8.7",
+ "reqwest",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "simplelog",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
+ "tulisp",
+ "tulisp-async",
+ "tulisp-fmt",
+]
+
+[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2017,40 +2051,6 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-
-[[package]]
-name = "switchyard"
-version = "0.1.0"
-dependencies = [
- "axum",
- "chrono",
- "chrono-tz",
- "clap",
- "frequenz-microgrid",
- "frequenz-microgrid-component-graph",
- "futures",
- "log",
- "notify",
- "parking_lot",
- "prost",
- "prost-types",
- "rand 0.8.7",
- "reqwest",
- "rust-embed",
- "serde",
- "serde_json",
- "simplelog",
- "tempfile",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
- "tower",
- "tulisp",
- "tulisp-async",
- "tulisp-fmt",
-]
 
 [[package]]
 name = "syn"

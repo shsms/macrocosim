@@ -1,7 +1,7 @@
 //! Text-format primitives for a managed microgrid `.lisp` file: a
-//! switchyard-generated block (structure, rewritten on every save)
+//! macrocosim-generated block (structure, rewritten on every save)
 //! followed by a hand-written script section (loaded verbatim,
-//! never touched by switchyard). `parse` / `compose` split and
+//! never touched by macrocosim). `parse` / `compose` split and
 //! rejoin the two; `rewrite_id` / `rewrite_grpc_port` /
 //! `remap_component_ids` patch the microgrid id, its gRPC port, and
 //! every component id inside the generated block without disturbing
@@ -24,19 +24,19 @@ use std::path::Path;
 
 use tulisp_fmt::cst::CstNode;
 
-/// Marks the start of the switchyard-generated block. Used to
+/// Marks the start of the macrocosim-generated block. Used to
 /// detect a managed file (the first non-empty line starts with
-/// this) — `GENERATED_BEGIN_LINE` is the exact line switchyard
+/// this) — `GENERATED_BEGIN_LINE` is the exact line macrocosim
 /// writes, which carries an explanatory suffix beyond this prefix.
-pub const GENERATED_BEGIN: &str = ";;; switchyard:generated";
+pub const GENERATED_BEGIN: &str = ";;; macrocosim:generated";
 
-/// The literal first line of the generated block, as switchyard
+/// The literal first line of the generated block, as macrocosim
 /// writes it.
 pub const GENERATED_BEGIN_LINE: &str =
-    ";;; switchyard:generated — rewritten by switchyard, do not edit";
+    ";;; macrocosim:generated — rewritten by macrocosim, do not edit";
 
-/// Marks the end of the switchyard-generated block.
-pub const GENERATED_END: &str = ";;; switchyard:end";
+/// Marks the end of the macrocosim-generated block.
+pub const GENERATED_END: &str = ";;; macrocosim:end";
 
 /// The ownership comment written at the top of the script section
 /// of a freshly created managed file.
@@ -63,7 +63,7 @@ pub struct ParsedFile {
     /// The generated block's contents, markers stripped, when the
     /// file is managed (its first non-empty line is
     /// `GENERATED_BEGIN_LINE`). `None` for an unmanaged file —
-    /// hand-written, with no switchyard markers at all.
+    /// hand-written, with no macrocosim markers at all.
     pub generated: Option<String>,
     /// Everything after the generated block (managed file), or the
     /// entire file (unmanaged file), byte-for-byte.
@@ -76,7 +76,7 @@ pub struct ParsedFile {
 /// `GENERATED_BEGIN`; unmanaged text with no marker anywhere is
 /// returned as `generated: None, script: text`. A marker found
 /// anywhere other than a well-formed leading block is an error —
-/// this only happens to text switchyard itself never wrote, so
+/// this only happens to text macrocosim itself never wrote, so
 /// failing loudly beats silently mangling it.
 pub fn parse(text: &str) -> Result<ParsedFile, String> {
     let first_non_empty = text.lines().find(|l| !l.trim().is_empty());
@@ -85,7 +85,7 @@ pub fn parse(text: &str) -> Result<ParsedFile, String> {
     if !is_managed {
         for line in text.lines() {
             if line.starts_with(GENERATED_BEGIN) || line.starts_with(GENERATED_END) {
-                return Err("switchyard marker found but not at the top of the file".to_string());
+                return Err("macrocosim marker found but not at the top of the file".to_string());
             }
         }
         return Ok(ParsedFile {
@@ -117,7 +117,7 @@ pub fn parse(text: &str) -> Result<ParsedFile, String> {
                     break;
                 } else if line.starts_with(GENERATED_BEGIN) {
                     return Err(
-                        "a second 'switchyard:generated' marker found inside the block".into(),
+                        "a second 'macrocosim:generated' marker found inside the block".into(),
                     );
                 }
             }
@@ -125,7 +125,7 @@ pub fn parse(text: &str) -> Result<ParsedFile, String> {
     }
 
     let Some(end_start) = end_line_start else {
-        return Err("missing ';;; switchyard:end' marker".to_string());
+        return Err("missing ';;; macrocosim:end' marker".to_string());
     };
 
     Ok(ParsedFile {
@@ -322,7 +322,7 @@ const COMPONENT_MAKE_FNS: &[&str] = &[
 ];
 
 /// Does a form head build a component? Both spellings count: the
-/// `%make-*` primitives switchyard renders, and the public `make-*`
+/// `%make-*` primitives macrocosim renders, and the public `make-*`
 /// wrappers a person may well have hand-written into `:topology`
 /// (it is ordinary lisp — nothing stops them, and they declare an
 /// `:id` just the same). Missing the wrapper spelling would leave
@@ -346,7 +346,7 @@ fn declares_a_component(head: &str) -> bool {
 ///
 /// Recursive, so a hand-edited block that wraps its components in a
 /// `progn` (or nests them the pre-flat way) is walked too; a
-/// switchyard-rendered block is flat and never needs the descent.
+/// macrocosim-rendered block is flat and never needs the descent.
 fn collect_component_ids(
     forms: &[CstNode],
     declared: &mut Vec<(std::ops::Range<usize>, u64)>,
@@ -557,12 +557,12 @@ mod tests {
     use super::*;
 
     const MANAGED: &str = "\
-;;; switchyard:generated — rewritten by switchyard, do not edit
+;;; macrocosim:generated — rewritten by macrocosim, do not edit
 (make-microgrid :id 2201 :name \"a\" :grpc-port 8810
   :topology
   (lambda ()
     (%make-meter :id 5)))
-;;; switchyard:end
+;;; macrocosim:end
 ;; Anything below is yours.
 (setq x 1)
 ";
@@ -572,8 +572,8 @@ mod tests {
         let p = parse(MANAGED).unwrap();
         let block = p.generated.expect("managed");
         assert!(block.contains("(make-microgrid :id 2201"));
-        assert!(!block.contains("switchyard:generated"));
-        assert!(!block.contains("switchyard:end"));
+        assert!(!block.contains("macrocosim:generated"));
+        assert!(!block.contains("macrocosim:end"));
         assert!(p.script.contains("(setq x 1)"));
         assert!(!p.script.contains("make-microgrid"));
     }
@@ -587,11 +587,11 @@ mod tests {
 
     #[test]
     fn parse_rejects_marker_not_at_top_and_missing_end() {
-        assert!(parse("(setq x 1)\n;;; switchyard:generated\nnil\n;;; switchyard:end\n").is_err());
-        assert!(parse(";;; switchyard:generated\n(make-microgrid :id 1)\n").is_err());
+        assert!(parse("(setq x 1)\n;;; macrocosim:generated\nnil\n;;; macrocosim:end\n").is_err());
+        assert!(parse(";;; macrocosim:generated\n(make-microgrid :id 1)\n").is_err());
         // A second begin inside the block is an error too.
         assert!(
-            parse(";;; switchyard:generated\n;;; switchyard:generated\nnil\n;;; switchyard:end\n")
+            parse(";;; macrocosim:generated\n;;; macrocosim:generated\nnil\n;;; macrocosim:end\n")
                 .is_err()
         );
     }
@@ -707,7 +707,7 @@ mod tests {
 
     /// `:topology` is ordinary lisp, so a hand-edited block may build
     /// its components with the public `make-*` wrappers rather than
-    /// the `%make-*` primitives switchyard renders. Those declare
+    /// the `%make-*` primitives macrocosim renders. Those declare
     /// component ids just the same, so the re-mint has to see them —
     /// otherwise they keep the original's ids (an instant collision)
     /// and a `connect` to one is refused as "not declared in this
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn write_atomic_replaces_content() {
-        let dir = std::env::temp_dir().join(format!("sw-mgfile-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mc-mgfile-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.lisp");
         write_atomic(&path, "one").unwrap();

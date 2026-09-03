@@ -1,11 +1,11 @@
 [package]
-name = "switchyard"
+name = "macrocosim"
 version = "0.1.0"
 edition = "2024"
-default-run = "switchyard"
+default-run = "macrocosim"
 
 [features]
-# Gates the dev-only `switchyard-etags` binary out of default builds (and
+# Gates the dev-only `macrocosim-etags` binary out of default builds (and
 # the distribution wheel). The emacs tags workflow enables it explicitly
 # (see .dir-locals.el).
 etags = []
@@ -23,12 +23,12 @@ tulisp-async = "0.1"
 notify = "6.1.1"
 futures = "0.3.30"
 # DAG validation + formula generation for the Dashboard's aggregated
-# tiles. Switchyard implements Node + Edge on its own component /
+# tiles. Macrocosim implements Node + Edge on its own component /
 # connection types in src/sim/graph_adapter.rs and runs the validator
 # at the end of each config-load / reload.
 frequenz-microgrid-component-graph = "0.6.2"
 # High-level Microgrid client + typed metric streams. The UI server
-# runs this as a client of switchyard's own gRPC server on localhost
+# runs this as a client of macrocosim's own gRPC server on localhost
 # (the loopback supervisor in src/ui/loopback.rs): aggregated
 # Dashboard tiles read from the same
 # LogicalMeterHandle::xxx<M>().subscribe() streams a production
@@ -40,7 +40,7 @@ rand = { version = "0.8.5", features = ["small_rng"] }
 chrono = { version = "0.4.42", features = ["serde"] }
 # IANA timezone resolution for (set-timezone "Europe/Berlin"). The
 # UI's TZ toggle reads the configured zone name + formats client-
-# side via Intl.DateTimeFormat — switchyard just owns the name +
+# side via Intl.DateTimeFormat — macrocosim just owns the name +
 # rejects unknown zones at config-load time.
 chrono-tz = "0.10"
 parking_lot = "0.12"
@@ -49,7 +49,7 @@ axum = { version = "0.8", features = ["ws"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rust-embed = "8"
-# swctl talks to the UI server's HTTP surface for scenario commands —
+# macroctl talks to the UI server's HTTP surface for scenario commands —
 # the scenario lifecycle isn't on gRPC.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
@@ -60,23 +60,23 @@ tonic-prost-build = { version = "0.14", features = ["cleanup-markdown"] }
 # axum oneshot testing pattern — no live port needed
 tower = { version = "0.5", features = ["util"] }
 # Out-of-process integration tests in tests/ talk to the live
-# HTTP / gRPC surface; reqwest is already a regular dep for swctl,
+# HTTP / gRPC surface; reqwest is already a regular dep for macroctl,
 # we just need a temp dir for per-test config files.
 tempfile = "3"
 
 [lib]
-name = "switchyard"
+name = "macrocosim"
 path = "src/lib.rs"
 
 [[bin]]
-name = "switchyard"
-path = "src/bin/switchyard.rs"
+name = "macrocosim"
+path = "src/bin/macrocosim.rs"
 
 [[bin]]
-name = "swctl"
-path = "src/bin/swctl.rs"
+name = "macroctl"
+path = "src/bin/macroctl.rs"
 
 [[bin]]
-name = "switchyard-etags"
-path = "src/bin/switchyard-etags.rs"
+name = "macrocosim-etags"
+path = "src/bin/macrocosim-etags.rs"
 required-features = ["etags"]

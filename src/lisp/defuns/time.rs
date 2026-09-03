@@ -11,7 +11,7 @@ pub(super) fn register(ctx: &mut TulispContext) {
     // chrono::Utc::now goes through the same clock_gettime(CLOCK_REALTIME)
     // syscall as std::time::SystemTime::now (both elide leap seconds the
     // same way the kernel does), but using chrono keeps these helpers
-    // consistent with the rest of switchyard's time handling and lets us
+    // consistent with the rest of macrocosim's time handling and lets us
     // extend with calendar-aware variants (seconds-since-midnight, etc.)
     // without swapping API later.
 

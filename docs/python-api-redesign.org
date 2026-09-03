@@ -2,7 +2,7 @@
 #+OPTIONS: toc:2 num:nil
 #+STARTUP: showall
 
-Status: draft. This sketches the second generation of switchyard's
+Status: draft. This sketches the second generation of macrocosim's
 Python client. The first generation grew feature by feature while we
 built end-to-end tests for downstream applications (power controllers,
 battery schedulers, and other apps built on the frequenz SDK). Those
@@ -31,7 +31,7 @@ the seams and the shape of the fix.
 These parts carried real integration suites well. v2 keeps their
 *shape*; only the plumbing underneath changes.
 
-- The topology builders (~sw.grid(...)~, ~sw.meter(...)~, ...) that
+- The topology builders (~mc.grid(...)~, ~mc.meter(...)~, ...) that
   read like the topology they build.
 - ~launch()~ / ~connect()~ with ephemeral ports, the endpoint
   handshake, and context-manager teardown.
@@ -55,10 +55,10 @@ check-then-insert races once reads became multi-threaded).
 
 *Target:* an async-native core.
 
-- ~switchyard.aio.Site~: every read, write, and wait is a coroutine.
+- ~macrocosim.aio.Site~: every read, write, and wait is a coroutine.
   HTTP via an async client; the gRPC client used natively on the
   caller's loop — no background loop, no worker threads, no locks.
-- ~switchyard.Site~: a thin sync facade over the async core for REPL
+- ~macrocosim.Site~: a thin sync facade over the async core for REPL
   use and simple scripts. It owns the one place where a loop is run.
   Async test code never sees it.
 
@@ -117,7 +117,7 @@ caller must remember to check.
 * Target layout
 
 #+begin_example
-switchyard/
+macrocosim/
   metrics.py       MetricSpec, MetricKind, BoundMetric, the catalog
   assertions.py    the one kind-aware assertion engine
   aio/             async-native core (site, transports, scenarios)
@@ -137,11 +137,11 @@ is a ~set~ scheduled at a point in the run. So the DSL takes signals
 and matchers, not raw ids, a ~Metric~ enum, and a keyword bag:
 
 #+begin_example
-scn = sw.Scenario("cloud-fade", length=timedelta(minutes=4))
+scn = mc.Scenario("cloud-fade", length=timedelta(minutes=4))
 scn.at(timedelta(seconds=30), pv.sunlight, percent(20))     # cue
 scn.check(timedelta(seconds=110), inv.power,
-          sw.near(MW(1.5), tol=kW(300)))                    # check
-scn.check(timedelta(seconds=110), bat.soc, sw.at_least(percent(40)))
+          mc.near(MW(1.5), tol=kW(300)))                    # check
+scn.check(timedelta(seconds=110), bat.soc, mc.at_least(percent(40)))
 #+end_example
 
 - A cue targets a *settable* signal; a check any component signal.
@@ -166,7 +166,7 @@ scn.check(timedelta(seconds=110), bat.soc, sw.at_least(percent(40)))
   ~BoundMetric~ landed and every existing ~expect~ method routes
   through the one engine. Public surface unchanged, except the
   cumulative metrics gained the full keyword set they were missing.
-- *Phase 2 — async core.* Core DONE: ~switchyard.aio~ is async-native
+- *Phase 2 — async core.* Core DONE: ~macrocosim.aio~ is async-native
   end to end (no background loop, no worker threads, no locks), with
   *signals* as the assertion surface. REMAINING: reimplement the sync
   ~Site~ as a facade over the aio core so the duplicated transports

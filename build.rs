@@ -1,10 +1,10 @@
-// Both proto APIs are vendored under switchyard's own `submodules/`.
+// Both proto APIs are vendored under macrocosim's own `submodules/`.
 // The override env var lets a downstream packager point at a private
 // mirror of the microgrid proto without editing build.rs.
 use std::path::PathBuf;
 
 fn main() -> Result<(), std::io::Error> {
-    let microgrid_root = std::env::var("SWITCHYARD_PROTO_ROOT")
+    let microgrid_root = std::env::var("MACROCOSIM_PROTO_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("submodules/frequenz-api-microgrid"));
     let assets_root = PathBuf::from("submodules/frequenz-api-assets");
@@ -22,7 +22,7 @@ fn main() -> Result<(), std::io::Error> {
     let common_proto_root = microgrid_root.join("submodules/frequenz-api-common/proto");
     let google_proto_root = microgrid_root.join("submodules/api-common-protos");
 
-    println!("cargo:rerun-if-env-changed=SWITCHYARD_PROTO_ROOT");
+    println!("cargo:rerun-if-env-changed=MACROCOSIM_PROTO_ROOT");
     // Watch the whole proto trees (cargo accepts directories), not
     // just the three root files: a submodule bump that only touches
     // an imported proto (e.g. frequenz-api-common) must regenerate

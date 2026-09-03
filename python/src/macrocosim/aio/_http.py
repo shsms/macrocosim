@@ -1,6 +1,6 @@
-"""Async client over switchyard's HTTP ``/api/*`` control plane.
+"""Async client over macrocosim's HTTP ``/api/*`` control plane.
 
-Internal: users reach these calls through :class:`switchyard.aio.Site`.
+Internal: users reach these calls through :class:`macrocosim.aio.Site`.
 Each method maps to one endpoint and returns parsed JSON.
 """
 
@@ -15,7 +15,7 @@ from ..errors import ControlRejected
 
 
 class AsyncHttpClient:
-    """Async ``httpx`` client bound to a switchyard UI server."""
+    """Async ``httpx`` client bound to a macrocosim UI server."""
 
     def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)

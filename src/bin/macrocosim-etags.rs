@@ -1,4 +1,4 @@
-//! Generate an emacs `TAGS` file for switchyard's Lisp config.
+//! Generate an emacs `TAGS` file for macrocosim's Lisp config.
 //!
 //! Walks every entry-point file plus everything each transitively
 //! `(load …)`s, recording each `(defun NAME …)` location. Drop the
@@ -9,13 +9,13 @@
 //!
 //! Usage:
 //!
-//!   switchyard-etags                              # ./config.lisp → ./TAGS
-//!   switchyard-etags examples/berlin-demo.lisp examples/scenario-driving.lisp
-//!   switchyard-etags examples/berlin-demo.lisp -o /tmp/TAGS
+//!   macrocosim-etags                              # ./config.lisp → ./TAGS
+//!   macrocosim-etags examples/berlin-demo.lisp examples/scenario-driving.lisp
+//!   macrocosim-etags examples/berlin-demo.lisp -o /tmp/TAGS
 
 use std::{env, io::Write as _, path::Path, process};
 
-use switchyard::lisp::Config;
+use macrocosim::lisp::Config;
 
 // tulisp_async::TokioExecutor::new captures Handle::current(),
 // so Config::tags_table needs a tokio runtime in scope even
@@ -36,7 +36,7 @@ async fn main() {
             }
             "-h" | "--help" => {
                 eprintln!(
-                    "usage: switchyard-etags [FILE …] [-o OUTPUT]\n\
+                    "usage: macrocosim-etags [FILE …] [-o OUTPUT]\n\
                      Default FILE = config.lisp; default OUTPUT = TAGS",
                 );
                 process::exit(0);

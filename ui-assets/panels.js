@@ -14,7 +14,7 @@ import { publishMgFlags, readSelectedMg, renderReplMgChip } from "./routing.js";
 const FIRST_MICROGRID_ID = 2200;
 
 const UNMANAGED_HINT =
-  "hand-written file — switchyard won't rewrite its structure until you Adopt it";
+  "hand-written file — macrocosim won't rewrite its structure until you Adopt it";
 
 export const microgridsPanel = (() => {
   let cached = []; // last /api/microgrids snapshot
@@ -34,7 +34,7 @@ export const microgridsPanel = (() => {
       card.className = "mglist-card";
       card.dataset.id = m.id;
       const tso = m.tso ? `<span class="mg-tso">${escapeHtml(m.tso)}</span>` : "";
-      // Two file-state chips: `unmanaged` means switchyard may not
+      // Two file-state chips: `unmanaged` means macrocosim may not
       // rewrite this file's structure (Adopt first), `unsaved` means
       // an edit ran live that the file could not be given.
       const chips = [
@@ -553,7 +553,7 @@ export const microgridsPanel = (() => {
     adopt.hidden = !unmanaged;
   }
 
-  // Take a hand-written file over: switchyard writes the live
+  // Take a hand-written file over: macrocosim writes the live
   // structure into it as a generated block and may rewrite it from
   // then on. Anything the block can't carry comes back as warnings,
   // which are the whole point of the round trip — surface every one.
@@ -656,7 +656,7 @@ export const microgridsPanel = (() => {
 // scenario-expect ledger), and /api/scenario/events (activity feed).
 // The journal tracks one scenario at a time; Run starts a scenario on
 // the wall clock, Stop ends it. Headless/deterministic runs are a
-// `swctl scenario run --stepped` / CI concern, not a UI action.
+// `macroctl scenario run --stepped` / CI concern, not a UI action.
 export const scenariosPanel = (() => {
   let scenarios = []; // /api/scenarios snapshot
   let summary = null; // /api/scenario (running/last journal)

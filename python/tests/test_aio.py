@@ -12,16 +12,16 @@ from typing import Any
 import pytest
 from frequenz.quantities import Energy, Power, ReactivePower
 
-import switchyard as sw
-from switchyard.errors import EvalRejected
+import macrocosim as mc
+from macrocosim.errors import EvalRejected
 
 _FAST = {"timeout": timedelta(seconds=0.2), "poll": timedelta(seconds=0.01)}
 
 
-def _site(**latest: Any) -> sw.aio.Site:
-    site = sw.aio.connect(
+def _site(**latest: Any) -> mc.aio.Site:
+    site = mc.aio.connect(
         ui="127.0.0.1:9",
-        microgrids={1: sw.MicrogridEndpoint(id=1, name="a", grpc="10.0.0.1:61000")},
+        microgrids={1: mc.MicrogridEndpoint(id=1, name="a", grpc="10.0.0.1:61000")},
     )
 
     async def fake_latest(mg_id: int | None = None) -> dict[str, Any]:
@@ -32,7 +32,7 @@ def _site(**latest: Any) -> sw.aio.Site:
 
 
 def test_no_microgrids_raises_a_clear_error() -> None:
-    site = sw.aio.connect(ui="127.0.0.1:9")
+    site = mc.aio.connect(ui="127.0.0.1:9")
     with pytest.raises(RuntimeError, match="no microgrid endpoints"):
         _ = site.grpc
 
@@ -53,14 +53,14 @@ async def test_reads_map_metric_names_to_streams() -> None:
 
 async def test_signal_expect_settles_on_an_instantaneous_metric() -> None:
     site = _site(grid_power=100.0)
-    value = await site.grid_power.expect(sw.at_most(Power.from_watts(200)), **_FAST)
+    value = await site.grid_power.expect(mc.at_most(Power.from_watts(200)), **_FAST)
     assert value == Power.from_watts(100.0)
 
 
 async def test_signal_expect_checks_a_cumulative_metric_once() -> None:
     site = _site(grid_energy=50.0)
     value = await site.grid_energy.expect(
-        sw.at_most(Energy.from_watt_hours(100)), **_FAST
+        mc.at_most(Energy.from_watt_hours(100)), **_FAST
     )
     assert value == Energy.from_watt_hours(50.0)
 
@@ -72,7 +72,7 @@ async def test_raw_handle_signals_read_the_component() -> None:
         return Power.from_watts(float(cid))
 
     site.active_power = fake_active_power  # type: ignore[method-assign]
-    value = await site[7].power.expect(sw.at_most(Power.from_watts(10)), **_FAST)
+    value = await site[7].power.expect(mc.at_most(Power.from_watts(10)), **_FAST)
     assert value == Power.from_watts(7.0)
     # The raw-id handle's signals only observe (category unknown): no set.
     assert not hasattr(site[7].power, "set")
@@ -80,7 +80,7 @@ async def test_raw_handle_signals_read_the_component() -> None:
 
 def test_component_handle_inherits_the_builders_microgrid() -> None:
     site = _site()
-    bat = sw.battery(id=9)
+    bat = mc.battery(id=9)
     bat._bind(site, 2)  # what launch() does in a multi-microgrid config
     assert site[bat]._mg == 2
     # An explicit mg_id still wins; raw ids keep the default routing.
@@ -139,7 +139,7 @@ async def test_meter_reactive_power_reads_and_drives_through_the_site() -> None:
 
     site.control_component = fake_control_component  # type: ignore[method-assign]
 
-    m = sw.meter(id=7, power=100.0)
+    m = mc.meter(id=7, power=100.0)
     m._bind(site)
     assert await m.reactive_power.try_read() == ReactivePower.from_volt_amperes_reactive(
         750.0
@@ -158,7 +158,7 @@ async def test_rejected_eval_raises_from_raw_drive() -> None:
 
     site._http.eval = fake_eval  # type: ignore[method-assign]
     with pytest.raises(EvalRejected, match="not found"):
-        await site[3].drive(power=sw.raw("(lambda () 100.0)"))
+        await site[3].drive(power=mc.raw("(lambda () 100.0)"))
     # EvalRejected still satisfies the historic except ValueError.
     assert issubclass(EvalRejected, ValueError)
 
@@ -179,45 +179,45 @@ class _FakeProcess:
 
 def _fake_spawn(tmp_path, monkeypatch) -> None:
     """Make aio.launch handshake instantly against no real process."""
-    import switchyard._process as proc_mod
-    import switchyard.aio._site as site_mod
+    import macrocosim._process as proc_mod
+    import macrocosim.aio._site as site_mod
 
     endpoints = tmp_path / "endpoints.json"
     endpoints.write_text(
         '{"ui": "127.0.0.1:9", "microgrids":'
         ' [{"id": 1, "name": "a", "grpc": "10.0.0.1:61000"}]}'
     )
-    log = tmp_path / "switchyard.log"
+    log = tmp_path / "macrocosim.log"
     log.write_text("")
 
     def spawn(config, bin):
-        return proc_mod.SpawnedSwitchyard(
+        return proc_mod.SpawnedMacrocosim(
             process=_FakeProcess(),
             endpoints_file=endpoints,
             log_file=log,
             tmpdir=tmp_path,
         )
 
-    monkeypatch.setattr(site_mod, "spawn_switchyard", spawn)
+    monkeypatch.setattr(site_mod, "spawn_macrocosim", spawn)
 
 
 async def test_launch_binds_and_unbinds_the_topology(tmp_path, monkeypatch) -> None:
     _fake_spawn(tmp_path, monkeypatch)
-    load = sw.meter(id=5)
-    mg = sw.Microgrid(id=1, topology=sw.grid(id=1, successors=[load]))
-    async with sw.aio.launch(mg) as site:
+    load = mc.meter(id=5)
+    mg = mc.Microgrid(id=1, topology=mc.grid(id=1, successors=[load]))
+    async with mc.aio.launch(mg) as site:
         assert load._site is site
     assert load._site is None  # exit unbinds: the builder is a spec again
 
 
 async def test_failed_bind_unbinds_the_partial_prefix(tmp_path, monkeypatch) -> None:
     _fake_spawn(tmp_path, monkeypatch)
-    first = sw.meter(id=5)
-    second = sw.meter(id=6)
+    first = mc.meter(id=5)
+    second = mc.meter(id=6)
     second._bind(object())  # pre-bound elsewhere: the 2nd bind will fail
-    mg = sw.Microgrid(id=1, topology=sw.grid(id=1, successors=[first, second]))
+    mg = mc.Microgrid(id=1, topology=mc.grid(id=1, successors=[first, second]))
     with pytest.raises(RuntimeError, match="already bound"):
-        async with sw.aio.launch(mg):
+        async with mc.aio.launch(mg):
             pytest.fail("launch must not yield")
     # The partial prefix was cleaned up: a retry starts fresh.
     assert first._site is None

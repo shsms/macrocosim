@@ -16,7 +16,7 @@ static UNIQ: AtomicU64 = AtomicU64::new(0);
 pub(super) fn config_with(body: &str) -> (Config, std::path::PathBuf) {
     let mut dir = std::env::temp_dir();
     dir.push(format!(
-        "switchyard-cfg-{}-{}",
+        "macrocosim-cfg-{}-{}",
         std::process::id(),
         UNIQ.fetch_add(1, Ordering::Relaxed),
     ));

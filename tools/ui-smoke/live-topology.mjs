@@ -1,10 +1,10 @@
 // Live-topology smoke: in-browser unit tests for ui-assets/live.js
-// plus (later tasks) e2e assertions against a running switchyard.
+// plus (later tasks) e2e assertions against a running macrocosim.
 // Run: SW_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs
 import { chromium } from "playwright";
 
 const BASE = process.env.SW_UI;
-if (!BASE) throw new Error("set SW_UI to a running switchyard UI, e.g. http://127.0.0.1:8801");
+if (!BASE) throw new Error("set SW_UI to a running macrocosim UI, e.g. http://127.0.0.1:8801");
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -812,7 +812,7 @@ check(
 // a panel is first created (side-panel.js's ensurePanel/loadPos), so the
 // poison has to survive a reload to matter — same discipline as the
 // values-off persistence check below.
-await page.evaluate(() => localStorage.setItem("sw-panel-pos-metrics-btn", JSON.stringify({ dx: 0, dy: -999 })));
+await page.evaluate(() => localStorage.setItem("mc-panel-pos-metrics-btn", JSON.stringify({ dx: 0, dy: -999 })));
 await page.reload({ waitUntil: "networkidle" });
 await page.click(DEMO_CARD).catch(() => {});
 await page.click("#metrics-btn");
@@ -831,7 +831,7 @@ check(
 // level with the canvas controls now, so a card healed all the way up
 // to the floor sits over that strip and swallows the pill's clicks.
 await page.click("#panel-metrics-btn .float-close");
-await page.evaluate(() => localStorage.removeItem("sw-panel-pos-metrics-btn"));
+await page.evaluate(() => localStorage.removeItem("mc-panel-pos-metrics-btn"));
 
 // ── e2e: shrinking the window re-fits the open panels ─────────────
 // A resize moves the geometry out from under an open card: the dock
@@ -882,7 +882,7 @@ check(
   await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === true),
 );
 await page.click("#panel-metrics-btn .float-close");
-await page.evaluate(() => localStorage.removeItem("sw-panel-pos-metrics-btn"));
+await page.evaluate(() => localStorage.removeItem("mc-panel-pos-metrics-btn"));
 
 // ── e2e: the canvas controls collapse ─────────────────────────────
 // The chevron folds the layout / drag / show groups away so the strip
@@ -1414,7 +1414,7 @@ const persisted = await page.evaluate(async () => {
   return topology.valuesOn();
 });
 check("e2e: off state survives reload", persisted === false);
-await page.evaluate(() => localStorage.removeItem("switchyard-topology-live"));
+await page.evaluate(() => localStorage.removeItem("macrocosim-topology-live"));
 
 // ── e2e: weather panel ──────────────────────────────────────────────
 // Runs LAST: the weather this section installs (and the sunrise/sunset
@@ -1560,7 +1560,7 @@ check(
 if (await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === true)) {
   await page.click("#metrics-btn");
 }
-await page.evaluate(() => localStorage.setItem("sw-panel-size-metrics-btn", JSON.stringify({ h: 120 })));
+await page.evaluate(() => localStorage.setItem("mc-panel-size-metrics-btn", JSON.stringify({ h: 120 })));
 await page.click("#metrics-btn");
 const cappedH = await page.evaluate(() => document.getElementById("panel-metrics-btn").getBoundingClientRect().height);
 check("e2e: a stored cap pins the metrics panel's height", Math.abs(cappedH - 120) <= 2, `${cappedH}`);
@@ -1569,7 +1569,7 @@ await page.evaluate(() => { document.getElementById("panel-metrics-btn").style.h
 const grown = await waitFor(async () => {
   const s = await page.evaluate(() => ({
     h: document.getElementById("panel-metrics-btn").getBoundingClientRect().height,
-    stored: JSON.parse(localStorage.getItem("sw-panel-size-metrics-btn") ?? "null")?.h ?? null,
+    stored: JSON.parse(localStorage.getItem("mc-panel-size-metrics-btn") ?? "null")?.h ?? null,
   }));
   return s.stored !== null && s.stored > 120 ? s : null;
 }, 5000).catch(() => null);
@@ -1712,7 +1712,7 @@ const stripState = async () =>
       splitterH: Math.round(sp.getBoundingClientRect().height),
       tiles: [...strip.querySelectorAll(".float-panel.open")].map((e) => e.id),
       canvasH: Math.round(document.getElementById("panel-dock").getBoundingClientRect().height),
-      stored: JSON.parse(localStorage.getItem("sw-strip-bottom") ?? "null"),
+      stored: JSON.parse(localStorage.getItem("mc-strip-bottom") ?? "null"),
     };
   });
 // Start from a known floating state: metrics open, floating. The
@@ -1738,7 +1738,7 @@ check("e2e: the strip takes its rows from the canvas", st.canvasH <= canvasBefor
 const tileBox = await page.evaluate(() => { const t = document.getElementById("panel-metrics-btn").getBoundingClientRect(); const s = document.getElementById("dock-bottom").getBoundingClientRect(); return { w: t.width, sw: s.width, h: t.height, sh: s.height }; });
 check("e2e: a lone tile fills the strip", Math.abs(tileBox.w - tileBox.sw) <= 1 && Math.abs(tileBox.h - tileBox.sh) <= 1, JSON.stringify(tileBox));
 check("e2e: a docked chart re-sizes to the tile", await waitFor(async () => { const w = await chartWidthAt(); return w.slot > 1000 && Math.abs(w.canvas - w.slot) <= 2 ? true : null; }, 5000).catch(() => false));
-check("e2e: dock state persists per panel", await page.evaluate(() => JSON.parse(localStorage.getItem("sw-panel-dock-metrics-btn") ?? "null")?.mode === "bottom"));
+check("e2e: dock state persists per panel", await page.evaluate(() => JSON.parse(localStorage.getItem("mc-panel-dock-metrics-btn") ?? "null")?.mode === "bottom"));
 // Strip height: drag the splitter up by 100px.
 const spBox = await page.evaluate(() => { const r = document.getElementById("dock-bottom-splitter").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
 await page.mouse.move(spBox.x, spBox.y);
@@ -1760,7 +1760,7 @@ st = await stripState();
 const floatRectAfter = await page.evaluate(() => { const r = document.getElementById("panel-metrics-btn").getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top) }; });
 check("e2e: floating the tile back empties the strip and restores its floating placement", !st.has && st.stripH === 0 && Math.abs(floatRectAfter.left - floatRectBefore.left) <= 1 && Math.abs(floatRectAfter.top - floatRectBefore.top) <= 1, JSON.stringify({ st, floatRectBefore, floatRectAfter }));
 check("e2e: the floated card's dock button flips back to the dock glyph", (await page.textContent("#panel-metrics-btn .float-dock")).trim() === "⤓", await page.textContent("#panel-metrics-btn .float-dock"));
-check("e2e: floating clears the persisted dock mode", await page.evaluate(() => JSON.parse(localStorage.getItem("sw-panel-dock-metrics-btn") ?? "null")?.mode === "float"));
+check("e2e: floating clears the persisted dock mode", await page.evaluate(() => JSON.parse(localStorage.getItem("mc-panel-dock-metrics-btn") ?? "null")?.mode === "float"));
 // Two tiles: shares, a splitter between them, reorder by dragging a
 // tile head, all persisted. Metrics kept its slot in the stored order
 // when it floated back out above, so the freshly docked logs tile
@@ -1779,7 +1779,7 @@ const tilesOf = async () =>
       widths: [...strip.querySelectorAll(".float-panel.open")].map((e) => Math.round(e.getBoundingClientRect().width)),
       splitters: strip.querySelectorAll(".tile-splitter").length,
       sw: Math.round(sw),
-      stored: JSON.parse(localStorage.getItem("sw-strip-bottom") ?? "null"),
+      stored: JSON.parse(localStorage.getItem("mc-strip-bottom") ?? "null"),
     };
   });
 let tl = await tilesOf();
@@ -1845,7 +1845,7 @@ const rightState = async () =>
       widths: tiles.map((e) => Math.round(e.getBoundingClientRect().width)),
       splitters: strip.querySelectorAll(".tile-splitter").length,
       canvasW: Math.round(document.getElementById("panel-dock").getBoundingClientRect().width),
-      stored: JSON.parse(localStorage.getItem("sw-strip-right") ?? "null"),
+      stored: JSON.parse(localStorage.getItem("mc-strip-right") ?? "null"),
     };
   });
 // Both tiles are floating again here (the previous checks floated
@@ -1882,7 +1882,7 @@ await page.click('.dock-menu .dock-menu-item:has-text("right")');
 rs = await rightState();
 check("e2e: docking to the right puts the card in the right strip at 560px", rs.has && rs.tiles.join() === "panel-metrics-btn" && Math.abs(rs.w - 560) <= 1 && rs.spW === 5, JSON.stringify(rs));
 check("e2e: the right strip takes its column from the canvas", rs.canvasW <= canvasWBefore - 560, `${canvasWBefore} -> ${rs.canvasW}`);
-check("e2e: dock mode persists as right", await page.evaluate(() => JSON.parse(localStorage.getItem("sw-panel-dock-metrics-btn") ?? "null")?.mode === "right"));
+check("e2e: dock mode persists as right", await page.evaluate(() => JSON.parse(localStorage.getItem("mc-panel-dock-metrics-btn") ?? "null")?.mode === "right"));
 // Width: drag the right strip's splitter 100px left.
 const rsp = await page.evaluate(() => { const r = document.getElementById("dock-right-splitter").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
 await page.mouse.move(rsp.x, rsp.y);
@@ -1939,7 +1939,7 @@ await page.mouse.move(h.x, h.y);
 await page.mouse.down();
 await page.mouse.move(h.x - 30, h.y + 30, { steps: 4 });
 await page.mouse.up();
-const posBefore = await page.evaluate(() => localStorage.getItem("sw-panel-pos-metrics-btn"));
+const posBefore = await page.evaluate(() => localStorage.getItem("mc-panel-pos-metrics-btn"));
 h = await headOf("#panel-metrics-btn .panel-drag");
 await page.mouse.move(h.x, h.y);
 await page.mouse.down();
@@ -1956,7 +1956,7 @@ await page.mouse.move(h.x, dockRect.bottom - 20, { steps: 8 });
 await page.mouse.up();
 st = await stripState();
 check("e2e: releasing in the bottom zone docks the card there", st.has && st.tiles.join() === "panel-metrics-btn" && (await page.evaluate(() => document.querySelectorAll(".snap-zone.armed").length === 0)), JSON.stringify(st));
-const posAfter = await page.evaluate(() => localStorage.getItem("sw-panel-pos-metrics-btn"));
+const posAfter = await page.evaluate(() => localStorage.getItem("mc-panel-pos-metrics-btn"));
 check("e2e: docking by drag leaves the stored float position alone", posAfter !== null && posAfter === posBefore, JSON.stringify({ posBefore, posAfter }));
 // Drag the tile's head up out of the strip: it floats under the pointer.
 h = await headOf("#panel-metrics-btn .panel-drag");

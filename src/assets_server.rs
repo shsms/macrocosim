@@ -1,5 +1,5 @@
 //! gRPC server: implements the Frequenz Assets API
-//! (`frequenz.api.assets.v1.PlatformAssets`) on top of switchyard's
+//! (`frequenz.api.assets.v1.PlatformAssets`) on top of macrocosim's
 //! `MicrogridSite` registry + `Config`.
 //!
 //! Exposes the same topology data as `MicrogridServer`, just under the

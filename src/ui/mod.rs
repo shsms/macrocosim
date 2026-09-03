@@ -204,7 +204,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
 ///   cross-origin requests, cross-origin WebSocket handshakes
 ///   included (the same-origin policy never blocked those).
 ///
-/// Non-browser clients (curl, swctl/reqwest) pass because they
+/// Non-browser clients (curl, macroctl/reqwest) pass because they
 /// address the server by its loopback authority — their `Host` is a
 /// loopback name and they send no `Origin`; requests with no `Host`
 /// at all (in-process test calls) pass too. Browsers always send

@@ -7,8 +7,8 @@ from datetime import timedelta
 import pytest
 from frequenz.quantities import Energy, Power
 
-from switchyard.assertions import expect_metric
-from switchyard.metrics import GRID_ENERGY, GRID_POWER, MetricKind, MetricSpec
+from macrocosim.assertions import expect_metric
+from macrocosim.metrics import GRID_ENERGY, GRID_POWER, MetricKind, MetricSpec
 
 _FAST = {"timeout": timedelta(seconds=0.2), "poll": timedelta(seconds=0.01)}
 

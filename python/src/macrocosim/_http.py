@@ -1,6 +1,6 @@
-"""Thin synchronous client over switchyard's HTTP ``/api/*`` control plane.
+"""Thin synchronous client over macrocosim's HTTP ``/api/*`` control plane.
 
-Internal: users reach these calls through :class:`switchyard.runtime.Site`.
+Internal: users reach these calls through :class:`macrocosim.runtime.Site`.
 Each method maps to one endpoint and returns parsed JSON.
 """
 
@@ -34,7 +34,7 @@ def control_path(component_id: int, action: str, mg_id: int | None) -> str:
 
 
 class HttpClient:
-    """Blocking ``httpx`` client bound to a switchyard UI server."""
+    """Blocking ``httpx`` client bound to a macrocosim UI server."""
 
     def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
         self._client = httpx.Client(base_url=base_url, timeout=timeout)

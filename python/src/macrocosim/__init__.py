@@ -1,14 +1,14 @@
-"""Python integration-testing client for the switchyard microgrid simulator.
+"""Python integration-testing client for the macrocosim microgrid simulator.
 
 Launch the simulator, build and drive a topology, inject faults, and assert
 on the resulting grid state from inside pytest. See ``todo.org`` §Y in the
-switchyard repo for the design and roadmap.
+macrocosim repo for the design and roadmap.
 
 Physical quantities are
 `frequenz-quantities <https://pypi.org/project/frequenz-quantities/>`_
 (``Power``, ``Energy``, ``Percentage``, ``Frequency``) — import them from
 there directly; times are :mod:`datetime`. :func:`to_lisp_atom` converts any
-typed value to the Lisp literal switchyard reads.
+typed value to the Lisp literal macrocosim reads.
 """
 
 from __future__ import annotations
@@ -36,9 +36,9 @@ from .enums import CommandMode, Health, Metric, Schedule, TelemetryMode
 from .errors import (
     ControlRejected,
     EvalRejected,
+    MacrocosimError,
     NoSample,
     SetpointRejected,
-    SwitchyardError,
 )
 from .matchers import Matcher, at_least, at_most, between, near
 from .metrics import MetricSpec
@@ -62,7 +62,7 @@ __all__ = [
     # async core
     "aio",
     # errors
-    "SwitchyardError",
+    "MacrocosimError",
     "SetpointRejected",
     "EvalRejected",
     "ControlRejected",

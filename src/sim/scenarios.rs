@@ -1,5 +1,5 @@
 //! Scenario registry — named, introspectable scenarios the operator
-//! can run from the UI / `swctl scenario run` / a stepped CI gate.
+//! can run from the UI / `macroctl scenario run` / a stepped CI gate.
 //!
 //! A scenario is one unified unit on two orthogonal axes (see
 //! `scenarios/DESIGN.md`):
@@ -257,7 +257,7 @@ impl From<&ScenarioDef> for ScenarioView {
 }
 
 /// Snapshot the registry into a list of [`ScenarioView`]s, alphabetic
-/// by name. Used by `GET /api/scenarios` and `swctl scenario list`.
+/// by name. Used by `GET /api/scenarios` and `macroctl scenario list`.
 pub fn snapshot(registry: &SharedScenarios) -> Vec<ScenarioView> {
     let mut out: Vec<_> = registry.lock().values().map(ScenarioView::from).collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));

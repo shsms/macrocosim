@@ -1,25 +1,25 @@
-//! Headless switchyard simulator: load `config.lisp`, spawn the
+//! Headless macrocosim simulator: load `config.lisp`, spawn the
 //! physics tick, serve the Microgrid gRPC API.
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 
 use clap::Parser;
-use simplelog::{
-    ColorChoice, CombinedLogger, ConfigBuilder, LevelFilter, TermLogger, TerminalMode,
-};
-use switchyard::{
+use macrocosim::{
     assets_server::AssetsServer, dispatch_server::DispatchServer, lisp::Config,
     proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer,
     proto::dispatch::microgrid_dispatch_service_server::MicrogridDispatchServiceServer as DispatchGrpcServer,
     proto::microgrid::microgrid_server::MicrogridServer as MicrogridGrpcServer,
     server::MicrogridServer, sim::MicrogridSite, ui, ui_log,
 };
+use simplelog::{
+    ColorChoice, CombinedLogger, ConfigBuilder, LevelFilter, TermLogger, TerminalMode,
+};
 use tonic::transport::Server;
 
 use tokio_stream::wrappers::TcpListenerStream;
 
-/// Headless switchyard microgrid simulator.
+/// Headless macrocosim microgrid simulator.
 #[derive(Parser)]
 struct Args {
     /// Lisp scripts to evaluate at boot, in order. With none, the
@@ -135,7 +135,7 @@ async fn main() {
     // Snapshot the enterprise registry: one tuple per microgrid
     // (id, name, grpc_port, site). Each will get its own physics
     // tick + history sampler + Microgrid gRPC server.
-    let entries: Vec<(u64, String, u16, switchyard::sim::MicrogridSite)> = config
+    let entries: Vec<(u64, String, u16, macrocosim::sim::MicrogridSite)> = config
         .microgrids()
         .lock()
         .values()
@@ -374,7 +374,7 @@ async fn main() {
     // lisp refresh + timeout loops live inside Config and stay
     // fire-and-forget for now.)
     let mut tasks: tokio::task::JoinSet<&'static str> = tokio::task::JoinSet::new();
-    log::info!("Switchyard UI listening on http://{ui_addr}");
+    log::info!("Macrocosim UI listening on http://{ui_addr}");
     tasks.spawn(async move {
         if let Err(e) = ui::serve_with_listener(ui_listener, ui_config, microgrid, loopbacks).await
         {
@@ -450,13 +450,13 @@ async fn main() {
 mod tests {
     use super::*;
 
-    /// A bare `switchyard some.lisp` invocation keeps the documented
+    /// A bare `macrocosim some.lisp` invocation keeps the documented
     /// defaults: UI on 8801, no state dir, the script positional.
     /// CI always boots with --ephemeral-ports and --state-dir, so
     /// nothing else exercises these defaults.
     #[test]
     fn bare_invocation_keeps_the_documented_defaults() {
-        let a = Args::parse_from(["switchyard", "some.lisp"]);
+        let a = Args::parse_from(["macrocosim", "some.lisp"]);
         assert_eq!(a.ui_port, 8801);
         assert!(a.state_dir.is_none());
         assert!(!a.ephemeral_ports);

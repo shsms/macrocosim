@@ -1,4 +1,4 @@
-#+TITLE: Switchyard — roadmap and deferred work
+#+TITLE: Macrocosim — roadmap and deferred work
 #+TODO: TODO INPROGRESS WAIT | DONE CANCELLED
 #+startup: logdrawer
 
@@ -46,9 +46,9 @@ output to verify.
 - Add =tests-browser/= with =package.json=, =playwright.config.ts=,
   and a single browser project (Chromium) — keep CI fast.
 - Fixture =tests-browser/fixtures/server.ts= that boots the
-  switchyard binary on a free UI port (and a free gRPC port to
+  macrocosim binary on a free UI port (and a free gRPC port to
   not collide with anything else), waits for the
-  =Switchyard UI listening= readiness marker, returns
+  =Macrocosim UI listening= readiness marker, returns
   ={ uiUrl }=. Tear-down kills the process.
 - Tests: page loads at =/=, =/api/topology= returns a non-empty
   graph, clicking a node populates the inspect pane, the REPL
@@ -132,7 +132,7 @@ run on the same machine matches.
 
 Shipped as the =ui-e2e= job in =.github/workflows/ci.yml=, needing
 both =rust= (shares its cargo cache) and =ui-lint=. It builds
-=cargo build --bin switchyard=, sets up Node 22, installs Playwright
+=cargo build --bin macrocosim=, sets up Node 22, installs Playwright
 loose and pinned to 1.62.1 (no package.json/lockfile in this repo to
 =npm ci= against — that's the locally-vendored node_modules version)
 plus its Chromium download, boots a scratch state dir seeded from
@@ -180,7 +180,7 @@ the WS pump adds a forwarder):
   =current_microgrid= if it points there, emit unregistered. WS
   forwarders need nothing: last site Arc drops → event Sender
   closes → the forwarder's =RecvError::Closed= arm exits.
-- Wrappers: =DELETE /api/mg/{id}=, a swctl verb, a UI button.
+- Wrappers: =DELETE /api/mg/{id}=, a macroctl verb, a UI button.
 - Ports rebind on re-load; the make-microgrid port-collision check
   errors cleanly if something else took the port meanwhile.
 
@@ -194,10 +194,10 @@ is worth a verb on top of unload-by-id.
 *** TODO S1. Expose the reporting API                              :rust:api:
 
 Mount the [[https://github.com/frequenz-floss/frequenz-api-reporting][frequenz-api-reporting]] gRPC service so downstream apps can hit a
-switchyard instance with the same reporting calls they'd use against
+macrocosim instance with the same reporting calls they'd use against
 a real deployment.  Larger project than the assets API (see
 =Archive=) — reporting wants historical aggregations, multi-metric
-queries, time-range pagination, etc., which switchyard doesn't
+queries, time-range pagination, etc., which macrocosim doesn't
 currently retain.
 
 *** TODO S2. ListMicrogrids discovery RPC                               :api:
@@ -205,7 +205,7 @@ currently retain.
 Follow-up from the assets API: there's no =ListMicrogrids= RPC in
 the upstream proto, so gRPC-only clients still need
 =/api/microgrids= (HTTP) to discover available ids. Worth a
-switchyard-side proto extension if a gRPC-only client ever needs
+macrocosim-side proto extension if a gRPC-only client ever needs
 it.
 
 ** R. REPL editing experience polish
@@ -254,7 +254,7 @@ output, and the UI builds the form from that. Removes the
 JS-vs-Rust schema drift.
 
 Why deferred: requires either a tulisp-side reflection API or a
-=switchyard::lisp::make= self-describing module. Hardcoded JS works
+=macrocosim::lisp::make= self-describing module. Hardcoded JS works
 fine for the current category count.
 
 ** P. Physics realism upgrades
@@ -305,17 +305,17 @@ no setpoint / bounds behaviour shifts.
 
 ** D. Downstream-app end-to-end testing in CI
 
-Ship switchyard as a standalone binary (and Docker image) so a downstream
+Ship macrocosim as a standalone binary (and Docker image) so a downstream
 app's CI can spin it up as a high-fidelity fake microgrid, drive a scenario,
 and gate on the result — exercising the app end-to-end through the real
 frequenz gRPC API rather than a hand-rolled mock. The app under test runs as a
-separate process talking gRPC; switchyard drives the environment and records
-the assertions (=scenario-expect= → =swctl scenario report --assert=).
+separate process talking gRPC; macrocosim drives the environment and records
+the assertions (=scenario-expect= → =macroctl scenario report --assert=).
 
 *** TODO D3. Routable bind address (deferred — only if cross-container)     :rust:ui:
 
 Routable =--ui-bind= / =--grpc-bind <host>= (vs today's loopback) so two
-*separate* containers — switchyard + the app — can talk by service name over a
+*separate* containers — macrocosim + the app — can talk by service name over a
 bridge network. Deferred: that's the *only* deployment that needs it, and it
 exposes =/api/eval= (arbitrary Lisp = RCE) to the network. Every other E2E shape
 runs on loopback, which D1+D2 already cover: host-process CI, a single container
@@ -328,10 +328,10 @@ live here is now D10 (worth doing on loopback regardless).
 *** TODO D5. Distribution + crates.io publish                        :packaging:
 
 Binary distribution DONE: the Python client ships as a =maturin= platform
-wheel bundling =switchyard= + =swctl= (python/, on python-client), so
-=pip install switchyard= needs no separate binary download. The tulisp family
+wheel bundling =macrocosim= + =macroctl= (python/, on python-client), so
+=pip install macrocosim= needs no separate binary download. The tulisp family
 is now published to crates.io (=tulisp= 0.29.0, =tulisp-async= / =tulisp-fmt=
-0.1.0) and switchyard depends on them there — the old git-deps blocker is
+0.1.0) and macrocosim depends on them there — the old git-deps blocker is
 cleared.
 
 Remaining before a public release:
@@ -340,7 +340,7 @@ Remaining before a public release:
 - A per-OS/arch wheel CI matrix (maturin / cibuildwheel) + a Python test/lint
   job; today only a hand-built linux-x86_64 wheel exists.
 - Optional: a Docker image (GPL) consumers run in CI — no source, no linking.
-- A crates.io publish of switchyard itself also needs the vendored proto build
+- A crates.io publish of macrocosim itself also needs the vendored proto build
   buildable from the published crate (git submodule today), and the
   =frequenz-microgrid-component-graph= dependency moved off its git pin
   (=git = …, rev = "8bab132"= in Cargo.toml) — crates.io rejects git deps.
@@ -352,7 +352,7 @@ resets all journals, and the report endpoint reads the current site — so two
 scenarios can't run concurrently on two microgrids in one process, and
 multi-microgrid assertions all land in one site's report. Scope a scenario (and
 its journal/report) to a single microgrid so independent cases — or several apps
-under test — can run in parallel inside one switchyard. Enables the in-process
+under test — can run in parallel inside one macrocosim. Enables the in-process
 multi-microgrid option D6 sets aside; until then, CI-job parallelism covers it.
 
 *** TODO D8. Deterministic clock-sync with the app under test          :testing:
@@ -360,7 +360,7 @@ multi-microgrid option D6 sets aside; until then, CI-job parallelism covers it.
 E2E with an external app is necessarily real-time + wall-clock (the app is a
 black box on its own clock), so checks must assert settled-state invariants with
 tolerance and a run costs minutes. A shared virtual-time contract —
-switchyard's stepped clock advancing in lockstep with the app — would make E2E
+macrocosim's stepped clock advancing in lockstep with the app — would make E2E
 fast and bit-reproducible, but needs the app to honour an external tick. Worth it
 only if a consumer opts in; the absolute-schedule live-cue gap (J-era) belongs
 here too.
@@ -390,8 +390,8 @@ needs no =(load "sim/…")=. Two independent follow-ups, neither urgent:
 ** Y. Python integration-testing library (PyPI)                :python:testing:api:
 
 IMPLEMENTED — on the =python-client= branch (see =python/README.md= and
-=python/src/switchyard/=). A synchronous, pytest-first client that drives
-switchyard the way a downstream control app would: build a topology (nested
+=python/src/macrocosim/=). A synchronous, pytest-first client that drives
+macrocosim the way a downstream control app would: build a topology (nested
 =successors= → =(make-*)= Lisp), launch + manage the process, drive the
 environment, inject faults, read component telemetry over gRPC and graph
 aggregates over the HTTP formulas, and assert settle-aware — plus author
@@ -401,7 +401,7 @@ scenarios in Python and a deterministic serverless gate
 Phases Y0–Y8 done: process lifecycle, gRPC + HTTP transport, config builder,
 runtime mutation (=set= / =drive=), settle-aware assertions, scenarios + a
 pytest plugin, and packaging. Shipped as a =maturin= platform wheel bundling
-the =switchyard= + =swctl= binaries (=pip install switchyard= just works);
+the =macrocosim= + =macroctl= binaries (=pip install macrocosim= just works);
 uv-native dev; the tulisp family is on crates.io (0.29.0 / 0.1.0).
 
 Deferred follow-ups: an async surface (sync-only today); a per-OS/arch wheel
@@ -493,7 +493,7 @@ Research on the internet before fixing (not urgent): real inverters
 differ — some are fully reactive-capable up to the kVA circle at any
 active power (including P≈0), others can only source/sink Q as a
 percentage of the *current* active power. Decide which model(s)
-switchyard should expose and how the static config bounds (rated) vs the
+macrocosim should expose and how the static config bounds (rated) vs the
 live telemetry bounds should each read. Likely answer: config bounds use
 rated P (=p_max=), telemetry keeps live-P. Check IEEE 1547-2018
 reactive-at-zero-P capability and typical nameplate Q ratings.
@@ -638,7 +638,7 @@ fidelity gap.
   the response, not executing the request — so the server rejects
   non-loopback Host (DNS rebinding) and Origin≠Host (plain
   cross-origin, incl. WS handshakes) itself. Headerless non-browser
-  clients (curl, swctl, tests) pass. axum's stock 2 MB
+  clients (curl, macroctl, tests) pass. axum's stock 2 MB
   DefaultBodyLimit on /api/eval is pinned by a test; the
   overrides-text and BulkRemoveBody endpoints named below no longer
   exist. Loopback allowlist needs a knob if --ui-bind lands.
@@ -682,7 +682,7 @@ unescaped dashboard names, csv-lookup NaN guard, snapshot-load
 atomicity, dispatch phantom-update) were fixed in the same pass; the
 items below need more than a local change.
 
-** TODO [#C] swctl --json emits Rust Debug output for gRPC-backed commands :api:
+** TODO [#C] macroctl --json emits Rust Debug output for gRPC-backed commands :api:
 
 =--json= is documented as "emit JSON … where applicable", and the
 HTTP-routed verbs (=scenario=, =scenarios=, =snapshot=, =pool=) do
@@ -965,12 +965,12 @@ was fixed in =fa39fc3=.)
 
 ** Packaging / housekeeping
 
-*** TODO [#B] PyPI name =switchyard= is taken            :packaging:python:
+*** TODO [#B] PyPI name =macrocosim= is taken            :packaging:python:
 
-PyPI already has =switchyard= (a GPL network-teaching framework,
-v1.0.1), so =pip install switchyard= installs the foreign package
+PyPI already has =macrocosim= (a GPL network-teaching framework,
+v1.0.1), so =pip install macrocosim= installs the foreign package
 and the planned publish (Y track / D5) cannot happen under this
-name. Rename or namespace (e.g. =switchyard-sim=) before any
+name. Rename or namespace (e.g. =macrocosim-sim=) before any
 release. The wheels.yml smoke test installs by wheel path since
 =e0d48bd=, so CI no longer trips over it.
 
@@ -985,7 +985,7 @@ crates-publish notes.
 
 *** TODO [#C] tulisp =etags= feature is always on                   :build:
 
-Only the feature-gated =switchyard-etags= bin needs it; default
+Only the feature-gated =macrocosim-etags= bin needs it; default
 builds (and the wheel) pay for it. Shape: =tulisp = { features =
 ["sync"] }= plus =etags = ["tulisp/etags"]= on the crate's own
 =etags= feature — verify the lib truly compiles without it first.
@@ -1056,7 +1056,7 @@ ui/handlers/topology.rs (category_label) and sim/scenario_csv.rs
 (category_slug); sim/marker.rs carries a name-prefix copy and
 sim/site_import.rs a SCREAMING->make-form copy. Adding a category (or
 renaming a slug) must be replayed by hand in each. Known drift
-already: swctl short_category prints "?" for the marker categories,
+already: macroctl short_category prints "?" for the marker categories,
 and dispatch category_from_alias cannot target them. One canonical
 mapping on Category (Display or a label() impl) would collapse the
 Rust copies and give the compiler a say.
@@ -1167,7 +1167,7 @@ or document snap-to-park as intended for chargers.
 
 *** TODO [#C] SetPower response stream skips the ACCEPTED phase   :api:
 The proto documents initial-response (ACCEPTED) then final
-(SUCCESS/FAILED/OVERRIDDEN); switchyard sends one SUCCESS and closes
+(SUCCESS/FAILED/OVERRIDDEN); macrocosim sends one SUCCESS and closes
 (=server.rs do_set_power=). Known frequenz clients tolerate it.
 Decision: emit ACCEPTED-then-SUCCESS for fidelity, or document the
 single-message simplification.
@@ -1176,7 +1176,7 @@ single-message simplification.
 An absent =request_lifetime= on Augment falls back to the shared
 =default_request_lifetime= (60 s); the vendored proto documents 5 s
 for Augment (60 s matches only SetPower). Recovery-timing tests
-against switchyard run differently than against production.
+against macrocosim run differently than against production.
 Decision: per-RPC fallbacks or one knob + documented deviation.
 
 ** Config semantics
@@ -1232,7 +1232,7 @@ or compare against the authored =Scenario._checks= count when the
 client authored the scenario.
 
 *** TODO [#C] pytest marker gate runs after an already-failed test :python:testing:
-The =switchyard_scenario= marker path runs-and-gates the scenario in
+The =macrocosim_scenario= marker path runs-and-gates the scenario in
 fixture teardown even when the test body failed (spending the full
 scenario length on a red test), and a failed gate surfaces as a
 teardown ERROR, not the FAILURE the docstring promises. Decision:
@@ -1325,7 +1325,7 @@ heavy-handed:
    matching =(load)='s resolution.
 
 (2) or (3) is probably the right answer; (1) is the smallest patch
-on the switchyard side.
+on the macrocosim side.
 
 *Where the workaround lives today:* =defuns::fs::register= closes
 over =load_dir: PathBuf=, propagated from =Config::new= via
@@ -1867,7 +1867,7 @@ suite has carried this one FAIL since 2026-08-27.
 
 Closing and reopening a panel within the ~200 ms gripper-to-cap
 conversion window can overwrite the stored height cap
-(sw-panel-size-<name>) with the transient value. From the
+(mc-panel-size-<name>) with the transient value. From the
 2026-08-27 metrics-panel review; low frequency, real ratchet.
 
 ** TODO Floating panels: fitted position doesn't spring back when the window re-widens :ux:
@@ -1933,14 +1933,14 @@ by design (=has_unrenderable_source=), but plain numeric pokes
 could round-trip if the renderer read the live source instead of
 cfg. Decide per-knob whether live-value serialization is wanted.
 
-** TODO swctl short_category prints ? for several categories    :api:cleanup:
+** TODO macroctl short_category prints ? for several categories    :api:cleanup:
 :LOGBOOK:
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
 =short_category= now labels boilers, but Converter, HVAC, Breaker,
 PowerTransformer, WindTurbine (and any other lifted category) still
-fall to the "?" catch-all in swctl's listing output.
+fall to the "?" catch-all in macroctl's listing output.
 
 ** DONE Stale setpoint deadlines survive reset and component removal :concurrency:api:
 :LOGBOOK:

@@ -8,11 +8,11 @@ REPL use and simple scripts.
 The surface is *signals*: every observable quantity is an object with
 ``read`` / ``expect`` / (where the simulator allows it) ``set``::
 
-    async with sw.aio.launch(topology) as site:
+    async with mc.aio.launch(topology) as site:
         await load.power.set(Power.from_kilowatts(20))
-        await site.grid_power.expect(sw.at_most(Power.from_kilowatts(13)))
+        await site.grid_power.expect(mc.at_most(Power.from_kilowatts(13)))
         await site.battery_energy.expect(
-            sw.at_most(Energy.from_watt_hours(-1)))
+            mc.at_most(Energy.from_watt_hours(-1)))
 
 Component signals live on the topology builders (bound at launch); the
 site's aggregates are signal properties here. A signal's *kind* picks
@@ -38,7 +38,7 @@ from frequenz.quantities import Energy, Percentage, Power, Quantity, ReactivePow
 
 from .. import metrics as _M
 from .._http import EvalResult, control_path
-from .._process import spawn_switchyard, terminate
+from .._process import spawn_macrocosim, terminate
 from ..build import RawLisp, to_lisp_atom
 from ..errors import EvalRejected
 from ..metrics import MetricSpec
@@ -74,9 +74,9 @@ _FROM_WIRE: dict[type[Quantity], Callable[[float], Quantity]] = {
 
 
 class Site:
-    """Async handle onto a running switchyard.
+    """Async handle onto a running macrocosim.
 
-    Mirrors the sync ``switchyard.Site`` surface, with every read, write,
+    Mirrors the sync ``macrocosim.Site`` surface, with every read, write,
     and wait a coroutine on the caller's loop.
     """
 
@@ -671,7 +671,7 @@ def connect(
     assets: str | None = None,
     dispatch: str | None = None,
 ) -> Site:
-    """Attach to an already-running switchyard (no process is spawned)."""
+    """Attach to an already-running macrocosim (no process is spawned)."""
     return Site(
         ui=ui,
         microgrids=microgrids or {},
@@ -688,15 +688,15 @@ async def launch(
     bin: str | os.PathLike[str] | None = None,
     ready_timeout: timedelta = timedelta(seconds=20),
 ) -> AsyncIterator[Site]:
-    """Boot switchyard on ephemeral ports and yield a ready async ``Site``.
+    """Boot macrocosim on ephemeral ports and yield a ready async ``Site``.
 
-    Same contract as the sync ``switchyard.launch``, but the handshake wait
+    Same contract as the sync ``macrocosim.launch``, but the handshake wait
     awaits instead of blocking, and the site is torn down on exit::
 
-        async with sw.aio.launch(topology) as site:
+        async with mc.aio.launch(topology) as site:
             ...
     """
-    spawned = spawn_switchyard(config, bin)
+    spawned = spawn_macrocosim(config, bin)
     site: Site | None = None
     try:
         deadline = time.monotonic() + ready_timeout.total_seconds()
@@ -709,13 +709,13 @@ async def launch(
             if spawned.process.poll() is not None:
                 spawned.fail(
                     RuntimeError,
-                    f"switchyard exited early (code {spawned.process.returncode}) "
+                    f"macrocosim exited early (code {spawned.process.returncode}) "
                     f"before emitting endpoints:",
                 )
             if time.monotonic() >= deadline:
                 spawned.fail(
                     TimeoutError,
-                    f"switchyard did not emit endpoints within {ready_timeout}:",
+                    f"macrocosim did not emit endpoints within {ready_timeout}:",
                 )
             await asyncio.sleep(0.1)
         endpoints = json.loads(spawned.endpoints_file.read_text())
@@ -726,7 +726,7 @@ async def launch(
         if not endpoints.get("microgrids"):
             spawned.fail(
                 RuntimeError,
-                "switchyard booted but the config registered no microgrids "
+                "macrocosim booted but the config registered no microgrids "
                 "— does it call (make-microgrid …)?",
             )
         microgrids = {

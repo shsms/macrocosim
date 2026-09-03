@@ -7,7 +7,7 @@ reach it via ``site.scenario(name)``:
 
 ``run(wait=True)`` starts it live, blocks until it finishes (its
 ``:length`` or ``until=``), then stops it so the report freezes — the same
-sequence as ``swctl scenario run --wait``. ``report()`` returns the parsed
+sequence as ``macroctl scenario run --wait``. ``report()`` returns the parsed
 pass/fail ledger + stats; ``assert_passed()`` raises on any failed
 ``(check …)``; ``events()`` reads the journal.
 
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from .runtime import Site
     from .signals import DrivenSignal, SettingSignal, Signal
 
-# A scenario report / journal are dynamic JSON from switchyard; named for intent.
+# A scenario report / journal are dynamic JSON from macrocosim; named for intent.
 ScenarioReport: TypeAlias = dict[str, Any]
 JournalEvent: TypeAlias = dict[str, Any]
 
@@ -51,7 +51,7 @@ def _time_literal(value: timedelta | clock_time) -> str:
     a ``datetime.time`` an ``"HH:MM:SS"`` clock string (for absolute schedules).
 
     Whole seconds render without a decimal point, fractional as a plain decimal
-    — never scientific notation, since switchyard's ``parse-offset`` splits at
+    — never scientific notation, since macrocosim's ``parse-offset`` splits at
     the first letter and would read an ``e``-exponent as the unit.
     """
     if isinstance(value, clock_time):
@@ -329,7 +329,7 @@ def run_scenario_stepped(
     config: ConfigSource,
     name: str,
     *,
-    swctl_bin: str | os.PathLike[str] | None = None,
+    macroctl_bin: str | os.PathLike[str] | None = None,
     until: timedelta | None = None,
     step: int | None = None,
     assert_pass: bool = True,
@@ -339,11 +339,11 @@ def run_scenario_stepped(
     Deterministic and faster than real time — no server, no app under test
     (e2e-testing.md mode 1). ``config`` is a ``.lisp`` path, or builder
     object(s) (a ``Microgrid`` and ``Scenario``) rendered to a temp config.
-    Shells ``swctl scenario run NAME --stepped --config … --json``; with
+    Shells ``macroctl scenario run NAME --stepped --config … --json``; with
     ``assert_pass`` a non-zero exit (a failed ``(check …)``) raises.
     """
     binary = resolve_binary(
-        "swctl", env_var="SWCTL_BIN", explicit=swctl_bin, flag="swctl_bin"
+        "macroctl", env_var="MACROCTL_BIN", explicit=macroctl_bin, flag="macroctl_bin"
     )
     # Only builder objects need rendering to a temp file; a .lisp path
     # is used as-is, and minting (and leaking) a tmpdir for it would
@@ -356,7 +356,7 @@ def run_scenario_stepped(
             # str | PathLike here.
             config_path = Path(config)  # ty: ignore[invalid-argument-type]
         else:
-            tmpdir = Path(tempfile.mkdtemp(prefix="switchyard-py-"))
+            tmpdir = Path(tempfile.mkdtemp(prefix="macrocosim-py-"))
             config_path = render_config(config, tmpdir)
         args = [
             binary,
@@ -378,7 +378,7 @@ def run_scenario_stepped(
         result = subprocess.run(args, capture_output=True, text=True, check=False)
     finally:
         # The rendered config has served its purpose; failure diagnostics
-        # come from swctl's captured output, not the tmpdir — clean up
+        # come from macroctl's captured output, not the tmpdir — clean up
         # even when rendering or the run itself raises (bad builder,
         # Ctrl-C, exec failure).
         if tmpdir is not None:
@@ -398,7 +398,7 @@ def run_scenario_stepped(
             f"stepped scenario {name!r} failed (exit {result.returncode}): {broken}"
         )
     if report is None:
-        raise RuntimeError(f"swctl produced no JSON report:\n{result.stderr}")
+        raise RuntimeError(f"macroctl produced no JSON report:\n{result.stderr}")
     return report
 
 

@@ -1,7 +1,7 @@
 """Shared process plumbing: binary discovery, config rendering, spawn.
 
-Internal. Both the sync client (:mod:`switchyard.runtime`) and the async
-core (:mod:`switchyard.aio`) launch the same simulator process; only the
+Internal. Both the sync client (:mod:`macrocosim.runtime`) and the async
+core (:mod:`macrocosim.aio`) launch the same simulator process; only the
 endpoint-handshake *wait* differs (blocking vs awaiting), so it stays
 with each flavor.
 """
@@ -43,7 +43,7 @@ def resolve_binary(
     """Locate a bundled binary: an explicit path → ``$env_var`` → PATH / wheel.
 
     ``flag`` names the launch/run keyword that overrides it, for the not-found
-    message (``bin`` for switchyard, ``swctl_bin`` for swctl).
+    message (``bin`` for macrocosim, ``macroctl_bin`` for macroctl).
     """
     for candidate in (explicit, os.environ.get(env_var)):
         if candidate:
@@ -55,7 +55,7 @@ def resolve_binary(
     if found:
         return found
     raise FileNotFoundError(
-        f"no {name} binary; install the switchyard platform wheel, pass "
+        f"no {name} binary; install the macrocosim platform wheel, pass "
         f"{flag}=..., set {env_var}, or put it on PATH"
     )
 
@@ -76,7 +76,7 @@ def render_config(config: ConfigSource, tmpdir: Path) -> Path:
 
 
 @dataclass
-class SpawnedSwitchyard:
+class SpawnedMacrocosim:
     """A freshly spawned simulator, before the endpoint handshake."""
 
     process: subprocess.Popen[bytes]
@@ -100,9 +100,9 @@ class SpawnedSwitchyard:
         raise exc_type(f"{message}\n{tail}")
 
 
-def spawn_switchyard(
+def spawn_macrocosim(
     config: ConfigSource, bin: str | os.PathLike[str] | None
-) -> SpawnedSwitchyard:
+) -> SpawnedMacrocosim:
     """Spawn the simulator on ephemeral ports; the caller awaits the handshake.
 
     Sends the child's output to a file, not a PIPE: an undrained pipe fills
@@ -110,9 +110,9 @@ def spawn_switchyard(
     endpoints handshake. The file also carries diagnostics for failures.
     """
     binary = resolve_binary(
-        "switchyard", env_var="SWITCHYARD_BIN", explicit=bin, flag="bin"
+        "macrocosim", env_var="MACROCOSIM_BIN", explicit=bin, flag="bin"
     )
-    tmpdir = Path(tempfile.mkdtemp(prefix="switchyard-py-"))
+    tmpdir = Path(tempfile.mkdtemp(prefix="macrocosim-py-"))
     config_path = render_config(config, tmpdir)
     # Rendered configs (builder objects) anchor their persistent state
     # (overrides journals, snapshots, created-microgrid stubs) in the
@@ -127,7 +127,7 @@ def spawn_switchyard(
     else:
         state_dir = tmpdir
     endpoints_file = tmpdir / "endpoints.json"
-    log_file = tmpdir / "switchyard.log"
+    log_file = tmpdir / "macrocosim.log"
     with log_file.open("wb") as log:
         process = subprocess.Popen(
             [
@@ -140,7 +140,7 @@ def spawn_switchyard(
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-    return SpawnedSwitchyard(
+    return SpawnedMacrocosim(
         process=process,
         endpoints_file=endpoints_file,
         log_file=log_file,

@@ -148,7 +148,7 @@ pub fn new_microgrid_loopbacks() -> MicrogridLoopbacks {
 /// each microgrid that lands in the registry after boot: spawn the
 /// physics tick + history sampler + Microgrid gRPC server + loopback
 /// client. The concrete implementation lives in
-/// `src/bin/switchyard.rs`; test fixtures run no listener, so
+/// `src/bin/macrocosim.rs`; test fixtures run no listener, so
 /// runtime-created entries simply get no runtime there.
 ///
 /// Args: `(id, name, grpc_port, site)`.

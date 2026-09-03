@@ -19,14 +19,14 @@ async fn config_with(body: &str) -> Config {
 }
 
 /// [`config_with`] plus the state directory it booted in — for tests
-/// that read the files switchyard writes (managed microgrid files,
+/// that read the files macrocosim writes (managed microgrid files,
 /// `enterprise.lisp`) or boot a second `Config` on the same dir.
 async fn config_with_dir(body: &str) -> (Config, std::path::PathBuf) {
     // tulisp-async's executor needs a tokio runtime in scope; we
     // already have one via #[tokio::test], so Config::new works.
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "switchyard-ui-{}-{}",
+        "macrocosim-ui-{}-{}",
         std::process::id(),
         // Counter — even if SystemTime resolves the same nanos for
         // two near-simultaneous tests, the AtomicU64 disambiguates.
@@ -92,7 +92,7 @@ async fn index_serves_embedded_shell() {
     let (status, body) = call(cfg, get("/")).await;
     assert_eq!(status, StatusCode::OK);
     let s = String::from_utf8_lossy(&body);
-    assert!(s.contains("<title>switchyard</title>"));
+    assert!(s.contains("<title>macrocosim</title>"));
     assert!(s.contains("/assets/app.js"));
 }
 
@@ -1446,7 +1446,7 @@ async fn adopt_makes_an_unmanaged_single_mg_file_managed() {
     let (st, body) = call(config.clone(), post("/api/mg/9/adopt", "")).await;
     assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let text = std::fs::read_to_string(dir.join("config.lisp")).unwrap();
-    assert!(text.starts_with(";;; switchyard:generated"));
+    assert!(text.starts_with(";;; macrocosim:generated"));
     assert!(
         text.contains(";; (make-microgrid"),
         "original form commented out: {text}"

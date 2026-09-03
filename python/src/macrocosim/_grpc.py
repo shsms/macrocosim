@@ -58,7 +58,7 @@ class GrpcClient:
         self._timeout = timeout
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
-            target=self._loop.run_forever, name="switchyard-grpc", daemon=True
+            target=self._loop.run_forever, name="macrocosim-grpc", daemon=True
         )
         self._thread.start()
         self._client = self._run(self._make_client(server_url))

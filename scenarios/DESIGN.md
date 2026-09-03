@@ -144,7 +144,7 @@ runner does. Both read the one scenario registry.
 - **Stepped runner** — the headless `ManualClock` path (`Config::new_headless` +
   `sim_run`). Advances the clock in fixed steps, ticking timers + physics +
   scenario time together; deterministic and fast. Surfaced as
-  `swctl scenario run NAME --stepped [--until …] [--step …] [--assert]` and a UI
+  `macroctl scenario run NAME --stepped [--until …] [--step …] [--assert]` and a UI
   "Run headless" action. `--assert` exits non-zero on a failed check (already
   built) — the CI gate.
 
@@ -167,7 +167,7 @@ Wall-clock runs are best-effort (stream jitter, scheduler).
 
 Already built; the model just wires them in declaratively:
 - `:expect` → `scenario-expect` checks → the scenario report's pass/fail ledger →
-  `swctl scenario report --assert`.
+  `macroctl scenario report --assert`.
 - `:record 'csv` → per-component telemetry + received-setpoint/effective-bounds
   CSVs.
 - The reporting API (future) consumes the same report/CSVs; an `absolute +
@@ -207,7 +207,7 @@ Bold revamp, but nothing stranded:
    primitives; old `:stages` form kept as sugar.
 3. **Runners off the registry**: live (cues fired by the refresh/auto-advance
    loop against the clock) and stepped (headless `sim_run` over the registry).
-4. **swctl**: `scenario run NAME [--stepped] [--until] [--step] [--assert]`,
+4. **macroctl**: `scenario run NAME [--stepped] [--until] [--step] [--assert]`,
    `scenario list`.
 5. **UI revamp**: registry list + Run live/headless + timeline/ledger run view.
 6. **Migrate** existing scenarios; retire the ad-hoc load-to-run path.

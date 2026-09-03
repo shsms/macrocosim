@@ -1,4 +1,4 @@
-# switchyard
+# macrocosim
 
 A microgrid simulator for testing downstream control apps. Components
 (grid, meter, battery, inverters, EV charger, CHP, steam boiler — a
@@ -13,7 +13,7 @@ The simulator exposes three surfaces:
   subsequent ones step by ten (`:8810`, `:8820`, …), or pin an
   explicit port with `:grpc-port` on `(make-microgrid …)`.
   Downstream apps written against the production API talk to
-  switchyard the same way they'd talk to a real microgrid.
+  macrocosim the same way they'd talk to a real microgrid.
   Two enterprise-wide services ride alongside on their own
   sockets: `PlatformAssets` (`[::1]:9900`) and the
   `MicrogridDispatchService` store-and-serve dispatch API
@@ -26,14 +26,14 @@ The simulator exposes three surfaces:
   also import a microgrid API site export as a real simulated
   microgrid, and run scenarios. Raw JS / HTML / CSS embedded
   into the binary via `rust-embed`; no build step.
-- **swctl** — clap-based client that drives both surfaces from the
+- **macroctl** — clap-based client that drives both surfaces from the
   shell.
 
 ## Build & run
 
 ```sh
 cargo build
-cargo run --bin switchyard examples/berlin-demo.lisp
+cargo run --bin macrocosim examples/berlin-demo.lisp
 ```
 
 The binary takes zero or more Lisp scripts. Each script is a
@@ -58,7 +58,7 @@ the binary, so a script never needs to load them.
 The proto roots ([frequenz-api-microgrid](https://github.com/frequenz-floss/frequenz-api-microgrid),
 frequenz-api-assets, frequenz-api-dispatch) are vendored as git
 submodules under `submodules/` — run `git submodule update --init --recursive`
-once after cloning. `SWITCHYARD_PROTO_ROOT` overrides the microgrid
+once after cloning. `MACROCOSIM_PROTO_ROOT` overrides the microgrid
 proto root for downstream packagers with a private mirror.
 
 ## Scenarios
@@ -71,34 +71,34 @@ for the framework, [`examples/scenario-driving.lisp`](examples/scenario-driving.
 for a runnable 30-minute sample.
 
 ```sh
-swctl scenario start "demo"
-swctl scenario load examples/scenario-driving.lisp
-swctl scenario report
-swctl scenario events --since 0 --limit 20
-swctl scenario stop
+macroctl scenario start "demo"
+macroctl scenario load examples/scenario-driving.lisp
+macroctl scenario report
+macroctl scenario events --since 0 --limit 20
+macroctl scenario stop
 ```
 
-The Report panel in the web UI polls the same endpoints as `swctl
+The Report panel in the web UI polls the same endpoints as `macroctl
 scenario report`.
 
-## swctl
+## macroctl
 
 ```sh
-swctl info
-swctl tree
-swctl list --category battery
-swctl connections --from 4                                  # filter graph edges
-swctl stream 1001 --samples 5
-swctl set-power 1001 -5000 --lifetime 30                    # negative = discharge
-swctl augment-bounds 1001 --lower -1000 --upper 5000        # TTL-limited bounds
-swctl pool battery                                          # loopback BatteryPool snapshot
-swctl scenario report                                       # journal report / CI gate
-swctl scenario list                                         # registered scenarios
-swctl scenario run cloud-fade --wait --assert              # run one live + gate
-swctl snapshot save before-test                             # freeze the mg's managed file
-swctl dashboard --tail                                      # one-line/sec pulse bar
-swctl dispatch list 1                                       # dispatch API CRUD
-swctl dispatch create 1 <type> battery --duration 3600
+macroctl info
+macroctl tree
+macroctl list --category battery
+macroctl connections --from 4                                  # filter graph edges
+macroctl stream 1001 --samples 5
+macroctl set-power 1001 -5000 --lifetime 30                    # negative = discharge
+macroctl augment-bounds 1001 --lower -1000 --upper 5000        # TTL-limited bounds
+macroctl pool battery                                          # loopback BatteryPool snapshot
+macroctl scenario report                                       # journal report / CI gate
+macroctl scenario list                                         # registered scenarios
+macroctl scenario run cloud-fade --wait --assert              # run one live + gate
+macroctl snapshot save before-test                             # freeze the mg's managed file
+macroctl dashboard --tail                                      # one-line/sec pulse bar
+macroctl dispatch list 1                                       # dispatch API CRUD
+macroctl dispatch create 1 <type> battery --duration 3600
 ```
 
 `--addr` (default `http://[::1]:8800`) points the gRPC client
@@ -142,9 +142,13 @@ gateway intersects bounds for setpoint validation.
 
 ## More
 
-- [`docs/e2e-testing.md`](docs/e2e-testing.md) — drive switchyard from a
+- [`docs/e2e-testing.md`](docs/e2e-testing.md) — drive macrocosim from a
   downstream app's CI for end-to-end integration tests.
 - [`AGENTS.md`](AGENTS.md) — developer notes for this repo.
 - [`todo.org`](todo.org) — roadmap + open design questions.
 - [`scenarios/README.md`](scenarios/README.md) — scenario framework
   reference.
+
+---
+
+This project was previously called `switchyard`.

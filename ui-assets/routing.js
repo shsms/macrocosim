@@ -59,7 +59,7 @@ export const READ_ONLY_TITLE =
 // once. Default = normal (the 32" 4K target keeps the comfortable
 // layout the landing one). Preference persists in localStorage so a
 // refresh keeps you put.
-const DENSITY_KEY = "switchyard-density";
+const DENSITY_KEY = "macrocosim-density";
 
 function applyDensity(mode) {
   if (mode === "compact") {
@@ -86,9 +86,9 @@ export function setupDensityToggle() {
 }
 
 // ─── Route state keys + read helpers ───────────────────────────────────────
-const MODE_KEY = "switchyard-mode";
-const MG_SELECTED_KEY = "switchyard-selected-mg";
-const MG_SUBVIEW_KEY = "switchyard-mg-subview";
+const MODE_KEY = "macrocosim-mode";
+const MG_SELECTED_KEY = "macrocosim-selected-mg";
+const MG_SUBVIEW_KEY = "macrocosim-mg-subview";
 const VALID_MODES = new Set(["microgrids", "scenarios"]);
 const VALID_SUBVIEWS = new Set(["topology", "dispatches"]);
 

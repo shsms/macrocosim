@@ -24,7 +24,7 @@ pub(in crate::ui) struct MicrogridStatusResp {
     /// is true, every `LogicalMeterHandle::xxx<M>()` is reachable.
     connected: bool,
     /// Round-trip count from `list_electrical_components` —
-    /// confirms switchyard's gRPC server returned what the
+    /// confirms macrocosim's gRPC server returned what the
     /// graph crate accepted.
     component_count: Option<usize>,
 }

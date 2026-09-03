@@ -1,11 +1,11 @@
-"""Typed enumerations for switchyard's runtime knobs and scenario checks.
+"""Typed enumerations for macrocosim's runtime knobs and scenario checks.
 
-Each member's *value* is the exact Lisp symbol switchyard expects. These are
+Each member's *value* is the exact Lisp symbol macrocosim expects. These are
 :class:`enum.StrEnum` s, so a member renders to that symbol when spliced into
 an emitted form (``f"'{Health.ERROR}"`` → ``'error``) and still compares equal
 to the bare string, but the enum is the typed, discoverable way to pass one.
 
-Values mirror switchyard's Rust ``FromStr`` impls (``src/sim/runtime.rs``) and
+Values mirror macrocosim's Rust ``FromStr`` impls (``src/sim/runtime.rs``) and
 the scenario metric parser (``src/lisp/defuns/scenarios.rs``).
 """
 

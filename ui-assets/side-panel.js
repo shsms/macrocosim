@@ -33,8 +33,8 @@ const panels = new Map();
 // Open panels, oldest first — Esc closes the newest.
 const openStack = [];
 
-const POS_KEY_PREFIX = "sw-panel-pos-";
-const SIZE_KEY_PREFIX = "sw-panel-size-";
+const POS_KEY_PREFIX = "mc-panel-pos-";
+const SIZE_KEY_PREFIX = "mc-panel-size-";
 // Where a panel nobody has placed lands. The dock's top edge is level
 // with the floating canvas controls, so that row is draggable-to but
 // not spawned-on: BASE clears the controls strip, and STEP staggers
@@ -85,12 +85,12 @@ const ROW_GAP = 8;
 // tiles run along the other one and the tile splitters cut across
 // it. Each strip persists its size, tile order and shares under
 // `key`; each panel remembers its edge under DOCK_KEY_PREFIX.
-const DOCK_KEY_PREFIX = "sw-panel-dock-";
+const DOCK_KEY_PREFIX = "mc-panel-dock-";
 const STRIPS = {
   bottom: {
     el: "dock-bottom",
     splitter: "dock-bottom-splitter",
-    key: "sw-strip-bottom",
+    key: "mc-strip-bottom",
     bodyClass: "has-bottom-dock",
     axis: "y",
     size: 260,
@@ -101,7 +101,7 @@ const STRIPS = {
   right: {
     el: "dock-right",
     splitter: "dock-right-splitter",
-    key: "sw-strip-right",
+    key: "mc-strip-right",
     bodyClass: "has-right-dock",
     axis: "x",
     size: 560,

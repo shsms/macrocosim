@@ -1,4 +1,4 @@
-//! gRPC loopback supervisor that mirrors switchyard's own gRPC
+//! gRPC loopback supervisor that mirrors macrocosim's own gRPC
 //! service back through `frequenz-microgrid`'s client + logical-
 //! meter actors. The metrics panel's charts and chips read from
 //! there, so the SPA exercises exactly the same path a downstream

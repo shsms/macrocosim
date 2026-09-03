@@ -58,7 +58,7 @@ function colorFor(c) {
   return CATEGORY_COLOR[c.category] || "#888888";
 }
 
-const LIVE_KEY = "switchyard-topology-live";
+const LIVE_KEY = "macrocosim-topology-live";
 const EDGE_LIVE_COLOR = "#79b8ff";
 
 // The edge's look with no live flow on it — what buildVisData's

@@ -1,4 +1,4 @@
-# switchyard
+# macrocosim
 
 A Rust microgrid simulator with a Lisp-driven config DSL. Reimplementation of
 microsim where component physics lives in Rust and Lisp's job
@@ -68,8 +68,8 @@ is wiring the topology + animating the environment.
   corner in `PANEL_DEFAULTS`; any card docks into the bottom or right
   strip (`#dock-bottom`, `#dock-right`; `STRIPS` holds each strip's
   ids, axis and sizes; `dockPanel(name, edge)` / `floatPanel` /
-  `layoutStrip(edge)`; persisted under `sw-panel-dock-<name>` and
-  `sw-strip-<edge>`);
+  `layoutStrip(edge)`; persisted under `mc-panel-dock-<name>` and
+  `mc-strip-<edge>`);
   `splitter.js` the drag-to-resize
   handshake the dock strips use; `strip-model.js` their DOM-free
   arithmetic (shares, order, size clamp); `vendor/fonts/` the
@@ -96,7 +96,7 @@ is wiring the topology + animating the environment.
   ```sh
   SD=$(mktemp -d); mkdir "$SD/microgrids"
   cp examples/berlin-demo.lisp "$SD/microgrids/2200.lisp"
-  ./target/debug/switchyard --state-dir "$SD" --ephemeral-ports \
+  ./target/debug/macrocosim --state-dir "$SD" --ephemeral-ports \
       --emit-endpoints="$SD/endpoints.json" "$SD/microgrids/2200.lisp" &
   until [ -f "$SD/endpoints.json" ]; do sleep 0.2; done
   SW_UI=http://$(jq -r .ui "$SD/endpoints.json") \
@@ -109,22 +109,22 @@ is wiring the topology + animating the environment.
 - `src/proto.rs` + `src/proto_conv.rs` — proto include + `Telemetry` →
   `MetricSample`s
 - `src/timeout_tracker.rs` — request lifetime → `reset_setpoint` expiry
-- `src/bin/switchyard.rs` — headless server
-- `src/bin/swctl.rs` — clap-based client CLI
+- `src/bin/macrocosim.rs` — headless server
+- `src/bin/macroctl.rs` — clap-based client CLI
 - `sim/common.lisp` — Lisp helpers (`every`, `cancel-timers`,
   `reset-state`); embedded into the binary with `defaults.lisp` +
   `scenarios.lisp` as the prelude
 - `examples/berlin-demo.lisp` — self-contained demo world: generated
   topology block + a script section with the environment animation
   and the seven starter scenarios. Boot scripts are optional
-  (`switchyard [script …]`); a bare boot loads worlds on demand via
+  (`macrocosim [script …]`); a bare boot loads worlds on demand via
   `(load …)` / the Microgrids tab, and `--state-dir` anchors
   `microgrids/`, `enterprise.lisp`, `snapshots/`, and relative paths
 
 ## Managed microgrid files
 
-Each microgrid lives in one `.lisp` file: a switchyard-generated
-block (`;;; switchyard:generated` … `;;; switchyard:end`) holding a
+Each microgrid lives in one `.lisp` file: a macrocosim-generated
+block (`;;; macrocosim:generated` … `;;; macrocosim:end`) holding a
 full `(make-microgrid :id … :name … :grpc-port … :topology (lambda ()
 …))` — every component as a flat `%make-*` plus `connect` calls,
 rewritten from live state on every structural eval — followed by a
@@ -258,11 +258,11 @@ UI").
 ```sh
 cargo build
 cargo test                                # unit tests for bounds/ramp/decay
-cargo run --bin switchyard examples/berlin-demo.lisp
-cargo run --bin swctl -- info
-cargo run --bin swctl -- tree
-cargo run --bin swctl -- stream 1001 --samples 5
-cargo run --bin swctl -- set-power 1001 5000
+cargo run --bin macrocosim examples/berlin-demo.lisp
+cargo run --bin macroctl -- info
+cargo run --bin macroctl -- tree
+cargo run --bin macroctl -- stream 1001 --samples 5
+cargo run --bin macroctl -- set-power 1001 5000
 ```
 
 `ui-assets/` changes: `npx @biomejs/biome check ui-assets` (config in
@@ -294,7 +294,7 @@ commit via a button (dialogs, pass-a-cloud) may keep both.
 Each registered microgrid binds its own gRPC port; the first
 defaults to `[::1]:8800` and subsequent microgrids step by ten
 (`:8810`, `:8820`, …). Override via `:grpc-port` on
-`(make-microgrid …)`. swctl's `--addr` points the gRPC client at
+`(make-microgrid …)`. macroctl's `--addr` points the gRPC client at
 the first microgrid by default; pass `--addr http://[::1]:8810`
 etc. to reach others. The UI server binds `127.0.0.1:8801` by
 default; override the port with `--ui-port N`, or pass
@@ -310,10 +310,10 @@ request): assets on `[::1]:9900`, dispatch on `[::1]:8900`. Override
 via `(set-assets-socket-addr …)` / `(set-dispatch-socket-addr …)`.
 Point the dispatch CLI at it with
 `--url 'grpc://[::1]:8900?ssl=false' --auth-key any` (auth is ignored),
-or use `swctl dispatch {list,create,pause,resume,delete,get}`. The
+or use `macroctl dispatch {list,create,pause,resume,delete,get}`. The
 per-microgrid Dispatches UI sub-tab (`/api/mg/{id}/dispatches`) lists
 them and can create / pause / resume / delete; all three write paths
-(gRPC, UI, swctl) funnel through `DispatchStore::{create,set_active}`,
+(gRPC, UI, macroctl) funnel through `DispatchStore::{create,set_active}`,
 so construction + validation stay identical.
 
 ## Dependencies
@@ -332,7 +332,7 @@ so construction + validation stay identical.
   ever runs (the same-ctx model has no background firing thread).
 - Proto roots are vendored under `submodules/`:
   - `submodules/frequenz-api-microgrid` (pinned at v0.18.1) — override
-    with `SWITCHYARD_PROTO_ROOT` for a private mirror.
+    with `MACROCOSIM_PROTO_ROOT` for a private mirror.
   - `submodules/frequenz-api-assets` (pinned at v0.1.0).
   - `submodules/frequenz-api-dispatch` (pinned at v1.0.0) — dispatch
     v1; imports the same vendored common v1alpha8, so no common of
@@ -426,11 +426,11 @@ rebuild; a script that wants live defaults-editing can still
    in the matching `src/lisp/defuns/` file. Use `(every …)` or
    `(run-with-timer …)` from the config to script behaviour over time.
 3. Demonstrate via a new line in `examples/berlin-demo.lisp` and
-   verify via swctl.
+   verify via macroctl.
 
 ## Testing an external bounds-driving app
 
-Switchyard is used to test apps whose job is to push
+Macrocosim is used to test apps whose job is to push
 `AugmentElectricalComponentBounds` and watch `power_bounds` react (a
 GCP active-power limiter is the motivating case).
 
@@ -454,7 +454,7 @@ GCP active-power limiter is the motivating case).
 - Drive sim state ad-hoc by POSTing lisp to
   `http://127.0.0.1:8801/api/eval`, e.g.
   `--data "(set-component-health 201 'error)"` → `{"ok":true,…}`.
-- Switchyard's physics supports closed-loop bound tests today; the
+- Macrocosim's physics supports closed-loop bound tests today; the
   remaining gaps are ergonomic, not physical — scenario assertions,
   an in-sim controller/actor that reacts to live bounds, declarative
   signal profiles, and deterministic sim-time. See `todo.org` §I.

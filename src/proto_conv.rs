@@ -1,4 +1,4 @@
-//! Convert switchyard's Rust-side `Telemetry` and `Category` into the
+//! Convert macrocosim's Rust-side `Telemetry` and `Category` into the
 //! proto messages that the Microgrid gRPC service emits.
 //!
 //! Lives in its own module so the server code stays focused on RPC
@@ -29,7 +29,7 @@ use crate::{
 /// The one chrono→proto Timestamp conversion. The nanos cast is
 /// subtle enough (`timestamp_subsec_nanos` is u32, proto wants i32)
 /// that every hand-rolled copy is a drift hazard — the dispatch
-/// store, the gRPC servers, and swctl all funnel through here.
+/// store, the gRPC servers, and macroctl all funnel through here.
 pub fn datetime_to_ts(dt: chrono::DateTime<chrono::Utc>) -> Timestamp {
     Timestamp {
         seconds: dt.timestamp(),

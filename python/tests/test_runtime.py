@@ -5,16 +5,16 @@ from __future__ import annotations
 import pytest
 from frequenz.quantities import Energy
 
-import switchyard as sw
-from switchyard.handles import MicrogridExpect
+import macrocosim as mc
+from macrocosim.handles import MicrogridExpect
 
 
-def _site() -> sw.Site:
-    return sw.connect(
+def _site() -> mc.Site:
+    return mc.connect(
         ui="127.0.0.1:8080",
         microgrids={
-            1: sw.MicrogridEndpoint(id=1, name="a", grpc="10.0.0.1:61000"),
-            2: sw.MicrogridEndpoint(id=2, name="b", grpc="10.0.0.2:61000"),
+            1: mc.MicrogridEndpoint(id=1, name="a", grpc="10.0.0.1:61000"),
+            2: mc.MicrogridEndpoint(id=2, name="b", grpc="10.0.0.2:61000"),
         },
     )
 
@@ -26,7 +26,7 @@ def test_grpc_is_first_microgrid_host_port() -> None:
 def test_no_microgrids_raises_a_clear_error() -> None:
     # connect() without microgrids must not leak a bare StopIteration
     # from the default-microgrid lookup.
-    site = sw.connect(ui="127.0.0.1:8080")
+    site = mc.connect(ui="127.0.0.1:8080")
     with pytest.raises(RuntimeError, match="no microgrid endpoints"):
         _ = site.grpc
     with pytest.raises(RuntimeError, match="no microgrid endpoints"):
@@ -116,4 +116,4 @@ async def test_expect_battery_energy_raises_under_floor() -> None:
 
 
 def test_energy_metric_renders_to_lisp_symbol() -> None:
-    assert sw.to_lisp_atom(sw.Metric.ENERGY) == "'energy"
+    assert mc.to_lisp_atom(mc.Metric.ENERGY) == "'energy"

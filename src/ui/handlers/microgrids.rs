@@ -1,7 +1,7 @@
 //! Microgrids as files: list them, create one, import one from a
 //! site export, load one from a file on disk (`/api/load`, plus
 //! `/api/load-as` for a second copy under a free id), and adopt a
-//! hand-written file so switchyard may rewrite its structure.
+//! hand-written file so macrocosim may rewrite its structure.
 //!
 //! Create and import both mint a managed file and load it — the file
 //! is the microgrid's declaration, so the registry entry always comes
@@ -38,15 +38,15 @@ pub(in crate::ui) struct CreateMicrogridResp {
     name: String,
     grpc_port: u16,
     tso: Option<String>,
-    /// Always true — create writes a switchyard-generated file, so
-    /// the new microgrid's structure is switchyard's to rewrite.
+    /// Always true — create writes a macrocosim-generated file, so
+    /// the new microgrid's structure is macrocosim's to rewrite.
     managed: bool,
 }
 
 /// POST /api/microgrids/create — auto-allocates id + grpc_port,
 /// writes and loads a managed microgrid file with an empty topology,
 /// and broadcasts a registered-microgrid notification. The binary's
-/// listener (see `bin/switchyard.rs`) reacts by booting the runtime
+/// listener (see `bin/macrocosim.rs`) reacts by booting the runtime
 /// — physics + history + Microgrid gRPC server + loopback client —
 /// so there is exactly one spawn path shared with runtime
 /// `(make-microgrid …)` evals, and no path can double-boot a
@@ -240,7 +240,7 @@ pub(in crate::ui) struct ImportMicrogridResp {
 /// rated fuse current all survive into the simulation.
 ///
 /// Imported component ids are kept verbatim. Component ids are
-/// enterprise-unique in switchyard, so an id that any registered
+/// enterprise-unique in macrocosim, so an id that any registered
 /// microgrid already carries fails the whole import atomically —
 /// nothing is created. The enterprise id allocator jumps past the
 /// import's highest id so later auto-assigned ids can't collide.
@@ -465,7 +465,7 @@ pub(in crate::ui) async fn load_file_as(
 }
 
 /// POST /api/mg/{mg_id}/adopt — take a hand-written microgrid file
-/// over, so switchyard may rewrite its structure from then on.
+/// over, so macrocosim may rewrite its structure from then on.
 ///
 /// The live structure is written as a generated block at the top of
 /// the file and the original `(make-microgrid …)` form is commented

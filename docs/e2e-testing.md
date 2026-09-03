@@ -1,14 +1,14 @@
-# End-to-end testing your app against switchyard in CI
+# End-to-end testing your app against macrocosim in CI
 
-Switchyard is a high-fidelity stand-in for a real microgrid: it speaks the
+Macrocosim is a high-fidelity stand-in for a real microgrid: it speaks the
 production Frequenz gRPC API (`Microgrid`, `PlatformAssets`,
 `MicrogridDispatchService`), runs real component physics, and drives scripted
 scenarios with built-in pass/fail assertions. That makes it a drop-in
 environment for a downstream control app's integration tests — your app talks to
-switchyard exactly as it would to a real deployment.
+macrocosim exactly as it would to a real deployment.
 
-Switchyard runs as a **separate process**; your app connects over gRPC. There's
-nothing to link or vendor — build the `switchyard` + `swctl` binaries from this
+Macrocosim runs as a **separate process**; your app connects over gRPC. There's
+nothing to link or vendor — build the `macrocosim` + `macroctl` binaries from this
 repo (a published wheel / container image is planned, see todo.org §D5) and
 drive them from your CI.
 
@@ -21,7 +21,7 @@ If the thing you're asserting is the *simulation's* own behaviour — a scenario
 faster than real time, no server, no app:
 
 ```sh
-swctl scenario run my-scenario \
+macroctl scenario run my-scenario \
   --stepped --config graph.lisp --assert
 #  --until <secs>  override the scenario's :length
 #  --step <ms>     clock step (default 100)
@@ -33,14 +33,14 @@ for testing scenario fixtures themselves, or sim-side invariants.
 
 ### 2. Live end-to-end with your app
 
-The real integration test: switchyard drives the environment (PV, load, faults)
+The real integration test: macrocosim drives the environment (PV, load, faults)
 while *your app* reacts over gRPC, and a scenario asserts the resulting grid
 state.
 
 ```sh
 # 1. boot the simulator; ephemeral ports keep parallel CI jobs from clashing,
 #    and the endpoints file is the readiness signal.
-switchyard graph.lisp --ephemeral-ports --emit-endpoints=endpoints.json &
+macrocosim graph.lisp --ephemeral-ports --emit-endpoints=endpoints.json &
 SW=$!
 # wait until bound; bail out if the simulator died at boot instead
 # of hanging the job until CI's global timeout.
@@ -54,7 +54,7 @@ my-control-app --microgrid "grpc://$GRPC" &
 APP=$!
 
 # 3. run a scenario live, block until it finishes, gate on its checks.
-swctl --ui-addr "http://$UI" scenario run my-scenario --wait --assert
+macroctl --ui-addr "http://$UI" scenario run my-scenario --wait --assert
 RC=$?
 
 kill $APP $SW
@@ -76,7 +76,7 @@ any failed `(check …)`. On failure, upload your app's logs and any recorded CS
 ## Structuring fixtures
 
 A test case is a **(graph, scenario, app-config)** triple. Keep these fixtures in
-*your* repo — switchyard is a generic engine that loads them.
+*your* repo — macrocosim is a generic engine that loads them.
 
 - **One file per graph.** Define the topology once, then every scenario that
   exercises it as a `(define-scenario …)` in the same file:
@@ -91,7 +91,7 @@ A test case is a **(graph, scenario, app-config)** triple. Keep these fixtures i
   `at` / `check` / `controller` / `drive-meter` / `drive-solar` / `timeline`,
   `set-*`) is embedded in the binary.
 
-- **Parallelise at the CI-job level.** Run one isolated `switchyard` + app pair
+- **Parallelise at the CI-job level.** Run one isolated `macrocosim` + app pair
   per `(graph, scenario)` — a CI matrix. With `--ephemeral-ports` the jobs don't
   collide. This gives true isolation, independent retry, and parallelism over
   the (real-time) live runs.
@@ -117,10 +117,10 @@ zero command-delay so steady state is reached quickly.
 
 ## Reference
 
-- `switchyard <config>` — `--ui-port N` · `--ephemeral-ports` ·
+- `macrocosim <config>` — `--ui-port N` · `--ephemeral-ports` ·
   `--emit-endpoints[=PATH]`.
-- `swctl scenario run NAME` — `--stepped --config X [--until S] [--step MS]`
+- `macroctl scenario run NAME` — `--stepped --config X [--until S] [--step MS]`
   (headless) · `--wait [--until S]` (live) · `--assert` (gate).
-- `swctl scenario report [--assert]`, `swctl scenario list`,
-  `swctl --addr … --ui-addr …`.
+- `macroctl scenario report [--assert]`, `macroctl scenario list`,
+  `macroctl --addr … --ui-addr …`.
 - [`scenarios/DESIGN.md`](../scenarios/DESIGN.md) — the scenario model.

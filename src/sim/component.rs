@@ -394,7 +394,7 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// Hidden components are still registered (so a parent meter can
     /// look them up and aggregate their power) but excluded from the
     /// gRPC `ListElectricalComponents` / `ListConnections` responses
-    /// and from `swctl tree`. Used for synthetic load / generator
+    /// and from `macroctl tree`. Used for synthetic load / generator
     /// meters that should appear as a power flow without being a
     /// discrete addressable component.
     fn is_hidden(&self) -> bool {
@@ -984,7 +984,7 @@ impl fmt::Display for ComponentHandle {
 }
 
 /// First auto-allocated component ID. Microsim picks 1000 so explicit
-/// IDs (1, 2, …) on roots/main-meters don't collide; switchyard
+/// IDs (1, 2, …) on roots/main-meters don't collide; macrocosim
 /// matches the convention so test fixtures stay portable.
 pub const FIRST_AUTO_ID: u64 = 1000;
 

@@ -326,7 +326,7 @@ impl Config {
                     Some(_) => parsed.script,
                     None => {
                         return Err(std::io::Error::other(format!(
-                            "{} carries no switchyard-generated block",
+                            "{} carries no macrocosim-generated block",
                             path.display()
                         )));
                     }
@@ -603,7 +603,7 @@ mod tests {
         assert!(text.contains("(set-enterprise-id 77)"), "{text}");
     }
 
-    /// A file switchyard cannot write is a *live but unsaved* edit,
+    /// A file macrocosim cannot write is a *live but unsaved* edit,
     /// never a failed eval: the in-memory change stands, the entry is
     /// flagged so the UI can mark the card, and the next structural
     /// edit retries the write. Here the file has lost its markers,

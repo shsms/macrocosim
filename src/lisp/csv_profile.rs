@@ -254,7 +254,7 @@ mod tests {
 
     fn write_tmp(name: &str, contents: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("switchyard-csv-{name}-{}.csv", std::process::id()));
+        p.push(format!("macrocosim-csv-{name}-{}.csv", std::process::id()));
         let mut f = fs::File::create(&p).unwrap();
         f.write_all(contents.as_bytes()).unwrap();
         p

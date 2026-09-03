@@ -57,7 +57,7 @@ impl Config {
     /// Copy microgrid `mg_id`'s file to
     /// `snapshots/{mg_id}/{name}.lisp` and return the snapshot's
     /// path. Refuses an unmanaged microgrid — there is no
-    /// switchyard-owned file to freeze.
+    /// macrocosim-owned file to freeze.
     pub fn save_snapshot_for(&self, mg_id: u64, name: &str) -> Result<PathBuf, SnapshotError> {
         let source = self.managed_file_of(mg_id)?;
         let dir = self.snapshots_dir_for(mg_id);
@@ -151,7 +151,7 @@ impl Config {
             .ok_or_else(|| SnapshotError::NotFound(format!("microgrid {mg_id} not registered")))?;
         if !entry.managed {
             return Err(SnapshotError::Unmanaged(format!(
-                "microgrid {mg_id} is not managed by switchyard; adopt it first"
+                "microgrid {mg_id} is not managed by macrocosim; adopt it first"
             )));
         }
         entry.source.clone().ok_or_else(|| {

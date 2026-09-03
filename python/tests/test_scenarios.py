@@ -7,11 +7,11 @@ from datetime import timedelta
 import pytest
 from frequenz.quantities import Power
 
-import switchyard.scenarios as scenarios_mod
-from switchyard.build import meter as sw_meter
-from switchyard.enums import Metric, Schedule
-from switchyard.matchers import at_least, at_most, near
-from switchyard.scenarios import Scenario, ScenarioRun, run_scenario_stepped
+import macrocosim.scenarios as scenarios_mod
+from macrocosim.build import meter as mc_meter
+from macrocosim.enums import Metric, Schedule
+from macrocosim.matchers import at_least, at_most, near
+from macrocosim.scenarios import Scenario, ScenarioRun, run_scenario_stepped
 
 
 class _FakeProc:
@@ -48,7 +48,7 @@ class FakeSite:
         self._http = FakeHttp(report)
 
 
-METER = sw_meter(id=2)
+METER = mc_meter(id=2)
 
 
 def test_check_metric_is_the_escape_for_signal_less_metrics() -> None:
@@ -64,7 +64,7 @@ def test_check_metric_is_the_escape_for_signal_less_metrics() -> None:
 def test_cues_render_from_settable_signals() -> None:
     from frequenz.quantities import Percentage
 
-    from switchyard.build import battery, solar_inverter
+    from macrocosim.build import battery, solar_inverter
 
     bat = battery(id=4)
     pv = solar_inverter(id=8)
@@ -80,11 +80,11 @@ def test_cues_render_from_settable_signals() -> None:
 
 
 def test_aggregate_signals_are_not_checkable() -> None:
-    import switchyard as sw
+    import macrocosim as mc
 
-    site = sw.aio.connect(
+    site = mc.aio.connect(
         ui="127.0.0.1:9",
-        microgrids={1: sw.MicrogridEndpoint(id=1, name="a", grpc="10.0.0.1:1")},
+        microgrids={1: mc.MicrogridEndpoint(id=1, name="a", grpc="10.0.0.1:1")},
     )
     scn = Scenario("x", length=timedelta(seconds=1))
     with pytest.raises(ValueError, match="component signals"):
@@ -98,7 +98,7 @@ def test_run_starts_and_stops() -> None:
 
 
 def test_at_rejects_a_read_only_signal() -> None:
-    from switchyard.build import battery_inverter
+    from macrocosim.build import battery_inverter
 
     inv = battery_inverter(id=3)
     scn = Scenario("s")
@@ -191,7 +191,7 @@ def test_scenario_authoring_emits_define_scenario() -> None:
 
 
 def test_run_scenario_stepped_returns_report(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(scenarios_mod, "resolve_binary", lambda *a, **k: "swctl")
+    monkeypatch.setattr(scenarios_mod, "resolve_binary", lambda *a, **k: "macroctl")
     monkeypatch.setattr(
         scenarios_mod.subprocess,
         "run",
@@ -202,7 +202,7 @@ def test_run_scenario_stepped_returns_report(monkeypatch, tmp_path) -> None:
 
 
 def test_run_scenario_stepped_raises_on_nonzero_exit(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(scenarios_mod, "resolve_binary", lambda *a, **k: "swctl")
+    monkeypatch.setattr(scenarios_mod, "resolve_binary", lambda *a, **k: "macroctl")
     monkeypatch.setattr(
         scenarios_mod.subprocess,
         "run",

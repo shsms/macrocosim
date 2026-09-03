@@ -1,6 +1,6 @@
 """Native-async wrapper over the ``frequenz-client-microgrid`` gRPC client.
 
-Unlike the sync facade (:mod:`switchyard._grpc`), everything here runs on
+Unlike the sync facade (:mod:`macrocosim._grpc`), everything here runs on
 the *caller's* event loop: no background loop thread, no worker threads,
 no locks. One reader task per ``(component, metric)`` stream keeps the
 latest sample cached; reads await an :class:`asyncio.Event` instead of

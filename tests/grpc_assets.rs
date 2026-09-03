@@ -6,7 +6,7 @@
 mod common;
 
 use common::TestServer;
-use switchyard::proto::assets::{
+use macrocosim::proto::assets::{
     GetMicrogridRequest, ListMicrogridElectricalComponentConnectionsRequest,
     ListMicrogridElectricalComponentsRequest, platform_assets_client::PlatformAssetsClient,
 };

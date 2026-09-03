@@ -7,8 +7,8 @@ mod common;
 use std::time::Duration;
 
 use common::TestServer;
+use macrocosim::lisp::Config;
 use serde_json::Value;
-use switchyard::lisp::Config;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn editing_config_lisp_rebuilds_the_world() {

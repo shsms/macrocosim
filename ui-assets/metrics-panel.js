@@ -83,11 +83,11 @@ function saveKey(key, value) {
     // Storage unavailable — the choice just doesn't stick.
   }
 }
-const cardOpen = (c) => loadKey(`sw-metrics-card-${c.key}`, c.defaultOpen ? "1" : "0") === "1";
-const seriesOn = (s) => loadKey(`sw-metrics-series-${s.stream}`, "1") === "1";
-const pfOn = () => loadKey("sw-metrics-pf", "0") === "1";
+const cardOpen = (c) => loadKey(`mc-metrics-card-${c.key}`, c.defaultOpen ? "1" : "0") === "1";
+const seriesOn = (s) => loadKey(`mc-metrics-series-${s.stream}`, "1") === "1";
+const pfOn = () => loadKey("mc-metrics-pf", "0") === "1";
 const windowSecs = () => {
-  const k = loadKey("sw-metrics-window", "5m");
+  const k = loadKey("mc-metrics-window", "5m");
   return (WINDOWS.find((w) => w.key === k) ?? WINDOWS[1]).secs;
 };
 
@@ -419,12 +419,12 @@ function repaint(contentEl) {
     if (!card) continue;
     const frame = cardFrame(card, secs, entry.div, entry);
     // The visible series set is read from localStorage every tick, so a
-    // second tab toggling a chip rewrites `sw-metrics-series-*` under a
+    // second tab toggling a chip rewrites `mc-metrics-series-*` under a
     // live plot and the next frame carries a different column count —
     // setData() would then hand uPlot an array its series list doesn't
     // index. A changed series set is as stale as a changed unit.
     // Same class of pin, same failure: the PF overlay flag is read
-    // from localStorage too, so a second tab flipping `sw-metrics-pf`
+    // from localStorage too, so a second tab flipping `mc-metrics-pf`
     // changes the column count under a live plot. The in-panel toggle
     // rebuilds on its own click, but an out-of-band change would
     // otherwise leave the pinned `withPf` shape in force forever —
@@ -504,7 +504,7 @@ function cardHtml(card) {
 }
 
 function render(contentEl) {
-  const winKey = loadKey("sw-metrics-window", "5m");
+  const winKey = loadKey("mc-metrics-window", "5m");
   contentEl.innerHTML = `
     <div class="metrics-panel">
       <div class="metrics-head">
@@ -531,7 +531,7 @@ function render(contentEl) {
   contentEl.querySelector(".metrics-panel").addEventListener("click", (ev) => {
     const win = ev.target.closest("[data-window]");
     if (win) {
-      saveKey("sw-metrics-window", win.dataset.window);
+      saveKey("mc-metrics-window", win.dataset.window);
       for (const b of contentEl.querySelectorAll("[data-window]")) {
         b.classList.toggle("active", b === win);
       }
@@ -540,7 +540,7 @@ function render(contentEl) {
     }
     const pfToggle = ev.target.closest("[data-pf-toggle]");
     if (pfToggle) {
-      saveKey("sw-metrics-pf", pfOn() ? "0" : "1");
+      saveKey("mc-metrics-pf", pfOn() ? "0" : "1");
       pfToggle.classList.toggle("off", !pfOn());
       rebuildCard("reactive");
       return;
@@ -549,7 +549,7 @@ function render(contentEl) {
     if (chip) {
       const stream = chip.dataset.chip;
       const card = CARDS.find((c) => c.series.some((s) => s.stream === stream));
-      saveKey(`sw-metrics-series-${stream}`, seriesOn({ stream }) ? "0" : "1");
+      saveKey(`mc-metrics-series-${stream}`, seriesOn({ stream }) ? "0" : "1");
       chip.classList.toggle("off", !seriesOn({ stream }));
       if (card) rebuildCard(card.key);
       return;
@@ -560,7 +560,7 @@ function render(contentEl) {
       const card = CARDS.find((c) => c.key === cardEl.dataset.card);
       const nowOpen = !cardEl.classList.contains("open");
       cardEl.classList.toggle("open", nowOpen);
-      saveKey(`sw-metrics-card-${card.key}`, nowOpen ? "1" : "0");
+      saveKey(`mc-metrics-card-${card.key}`, nowOpen ? "1" : "0");
       rebuildCard(card.key);
     }
   });

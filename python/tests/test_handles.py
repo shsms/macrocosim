@@ -8,10 +8,10 @@ from typing import Any
 import pytest
 from frequenz.quantities import Percentage, Power
 
-from switchyard.build import raw
-from switchyard.enums import CommandMode, Health, TelemetryMode
-from switchyard.errors import ControlRejected
-from switchyard.handles import ComponentHandle
+from macrocosim.build import raw
+from macrocosim.enums import CommandMode, Health, TelemetryMode
+from macrocosim.errors import ControlRejected
+from macrocosim.handles import ComponentHandle
 
 
 class FakeSite:

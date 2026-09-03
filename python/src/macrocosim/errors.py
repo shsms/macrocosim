@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 
-class SwitchyardError(Exception):
-    """Base for errors raised by the switchyard client."""
+class MacrocosimError(Exception):
+    """Base for errors raised by the macrocosim client."""
 
 
-class SetpointRejected(SwitchyardError):
+class SetpointRejected(MacrocosimError):
     """A setpoint or bounds command was rejected by the API gateway.
 
     Most often the commanded value is outside the component's live
@@ -16,7 +16,7 @@ class SetpointRejected(SwitchyardError):
     """
 
 
-class EvalRejected(SwitchyardError, ValueError):
+class EvalRejected(MacrocosimError, ValueError):
     """The interpreter rejected a Lisp form sent over ``/api/eval``.
 
     Carries the server's error text. Subclasses ``ValueError`` so callers
@@ -24,7 +24,7 @@ class EvalRejected(SwitchyardError, ValueError):
     """
 
 
-class ControlRejected(SwitchyardError, ValueError):
+class ControlRejected(MacrocosimError, ValueError):
     """The server rejected a typed control request (drive, status, ...).
 
     Carries the server's error text — e.g. an unknown component id, or a
@@ -32,7 +32,7 @@ class ControlRejected(SwitchyardError, ValueError):
     """
 
 
-class NoSample(SwitchyardError):
+class NoSample(MacrocosimError):
     """A signal produced no value within the read's wait window.
 
     Raised by ``Signal.read()`` so its return type is the plain quantity;

@@ -1,8 +1,8 @@
-;; switchyard runtime helpers — load this from your config file before
+;; macrocosim runtime helpers — load this from your config file before
 ;; anything else:
 ;;
-;;   (unless (boundp 'switchyard-loaded)
-;;     (setq switchyard-loaded t)
+;;   (unless (boundp 'macrocosim-loaded)
+;;     (setq macrocosim-loaded t)
 ;;     (load "sim/common.lisp"))
 ;;
 ;; Built on tulisp-async's `run-with-timer` / `cancel-timer`. Lisp's
@@ -21,7 +21,7 @@
 ;;
 ;; Process-global by design. If two distinct scenario scripts ever
 ;; share a process (rare with the current single-Config design),
-;; reset-state would cancel both. Switchyard runs one Config per
+;; reset-state would cancel both. Macrocosim runs one Config per
 ;; process, so today there's no namespace conflict; revisit if a
 ;; multi-config layout shows up.
 (unless (boundp 'active-timers)
@@ -184,7 +184,7 @@ is safe (it never starves the device), it just wastes commands."
 (defun load-overrides ()
   "Deprecated no-op. UI edits used to be journaled into
 microgrids/config.<id>.overrides.lisp and replayed by this call;
-switchyard now saves a microgrid's structure into the microgrid's
+macrocosim now saves a microgrid's structure into the microgrid's
 own file. Kept so an older config still loads."
   (log.warn "load-overrides is gone; this microgrid predates managed files — use Adopt in the UI"))
 

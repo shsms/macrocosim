@@ -1,5 +1,5 @@
 //! gRPC server: implements the Frequenz Microgrid API on top of
-//! switchyard's `MicrogridSite` + `Config`.
+//! macrocosim's `MicrogridSite` + `Config`.
 //!
 //! Streaming telemetry is one tokio task per subscription; each task
 //! samples its component at the component's own `stream_interval` and
@@ -260,7 +260,7 @@ impl MicrogridServer {
         // Gateway-level envelope check: a real microgrid API gateway
         // intersects the inverter's reported AC bounds with the sum of
         // its children's reported bounds and rejects setpoints that
-        // exceed the result. Switchyard does the same here so client
+        // exceed the result. Macrocosim does the same here so client
         // code sees the production behaviour even though the inverter
         // and battery don't share a data link in our model. The gate
         // (per-axis envelope, 0-park carve-out, message) is shared
@@ -814,7 +814,7 @@ impl microgrid_server::Microgrid for MicrogridServer {
         &self,
         _request: tonic::Request<ListSensorRequest>,
     ) -> Result<tonic::Response<ListSensorsResponse>, tonic::Status> {
-        // switchyard does not model sensors; report an empty inventory.
+        // macrocosim does not model sensors; report an empty inventory.
         Ok(tonic::Response::new(ListSensorsResponse {
             sensors: Vec::new(),
         }))

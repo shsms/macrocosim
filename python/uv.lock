@@ -271,6 +271,48 @@ wheels = [
 ]
 
 [[package]]
+name = "macrocosim"
+version = "0.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "frequenz-quantities" },
+    { name = "httpx" },
+]
+
+[package.optional-dependencies]
+grpc = [
+    { name = "frequenz-client-microgrid" },
+    { name = "pytest-asyncio" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "frequenz-client-microgrid" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "frequenz-client-microgrid", marker = "extra == 'grpc'", specifier = "~=0.18" },
+    { name = "frequenz-quantities", specifier = ">=1.0.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest-asyncio", marker = "extra == 'grpc'", specifier = ">=0.24" },
+]
+provides-extras = ["grpc"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "frequenz-client-microgrid", specifier = "~=0.18" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "ruff", specifier = ">=0.6" },
+    { name = "ty", specifier = ">=0.0.56" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -364,48 +406,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/10/9b/5f14927848d2fd4aa891fd88d883788c5a7baba561c7874732364045708c/ruff-0.15.20-py3-none-win32.whl", hash = "sha256:ed65ef510e43a137207e0f01cfcf998aeddb1aeeda5c9d35023e910284d7cf21", size = 10857322, upload-time = "2026-06-25T17:20:28.612Z" },
     { url = "https://files.pythonhosted.org/packages/fa/f0/fe47c501f9dea92a26d788ff98bb5d92ed4cb4c88792c5c88af6b697dc8e/ruff-0.15.20-py3-none-win_amd64.whl", hash = "sha256:a525c81c70fb0380344dd1d8745d8cc1c890b7fc94a58d5a07bd8eb9557b8415", size = 11993274, upload-time = "2026-06-25T17:20:31.871Z" },
     { url = "https://files.pythonhosted.org/packages/d7/2b/9555445e1201d92b3195f45cdb153a0b68f24e0a4273f6e3d5ab46e212bb/ruff-0.15.20-py3-none-win_arm64.whl", hash = "sha256:2f5b2a6d614e8700388806a14996c40fab2c47b819ef57d790a34878858ed9ca", size = 11343498, upload-time = "2026-06-25T17:20:35.03Z" },
-]
-
-[[package]]
-name = "switchyard"
-version = "0.0.0"
-source = { editable = "." }
-dependencies = [
-    { name = "frequenz-quantities" },
-    { name = "httpx" },
-]
-
-[package.optional-dependencies]
-grpc = [
-    { name = "frequenz-client-microgrid" },
-    { name = "pytest-asyncio" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "frequenz-client-microgrid" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-    { name = "ty" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "frequenz-client-microgrid", marker = "extra == 'grpc'", specifier = "~=0.18" },
-    { name = "frequenz-quantities", specifier = ">=1.0.0" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pytest-asyncio", marker = "extra == 'grpc'", specifier = ">=0.24" },
-]
-provides-extras = ["grpc"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "frequenz-client-microgrid", specifier = "~=0.18" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "ruff", specifier = ">=0.6" },
-    { name = "ty", specifier = ">=0.0.56" },
 ]
 
 [[package]]

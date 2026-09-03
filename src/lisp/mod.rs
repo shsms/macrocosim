@@ -269,10 +269,10 @@ pub struct Config {
     /// Wall-clock in a normal (live) `Config`; tied to `sim_clock` in a
     /// headless one. See [`crate::sim::sim_clock`].
     pub(crate) now: crate::sim::sim_clock::NowSource,
-    /// Hash of the bytes switchyard itself last wrote to each file
+    /// Hash of the bytes macrocosim itself last wrote to each file
     /// it manages (managed microgrid files, `enterprise.lisp`). The
     /// file watcher compares an event's file content against this
-    /// map and ignores a match, so a save switchyard performed does
+    /// map and ignores a match, so a save macrocosim performed does
     /// not bounce back as a reload of the file it just wrote.
     pub(crate) written_hashes: Arc<Mutex<HashMap<PathBuf, u64>>>,
     /// Per-microgrid undo / redo stacks over managed microgrid
@@ -443,7 +443,7 @@ impl Config {
         self.state_dir.join("enterprise.lisp")
     }
 
-    /// Remember that switchyard wrote `content` to `path`, so the
+    /// Remember that macrocosim wrote `content` to `path`, so the
     /// file watcher can tell its own save apart from a human edit.
     pub(crate) fn record_self_write(&self, path: &Path, content: &str) {
         self.written_hashes
@@ -451,11 +451,11 @@ impl Config {
             .insert(path.to_path_buf(), content_hash(content));
     }
 
-    /// Was `content` exactly what switchyard last wrote to `path`?
+    /// Was `content` exactly what macrocosim last wrote to `path`?
     /// If so, FORGET that write and answer true.
     ///
     /// The file watcher asks this before reloading, so a save
-    /// switchyard performed does not bounce back as a reload. The
+    /// macrocosim performed does not bounce back as a reload. The
     /// answer is deliberately one-shot: a remembered hash that
     /// stayed remembered would go on suppressing forever, so an
     /// operator reverting the file to exactly that content by hand

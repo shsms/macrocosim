@@ -15,8 +15,8 @@ from frequenz.quantities import (
     Voltage,
 )
 
-import switchyard as sw
-from switchyard.build import Microgrid, battery, battery_inverter, grid, meter, raw
+import macrocosim as mc
+from macrocosim.build import Microgrid, battery, battery_inverter, grid, meter, raw
 
 
 def test_nested_successors_emit_make_forms() -> None:
@@ -58,7 +58,7 @@ def test_value_kinds_render_correctly() -> None:
         id=2,
         name="main",
         hidden=True,
-        health=sw.Health.ERROR,
+        health=mc.Health.ERROR,
         interval=timedelta(seconds=5),
     )
     lisp = node.to_lisp()
@@ -89,13 +89,13 @@ def test_meter_reactive_kwargs_render_correctly() -> None:
 def test_live_signal_path_exposes_reactive_power() -> None:
     """`Meter.reactive_power` reads through the bound *async* Site.
 
-    `_bind` is only ever called with `switchyard.aio.Site`, so the read
+    `_bind` is only ever called with `macrocosim.aio.Site`, so the read
     path needs the async twins — the sync ones alone leave the signal
     raising AttributeError on first use.
     """
-    from switchyard.aio._grpc import AsyncGrpcClient
-    from switchyard.aio._site import Site as AsyncSite
-    from switchyard.runtime import Site as SyncSite
+    from macrocosim.aio._grpc import AsyncGrpcClient
+    from macrocosim.aio._site import Site as AsyncSite
+    from macrocosim.runtime import Site as SyncSite
 
     for holder in (AsyncSite, AsyncGrpcClient, SyncSite):
         assert hasattr(holder, "active_power"), holder
@@ -106,14 +106,14 @@ def test_live_signal_path_exposes_reactive_power() -> None:
 
 
 def test_to_lisp_atom_converts_typed_values() -> None:
-    assert sw.to_lisp_atom(Power.from_kilowatts(2)) == "2000.0"
-    assert sw.to_lisp_atom(Energy.from_kilowatt_hours(1)) == "1000.0"
-    assert sw.to_lisp_atom(Percentage.from_percent(50)) == "50.0"
-    assert sw.to_lisp_atom(timedelta(seconds=30)) == "30.0"
-    assert sw.to_lisp_atom(time(12, 0)) == '"12:00:00"'
-    assert sw.to_lisp_atom(sw.Health.ERROR) == "'error"
-    assert sw.to_lisp_atom(True) == "t"
-    assert sw.to_lisp_atom(5) == "5"
+    assert mc.to_lisp_atom(Power.from_kilowatts(2)) == "2000.0"
+    assert mc.to_lisp_atom(Energy.from_kilowatt_hours(1)) == "1000.0"
+    assert mc.to_lisp_atom(Percentage.from_percent(50)) == "50.0"
+    assert mc.to_lisp_atom(timedelta(seconds=30)) == "30.0"
+    assert mc.to_lisp_atom(time(12, 0)) == '"12:00:00"'
+    assert mc.to_lisp_atom(mc.Health.ERROR) == "'error"
+    assert mc.to_lisp_atom(True) == "t"
+    assert mc.to_lisp_atom(5) == "5"
 
 
 def test_raw_splices_literal_lisp() -> None:
@@ -150,13 +150,13 @@ def test_public_constructors_exported() -> None:
         "raw",
         "Microgrid",
     ):
-        assert hasattr(sw, name), name
+        assert hasattr(mc, name), name
 
 
 def test_builders_cover_every_server_arg() -> None:
     # One call per builder exercising the newly named parameters; each
     # keyword must land under the server's exact plist key and unit.
-    g = sw.grid(
+    g = mc.grid(
         id=1,
         rated_fuse_current=Current.from_amperes(63),
         stream_jitter_pct=Percentage.from_percent(5),
@@ -164,7 +164,7 @@ def test_builders_cover_every_server_arg() -> None:
     assert ":rated-fuse-current 63" in g
     assert ":stream-jitter-pct 5.0" in g
 
-    inv = sw.battery_inverter(
+    inv = mc.battery_inverter(
         id=3,
         interval=timedelta(milliseconds=500),
         command_delay=timedelta(milliseconds=250),
@@ -182,7 +182,7 @@ def test_builders_cover_every_server_arg() -> None:
     assert ":reactive-command-delay-ms 100" in inv
     assert ":reactive-ramp-rate 2000.0" in inv
 
-    bat = sw.battery(
+    bat = mc.battery(
         id=4,
         soc_lower=Percentage.from_percent(10),
         soc_upper=Percentage.from_percent(90),
@@ -194,7 +194,7 @@ def test_builders_cover_every_server_arg() -> None:
     assert ":soc-protect-margin 5.0" in bat
     assert ":voltage 800.0" in bat
 
-    ev = sw.ev_charger(
+    ev = mc.ev_charger(
         id=6,
         capacity=Energy.from_kilowatt_hours(75),
         initial_soc=Percentage.from_percent(30),
@@ -208,13 +208,13 @@ def test_builders_cover_every_server_arg() -> None:
     # make-chp takes no rated bounds; the builder no longer offers them.
     import inspect
 
-    assert "rated" not in inspect.signature(sw.chp).parameters
-    chp_lisp = sw.chp(id=7, stream_jitter_pct=Percentage.from_percent(2)).to_lisp()
+    assert "rated" not in inspect.signature(mc.chp).parameters
+    chp_lisp = mc.chp(id=7, stream_jitter_pct=Percentage.from_percent(2)).to_lisp()
     assert ":stream-jitter-pct 2.0" in chp_lisp
 
 
 def test_steam_boiler_renders_rated_and_physics_kwargs() -> None:
-    c = sw.steam_boiler(
+    c = mc.steam_boiler(
         id=7,
         rated=(Power.from_watts(0), Power.from_watts(100_000)),
         target_bar=6.0,

@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 from frequenz.quantities import Power
 
-from switchyard.assertions import Assertion
+from macrocosim.assertions import Assertion
 
 _FAST = {"timeout": timedelta(seconds=0.2), "poll": timedelta(seconds=0.02)}
 

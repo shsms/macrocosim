@@ -2,7 +2,7 @@
 /.claude/
 /TAGS
 
-# Managed-microgrid-file state: written by switchyard itself, at
+# Managed-microgrid-file state: written by macrocosim itself, at
 # --state-dir (default: cwd) or wherever a boot script's directory
 # ends up doubling as one (e.g. examples/enterprise.lisp when a demo
 # script boots from the checkout). enterprise.lisp is unanchored on

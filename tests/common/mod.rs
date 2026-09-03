@@ -1,4 +1,4 @@
-//! Integration-test harness: spawn a `Config`-driven switchyard
+//! Integration-test harness: spawn a `Config`-driven macrocosim
 //! server in-process on OS-assigned ports, expose its gRPC + UI
 //! addresses, and tear everything down on Drop.
 //!
@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use switchyard::{
+use macrocosim::{
     assets_server::AssetsServer, lisp::Config,
     proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer,
     proto::microgrid::microgrid_server::MicrogridServer as MicrogridGrpcServer,
@@ -32,7 +32,7 @@ use tonic::transport::Server;
 
 static UNIQ: AtomicU64 = AtomicU64::new(0);
 
-/// A live switchyard instance: gRPC + UI on OS-assigned localhost
+/// A live macrocosim instance: gRPC + UI on OS-assigned localhost
 /// ports, plus the underlying [`Config`] for direct world
 /// inspection. `Drop` aborts the spawned server tasks; the temp
 /// dir cleans up via the held `TempDir` handle.
@@ -54,7 +54,7 @@ impl TestServer {
     /// Caller is on a tokio runtime (provided by `#[tokio::test]`).
     pub async fn start(config_body: &str) -> Self {
         let tempdir = TempDir::with_prefix(format!(
-            "switchyard-it-{}-",
+            "macrocosim-it-{}-",
             UNIQ.fetch_add(1, Ordering::Relaxed),
         ))
         .expect("create temp dir");

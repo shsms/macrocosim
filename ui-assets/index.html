@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>switchyard</title>
+    <title>macrocosim</title>
     <link rel="stylesheet" href="/assets/vendor/vis-network.min.css" />
     <link rel="stylesheet" href="/assets/vendor/uplot.min.css" />
     <link rel="stylesheet" href="/assets/style.css" />
@@ -12,7 +12,7 @@
   </head>
   <body>
     <header>
-      <strong>switchyard</strong>
+      <strong>macrocosim</strong>
       <span id="status" class="status">connecting…</span>
       <nav id="mode-toggle" aria-label="view mode">
         <button class="mode-btn" data-mode="microgrids">Microgrids</button>
@@ -63,7 +63,7 @@
         <span id="mg-breadcrumb-tso" class="muted"></span>
         <span id="mg-file-chips"></span>
         <button type="button" id="mg-adopt-btn" class="hdr-btn"
-                title="Write the live structure into this file so switchyard may rewrite it from now on"
+                title="Write the live structure into this file so macrocosim may rewrite it from now on"
                 hidden>Adopt</button>
         <nav id="mg-subtoggle" aria-label="microgrid view">
           <button class="mode-btn" data-subview="topology">Topology</button>
@@ -110,7 +110,7 @@
             <p class="hint">
               Dispatches the dispatch API (<code>frequenz.api.dispatch.v1</code>)
               holds for this microgrid — create one here, or with the
-              dispatch CLI / <code>swctl dispatch</code>. Switchyard serves
+              dispatch CLI / <code>macroctl dispatch</code>. Macrocosim serves
               them to downstream control apps.
             </p>
           </div>
@@ -282,7 +282,7 @@
         </form>
         <p class="hint">
           Writes <code>microgrids/&lt;id&gt;.lisp</code> — a managed
-          file switchyard owns and rewrites as you edit the topology
+          file macrocosim owns and rewrites as you edit the topology
           — and loads it. Leave the port blank for the next free one.
         </p>
       </div>
@@ -485,7 +485,7 @@
     </dialog>
     <dialog id="help-dialog">
       <header>
-        <h3>Switchyard reference</h3>
+        <h3>Macrocosim reference</h3>
         <button id="help-dialog-close" type="button">×</button>
       </header>
       <div id="help-dialog-content">
@@ -509,7 +509,7 @@
         </ul>
         <h4>Snapshots</h4>
         <ul class="help-list">
-          <li><strong>Snapshots</strong> button (top right) — saves the selected microgrid's managed file under <code>snapshots/&lt;microgrid-id&gt;/&lt;name&gt;.lisp</code>; load to replay that state. Needs a selected, managed microgrid. Headless: <code>swctl snapshot save / load / list [--microgrid-id N]</code>.</li>
+          <li><strong>Snapshots</strong> button (top right) — saves the selected microgrid's managed file under <code>snapshots/&lt;microgrid-id&gt;/&lt;name&gt;.lisp</code>; load to replay that state. Needs a selected, managed microgrid. Headless: <code>macroctl snapshot save / load / list [--microgrid-id N]</code>.</li>
         </ul>
         <h4>Topology canvas</h4>
         <ul class="help-list">
@@ -532,7 +532,7 @@
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in its own floating panel; edits write to <code>enterprise.lisp</code>.</li>
-          <li><strong>Managed files</strong> — every microgrid is a file. A <em>managed</em> one (created here, or adopted) carries a switchyard-generated block that is rewritten on each structural edit; an <em>unmanaged</em> one is hand-written, so its structure is read-only in the UI and its card carries an <em>unmanaged</em> chip. Hit <em>Adopt</em> in the microgrid header to take it over. An <em>unsaved</em> chip means a live edit the file could not record.</li>
+          <li><strong>Managed files</strong> — every microgrid is a file. A <em>managed</em> one (created here, or adopted) carries a macrocosim-generated block that is rewritten on each structural edit; an <em>unmanaged</em> one is hand-written, so its structure is read-only in the UI and its card carries an <em>unmanaged</em> chip. Hit <em>Adopt</em> in the microgrid header to take it over. An <em>unsaved</em> chip means a live edit the file could not record.</li>
         </ul>
         <h4>REPL</h4>
         <ul class="help-list">

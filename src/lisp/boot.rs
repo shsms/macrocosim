@@ -493,7 +493,7 @@ impl Config {
     }
 
     /// Load one microgrid file: parse it (managed files carry a
-    /// switchyard-generated block; hand-written ones don't), evaluate
+    /// macrocosim-generated block; hand-written ones don't), evaluate
     /// it with the file recorded as the ambient loading file, and
     /// return the ids of the microgrids it newly registered.
     ///
@@ -567,7 +567,7 @@ impl Config {
 
         let text = std::fs::read_to_string(resolved)
             .map_err(|e| LoadError::Other(format!("cannot read {}: {e}", resolved.display())))?;
-        // A managed file's structure is switchyard's to rewrite, an
+        // A managed file's structure is macrocosim's to rewrite, an
         // unmanaged one's is the author's — and the split also
         // decides how the file is evaluated (see below).
         let parsed = super::microgrid_file::parse(&text)
@@ -895,7 +895,7 @@ impl Config {
     /// stats + the `scenario-expect` pass/fail ledger) at sim/wall now,
     /// serialized to JSON — the same shape `GET /api/scenario/report`
     /// returns. Public + JSON so an out-of-crate stepped runner
-    /// (`swctl scenario run --stepped`) can print + assert on it
+    /// (`macroctl scenario run --stepped`) can print + assert on it
     /// without a server or exposing the internal report type.
     pub fn scenario_report_json(&self) -> serde_json::Value {
         serde_json::to_value(self.site().scenario_report(self.now.now())).unwrap_or_default()
@@ -1418,7 +1418,7 @@ impl Config {
         let mut whole_world = false;
         for path in touched {
             let path = path.canonicalize().unwrap_or_else(|_| path.clone());
-            // Switchyard's own save must not bounce back as a reload
+            // Macrocosim's own save must not bounce back as a reload
             // of the file it just wrote: the world already IS what the
             // file says, and reloading would throw away live state for
             // nothing. One-shot — see `take_self_write`.
@@ -1533,7 +1533,7 @@ fn script_parent_dir(script: &str) -> PathBuf {
 /// `/api/topology`, which validates the requested site per request.
 ///
 /// On success the log line includes a one-line summary so a dev
-/// reading the log can confirm switchyard parsed the topology the
+/// reading the log can confirm macrocosim parsed the topology the
 /// same way `frequenz-microgrid` would.
 fn log_topology_validation(site: &MicrogridSite, phase: &str) {
     let (nodes, edges) = crate::sim::graph_adapter::snapshot(site);
@@ -1546,7 +1546,7 @@ fn log_topology_validation(site: &MicrogridSite, phase: &str) {
         Ok(graph) => {
             // `graph.components()` yields nodes that survived
             // pass-through elision. With no pass-through categories
-            // in switchyard's model yet this equals visible_count;
+            // in macrocosim's model yet this equals visible_count;
             // we log both so the gap is visible the day we add a
             // transformer / breaker / converter.
             let logical_count = graph.components().count();
@@ -1577,7 +1577,7 @@ mod tests {
     fn stepped_config(tag: &str, body: &str) -> Config {
         let mut dir = std::env::temp_dir();
         dir.push(format!(
-            "switchyard-{tag}-{}-{}",
+            "macrocosim-{tag}-{}-{}",
             std::process::id(),
             next_unique(),
         ));
@@ -1618,7 +1618,7 @@ mod tests {
     fn bare_boot_has_empty_registry() {
         let mut dir = std::env::temp_dir();
         dir.push(format!(
-            "switchyard-bare-{}-{}",
+            "macrocosim-bare-{}-{}",
             std::process::id(),
             next_unique(),
         ));
@@ -1666,7 +1666,7 @@ mod tests {
     fn config_new_returns_err_on_bad_lisp() {
         let mut dir = std::env::temp_dir();
         dir.push(format!(
-            "switchyard-cfg-bad-{}-{}",
+            "macrocosim-cfg-bad-{}-{}",
             std::process::id(),
             next_unique(),
         ));
@@ -1707,7 +1707,7 @@ mod tests {
 (set-active-power 3 3600.0 600000)";
         let mut dir = std::env::temp_dir();
         dir.push(format!(
-            "switchyard-headless-{}-{}",
+            "macrocosim-headless-{}-{}",
             std::process::id(),
             next_unique(),
         ));
@@ -1792,7 +1792,7 @@ mod tests {
         // Copy the scenario DSL the config (load …)s.
         let mut dir = std::env::temp_dir();
         dir.push(format!(
-            "switchyard-stepped-{}-{}",
+            "macrocosim-stepped-{}-{}",
             std::process::id(),
             next_unique(),
         ));
@@ -1863,7 +1863,7 @@ mod tests {
         use std::time::Duration;
         let mut dir = std::env::temp_dir();
         dir.push(format!(
-            "switchyard-stepped-q-{}-{}",
+            "macrocosim-stepped-q-{}-{}",
             std::process::id(),
             next_unique(),
         ));
@@ -2963,7 +2963,7 @@ mod tests {
         cfg.eval("(set-enterprise-id 77)").unwrap();
 
         // A second process on the same state dir — no boot scripts,
-        // exactly what a bare `switchyard --state-dir` does.
+        // exactly what a bare `macrocosim --state-dir` does.
         let boot = |dir: std::path::PathBuf| {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let built = rt.block_on(async { Config::new_with(&[], Some(dir)) });
@@ -3022,7 +3022,7 @@ mod tests {
     }
 
     /// Self-write suppression is one-shot: the first event whose
-    /// content matches what switchyard wrote is skipped, and the
+    /// content matches what macrocosim wrote is skipped, and the
     /// hash is forgotten — so an operator reverting the file to
     /// exactly that content by hand is a real edit again.
     #[test]

@@ -12,7 +12,7 @@ bound to the running site; act on it by *intent*:
         approx=Power.from_kilowatts(2), tol=Power.from_watts(300))
 
 ``command`` issues a control command through the real gRPC gateway (so an
-out-of-envelope value raises :class:`~switchyard.errors.SetpointRejected`, the
+out-of-envelope value raises :class:`~macrocosim.errors.SetpointRejected`, the
 production behaviour under test); ``status`` / ``drive`` are test-side stimuli
 POSTed to the typed control API (``/api/component/{id}/status`` / ``…/drive``);
 only a ``RawLisp`` drive goes through ``/api/eval``. The ``expect``
@@ -21,8 +21,8 @@ site.expect.grid_power(...)`` (or ``site.microgrid(id)`` for a
 non-default one).
 
 Every ``expect`` method here is one-line sugar over the kind-aware engine
-(:func:`switchyard.assertions.expect_metric`): the metric's entry in
-:mod:`switchyard.metrics` decides whether it settles (power, SoC) or is
+(:func:`macrocosim.assertions.expect_metric`): the metric's entry in
+:mod:`macrocosim.metrics` decides whether it settles (power, SoC) or is
 checked once as a running total (energy).
 """
 

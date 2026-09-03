@@ -1,12 +1,12 @@
 //! gRPC server: implements the Frequenz Dispatch API
 //! (`frequenz.api.dispatch.v1.MicrogridDispatchService`) on top of
-//! switchyard's in-memory [`DispatchStore`](crate::sim::dispatch).
+//! macrocosim's in-memory [`DispatchStore`](crate::sim::dispatch).
 //!
 //! This is a *store-and-serve* backend: it owns the full CRUD surface
 //! (Create / Get / Update / Delete / List / Stream) so the python
 //! dispatch CLI — or any `frequenz-client-dispatch` — can manage
 //! dispatches, the UI can list them per microgrid, and downstream
-//! control apps consume the stream and act. Switchyard never executes
+//! control apps consume the stream and act. Macrocosim never executes
 //! a dispatch against its own simulated components (see the
 //! `crate::sim::dispatch` module docs).
 //!

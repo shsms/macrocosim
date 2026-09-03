@@ -205,7 +205,7 @@ impl Expectation {
     }
 
     /// Human-readable form recorded on the check (and shown by
-    /// `swctl scenario report` on failure).
+    /// `macroctl scenario report` on failure).
     fn describe(&self) -> String {
         match self {
             Self::Approx { center, tol } => format!("approx {center} (tol {tol})"),

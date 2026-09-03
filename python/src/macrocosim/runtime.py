@@ -1,6 +1,6 @@
-"""Process lifecycle and the ``Site`` handle onto a running switchyard.
+"""Process lifecycle and the ``Site`` handle onto a running macrocosim.
 
-``launch()`` boots the ``switchyard`` binary on ephemeral ports, waits for
+``launch()`` boots the ``macrocosim`` binary on ephemeral ports, waits for
 the endpoint-emission handshake, and hands back a ``Site`` (a context
 manager); ``connect()`` attaches to an already-running instance. ``Site``
 is the handle through which tests read (component telemetry over gRPC,
@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from frequenz.quantities import Energy, Percentage, Power, ReactivePower
 
 from ._http import EvalResult, HttpClient, control_path
-from ._process import spawn_switchyard, terminate, which_binary
+from ._process import spawn_macrocosim, terminate, which_binary
 from .build import LaunchConfig
 from .errors import EvalRejected
 
@@ -57,7 +57,7 @@ class MicrogridEndpoint:
 
 
 class Site:
-    """A running switchyard instance and its resolved endpoints.
+    """A running macrocosim instance and its resolved endpoints.
 
     Use as a context manager; exiting tears the process down. Reads exposed
     here are the graph-derived formula aggregates (grid / consumer / PV /
@@ -119,7 +119,7 @@ class Site:
 
         Requires the ``grpc`` extra (``frequenz-client-microgrid``). One
         cached connection per microgrid — the same client the app under
-        test would open against switchyard.
+        test would open against macrocosim.
         """
         mg = self._resolve_mg(mg_id)
         with self._grpc_lock:
@@ -386,16 +386,16 @@ def launch(
     bin: str | os.PathLike[str] | None = None,
     ready_timeout: timedelta = timedelta(seconds=20),
 ) -> Site:
-    """Boot switchyard on ephemeral ports and return a ready ``Site``.
+    """Boot macrocosim on ephemeral ports and return a ready ``Site``.
 
     ``config`` is a path to a ``.lisp`` file, or a builder object with a
-    ``to_lisp()`` method (a :class:`switchyard.build.Microgrid`), which is
-    rendered to a temp config first. Spawns ``switchyard <config>
+    ``to_lisp()`` method (a :class:`macrocosim.build.Microgrid`), which is
+    rendered to a temp config first. Spawns ``macrocosim <config>
     --ephemeral-ports --emit-endpoints=<file>`` and blocks until the
     endpoints file is written (the readiness signal). Raises if the process
     dies first or the handshake times out.
     """
-    spawned = spawn_switchyard(config, bin)
+    spawned = spawn_macrocosim(config, bin)
     deadline = time.monotonic() + ready_timeout.total_seconds()
     while True:
         if spawned.endpoints_file.exists() and spawned.endpoints_file.stat().st_size > 0:
@@ -403,13 +403,13 @@ def launch(
         if spawned.process.poll() is not None:
             spawned.fail(
                 RuntimeError,
-                f"switchyard exited early (code {spawned.process.returncode}) "
+                f"macrocosim exited early (code {spawned.process.returncode}) "
                 f"before emitting endpoints:",
             )
         if time.monotonic() >= deadline:
             spawned.fail(
                 TimeoutError,
-                f"switchyard did not emit endpoints within {ready_timeout}:",
+                f"macrocosim did not emit endpoints within {ready_timeout}:",
             )
         time.sleep(0.1)
 
@@ -425,7 +425,7 @@ def launch(
         if not endpoints.get("microgrids"):
             spawned.fail(
                 RuntimeError,
-                "switchyard booted but the config registered no microgrids "
+                "macrocosim booted but the config registered no microgrids "
                 "— does it call (make-microgrid …)?",
             )
         return _site_from_endpoints(endpoints, spawned.process, spawned.tmpdir)
@@ -441,7 +441,7 @@ def connect(
     assets: str | None = None,
     dispatch: str | None = None,
 ) -> Site:
-    """Attach to an already-running switchyard (no process is spawned)."""
+    """Attach to an already-running macrocosim (no process is spawned)."""
     return Site(
         ui=ui,
         microgrids=microgrids or {},

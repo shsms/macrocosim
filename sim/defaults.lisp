@@ -1,4 +1,4 @@
-;; switchyard per-category defaults + bare-name shorthand DSL.
+;; macrocosim per-category defaults + bare-name shorthand DSL.
 ;;
 ;; Part of the embedded prelude (compiled into the binary via
 ;; include_str!), so editing this file needs a rebuild. A script

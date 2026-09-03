@@ -72,7 +72,7 @@ pub struct ScenarioCheck {
 }
 
 /// Battery-side energy integrals accumulated since `scenario_start`.
-/// Sign convention follows switchyard's internals: positive DC power
+/// Sign convention follows macrocosim's internals: positive DC power
 /// = charging; negative = discharging. Both quantities are recorded
 /// as positive Wh (absolute energy that crossed the bus in each
 /// direction).

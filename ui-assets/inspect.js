@@ -340,7 +340,7 @@ export function setupInspectorChips() {
 // quota-exceeded storage throws) and fall back to the card's default
 // on any failure. Power starts open — the P/Q readouts are the
 // panel's headline — the other cards start folded.
-const CARD_KEY_PREFIX = "sw-inspector-card-";
+const CARD_KEY_PREFIX = "mc-inspector-card-";
 const CARD_DEFAULT_OPEN = { component: false, power: true, charts: false, setpoints: false };
 function loadCardOpen(name) {
   try {

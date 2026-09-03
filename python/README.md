@@ -1,7 +1,7 @@
-# switchyard (Python)
+# macrocosim (Python)
 
 Python integration-testing client for the
-[switchyard](https://github.com/shsms/switchyard) microgrid simulator.
+[macrocosim](https://github.com/shsms/macrocosim) microgrid simulator.
 
 Build a topology, launch the simulator, drive its environment, inject
 faults, and assert on the resulting grid state — from inside `pytest`,
@@ -11,18 +11,18 @@ Microgrid API + the HTTP `/api` control plane).
 ```python
 from datetime import timedelta
 from frequenz.quantities import Energy, Percentage, Power
-import switchyard as sw
+import macrocosim as mc
 
 async def test_limiter_holds_import_cap():
-    bat = sw.battery(id=4, capacity=Energy.from_kilowatt_hours(92),
+    bat = mc.battery(id=4, capacity=Energy.from_kilowatt_hours(92),
                      initial_soc=Percentage.from_percent(50))
-    inv = sw.battery_inverter(id=3, successors=[bat],
+    inv = mc.battery_inverter(id=3, successors=[bat],
         rated=(Power.from_kilowatts(-5), Power.from_kilowatts(5)))
-    mg  = sw.Microgrid(id=1,
-        topology=sw.grid(id=1, successors=[sw.meter(id=2, successors=[inv])]))
+    mg  = mc.Microgrid(id=1,
+        topology=mc.grid(id=1, successors=[mc.meter(id=2, successors=[inv])]))
 
-    with sw.launch(mg) as site:
-        site.component(inv).status(health=sw.Health.ERROR)            # fault injection
+    with mc.launch(mg) as site:
+        site.component(inv).status(health=mc.Health.ERROR)            # fault injection
         await site.component(inv).expect.active_power(
             approx=Power.from_watts(0), tol=Power.from_watts(100))
         await site.component(bat).expect.soc(
@@ -31,17 +31,17 @@ async def test_limiter_holds_import_cap():
 
 ## Install
 
-Released as a **platform wheel** that bundles the `switchyard` + `swctl`
+Released as a **platform wheel** that bundles the `macrocosim` + `macroctl`
 binaries (built from the Rust crate via maturin), so a downstream install
 just works — no separate binary to fetch:
 
 ```sh
-pip install 'switchyard[grpc]'      # or: uv add 'switchyard[grpc]'
+pip install 'macrocosim[grpc]'      # or: uv add 'macrocosim[grpc]'
 ```
 
 `launch()` finds the bundled binaries automatically (in the interpreter's
-scripts directory, even off PATH). Override with `SWITCHYARD_BIN` /
-`SWCTL_BIN`, or `bin=` on `launch`, to point at a local build.
+scripts directory, even off PATH). Override with `MACROCOSIM_BIN` /
+`MACROCTL_BIN`, or `bin=` on `launch`, to point at a local build.
 
 ## Development
 
@@ -57,46 +57,46 @@ uv run pytest                 # tests; ruff / ty also via `uv run`
 Point tests at a fast local `cargo` build instead of the wheel's binary:
 
 ```sh
-SWITCHYARD_BIN=../target/debug/switchyard uv run pytest
+MACROCOSIM_BIN=../target/debug/macrocosim uv run pytest
 ```
 
 ## The surface
 
 **Build** a topology — the spec *is* the graph (nested `successors`),
-rendering 1:1 to switchyard's `(make-*)` Lisp:
+rendering 1:1 to macrocosim's `(make-*)` Lisp:
 
 ```python
 from frequenz.quantities import Energy, Percentage, Power
 
 P = Power.from_kilowatts
-mg = sw.Microgrid(id=1, topology=sw.grid(id=1, successors=[
-    sw.meter(id=2, successors=[
-        sw.battery_inverter(id=3, rated=(P(-5), P(5)), successors=[
-            sw.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
+mg = mc.Microgrid(id=1, topology=mc.grid(id=1, successors=[
+    mc.meter(id=2, successors=[
+        mc.battery_inverter(id=3, rated=(P(-5), P(5)), successors=[
+            mc.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
                        initial_soc=Percentage.from_percent(50))]),
-        sw.solar_inverter(id=5, sunlight=Percentage.from_percent(80)),
-        sw.meter(id=6, power=Power.from_watts(1000))])]))
+        mc.solar_inverter(id=5, sunlight=Percentage.from_percent(80)),
+        mc.meter(id=6, power=Power.from_watts(1000))])]))
 ```
 
 Constructors: `grid`, `meter`, `battery_inverter`, `solar_inverter`,
 `battery`, `ev_charger`, `chp`, `steam_boiler`. Kwargs mirror the plist keys
 (`snake_case` → `:kebab-case`): `rated=(lo, hi)` `Power` bounds, `capacity`
-an `Energy`, `initial_soc` / `sunlight` a `Percentage`; `sw.raw("(lambda () …)")`
+an `Energy`, `initial_soc` / `sunlight` a `Percentage`; `mc.raw("(lambda () …)")`
 splices Lisp.
 
 Typed throughout — no bare numbers or unit strings. Knobs take enums
-(`sw.Health`, `sw.CommandMode`, `sw.TelemetryMode`, scenario `sw.Metric`,
-`sw.Schedule`); quantities are
+(`mc.Health`, `mc.CommandMode`, `mc.TelemetryMode`, scenario `mc.Metric`,
+`mc.Schedule`); quantities are
 [`frequenz-quantities`](https://pypi.org/project/frequenz-quantities/)
 (`Power`, `Energy`, `Percentage`, `Frequency`), imported from it directly;
 times are `datetime` (`timedelta`, or a `datetime.time` for an absolute scenario clock).
-`sw.to_lisp_atom(v)` shows the Lisp literal any of them emits.
-Or use an existing config: `sw.launch("topology.lisp")`.
+`mc.to_lisp_atom(v)` shows the Lisp literal any of them emits.
+Or use an existing config: `mc.launch("topology.lisp")`.
 
 **Launch** and get a `Site` (a context manager; tears the process down):
 
 ```python
-with sw.launch(mg) as site:
+with mc.launch(mg) as site:
     site.grpc          # first microgrid's gRPC address ("host:port")
     site.grpc_url      # ... as a "grpc://host:port" URL a client connects with
     site.eval("(...)") # raw Lisp escape hatch
@@ -130,7 +130,7 @@ await site.expect.battery_energy(approx=Energy.from_kilowatt_hours(-8),
 
 Per-component energy is a first-class metric too, assertable from Lisp and the
 scenario framework: `(check "15m" :component 2 :metric 'energy :max 15000.0)` or
-`metric=sw.Metric.ENERGY` on a Python `Scenario.check`.
+`metric=mc.Metric.ENERGY` on a Python `Scenario.check`.
 
 **Mutate** — reach a component with `site[id]` (or `site.component(id)`), then
 act by *intent*:
@@ -141,13 +141,13 @@ inv.command(active_power=Power.from_kilowatts(2),      # app command (gRPC gatew
             lifetime=timedelta(seconds=30))
 inv.command(bounds=(Power.from_kilowatts(-1),
                     Power.from_kilowatts(1)))           # narrow the envelope
-inv.status(health=sw.Health.ERROR)                       # inject a fault
+inv.status(health=mc.Health.ERROR)                       # inject a fault
 site[6].drive(power=Power.from_megawatts(2))            # drive the environment
 site[5].drive(sunlight=Percentage.from_percent(30))
 ```
 
 `command` goes through the real gRPC gateway, so an out-of-envelope value
-raises `sw.SetpointRejected` (the production behaviour under test); `status` /
+raises `mc.SetpointRejected` (the production behaviour under test); `status` /
 `drive` are test-side stimuli.
 
 **Assert** — settle-aware `expect`, on a component (`site[id].expect`) or a
@@ -170,7 +170,7 @@ await site[4].expect.soc(
 require it on every sample across a duration instead. Matchers: `approx`+`tol`,
 `within`, `max`, `min`.
 
-**Async core (v2): signals** — `switchyard.aio` is the async-native
+**Async core (v2): signals** — `macrocosim.aio` is the async-native
 core: every read, write, and wait is a coroutine on your event loop (no
 background threads). Its unit is the *signal*: once `aio.launch` binds
 the topology, the builder objects are the live handles, and every
@@ -180,20 +180,20 @@ typed matcher), and `set` where the simulator allows it. Capability
 lives in the type:
 
 ```python
-load = sw.meter(id=5, power=Power.zero())
-bat = sw.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
+load = mc.meter(id=5, power=Power.zero())
+bat = mc.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
                  initial_soc=Percentage.from_percent(60))
 
-async with sw.aio.launch(mg) as site:
+async with mc.aio.launch(mg) as site:
     await load.power.set(Power.from_kilowatts(20))       # drive the world
-    await site.grid_power.expect(sw.at_most(Power.from_kilowatts(13)))
+    await site.grid_power.expect(mc.at_most(Power.from_kilowatts(13)))
     await bat.soc.set(Percentage.from_percent(11))       # teleport state
-    await bat.soc.expect(sw.between(Percentage.from_percent(10),
+    await bat.soc.expect(mc.between(Percentage.from_percent(10),
                                     Percentage.from_percent(12)))
     stored = await bat.stored_energy.read()              # state (SoC×capacity)
     await site.battery_energy.expect(                    # flow (∫ battery_power)
-        sw.at_most(Energy.from_watt_hours(-1)))
-    await inv.health.set(sw.Health.ERROR)                # fault injection
+        mc.at_most(Energy.from_watt_hours(-1)))
+    await inv.health.set(mc.Health.ERROR)                # fault injection
 ```
 
 Matchers: `near(x, tol=…)`, `between(lo, hi)`, `at_most(x)`,
@@ -209,29 +209,29 @@ control endpoints; rejections raise `ControlRejected`. See
 **Scenarios** — author in Python, or run a registered Lisp scenario:
 
 ```python
-scn = sw.Scenario("cloud-fade", length=timedelta(minutes=4))
+scn = mc.Scenario("cloud-fade", length=timedelta(minutes=4))
 scn.at(timedelta(seconds=30), pv.sunlight, Percentage.from_percent(20))
 scn.check(timedelta(seconds=110), inv.power,
-          sw.near(Power.from_megawatts(1.5), tol=Power.from_kilowatts(300)))
+          mc.near(Power.from_megawatts(1.5), tol=Power.from_kilowatts(300)))
 site.define_scenario(scn).run(wait=True).assert_passed()
 
 # deterministic, serverless gate (no app under test):
-sw.run_scenario_stepped([mg, scn], "cloud-fade")
+mc.run_scenario_stepped([mg, scn], "cloud-fade")
 ```
 
-**pytest** — the plugin auto-loads; provide a `switchyard_config` fixture:
+**pytest** — the plugin auto-loads; provide a `macrocosim_config` fixture:
 
 ```python
 @pytest.fixture
-def switchyard_config():
+def macrocosim_config():
     return mg
 
-async def test_grid_holds(switchyard):
-    await switchyard.expect.grid_power(
+async def test_grid_holds(macrocosim):
+    await macrocosim.expect.grid_power(
         approx=Power.from_kilowatts(7), tol=Power.from_watts(500))
 
-@pytest.mark.switchyard_scenario("cloud-fade")   # runs + gates after the test
-def test_scenario(switchyard): ...
+@pytest.mark.macrocosim_scenario("cloud-fade")   # runs + gates after the test
+def test_scenario(macrocosim): ...
 ```
 
 The `expect` assertions are `async`, so awaiting them needs `pytest-asyncio`
@@ -241,7 +241,7 @@ assertion silently never runs.
 
 ## Status
 
-Early but functional end to end — see `todo.org` §Y in the switchyard repo
+Early but functional end to end — see `todo.org` §Y in the macrocosim repo
 for the design and roadmap. Building, launching, reading and mutating are
 synchronous; the settle-aware `expect` assertions are `async` (so they compose
 with an app under test on the same event loop). Runnable `examples/` cover each

@@ -1,6 +1,6 @@
 name: wheels
 
-# Build the platform wheels (switchyard + swctl bundled via maturin) and an
+# Build the platform wheels (macrocosim + macroctl bundled via maturin) and an
 # sdist, on demand and on version tags. BUILD-ONLY — no PyPI publish yet: that
 # needs a license (GPL-3.0-or-later) + a PyPI trusted publisher (see todo.org
 # D5). Add a `publish` job gated on `id-token: write` once those are in place.
@@ -71,17 +71,17 @@ jobs:
         if: matrix.smoke
         run: |
           # Install the built wheel by explicit path. A plain
-          # `pip install switchyard` could pull a foreign package with
+          # `pip install macrocosim` could pull a foreign package with
           # the same name from PyPI; only the extras' dependencies
           # should come from there.
           python -m pip install "$(ls python/dist/*.whl)[grpc]"
           python - <<'EOF'
-          import switchyard  # noqa: F401
-          from switchyard.runtime import which_binary
-          assert which_binary("switchyard") and which_binary("swctl"), (
+          import macrocosim  # noqa: F401
+          from macrocosim.runtime import which_binary
+          assert which_binary("macrocosim") and which_binary("macroctl"), (
               "bundled binaries not found on PATH"
           )
-          print("wheel OK: switchyard + swctl bundled and discoverable")
+          print("wheel OK: macrocosim + macroctl bundled and discoverable")
           EOF
 
       - uses: actions/upload-artifact@v4

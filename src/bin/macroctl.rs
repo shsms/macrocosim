@@ -1,54 +1,54 @@
-//! Convenience CLI for poking at a running switchyard server.
+//! Convenience CLI for poking at a running macrocosim server.
 //!
 //! gRPC commands (default --addr http://[::1]:8800):
-//!   swctl info
-//!   swctl list
-//!   swctl list --category battery
-//!   swctl tree
-//!   swctl stream 1001
-//!   swctl stream 1001 --samples 5 --json
-//!   swctl set-power 1001 8000
-//!   swctl set-power 1001 -5000 --lifetime 30   # negative → discharge
-//!   swctl augment-bounds 1001 --lower -15000 --upper 15000 --lifetime 60
-//!   swctl augment-bounds 1001 --lower -3000 --upper 3000 --reactive --lifetime 60
+//!   macroctl info
+//!   macroctl list
+//!   macroctl list --category battery
+//!   macroctl tree
+//!   macroctl stream 1001
+//!   macroctl stream 1001 --samples 5 --json
+//!   macroctl set-power 1001 8000
+//!   macroctl set-power 1001 -5000 --lifetime 30   # negative → discharge
+//!   macroctl augment-bounds 1001 --lower -15000 --upper 15000 --lifetime 60
+//!   macroctl augment-bounds 1001 --lower -3000 --upper 3000 --reactive --lifetime 60
 //!
 //! Scenario commands — HTTP (default --ui-addr http://127.0.0.1:8801):
-//!   swctl scenario start "demo"
-//!   swctl scenario event outage "bat-1003"
-//!   swctl scenario load examples/scenario-driving.lisp
-//!   swctl scenario report
-//!   swctl scenario events --since 0 --limit 20
-//!   swctl scenario summary
-//!   swctl scenario stop
+//!   macroctl scenario start "demo"
+//!   macroctl scenario event outage "bat-1003"
+//!   macroctl scenario load examples/scenario-driving.lisp
+//!   macroctl scenario report
+//!   macroctl scenario events --since 0 --limit 20
+//!   macroctl scenario summary
+//!   macroctl scenario stop
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use tonic::transport::Channel;
 
-use switchyard::proto::common::metrics::Metric;
-use switchyard::proto::common::microgrid::electrical_components::{
+use macrocosim::proto::common::metrics::Metric;
+use macrocosim::proto::common::microgrid::electrical_components::{
     ElectricalComponent, ElectricalComponentCategory,
     electrical_component_category_specific_info::Kind,
 };
-use switchyard::proto::dispatch::microgrid_dispatch_service_client::MicrogridDispatchServiceClient;
-use switchyard::proto::dispatch::{
+use macrocosim::proto::dispatch::microgrid_dispatch_service_client::MicrogridDispatchServiceClient;
+use macrocosim::proto::dispatch::{
     CreateMicrogridDispatchRequest, DeleteMicrogridDispatchRequest, DispatchData,
     GetMicrogridDispatchRequest, ListMicrogridDispatchesRequest, UpdateMicrogridDispatchRequest,
     update_microgrid_dispatch_request::DispatchUpdate,
 };
-use switchyard::proto::microgrid::microgrid_client::MicrogridClient;
-use switchyard::proto::microgrid::{
+use macrocosim::proto::microgrid::microgrid_client::MicrogridClient;
+use macrocosim::proto::microgrid::{
     AugmentElectricalComponentBoundsRequest, ListElectricalComponentConnectionsRequest,
     ListElectricalComponentsRequest, PowerType, ReceiveElectricalComponentTelemetryStreamRequest,
     SetElectricalComponentPowerRequest,
 };
-use switchyard::sim::dispatch::{json_to_struct, parse_target, struct_to_json, target_to_string};
+use macrocosim::sim::dispatch::{json_to_struct, parse_target, struct_to_json, target_to_string};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "swctl",
-    about = "Switchyard microgrid client",
+    name = "macroctl",
+    about = "Macrocosim microgrid client",
     version,
     propagate_version = true
 )]
@@ -74,7 +74,7 @@ struct Cli {
     json: bool,
 
     /// Target microgrid id for per-microgrid HTTP-routed subcommands
-    /// (`pool`, `dashboard --tail`, `snapshot`). When set, swctl
+    /// (`pool`, `dashboard --tail`, `snapshot`). When set, macroctl
     /// reads from `/api/mg/{id}/...` instead of the legacy
     /// single-microgrid `/api/...` paths. Default = the lowest id
     /// reported by `GET /api/microgrids`, which matches the
@@ -487,11 +487,11 @@ fn str_err(e: String) -> Box<dyn std::error::Error> {
 
 fn rfc3339_to_ts(s: &str) -> Result<prost_types::Timestamp, Box<dyn std::error::Error>> {
     let dt = chrono::DateTime::parse_from_rfc3339(s)?.with_timezone(&chrono::Utc);
-    Ok(switchyard::proto_conv::datetime_to_ts(dt))
+    Ok(macrocosim::proto_conv::datetime_to_ts(dt))
 }
 
 /// One-line dispatch summary for `dispatch list`.
-fn dispatch_summary(d: &switchyard::proto::dispatch::Dispatch) -> String {
+fn dispatch_summary(d: &macrocosim::proto::dispatch::Dispatch) -> String {
     let id = d.metadata.as_ref().map(|m| m.dispatch_id).unwrap_or(0);
     let data = d.data.as_ref();
     let ty = data.map(|x| x.r#type.as_str()).unwrap_or("?");
@@ -511,7 +511,7 @@ fn dispatch_summary(d: &switchyard::proto::dispatch::Dispatch) -> String {
 }
 
 /// Multi-line dispatch detail for `dispatch get` / `create`.
-fn print_dispatch_detail(d: &switchyard::proto::dispatch::Dispatch) {
+fn print_dispatch_detail(d: &macrocosim::proto::dispatch::Dispatch) {
     println!("{}", dispatch_summary(d));
     if let Some(data) = d.data.as_ref() {
         if let Some(st) = data.start_time.as_ref() {
@@ -755,7 +755,7 @@ async fn run_pool(
         // Same transient-error tolerance as dashboard --tail.
         match build_pool_line(&http, ui_addr, mg, kind, json).await {
             Ok(line) => println!("{line}"),
-            Err(e) if stream => eprintln!("swctl: pool fetch failed ({e}); retrying"),
+            Err(e) if stream => eprintln!("macroctl: pool fetch failed ({e}); retrying"),
             Err(e) => return Err(e),
         }
         if !stream {
@@ -765,7 +765,7 @@ async fn run_pool(
     }
 }
 
-/// Resolve the microgrid id swctl should hit for per-mg HTTP
+/// Resolve the microgrid id macroctl should hit for per-mg HTTP
 /// endpoints. Honours an explicit `--microgrid-id N` if supplied,
 /// otherwise queries `/api/microgrids` and returns the lowest
 /// registered id — matches the legacy "first registry entry"
@@ -851,7 +851,7 @@ async fn build_pool_line(
 /// Polls /api/topology + /api/microgrid/latest at `interval`
 /// seconds and prints a one-line pulse summary per tick. With
 /// `tail=false` (single snapshot mode) the loop runs once and
-/// exits, matching `swctl dashboard` without a flag.
+/// exits, matching `macroctl dashboard` without a flag.
 async fn run_dashboard(
     ui_addr: &str,
     microgrid_id: Option<u64>,
@@ -867,7 +867,7 @@ async fn run_dashboard(
         // warn and try again next tick. One-shot mode still errors.
         match build_dashboard_line(&http, ui_addr, mg).await {
             Ok(line) => println!("{line}"),
-            Err(e) if tail => eprintln!("swctl: dashboard fetch failed ({e}); retrying"),
+            Err(e) if tail => eprintln!("macroctl: dashboard fetch failed ({e}); retrying"),
             Err(e) => return Err(e),
         }
         if !tail {
@@ -1011,7 +1011,7 @@ async fn run_scenario(
                 // non-zero on any failed check: the CI gate.
                 let config = config.ok_or("`scenario run --stepped` needs --config <file>")?;
                 let dt = std::time::Duration::from_millis(step.unwrap_or(100));
-                let (cfg, _clock) = switchyard::lisp::Config::new_headless(&config)
+                let (cfg, _clock) = macrocosim::lisp::Config::new_headless(&config)
                     .map_err(|e| format!("headless boot failed: {e}"))?;
                 // `--until` overrides the scenario's own `:length`;
                 // without it the declared length is the run length.
@@ -1612,7 +1612,7 @@ async fn cmd_stream(
             metrics.push(parse_metric_name(name)? as i32);
         }
         Some(
-            switchyard::proto::microgrid::receive_electrical_component_telemetry_stream_request::ComponentTelemetryStreamFilter {
+            macrocosim::proto::microgrid::receive_electrical_component_telemetry_stream_request::ComponentTelemetryStreamFilter {
                 metrics,
             },
         )
@@ -1650,7 +1650,7 @@ async fn cmd_stream(
                     .as_ref()
                     .and_then(|v| v.metric_value_variant.as_ref())
                     .and_then(|v| match v {
-                        switchyard::proto::common::metrics::metric_value_variant::MetricValueVariant::SimpleMetric(sv) => Some(sv.value),
+                        macrocosim::proto::common::metrics::metric_value_variant::MetricValueVariant::SimpleMetric(sv) => Some(sv.value),
                         _ => None,
                     });
                 let bounds = if s.bounds.is_empty() {
@@ -1702,7 +1702,7 @@ async fn cmd_set_power(
         .into_inner();
     while let Some(msg) = stream.message().await? {
         let name =
-            switchyard::proto::microgrid::SetElectricalComponentPowerRequestStatus::try_from(
+            macrocosim::proto::microgrid::SetElectricalComponentPowerRequestStatus::try_from(
                 msg.status,
             )
             .map(|s| {
@@ -1727,7 +1727,7 @@ async fn cmd_augment(
     reactive: bool,
     lifetime: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use switchyard::proto::common::metrics::Bounds;
+    use macrocosim::proto::common::metrics::Bounds;
     let target_metric = if reactive {
         Metric::AcPowerReactive
     } else {

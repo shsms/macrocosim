@@ -1,6 +1,6 @@
 # Scenarios
 
-A scenario is a Lisp file that drives switchyard through a stress
+A scenario is a Lisp file that drives macrocosim through a stress
 test — sudden load spikes, cloud cover, battery outages, silent
 components — while a Rust **reporter** records metrics and a
 **journal** records named events. At any time you can ask the
@@ -117,7 +117,7 @@ build a plist and touch nothing; only `scenario--run`, walking the
 
 ## Helpers in `sim/scenarios.lisp`
 
-These helpers are built into the binary. Switchyard evaluates the
+These helpers are built into the binary. Macrocosim evaluates the
 `sim/*.lisp` preludes at startup, before your config runs, so no
 explicit `(load …)` is needed:
 

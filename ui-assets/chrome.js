@@ -5,14 +5,14 @@ import { mgPath, setupDensityToggle } from "./routing.js";
 
 // ─── Clock + TZ toggle ─────────────────────────────────────────────────────
 //
-// switchyard's physics + gRPC boundary speak UTC. The UI displays
+// macrocosim's physics + gRPC boundary speak UTC. The UI displays
 // timestamps in either UTC or the IANA zone the operator set via
 // (set-timezone …) — defaulting to "Europe/Berlin" matching the
 // configured demo target. clockState pulls the zone name once at
 // boot via /api/clock; the TZ chip in the pulse bar flips between
 // the local-zone short label (CET / CEST / EST / etc., picked via
 // Intl) and "UTC". Persists in localStorage.
-const TZ_PREF_KEY = "switchyard-tz";
+const TZ_PREF_KEY = "macrocosim-tz";
 export const clockState = (() => {
   let simTz = "Europe/Berlin";
   let simLabel = "local";

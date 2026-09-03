@@ -3,9 +3,9 @@ requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
 
 [project]
-name = "switchyard"
+name = "macrocosim"
 version = "0.0.0"
-description = "Python integration-testing client for the switchyard microgrid simulator"
+description = "Python integration-testing client for the macrocosim microgrid simulator"
 readme = "README.md"
 requires-python = ">=3.11"
 # The core (process launch + the HTTP /api control plane) needs only httpx.
@@ -24,7 +24,7 @@ grpc = ["frequenz-client-microgrid~=0.18", "pytest-asyncio>=0.24"]
 
 # Auto-load the pytest fixtures when both packages are installed.
 [project.entry-points.pytest11]
-switchyard = "switchyard.pytest_plugin"
+macrocosim = "macrocosim.pytest_plugin"
 
 # uv-native dev tooling (PEP 735). `uv sync` installs this by default; the
 # gRPC client is here too so tests + type-checking see the full surface.
@@ -37,10 +37,10 @@ dev = [
     "ty>=0.0.56",
 ]
 
-# maturin builds the switchyard + swctl binaries from the Rust crate at the
+# maturin builds the macrocosim + macroctl binaries from the Rust crate at the
 # repo root and bundles them into the (platform-specific) wheel as scripts,
-# alongside the pure-Python `switchyard` package under src/. Downstream
-# `pip install switchyard` then puts the binaries on PATH, where launch()'s
+# alongside the pure-Python `macrocosim` package under src/. Downstream
+# `pip install macrocosim` then puts the binaries on PATH, where launch()'s
 # discovery finds them — no separate binary download.
 [tool.maturin]
 manifest-path = "../Cargo.toml"

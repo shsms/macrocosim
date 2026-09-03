@@ -1,4 +1,4 @@
-;; Local emacs settings for switchyard. Configures etags-regen so
+;; Local emacs settings for macrocosim. Configures etags-regen so
 ;; `M-x etags-regen-mode` picks up the right command. The mode is
 ;; NOT auto-enabled here — run it manually when you want a fresh
 ;; TAGS file. Nothing deletes the old TAGS or hooks into save.
@@ -15,7 +15,7 @@
                (setq-local etags-regen-program "cargo")
                (setq-local etags-regen-program-options
                            '("run" "-q" "--features" "etags"
-                             "--bin" "switchyard-etags"
+                             "--bin" "macrocosim-etags"
                              "config.lisp" "scenarios/example.lisp"))
                (setq-local etags-regen-file-extensions
                            '("lisp" "rs" "el")))))))

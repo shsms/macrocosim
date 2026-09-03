@@ -2,11 +2,11 @@
 //! gRPC surface (`src/dispatch_server.rs`) and the per-microgrid
 //! Dispatches view in the UI.
 //!
-//! Switchyard is a *store-and-serve* dispatch backend: the python
+//! Macrocosim is a *store-and-serve* dispatch backend: the python
 //! dispatch CLI (or any `frequenz-client-dispatch`) creates /
 //! updates / deletes dispatches
 //! here, the UI lists them, and downstream control apps (e.g. the
-//! edge-app) consume the stream and act on them. Switchyard itself
+//! edge-app) consume the stream and act on them. Macrocosim itself
 //! never executes a dispatch against its simulated components.
 //!
 //! State is enterprise-wide but keyed by `microgrid_id` (the dispatch
@@ -190,7 +190,7 @@ impl DispatchStore {
     /// `start_immediately` overrides `start_time` to server-now. A
     /// dispatch with neither is rejected ([`DispatchError::MissingStartTime`]).
     /// A past `start_time` is intentionally accepted (see the module
-    /// docs): switchyard is a sim backend, and an already-started
+    /// docs): macrocosim is a sim backend, and an already-started
     /// dispatch is a useful thing to create for downstream testing.
     pub fn create(
         &self,
@@ -356,7 +356,7 @@ pub(crate) fn stamp_updated(dispatch: &mut pb::Dispatch) {
     }
 }
 
-// --- human-input parsing (shared by the UI create endpoint + swctl) -------
+// --- human-input parsing (shared by the UI create endpoint + macroctl) -------
 
 fn category_from_alias(token: &str) -> Option<i32> {
     use crate::proto::common::microgrid::electrical_components::ElectricalComponentCategory as Cat;
@@ -377,7 +377,7 @@ fn category_from_alias(token: &str) -> Option<i32> {
 /// comma-separated list of numeric component ids (`"1,2,3"`) or a
 /// comma-separated list of category names (`"battery,grid"`); the two
 /// can't be mixed. Mirrors the `frequenz-client-dispatch` CLI's target
-/// argument so the UI / swctl take the same syntax.
+/// argument so the UI / macroctl take the same syntax.
 pub fn parse_target(spec: &str) -> Result<pb::TargetComponents, String> {
     use pb::target_components::{CategoryAndType, CategoryTypeSet, Components, IdSet};
     let tokens: Vec<&str> = spec
@@ -438,7 +438,7 @@ pub fn electrical_category_label(cat: i32) -> String {
 }
 
 /// Render a dispatch target as a short human string — the inverse of
-/// [`parse_target`], used by the UI list + swctl. Matches on
+/// [`parse_target`], used by the UI list + macroctl. Matches on
 /// component-id and category-set shapes; the deprecated bare-category
 /// set is handled too so an older dispatch still renders.
 #[allow(deprecated)]

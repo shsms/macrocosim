@@ -1,4 +1,4 @@
-;;; switchyard:generated — rewritten by switchyard, do not edit
+;;; macrocosim:generated — rewritten by macrocosim, do not edit
 (make-microgrid :id 2200 :name "Berlin demo" :grpc-port 8800 :tso "TN"
   :topology
   (lambda ()
@@ -25,17 +25,17 @@
     (connect 2 1007)
     (connect 2 100)
     (connect 1 2)))
-;;; switchyard:end
-;; Berlin demo — a self-contained switchyard world: one microgrid
+;;; macrocosim:end
+;; Berlin demo — a self-contained macrocosim world: one microgrid
 ;; (id 2200) with battery, solar, EV-charger, CHP and consumer
 ;; branches, its environment animation, and the seven starter
 ;; scenarios that drive it.
 ;;
 ;; Run it as the boot script:
 ;;
-;;   cargo run --bin switchyard examples/berlin-demo.lisp
+;;   cargo run --bin macrocosim examples/berlin-demo.lisp
 ;;
-;; or load it into a bare engine (`cargo run --bin switchyard`) at
+;; or load it into a bare engine (`cargo run --bin macrocosim`) at
 ;; runtime, from the REPL box or the Microgrids tab:
 ;;
 ;;   (load "examples/berlin-demo.lisp")

@@ -60,13 +60,13 @@ pub struct MicrogridEntry {
     /// place. See `(make-microgrid …)` in `lisp::defuns::microgrids`.
     pub source: Option<PathBuf>,
     /// Whether [`source`](Self::source) is a *managed* microgrid file
-    /// — one whose structure lives in a switchyard-generated block
-    /// (see [`crate::lisp::microgrid_file`]) that switchyard may
-    /// rewrite. A hand-written script is unmanaged: switchyard loads
+    /// — one whose structure lives in a macrocosim-generated block
+    /// (see [`crate::lisp::microgrid_file`]) that macrocosim may
+    /// rewrite. A hand-written script is unmanaged: macrocosim loads
     /// it and never writes to it.
     pub managed: bool,
     /// Live edits have been applied that no file on disk carries: a
-    /// save failed, the microgrid's file is unmanaged (switchyard
+    /// save failed, the microgrid's file is unmanaged (macrocosim
     /// never writes to it), or it was declared straight from the
     /// REPL. Cleared by the next successful save.
     pub unsaved: bool,
@@ -114,7 +114,7 @@ impl From<&MicrogridEntry> for MicrogridView {
 }
 
 /// Snapshot the registry into a list of `MicrogridView`s, sorted
-/// ascending by id. Driver for `GET /api/microgrids` + `swctl
+/// ascending by id. Driver for `GET /api/microgrids` + `macroctl
 /// microgrids list`.
 pub fn snapshot(registry: &SharedMicrogrids) -> Vec<MicrogridView> {
     registry.lock().values().map(MicrogridView::from).collect()

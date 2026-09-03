@@ -4,20 +4,20 @@ Loads a config that both wires a topology and registers a scenario via
 ``(define-scenario …)``, runs it to completion, and fails if any
 ``(check …)`` failed — the CI gate.
 
-    SWITCHYARD_BIN=../target/debug/switchyard python examples/scenario_gate.py
+    MACROCOSIM_BIN=../target/debug/macrocosim python examples/scenario_gate.py
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import switchyard as sw
+import macrocosim as mc
 
 CONFIG = Path(__file__).with_name("scenario.lisp")
 
 
 def main() -> None:
-    with sw.launch(CONFIG) as site:
+    with mc.launch(CONFIG) as site:
         registered = [s["name"] for s in site._http.get_json("/api/scenarios")]
         print(f"registered scenarios: {registered}")
 

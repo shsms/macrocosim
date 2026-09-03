@@ -116,8 +116,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Build switchyard binary
-        run: cargo build --bin switchyard
+      - name: Build macrocosim binary
+        run: cargo build --bin macrocosim
 
       - uses: actions/setup-node@v4
         with:
@@ -150,17 +150,17 @@ jobs:
           SD=$(mktemp -d)
           mkdir "$SD/microgrids"
           cp examples/berlin-demo.lisp "$SD/microgrids/2200.lisp"
-          ./target/debug/switchyard --state-dir "$SD" --ephemeral-ports \
+          ./target/debug/macrocosim --state-dir "$SD" --ephemeral-ports \
               --emit-endpoints="$SD/endpoints.json" "$SD/microgrids/2200.lisp" \
-              > /tmp/sw-e2e.log 2>&1 &
-          echo $! > /tmp/sw-e2e.pid
+              > /tmp/mc-e2e.log 2>&1 &
+          echo $! > /tmp/mc-e2e.pid
           for _ in {1..30}; do
             [ -f "$SD/endpoints.json" ] && break
             sleep 1
           done
           if [ ! -f "$SD/endpoints.json" ]; then
             echo "server failed to emit endpoints"
-            cat /tmp/sw-e2e.log
+            cat /tmp/mc-e2e.log
             exit 1
           fi
           echo "SW_UI=http://$(jq -r .ui "$SD/endpoints.json")" >> "$GITHUB_ENV"
@@ -170,8 +170,8 @@ jobs:
 
       - name: Server log (on failure)
         if: failure()
-        run: cat /tmp/sw-e2e.log 2>/dev/null || true
+        run: cat /tmp/mc-e2e.log 2>/dev/null || true
 
       - name: Kill the server
         if: always()
-        run: kill "$(cat /tmp/sw-e2e.pid 2>/dev/null)" 2>/dev/null || true
+        run: kill "$(cat /tmp/mc-e2e.pid 2>/dev/null)" 2>/dev/null || true

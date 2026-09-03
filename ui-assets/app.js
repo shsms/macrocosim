@@ -100,7 +100,7 @@ export function notify(message, kind = "error") {
 // behind the chevron, leaving the `panels` pills. Persisted like the
 // other UI preferences — in a try/catch, since private-mode and
 // quota-exceeded storage throw — and falling back to expanded.
-const CTL_COLLAPSED_KEY = "sw-controls-collapsed";
+const CTL_COLLAPSED_KEY = "mc-controls-collapsed";
 function loadCtlCollapsed() {
   try {
     return localStorage.getItem(CTL_COLLAPSED_KEY) === "1";
@@ -208,7 +208,7 @@ export async function mutate(method, path, body) {
 
 // ─── Dispatches (per-microgrid) ─────────────────────────────────────────────
 //
-// Read-only table of the dispatches switchyard's dispatch API holds for
+// Read-only table of the dispatches macrocosim's dispatch API holds for
 // the selected microgrid. Rendered on entering the Dispatches sub-tab
 // and refetched when a `dispatch_changed` WS event names this microgrid
 // (the dispatch CLI created / updated / deleted one).
@@ -284,7 +284,7 @@ export const dispatchesPanel = (() => {
   }
 
   function emptyHtml() {
-    return `<p class="hint">No dispatches for this microgrid yet — create one with the + New dispatch button, <code>swctl dispatch create</code>, or the dispatch CLI.</p>`;
+    return `<p class="hint">No dispatches for this microgrid yet — create one with the + New dispatch button, <code>macroctl dispatch create</code>, or the dispatch CLI.</p>`;
   }
 
   async function setActive(id, active) {
@@ -509,7 +509,7 @@ async function init() {
   try {
     // The drawer these panels replaced left its height and its two
     // open flags behind; nothing reads them now.
-    for (const k of ["switchyard-drawer-h", "switchyard-drawer-logs", "switchyard-drawer-repl"]) localStorage.removeItem(k);
+    for (const k of ["macrocosim-drawer-h", "macrocosim-drawer-logs", "macrocosim-drawer-repl"]) localStorage.removeItem(k);
   } catch {
     // Storage unavailable — there is nothing stale to drop either.
   }

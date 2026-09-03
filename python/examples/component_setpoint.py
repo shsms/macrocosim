@@ -2,10 +2,10 @@
 Python, then discover, command a setpoint, read it back, and watch the
 bounds gateway reject an out-of-envelope command.
 
-Talks to switchyard the same way a downstream control app would. Run with
+Talks to macrocosim the same way a downstream control app would. Run with
 the grpc extra installed (``pip install -e '.[grpc]'``):
 
-    SWITCHYARD_BIN=../target/debug/switchyard python examples/component_setpoint.py
+    MACROCOSIM_BIN=../target/debug/macrocosim python examples/component_setpoint.py
 """
 
 from __future__ import annotations
@@ -15,23 +15,23 @@ from datetime import timedelta
 
 from frequenz.quantities import Energy, Percentage, Power
 
-import switchyard as sw
+import macrocosim as mc
 
 INVERTER = 3
 
-TOPOLOGY = sw.Microgrid(
+TOPOLOGY = mc.Microgrid(
     id=1,
-    topology=sw.grid(
+    topology=mc.grid(
         id=1,
         successors=[
-            sw.meter(
+            mc.meter(
                 id=2,
                 successors=[
-                    sw.battery_inverter(
+                    mc.battery_inverter(
                         id=INVERTER,
                         rated=(Power.from_watts(-5000), Power.from_watts(5000)),
                         successors=[
-                            sw.battery(
+                            mc.battery(
                                 id=4,
                                 capacity=Energy.from_kilowatt_hours(100),
                                 initial_soc=Percentage.from_percent(50),
@@ -46,7 +46,7 @@ TOPOLOGY = sw.Microgrid(
 
 
 async def main() -> None:
-    with sw.launch(TOPOLOGY) as site:
+    with mc.launch(TOPOLOGY) as site:
         for c in site.components():
             print(f"  {c.category:20} id={c.id} name={c.name}")
 
@@ -68,7 +68,7 @@ async def main() -> None:
         inv.command(bounds=(Power.from_kilowatts(-1), Power.from_kilowatts(1)))
         try:
             inv.command(active_power=Power.from_kilowatts(4))
-        except sw.SetpointRejected as exc:
+        except mc.SetpointRejected as exc:
             print(f"OK  out-of-envelope setpoint rejected: {exc}"[:80])
         else:
             raise AssertionError("out-of-envelope setpoint was NOT rejected")

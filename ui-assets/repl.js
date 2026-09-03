@@ -48,7 +48,7 @@ export async function backfillLogs() {
 // The Logs panel head: the minimum level goes on #logs as a class the
 // stylesheet reads, and persists; clear empties the tail (new lines
 // keep arriving).
-const LOGS_LEVEL_KEY = "sw-logs-level";
+const LOGS_LEVEL_KEY = "mc-logs-level";
 
 export function setupLogsPanel() {
   const box = document.getElementById("logs");
@@ -69,7 +69,7 @@ export function setupLogsPanel() {
 
 // Hardcoded completion candidates for the REPL. Until tulisp exposes
 // obarray enumeration upstream, this list has to track the surface
-// switchyard exposes by hand. Drop-in replacement: hit /api/symbols
+// macrocosim exposes by hand. Drop-in replacement: hit /api/symbols
 // (TBD) and merge the response into this array.
 
 export function setupRepl() {

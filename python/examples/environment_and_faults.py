@@ -4,7 +4,7 @@ Build a topology in Python, then use the component handles
 (``site.component(id).command`` / ``.status`` / ``.drive``) and settle-aware ``expect`` to
 exercise it the way an integration test would.
 
-    SWITCHYARD_BIN=../target/debug/switchyard python examples/environment_and_faults.py
+    MACROCOSIM_BIN=../target/debug/macrocosim python examples/environment_and_faults.py
 """
 
 from __future__ import annotations
@@ -14,33 +14,33 @@ from datetime import timedelta
 
 from frequenz.quantities import Energy, Percentage, Power
 
-import switchyard as sw
+import macrocosim as mc
 
-TOPOLOGY = sw.Microgrid(
+TOPOLOGY = mc.Microgrid(
     id=1,
-    topology=sw.grid(
+    topology=mc.grid(
         id=1,
         successors=[
-            sw.meter(
+            mc.meter(
                 id=2,
                 successors=[
-                    sw.battery_inverter(
+                    mc.battery_inverter(
                         id=3,
                         rated=(Power.from_watts(-5000), Power.from_watts(5000)),
                         successors=[
-                            sw.battery(
+                            mc.battery(
                                 id=4,
                                 capacity=Energy.from_kilowatt_hours(100),
                                 initial_soc=Percentage.from_percent(50),
                             )
                         ],
                     ),
-                    sw.solar_inverter(
+                    mc.solar_inverter(
                         id=5,
                         rated=(Power.from_watts(-5000), Power.from_watts(0)),
                         sunlight=Percentage.from_percent(80),
                     ),
-                    sw.meter(id=6, power=Power.from_watts(1000)),  # a consumer meter
+                    mc.meter(id=6, power=Power.from_watts(1000)),  # a consumer meter
                 ],
             )
         ],
@@ -49,7 +49,7 @@ TOPOLOGY = sw.Microgrid(
 
 
 async def main() -> None:
-    with sw.launch(TOPOLOGY) as site:
+    with mc.launch(TOPOLOGY) as site:
         # Command a battery-inverter setpoint, then trip it offline.
         inv = site.component(3)
         inv.command(active_power=Power.from_kilowatts(2), lifetime=timedelta(seconds=60))
@@ -58,7 +58,7 @@ async def main() -> None:
         )
         print("OK  inverter holding 2 kW")
 
-        inv.status(health=sw.Health.ERROR)
+        inv.status(health=mc.Health.ERROR)
         await inv.expect.active_power(
             approx=Power.from_watts(0), tol=Power.from_watts(100)
         )

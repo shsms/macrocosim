@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import switchyard._process as rt
+import macrocosim._process as rt
 
 
 def test_which_binary_prefers_path(monkeypatch) -> None:
@@ -22,9 +22,9 @@ def test_which_binary_falls_back_to_scripts_dir(monkeypatch) -> None:
         lambda name, path=None: None if path is None else f"{path}/{name}",
     )
     monkeypatch.setattr(rt.sysconfig, "get_path", lambda key: "/venv/bin")
-    assert rt.which_binary("switchyard") == "/venv/bin/switchyard"
+    assert rt.which_binary("macrocosim") == "/venv/bin/macrocosim"
 
 
 def test_which_binary_none_when_absent(monkeypatch) -> None:
     monkeypatch.setattr(rt.shutil, "which", lambda name, path=None: None)
-    assert rt.which_binary("switchyard") is None
+    assert rt.which_binary("macrocosim") is None

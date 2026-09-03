@@ -163,7 +163,7 @@ impl Config {
             .map_err(|e| unwritten(format!("{}: {e}", path.display())))?;
         let displaced = parsed.generated.ok_or_else(|| {
             unwritten(format!(
-                "{} carries no switchyard-generated block",
+                "{} carries no macrocosim-generated block",
                 path.display()
             ))
         })?;
@@ -195,7 +195,7 @@ impl Config {
             .ok_or_else(|| format!("microgrid {id} not registered"))?;
         if !entry.managed {
             return Err(format!(
-                "microgrid {id} is not managed by switchyard; adopt it first"
+                "microgrid {id} is not managed by macrocosim; adopt it first"
             ));
         }
         entry

@@ -5,9 +5,9 @@
 mod common;
 
 use common::TestServer;
-use switchyard::proto::common::metrics::{Bounds, Metric};
-use switchyard::proto::microgrid::microgrid_client::MicrogridClient;
-use switchyard::proto::microgrid::{
+use macrocosim::proto::common::metrics::{Bounds, Metric};
+use macrocosim::proto::microgrid::microgrid_client::MicrogridClient;
+use macrocosim::proto::microgrid::{
     AugmentElectricalComponentBoundsRequest, ListElectricalComponentConnectionsRequest,
     ListElectricalComponentsRequest, PowerType, ReceiveElectricalComponentTelemetryStreamRequest,
     ReceiveElectricalComponentTelemetryStreamResponse, SetElectricalComponentPowerRequest,
@@ -16,7 +16,7 @@ use switchyard::proto::microgrid::{
 
 /// Pull the AC active-power value (W) out of a telemetry response, if present.
 fn active_power_w(resp: &ReceiveElectricalComponentTelemetryStreamResponse) -> Option<f32> {
-    use switchyard::proto::common::metrics::{Metric, metric_value_variant::MetricValueVariant};
+    use macrocosim::proto::common::metrics::{Metric, metric_value_variant::MetricValueVariant};
     let t = resp.telemetry.as_ref()?;
     t.metric_samples.iter().find_map(|s| {
         if s.metric != Metric::AcPowerActive as i32 {
@@ -265,7 +265,7 @@ async fn errored_component_rejects_power_and_bounds() {
 /// in the stream loop; without it both would read as idle.
 #[tokio::test(flavor = "multi_thread")]
 async fn health_drives_the_streamed_state_code() {
-    use switchyard::proto::common::microgrid::electrical_components::ElectricalComponentStateCode;
+    use macrocosim::proto::common::microgrid::electrical_components::ElectricalComponentStateCode;
 
     fn states(resp: &ReceiveElectricalComponentTelemetryStreamResponse) -> Vec<i32> {
         resp.telemetry

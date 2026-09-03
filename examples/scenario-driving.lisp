@@ -87,7 +87,7 @@
 ;; lands as a journal event so the Report panel's event log shows
 ;; what happened when.
 ;;
-;; Replace the id list with your actual battery ids — `swctl tree`
+;; Replace the id list with your actual battery ids — `macroctl tree`
 ;; or the topology JSON (/api/topology) is the easiest way to look
 ;; them up.
 (random-outage '(1000)

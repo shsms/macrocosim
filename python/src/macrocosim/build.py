@@ -1,4 +1,4 @@
-"""Pythonic topology builder that emits switchyard's ``(make-*)`` Lisp.
+"""Pythonic topology builder that emits macrocosim's ``(make-*)`` Lisp.
 
 The spec *is* the graph: nest children with ``successors=[…]``, exactly as
 ``(make-grid-connection-point … :successors (list (make-meter …)))`` in a
@@ -8,8 +8,8 @@ hand-written config. Each constructor returns a :class:`Component` node;
 Values are strongly typed — physical quantities are
 `frequenz-quantities <https://pypi.org/project/frequenz-quantities/>`_
 (``Power``, ``Energy``, ``Percentage``, …), times are :mod:`datetime`, and
-runtime knobs are the :mod:`switchyard.enums` enums. :func:`to_lisp_atom`
-converts any of these to the Lisp-supported literal switchyard reads;
+runtime knobs are the :mod:`macrocosim.enums` enums. :func:`to_lisp_atom`
+converts any of these to the Lisp-supported literal macrocosim reads;
 :func:`raw` is the one escape hatch for splicing a literal form.
 """
 
@@ -80,7 +80,7 @@ def _lisp_string(value: str) -> str:
 
 
 def to_lisp_atom(value: Value) -> str:
-    """Render a typed Python value as the Lisp literal switchyard reads.
+    """Render a typed Python value as the Lisp literal macrocosim reads.
 
     Physical quantities collapse to their SI base unit (``Power`` → watts,
     ``Energy`` → watt-hours, ``Percentage`` → percent, ``Frequency`` → hertz),
@@ -125,7 +125,7 @@ def _normalize(kwargs: Mapping[str, Value | None]) -> dict[str, Value]:
 class Component:
     """One node in the topology tree — a ``(make-*)`` form and its children.
 
-    Before launch it is the spec; after ``switchyard.aio.launch`` binds
+    Before launch it is the spec; after ``macrocosim.aio.launch`` binds
     the topology, the same object is the *live handle*: its typed signal
     properties (``health`` here; ``power`` / ``soc`` / ... on the
     category subclasses) read, assert, and drive the running component.
@@ -149,7 +149,7 @@ class Component:
         body = (" " + " ".join(parts)) if parts else ""
         return f"({self.make}{body})"
 
-    # --- live-handle plumbing (bound by switchyard.aio.launch) ------------
+    # --- live-handle plumbing (bound by macrocosim.aio.launch) ------------
 
     @property
     def component_id(self) -> int:
@@ -181,7 +181,7 @@ class Component:
         if self._site is None:
             raise RuntimeError(
                 f"{self.make} id={self.args.get('id')} is not bound to a "
-                "running site — launch its topology with switchyard.aio.launch"
+                "running site — launch its topology with macrocosim.aio.launch"
             )
         return self._site
 
