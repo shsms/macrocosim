@@ -75,6 +75,11 @@ jobs:
       - name: weather-panel tests
         run: node tools/weather-panel-test.mjs
 
+      # Where an unplaced floating card cascades to: the first free
+      # slot, read from the open cards' positions.
+      - name: panel-geometry tests
+        run: node tools/panel-geometry-test.mjs
+
       # The dock strips' pure model: how tiles share a strip, what
       # order survives a tile leaving, and the size clamp.
       - name: panel-dock tests

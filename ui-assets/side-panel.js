@@ -14,6 +14,7 @@
 // panel; each tenant supplies its own teardown since only it knows
 // what live resources (charts, timers) it owns.
 
+import { cascadeColumn, cascadeSlot } from "./panel-geometry.js";
 import { makeSplitter } from "./splitter.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
@@ -42,6 +43,8 @@ const SIZE_KEY_PREFIX = "mc-panel-size-";
 // grab strip.
 const CASCADE_BASE = 40;
 const CASCADE_STEP = 32;
+// A card nudged less than this off the column's x still sits in it.
+const CASCADE_DRIFT = 16;
 // A capped panel must stay tall enough to grab and re-open: the drag
 // strip plus a row of content.
 const MIN_HEIGHT = 60;
@@ -609,7 +612,7 @@ function sanitizePanel(p, name, persist = true) {
 // already open — top-right by default, or in a row along the dock's
 // bottom edge for the panels PANEL_DEFAULTS puts there — then the
 // same sanitize every open card gets.
-function placePanel(p, name, order) {
+function placePanel(p, name) {
   if (p.cascade) {
     const bottomLeft = PANEL_DEFAULTS[name]?.spawn === "bottom-left";
     const spot = bottomLeft ? bottomLeftSpawn(p.el, name) : null;
@@ -620,12 +623,23 @@ function placePanel(p, name, order) {
     // asks again, against whatever is open then.
     p.pos = spot
       ? { ...spot, bottom: true }
-      : { dx: 0, dy: CASCADE_BASE + CASCADE_STEP * order, bottom: false };
+      : {
+          dx: 0,
+          dy: cascadeSlot(cascadeColumn(openCards(name), CASCADE_DRIFT), CASCADE_BASE, CASCADE_STEP),
+          bottom: false,
+        };
     // The offset is saved with the edge it was measured against, so
     // the class has to follow it here and on the next ensurePanel.
     p.el.classList.toggle("anchor-bottom", p.pos.bottom);
   }
   sanitizePanel(p, name);
+}
+
+// The records of every other open card, for cascadeColumn. Read from
+// the cards that are open, not from how many are: a closed card frees
+// its slot while the ones still open keep theirs.
+function openCards(name) {
+  return openStack.filter((other) => other !== name).map((other) => panels.get(other));
 }
 
 // The offset that puts a bottom-anchored card CORNER_INSET up from the
@@ -719,7 +733,7 @@ function floatPanel(name) {
   // A card auto-docked from storage has never been placed as a float,
   // so it takes the usual cascade rather than the dock's bare corner.
   if (!openStack.includes(name)) return;
-  if (p.cascade) placePanel(p, name, openStack.length - 1);
+  if (p.cascade) placePanel(p, name);
   else sanitizePanel(p, name);
 }
 
@@ -1011,7 +1025,6 @@ export function openPanel(name, render, teardown = null) {
   p.teardown?.();
   p.teardown = teardown;
   const opening = !openStack.includes(name);
-  const order = openStack.length;
   if (opening) openStack.push(name);
   p.el.classList.add("open");
   // A re-render keeps where the panel already is; only a fresh open
@@ -1022,7 +1035,7 @@ export function openPanel(name, render, teardown = null) {
     const stored = loadDock(name);
     if (p.dock) layoutStrip(p.dock);
     else if (stored) dockPanel(name, stored.mode);
-    else placePanel(p, name, order);
+    else placePanel(p, name);
   }
   syncButton(name, true);
   render(p.contentEl);

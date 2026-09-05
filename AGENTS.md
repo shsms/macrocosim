@@ -72,7 +72,9 @@ is wiring the topology + animating the environment.
   `mc-strip-<edge>`);
   `splitter.js` the drag-to-resize
   handshake the dock strips use; `strip-model.js` their DOM-free
-  arithmetic (shares, order, size clamp); `vendor/fonts/` the
+  arithmetic (shares, order, size clamp); `panel-geometry.js` the
+  floating cards' DOM-free placement arithmetic (cascade slot pick);
+  `vendor/fonts/` the
   vendored IBM Plex faces (OFL))
   - Reactive power reads at parity with active power across the SPA:
     the hover card draws a Q envelope bar under the P one (same
@@ -268,7 +270,7 @@ cargo run --bin macroctl -- set-power 1001 5000
 `ui-assets/` changes: `npx @biomejs/biome check ui-assets` (config in
 `biome.json`) — `npx biome` alone resolves to an unrelated no-op
 package on the npm registry, not this project's linter, so always
-spell out `@biomejs/biome`. Plus five node-only gates that need
+spell out `@biomejs/biome`. Plus six node-only gates that need
 neither a browser nor a running server:
 
 ```sh
@@ -279,6 +281,7 @@ node tools/formula-ast-test.mjs  # formula-ast.js parser + renderer
 node tools/metrics-store-test.mjs  # metrics-store.js ring/PF/format
 node tools/weather-panel-test.mjs  # weather-panel.js cloud list vs curve
 node tools/panel-dock-test.mjs   # strip-model.js tile shares/order/size
+node tools/panel-geometry-test.mjs  # panel-geometry.js cascade slot pick
 ```
 
 UI input convention: a numeric field that commits on Enter (inspector
