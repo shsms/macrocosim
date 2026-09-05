@@ -40,6 +40,9 @@
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
     sans-serif;
+  /* A capped floating card stays at least this tall: the drag strip
+     plus a row of content. side-panel.js reads it for its cap floor. */
+  --panel-min-height: 60px;
 
   /* Per-category palette — the pill nodes' category bar reads these
      (pill.js via topology.js), and the legend / sidebar use them too,
@@ -969,7 +972,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
      side-panel.js's applyCap(), which has to shave the same 40px off
      its inline max-height or the inline value would win and undo it. */
   max-height: calc(100% - 40px);
-  min-height: 60px;
+  min-height: var(--panel-min-height);
   resize: vertical;
   /* border-box so the bound above and the height the user resizes to
      are the card's real height — a content-box card overshoots the

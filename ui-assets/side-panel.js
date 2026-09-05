@@ -15,6 +15,7 @@
 // what live resources (charts, timers) it owns.
 
 import { cascadeColumn, cascadeSlot } from "./panel-geometry.js";
+import { cssToken } from "./pill.js";
 import { makeSplitter } from "./splitter.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
@@ -52,8 +53,11 @@ const CASCADE_STEP = 32;
 // A card nudged less than this off the column's x still sits in it.
 const CASCADE_DRIFT = 16;
 // A capped panel must stay tall enough to grab and re-open: the drag
-// strip plus a row of content.
-const MIN_HEIGHT = 60;
+// strip plus a row of content. The stylesheet owns the number
+// (--panel-min-height, the .float-panel min-height); this reads it
+// once at load. The literal only serves a run with nothing to read
+// (the boot smoke's DOM shim, a stylesheet without the token).
+const MIN_HEIGHT = Number.parseFloat(cssToken("--panel-min-height")) || 60;
 // Of a clamped panel, how much must stay on screen: enough of the
 // card's width to grab horizontally, and its strip vertically.
 const KEEP_X = 80;
