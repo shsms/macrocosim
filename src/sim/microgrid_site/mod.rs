@@ -134,6 +134,9 @@ struct MicrogridSiteInner {
     /// Config-level operational mode per component (declared
     /// capability). Not a runtime knob: the runtime fault modes
     /// depend on it, never the other way around.
+    ///
+    /// Lock order: `set_operational_mode` takes `runtime` then this
+    /// one; nothing may take `runtime` while holding this.
     operational_modes: RwLock<HashMap<u64, OperationalMode>>,
     /// User-facing name overrides set via `(rename-component …)`.
     /// Reads go through `display_name`; the component's intrinsic
@@ -1072,6 +1075,14 @@ impl MicrogridSite {
     // `set-component-*` Lisp defuns or gRPC. `runtime_of` returns
     // the current snapshot; the per-setter methods mutate in place.
 
+    /// Errors unless `id` names a currently registered component.
+    fn require_registered(&self, id: u64) -> Result<(), String> {
+        if self.get(id).is_none() {
+            return Err(format!("component {id} not found"));
+        }
+        Ok(())
+    }
+
     pub fn runtime_of(&self, id: u64) -> ComponentRuntime {
         self.inner
             .runtime
@@ -1081,9 +1092,10 @@ impl MicrogridSite {
             .unwrap_or_default()
     }
 
-    /// Set a component's health, coupling its command mode along: an
-    /// errored device is also unreachable for commands, and clearing
-    /// the error restores normal handling.
+    /// Set a component's health; errors unless the id is registered.
+    /// Couples the command mode along: an errored device is also
+    /// unreachable for commands, and clearing the error restores
+    /// normal handling.
     ///
     /// NOTE the two axes are deliberately NOT orthogonal across an
     /// Error→Ok cycle: `set_health(Ok)` forces `command = Normal`,
@@ -1093,10 +1105,13 @@ impl MicrogridSite {
     /// script that wants a command fault to survive a health cycle
     /// must re-apply it after the recovery. (`Standby` leaves the
     /// command mode alone in both directions.)
-    pub fn set_health(&self, id: u64, health: Health) {
+    pub fn set_health(&self, id: u64, health: Health) -> Result<(), String> {
+        self.require_registered(id)?;
         let mode = self.operational_mode(id);
         let mut runtime = self.inner.runtime.write();
-        let entry = runtime.entry(id).or_default();
+        let entry = runtime
+            .get_mut(&id)
+            .ok_or_else(|| format!("component {id} not found"))?;
         entry.health = health;
         match health {
             Health::Error => entry.command = CommandMode::Error,
@@ -1112,13 +1127,16 @@ impl MicrogridSite {
             }
             Health::Standby => {}
         }
+        Ok(())
     }
 
-    /// Set a component's runtime telemetry mode. Rejected when the
-    /// component's operational mode does not stream telemetry — the
-    /// runtime knobs depend on the declared capability, so an
-    /// inactive component can never be poked back to `normal`.
+    /// Set a component's runtime telemetry mode; errors unless the id
+    /// is registered. Also rejected when the component's operational
+    /// mode does not stream telemetry — the runtime knobs depend on
+    /// the declared capability, so an inactive component can never be
+    /// poked back to `normal`.
     pub fn set_telemetry_mode(&self, id: u64, mode: TelemetryMode) -> Result<(), String> {
+        self.require_registered(id)?;
         if mode == TelemetryMode::Normal && !self.operational_mode(id).provides_telemetry() {
             return Err(format!(
                 "component {id} has operational mode {}, which streams no \
@@ -1126,17 +1144,23 @@ impl MicrogridSite {
                 self.operational_mode(id)
             ));
         }
-        self.inner.runtime.write().entry(id).or_default().telemetry = mode;
+        let mut runtime = self.inner.runtime.write();
+        runtime
+            .get_mut(&id)
+            .ok_or_else(|| format!("component {id} not found"))?
+            .telemetry = mode;
         Ok(())
     }
 
-    /// Set a component's runtime command mode. Rejected when the
-    /// component's operational mode does not accept control — same
-    /// rule as [`Self::set_telemetry_mode`] — and when the component's
-    /// health is `Error`: an errored device never accepts commands
+    /// Set a component's runtime command mode; errors unless the id
+    /// is registered. Also rejected when the component's operational
+    /// mode does not accept control — same rule as
+    /// [`Self::set_telemetry_mode`] — and when the component's health
+    /// is `Error`: an errored device never accepts commands
     /// (`set_health` forces the channel shut; only recovery via
     /// `set_health(Ok)` re-opens it).
     pub fn set_command_mode(&self, id: u64, mode: CommandMode) -> Result<(), String> {
+        self.require_registered(id)?;
         if mode == CommandMode::Normal && !self.operational_mode(id).accepts_control() {
             return Err(format!(
                 "component {id} has operational mode {}, which accepts no \
@@ -1144,10 +1168,18 @@ impl MicrogridSite {
                 self.operational_mode(id)
             ));
         }
-        // Checked under the same write lock as the store, so a racing
-        // set_health cannot slip between the check and the write.
+        // The health check below runs under the same write lock as
+        // the store, so a racing set_health cannot slip between the
+        // check and the write. The registration check above is a
+        // separate read, but the write itself fails on a missing row
+        // rather than creating one — registration is what puts the
+        // row there — so a removal racing that check errors out here
+        // instead of leaving a runtime row behind for a component
+        // that no longer exists.
         let mut runtime = self.inner.runtime.write();
-        let entry = runtime.entry(id).or_default();
+        let entry = runtime
+            .get_mut(&id)
+            .ok_or_else(|| format!("component {id} not found"))?;
         if mode == CommandMode::Normal && entry.health == Health::Error {
             return Err(format!(
                 "component {id} has health error, which keeps the command \
@@ -1187,13 +1219,25 @@ impl MicrogridSite {
     /// deliberately clobbers independently-set fault knobs on the
     /// affected axes.
     pub fn set_operational_mode(&self, id: u64, mode: OperationalMode) -> Result<(), String> {
-        if self.get(id).is_none() {
-            return Err(format!("component {id} not found"));
-        }
-        self.inner.operational_modes.write().insert(id, mode);
+        self.require_registered(id)?;
         {
             let mut runtime = self.inner.runtime.write();
-            let entry = runtime.entry(id).or_default();
+            let entry = runtime
+                .get_mut(&id)
+                .ok_or_else(|| format!("component {id} not found"))?;
+            // The config write waits for that lookup to succeed, and
+            // happens under the runtime lock: registration is what
+            // creates the runtime row, so a `remove_component` racing
+            // the check above errors out here instead of leaving a
+            // ghost operational mode behind — one a component later
+            // allocated on this id would silently inherit — and
+            // without bumping the structural version for a component
+            // that is gone.
+            //
+            // This is the only place that holds both guards, runtime
+            // then operational_modes; nothing else may take runtime
+            // while holding operational_modes.
+            self.inner.operational_modes.write().insert(id, mode);
             entry.telemetry = if mode.provides_telemetry() {
                 TelemetryMode::Normal
             } else {
@@ -1519,17 +1563,37 @@ mod tests {
     #[test]
     fn set_health_couples_command_mode() {
         let w = MicrogridSite::new();
+        w.register(crate::sim::Meter::new(
+            5,
+            std::time::Duration::from_secs(1),
+            None,
+            None,
+            0.0,
+            false,
+        ));
         // Erroring a component makes it unreachable for commands too.
-        w.set_health(5, Health::Error);
+        w.set_health(5, Health::Error).unwrap();
         assert_eq!(w.runtime_of(5).health, Health::Error);
         assert_eq!(w.runtime_of(5).command, CommandMode::Error);
         // Clearing the error restores normal command handling.
-        w.set_health(5, Health::Ok);
+        w.set_health(5, Health::Ok).unwrap();
         assert_eq!(w.runtime_of(5).command, CommandMode::Normal);
         // Standby refuses via the health check but leaves command mode alone.
         w.set_command_mode(5, CommandMode::Timeout).unwrap();
-        w.set_health(5, Health::Standby);
+        w.set_health(5, Health::Standby).unwrap();
         assert_eq!(w.runtime_of(5).command, CommandMode::Timeout);
+    }
+
+    /// The runtime knobs belong to registered components: poking an
+    /// unknown id is an error, not a ghost entry a later component on
+    /// that id would inherit.
+    #[test]
+    fn runtime_knob_setters_reject_unregistered_ids() {
+        let w = MicrogridSite::new();
+        assert!(w.set_health(99, Health::Error).is_err());
+        assert!(w.set_telemetry_mode(99, TelemetryMode::Normal).is_err());
+        assert!(w.set_command_mode(99, CommandMode::Normal).is_err());
+        assert!(!w.inner.runtime.read().contains_key(&99), "no ghost entry");
     }
 
     /// Setting the operational mode (config) derives the runtime
@@ -1607,19 +1671,19 @@ mod tests {
         // normal (the mode accepts control) …
         w.set_operational_mode(5, OperationalMode::ControlOnly)
             .unwrap();
-        w.set_health(5, Health::Error);
-        w.set_health(5, Health::Ok);
+        w.set_health(5, Health::Error).unwrap();
+        w.set_health(5, Health::Ok).unwrap();
         assert_eq!(w.runtime_of(5).command, CommandMode::Normal);
 
         // … but an inactive mode wins over recovery.
         w.set_operational_mode(5, OperationalMode::Inactive)
             .unwrap();
-        w.set_health(5, Health::Error);
-        w.set_health(5, Health::Ok);
+        w.set_health(5, Health::Error).unwrap();
+        w.set_health(5, Health::Ok).unwrap();
         assert_eq!(w.runtime_of(5).command, CommandMode::Error);
 
         // And a mode change never re-enables an errored device.
-        w.set_health(5, Health::Error);
+        w.set_health(5, Health::Error).unwrap();
         w.set_operational_mode(5, OperationalMode::ControlAndTelemetry)
             .unwrap();
         assert_eq!(w.runtime_of(5).command, CommandMode::Error);
@@ -2017,13 +2081,13 @@ mod tests {
     fn command_normal_is_rejected_while_health_is_error() {
         let w = MicrogridSite::new();
         w.register(Stub::new(1));
-        w.set_health(1, Health::Error);
+        w.set_health(1, Health::Error).unwrap();
         assert!(w.set_command_mode(1, CommandMode::Normal).is_err());
         assert_eq!(w.runtime_of(1).command, CommandMode::Error);
         // Non-normal modes stay settable (e.g. scripted Timeout).
         assert!(w.set_command_mode(1, CommandMode::Timeout).is_ok());
         // Recovery re-opens the channel.
-        w.set_health(1, Health::Ok);
+        w.set_health(1, Health::Ok).unwrap();
         assert!(w.set_command_mode(1, CommandMode::Normal).is_ok());
     }
 

@@ -743,7 +743,7 @@ mod tests {
         // Healthy children: commanded value is delivered + published.
         assert!((inv.aggregate_power_w(&w) - 3000.0).abs() < 1.0);
 
-        w.set_health(bat_id, Health::Error);
+        w.set_health(bat_id, Health::Error).unwrap();
         inv.tick(&w, Utc::now(), Duration::from_millis(100));
         assert!(
             inv.aggregate_power_w(&w).abs() < 1.0,
@@ -759,7 +759,7 @@ mod tests {
 
         // Recovery: bring the battery back, the inverter resumes
         // delivering on the next tick (ramp.actual stayed at 3000).
-        w.set_health(bat_id, Health::Ok);
+        w.set_health(bat_id, Health::Ok).unwrap();
         inv.tick(&w, Utc::now(), Duration::from_millis(100));
         assert!((inv.aggregate_power_w(&w) - 3000.0).abs() < 1.0);
     }
@@ -802,7 +802,7 @@ mod tests {
         // With the battery down only the meter is left — no DC sink,
         // so the inverter publishes zero on BOTH axes, same as
         // having no children at all.
-        w.set_health(bat_id, Health::Error);
+        w.set_health(bat_id, Health::Error).unwrap();
         inv.tick(&w, Utc::now(), Duration::from_millis(100));
         assert!(inv.aggregate_power_w(&w).abs() < 1.0);
         assert!(inv.aggregate_reactive_var(&w).abs() < 1.0);
@@ -823,7 +823,7 @@ mod tests {
         assert!((inv.aggregate_power_w(&w) - 3000.0).abs() < 1.0);
 
         // Fault the inverter itself → no production or consumption.
-        w.set_health(inv_id, Health::Error);
+        w.set_health(inv_id, Health::Error).unwrap();
         inv.tick(&w, Utc::now(), dt);
         assert!(
             inv.aggregate_power_w(&w).abs() < 1.0,
@@ -833,7 +833,7 @@ mod tests {
 
         // Recovery alone does not resume delivery — the setpoint was
         // cleared on the trip, so it stays at zero awaiting re-dispatch.
-        w.set_health(inv_id, Health::Ok);
+        w.set_health(inv_id, Health::Ok).unwrap();
         inv.tick(&w, Utc::now(), dt);
         assert!(
             inv.aggregate_power_w(&w).abs() < 1.0,

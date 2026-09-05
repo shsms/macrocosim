@@ -13,20 +13,16 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 
     // All four setters below reject an unregistered id, matching
     // their siblings (set-meter-power, set-active-power, ...). The
-    // site-level setters are permissive (entry().or_default()), so
-    // without this check a typo'd id in a scenario silently
-    // "succeeds" while the journal reports the fault as applied.
+    // site-level setters do that rejection; each defun only prefixes
+    // its own name onto their message.
     let r = router.clone();
     ctx.defun(
         "set-component-health",
         move |id: i64, h: Health| -> Result<bool, tulisp::Error> {
             let w = r.site();
-            if w.get(id as u64).is_none() {
-                return Err(tulisp::Error::invalid_argument(format!(
-                    "set-component-health: no component with id {id}"
-                )));
-            }
-            w.set_health(id as u64, h);
+            w.set_health(id as u64, h).map_err(|e| {
+                tulisp::Error::invalid_argument(format!("set-component-health: {e}"))
+            })?;
             Ok(true)
         },
     );
@@ -36,13 +32,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         "set-component-telemetry-mode",
         move |id: i64, m: TelemetryMode| -> Result<bool, tulisp::Error> {
             let w = r.site();
-            if w.get(id as u64).is_none() {
-                return Err(tulisp::Error::invalid_argument(format!(
-                    "set-component-telemetry-mode: no component with id {id}"
-                )));
-            }
-            w.set_telemetry_mode(id as u64, m)
-                .map_err(tulisp::Error::invalid_argument)?;
+            w.set_telemetry_mode(id as u64, m).map_err(|e| {
+                tulisp::Error::invalid_argument(format!("set-component-telemetry-mode: {e}"))
+            })?;
             Ok(true)
         },
     );
@@ -52,13 +44,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         "set-component-command-mode",
         move |id: i64, m: CommandMode| -> Result<bool, tulisp::Error> {
             let w = r.site();
-            if w.get(id as u64).is_none() {
-                return Err(tulisp::Error::invalid_argument(format!(
-                    "set-component-command-mode: no component with id {id}"
-                )));
-            }
-            w.set_command_mode(id as u64, m)
-                .map_err(tulisp::Error::invalid_argument)?;
+            w.set_command_mode(id as u64, m).map_err(|e| {
+                tulisp::Error::invalid_argument(format!("set-component-command-mode: {e}"))
+            })?;
             Ok(true)
         },
     );

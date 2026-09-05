@@ -159,7 +159,8 @@ fn apply_status(site: &MicrogridSite, id: u64, req: &StatusRequest) -> ControlRe
     // The window is a few instructions wide; closing it needs an
     // atomic multi-knob setter on the site (tracked in todo.org).
     if let Some(h) = health {
-        site.set_health(id, h);
+        site.set_health(id, h)
+            .map_err(|e| reject(StatusCode::BAD_REQUEST, e))?;
     }
     if let Some(m) = command {
         site.set_command_mode(id, m)

@@ -983,7 +983,7 @@ fn apply_initial_modes(
     command: Option<CommandMode>,
 ) -> Result<(), Error> {
     if let Some(h) = health {
-        site.set_health(id, h);
+        site.set_health(id, h).map_err(Error::invalid_argument)?;
     }
     // The checked setters reject a knob the component's operational
     // mode forbids (e.g. `:telemetry-mode 'normal` on an inactive

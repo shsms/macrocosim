@@ -453,11 +453,11 @@ mod tests {
         w.tick_once(t(0), Duration::from_secs(0)); // seed
         w.tick_once(t(3600), Duration::from_secs(3600)); // +3600 Wh
         // Fault the component: the next span must not be integrated.
-        w.set_health(4, Health::Error);
+        w.set_health(4, Health::Error).unwrap();
         w.tick_once(t(7200), Duration::from_secs(3600)); // cursor dropped
         // Recover: the first healthy tick re-seeds, so nothing accrued
         // across the faulted window.
-        w.set_health(4, Health::Ok);
+        w.set_health(4, Health::Ok).unwrap();
         w.tick_once(t(10800), Duration::from_secs(3600)); // re-seed
         w.tick_once(t(14400), Duration::from_secs(3600)); // +3600 Wh
         let wh = w.component_energy_wh(4).unwrap();

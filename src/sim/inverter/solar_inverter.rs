@@ -865,7 +865,7 @@ mod tests {
         assert!((inv.aggregate_power_w(&w) - (-10_000.0)).abs() < 1.0);
 
         // Errored: tripped offline, zero output — NOT sunlight production.
-        w.set_health(1, Health::Error);
+        w.set_health(1, Health::Error).unwrap();
         inv.tick(&w, Utc::now(), dt);
         assert!(
             inv.aggregate_power_w(&w).abs() < 1.0,
@@ -874,7 +874,7 @@ mod tests {
         );
 
         // Recovery: a PV inverter reconnects and resumes from sunlight.
-        w.set_health(1, Health::Ok);
+        w.set_health(1, Health::Ok).unwrap();
         inv.tick(&w, Utc::now(), dt);
         assert!((inv.aggregate_power_w(&w) - (-10_000.0)).abs() < 1.0);
     }
@@ -910,7 +910,7 @@ mod tests {
         assert!((inv.aggregate_reactive_var(&w) - 2_000.0).abs() < 1.0);
 
         // Trip: both axes read zero.
-        w.set_health(1, Health::Error);
+        w.set_health(1, Health::Error).unwrap();
         inv.tick(&w, Utc::now(), dt);
         assert!(inv.aggregate_power_w(&w).abs() < 1.0, "P snaps to 0");
         assert!(
@@ -921,7 +921,7 @@ mod tests {
 
         // Recovery: P resumes at the ARMED curtailment, not full sun;
         // Q stays parked until something dispatches it again.
-        w.set_health(1, Health::Ok);
+        w.set_health(1, Health::Ok).unwrap();
         inv.tick(&w, Utc::now(), dt);
         assert!(
             (inv.aggregate_power_w(&w) - (-4_000.0)).abs() < 1.0,

@@ -554,7 +554,7 @@ mod tests {
             ev.aggregate_power_w(&w),
         );
 
-        w.set_health(7, Health::Error);
+        w.set_health(7, Health::Error).unwrap();
         tick_n(&w, &ev, 1);
         assert_eq!(
             ev.aggregate_power_w(&w),
@@ -562,7 +562,7 @@ mod tests {
             "a faulted charger draws nothing",
         );
 
-        w.set_health(7, Health::Ok);
+        w.set_health(7, Health::Ok).unwrap();
         tick_n(&w, &ev, 5);
         assert_eq!(
             ev.aggregate_power_w(&w),
@@ -592,11 +592,11 @@ mod tests {
         tick_n(&w, &ev, 2);
         assert!((ev.aggregate_power_w(&w) - 10_000.0).abs() < 1.0);
 
-        w.set_health(7, Health::Standby);
+        w.set_health(7, Health::Standby).unwrap();
         tick_n(&w, &ev, 1);
         assert_eq!(ev.aggregate_power_w(&w), 0.0, "standby is offline too");
 
-        w.set_health(7, Health::Ok);
+        w.set_health(7, Health::Ok).unwrap();
         tick_n(&w, &ev, 5);
         assert_eq!(
             ev.aggregate_power_w(&w),
@@ -621,13 +621,13 @@ mod tests {
         tick_n(&w, &ev, 2);
         assert!((ev.aggregate_power_w(&w) - 10_000.0).abs() < 1.0);
 
-        w.set_health(7, Health::Error);
+        w.set_health(7, Health::Error).unwrap();
         tick_n(&w, &ev, 1);
         assert_eq!(ev.aggregate_power_w(&w), 0.0);
         tick_n(&w, &ev, 3);
         assert_eq!(ev.aggregate_power_w(&w), 0.0, "stays off while faulted",);
 
-        w.set_health(7, Health::Ok);
+        w.set_health(7, Health::Ok).unwrap();
         tick_n(&w, &ev, 5);
         assert!(
             (ev.aggregate_power_w(&w) - 10_000.0).abs() < 1.0,
