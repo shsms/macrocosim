@@ -80,7 +80,58 @@ struct BoilerState {
 }
 
 impl SteamBoiler {
+    /// Bring a config into the range `tick` can run on: a pressure
+    /// window of positive normal numbers with max at or above target,
+    /// a finite initial pressure, and positive normal constants for
+    /// the two factors tick divides and multiplies by. The Lisp door
+    /// rejects most of these configs with an error; a direct caller
+    /// gets a running boiler and a warning per correction instead.
+    fn guard(mut cfg: SteamBoilerConfig, id: u64) -> SteamBoilerConfig {
+        if !cfg.target_bar.is_finite() || cfg.target_bar < f32::MIN_POSITIVE {
+            let fallback = SteamBoilerConfig::default().target_bar;
+            log::warn!(
+                "steam-boiler {id}: target_bar {} is not a positive normal number; using {fallback}",
+                cfg.target_bar
+            );
+            cfg.target_bar = fallback;
+        }
+        if !cfg.max_bar.is_finite() || cfg.max_bar < cfg.target_bar {
+            log::warn!(
+                "steam-boiler {id}: max_bar {} is not a finite value at or above target_bar {}; using target_bar",
+                cfg.max_bar,
+                cfg.target_bar
+            );
+            cfg.max_bar = cfg.target_bar;
+        }
+        if let Some(bar) = cfg.initial_bar
+            && !bar.is_finite()
+        {
+            log::warn!(
+                "steam-boiler {id}: initial_bar {bar} is not finite; starting at target_bar"
+            );
+            cfg.initial_bar = None;
+        }
+        let defaults = SteamBoilerConfig::default();
+        for (name, value, fallback) in [
+            (
+                "capacity_wh_per_bar",
+                &mut cfg.capacity_wh_per_bar,
+                defaults.capacity_wh_per_bar,
+            ),
+            ("wh_per_kg", &mut cfg.wh_per_kg, defaults.wh_per_kg),
+        ] {
+            if !value.is_finite() || *value < f32::MIN_POSITIVE {
+                log::warn!(
+                    "steam-boiler {id}: {name} {value} is not a positive normal number; using {fallback}"
+                );
+                *value = fallback;
+            }
+        }
+        cfg
+    }
+
     pub fn new(id: u64, interval: Duration, cfg: SteamBoilerConfig) -> Self {
+        let cfg = Self::guard(cfg, id);
         let init_bar = cfg
             .initial_bar
             .unwrap_or(cfg.target_bar)
@@ -530,6 +581,116 @@ mod tests {
         b.tick(&w, Utc::now(), dt());
         assert_eq!(b.aggregate_power_w(&w), 0.0, "negative demand is 0");
         assert_eq!(b.telemetry(&w).pressure_bar, Some(8.0));
+
+        // Same outcome for a non-finite reading. Infinity is the case
+        // that tells: without the sanitize it would pass f32::min and
+        // pin the need at the rated ceiling.
+        for raw in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let b = boiler(SteamBoilerConfig::default());
+            b.set_steam_demand_kg_h(raw);
+            b.set_active_setpoint(10_000.0).unwrap();
+            b.tick(&w, Utc::now(), dt());
+            assert_eq!(b.aggregate_power_w(&w), 0.0, "{raw} demand is 0");
+            assert_eq!(b.telemetry(&w).pressure_bar, Some(8.0), "{raw}");
+        }
+    }
+
+    /// A max_bar below target_bar is lifted to target_bar, so tick's
+    /// pressure clamp has a valid range.
+    #[test]
+    fn new_guards_max_bar_below_target() {
+        let w = crate::sim::MicrogridSite::new();
+        let b = boiler(SteamBoilerConfig {
+            target_bar: 8.0,
+            max_bar: 4.0,
+            ..Default::default()
+        });
+        assert_eq!(b.cfg.max_bar, 8.0);
+        // A few ticks must not panic.
+        let now = Utc::now();
+        for i in 0..5 {
+            b.tick(
+                &w,
+                now + chrono::Duration::seconds(i),
+                Duration::from_secs(1),
+            );
+        }
+        assert_eq!(b.telemetry(&w).pressure_bar, Some(8.0));
+    }
+
+    /// A max_bar that is not a finite value at or above target_bar —
+    /// NaN, infinite, zero, or subnormal — falls back to target_bar.
+    #[test]
+    fn new_guards_non_finite_and_subnormal_max_bar() {
+        for max in [f32::NAN, f32::INFINITY, 0.0, 1e-40] {
+            let b = boiler(SteamBoilerConfig {
+                target_bar: 6.0,
+                max_bar: max,
+                ..Default::default()
+            });
+            assert_eq!(b.cfg.max_bar, 6.0, "max_bar {max}");
+        }
+    }
+
+    /// A NaN initial_bar survives every later clamp and pins the
+    /// electric need at the rated ceiling; an infinite one is no start
+    /// pressure at all. Both start at target instead.
+    #[test]
+    fn new_guards_non_finite_initial_bar() {
+        let w = crate::sim::MicrogridSite::new();
+        for bar in [f32::NAN, f32::INFINITY] {
+            let b = boiler(SteamBoilerConfig {
+                initial_bar: Some(bar),
+                ..Default::default()
+            });
+            b.tick(&w, Utc::now(), dt());
+            assert_eq!(b.telemetry(&w).pressure_bar, Some(8.0), "initial_bar {bar}");
+            assert_eq!(b.aggregate_power_w(&w), 0.0, "initial_bar {bar}");
+        }
+    }
+
+    /// The two constants tick divides and multiplies by must be positive
+    /// normal numbers: zero or NaN makes the integrator NaN, infinity
+    /// turns a zero demand into NaN, a negative value inverts the
+    /// integrator, a subnormal one overflows it.
+    #[test]
+    fn new_guards_capacity_and_wh_per_kg() {
+        let defaults = SteamBoilerConfig::default();
+        for v in [f32::NAN, f32::INFINITY, 0.0, -1.0, 1e-40] {
+            let b = boiler(SteamBoilerConfig {
+                capacity_wh_per_bar: v,
+                wh_per_kg: v,
+                ..Default::default()
+            });
+            assert_eq!(
+                b.cfg.capacity_wh_per_bar, defaults.capacity_wh_per_bar,
+                "{v}"
+            );
+            assert_eq!(b.cfg.wh_per_kg, defaults.wh_per_kg, "{v}");
+        }
+    }
+
+    /// A target_bar that is not a positive normal number falls back to
+    /// the default target; a max_bar below that is then lifted to it.
+    #[test]
+    fn new_guards_bad_target_bar() {
+        for target in [f32::NAN, -1.0, 0.0, 1e-40] {
+            let b = boiler(SteamBoilerConfig {
+                target_bar: target,
+                max_bar: 5.0,
+                ..Default::default()
+            });
+            assert_eq!(
+                b.cfg.target_bar,
+                SteamBoilerConfig::default().target_bar,
+                "target {target}"
+            );
+            assert_eq!(
+                b.cfg.max_bar,
+                SteamBoilerConfig::default().target_bar,
+                "target {target}"
+            );
+        }
     }
 
     /// set_pressure_bar sanitizes: non-finite rejected, values
