@@ -1882,8 +1882,9 @@ event, which the knob ignores. Decide the intended UX (should blur/
 change also commit?) and align either the knob or the smoke; the
 suite has carried this one FAIL since 2026-08-27.
 
-** TODO Floating panels: reopen inside the resize debounce ratchets the stored size cap :ux:
+** DONE Floating panels: reopen inside the resize debounce ratchets the stored size cap :ux:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-05 Sa 20:31]
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
@@ -1892,8 +1893,14 @@ conversion window can overwrite the stored height cap
 (mc-panel-size-<name>) with the transient value. From the
 2026-08-27 metrics-panel review; low frequency, real ratchet.
 
-** TODO Floating panels: fitted position doesn't spring back when the window re-widens :ux:
+Done 2026-09-05: the gripper settle hangs off the panel record and
+closePanel/dockPanel commit it before hiding or re-parenting the card.
+Residual: a live drag racing a live window resize can still persist a
+cap the shrunk dock clamped.
+
+** DONE Floating panels: fitted position doesn't spring back when the window re-widens :ux:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-05 Sa 20:31]
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
@@ -1902,8 +1909,14 @@ persist=false, so storage keeps the user intent — but within the
 session, re-widening the window leaves the panel at the fitted
 position instead of restoring the stored one. Reload restores.
 
-** TODO Floating panels: cascade slot reuse can overlap two panels       :ux:
+Done 2026-09-05: the record keeps the placement (pos, persisted) apart
+from what is shown (shown); a refit only moves shown. No unit test —
+sanitizePanel has no seam; lifting a pure fitPlacement(pos, geometry)
+into panel-geometry.js would let the invariant get a node test.
+
+** DONE Floating panels: cascade slot reuse can overlap two panels       :ux:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-05 Sa 20:31]
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
@@ -1911,14 +1924,22 @@ The open-time cascade offsets (CASCADE_BASE/STEP) can hand two
 panels the same slot after closes/reopens, stacking them exactly on
 top of each other. Needs a smarter free-slot pick.
 
-** TODO Panel MIN_HEIGHT constant duplicated in JS and CSS       :ui:cleanup:
+Done 2026-09-05: cascadeSlot in panel-geometry.js picks the first slot
+no open floating top-anchored card sits within half a step of; node
+test in tools/panel-geometry-test.mjs.
+
+** DONE Panel MIN_HEIGHT constant duplicated in JS and CSS       :ui:cleanup:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-05 Sa 20:31]
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
 side-panel.js and style.css each carry the panel minimum height;
 they can drift. Single-source it (CSS custom property read from JS,
 or generated).
+
+Done 2026-09-05: --panel-min-height on :root; side-panel.js reads it
+once at load (literal 60 only for the DOM-shim fallback).
 
 ** TODO SPA structural cleanups: alive-token helpers, store-panel coupling, fmtValue dedup :ui:cleanup:
 :LOGBOOK:
@@ -1931,8 +1952,9 @@ helper; decouple metrics-store's reseed gating from side-panel's
 isPanelOpen; dedupe fmtValue vs formatScaled. Behavior-neutral
 batch, needs its own review pass.
 
-** TODO SteamBoiler::new accepts configs that panic in tick   :rust:fidelity:
+** DONE SteamBoiler::new accepts configs that panic in tick   :rust:fidelity:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-05 Sa 20:31]
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
@@ -1942,6 +1964,12 @@ The Lisp door validates max-bar >= target-bar > 0, but the pub
 tick loop. Guard in =new= (clamp or error) like EvCharger's
 =warn_if_overwide=. While there: the NaN-demand sanitize branch in
 =tick= has no test (only negative demand is covered).
+
+Done 2026-09-05: SteamBoiler::new now corrects the config with a
+warning (target must be a positive normal number, max lifted to
+target), so all three pressure clamps have a valid range; NaN demand
+is covered by a test. Left open: a non-finite :initial-bar starts the
+pressure at NaN (no panic) and is validated at neither door.
 
 ** TODO Runtime knob pokes don't round-trip into saved worlds :microgrid-files:design:
 :LOGBOOK:
