@@ -535,9 +535,12 @@ async function init() {
       clearTimeout(formulaRefreshTimer);
       formulaRefreshTimer = setTimeout(refreshFormula, 300);
     }
-    // The loopback supervisor debounces ~300ms and rebuilds the
-    // Microgrid handle; /api/microgrid/latest + /formulas return
-    // 503 mid-rebuild. Delay the metrics-panel re-fetch so it lands
+    // On a structural change the loopback supervisor debounces ~300ms
+    // and rebuilds the Microgrid handle; /api/microgrid/latest +
+    // /formulas return 503 mid-rebuild. (A runtime poke such as
+    // set-meter-power fires this event too but triggers no rebuild;
+    // the backfill below then just refetches an unchanged history.)
+    // Delay the metrics-panel re-fetch so it lands
     // after the supervisor settles. At most one backfill timer is
     // armed at a time (each backfill refetches the full 15-min
     // history for every stream); events landing while it's armed

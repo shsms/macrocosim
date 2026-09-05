@@ -6,8 +6,9 @@
 //!
 //! `spawn_microgrid_loopback` kicks the supervisor task; the
 //! supervisor watches `MicrogridSite` events and rebuilds the
-//! `Microgrid` handle every time the topology changes (which also
-//! resubscribes every forwarder against the new graph).
+//! `Microgrid` handle when the site's structure or run generation
+//! moved (see `SiteShape`), which also resubscribes every forwarder
+//! against the new graph.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -47,16 +48,6 @@ pub fn spawn_microgrid_loopback(grpc_url: String, slot: SharedMicrogrid, site: M
         // event here — otherwise the loopback would serve the
         // pre-change graph until the NEXT mutation, silently.
         let events = site.subscribe_events();
-        if build_microgrid(&grpc_url, &slot, &site).await {
-            log::info!("microgrid loopback: connected + graph built + forwarders running");
-        }
-        // Watch for topology mutations and rebuild on each. The
-        // graph crate's ComponentGraph is snapshotted at try_new
-        // time so formulas + subscriptions go stale once the site
-        // mutates; rebuilding picks up the new shape. Entered even
-        // when the initial build failed: a transient failure (gRPC
-        // transport hiccup) heals on the next topology event
-        // instead of leaving the microgrid endpoints 503 forever.
         run_supervisor(grpc_url, slot, site, events).await;
     });
 }
@@ -155,29 +146,38 @@ async fn build_microgrid(grpc_url: &str, slot: &SharedMicrogrid, site: &Microgri
     true
 }
 
-/// Subscribe to MicrogridSite events and rebuild the Microgrid handle on
-/// every TopologyChanged. Lagged-receiver and dropped-sender
-/// events also trigger a rebuild (defensive — a missed event
-/// might have been a topology change).
+/// Run the initial build, then rebuild the Microgrid handle on every
+/// TopologyChanged that follows a structural change or a site reset —
+/// the event also fires for runtime pokes (see `SiteShape`), which
+/// keep the graph. The graph crate's ComponentGraph is snapshotted at
+/// try_new time, so formulas + subscriptions go stale once the site's
+/// structure mutates; rebuilding picks up the new shape. The loop is
+/// entered even when the initial build failed: a transient failure
+/// (gRPC transport hiccup) heals on the next topology event instead of
+/// leaving the microgrid endpoints 503 forever. Lagged-receiver events
+/// run the same check (defensive — a missed event might have been a
+/// topology change).
 async fn run_supervisor(
     grpc_url: String,
     slot: SharedMicrogrid,
     site: MicrogridSite,
     mut events: tokio::sync::broadcast::Receiver<SiteEvent>,
 ) {
+    let mut built = None;
+    build_if_needed(&grpc_url, &slot, &site, &mut built).await;
     loop {
         match events.recv().await {
             Ok(SiteEvent::TopologyChanged { .. }) => {
                 debounce_topology_burst(&mut events).await;
-                rebuild(&grpc_url, &slot, &site).await;
+                build_if_needed(&grpc_url, &slot, &site, &mut built).await;
             }
             Ok(_) => continue,
             Err(RecvError::Lagged(n)) => {
                 log::warn!(
-                    "microgrid loopback supervisor: lagged {n} events, rebuilding defensively"
+                    "microgrid loopback supervisor: lagged {n} events, checking the graph defensively"
                 );
                 debounce_topology_burst(&mut events).await;
-                rebuild(&grpc_url, &slot, &site).await;
+                build_if_needed(&grpc_url, &slot, &site, &mut built).await;
             }
             Err(RecvError::Closed) => {
                 log::info!("microgrid loopback supervisor: site events closed, exiting");
@@ -204,18 +204,41 @@ async fn debounce_topology_burst(events: &mut tokio::sync::broadcast::Receiver<S
 }
 
 /// Rebuild the `LogicalMeterHandle` so its graph snapshot reflects
-/// the new topology. `build_microgrid` does the work — it
-/// subscribes the new forwarders first, then atomically aborts the
-/// old ones and swaps the slot. The old `Microgrid` stays in the
-/// slot until then so the shared client's per-component broadcast
-/// Senders keep at least one live receiver across the handoff.
+/// the new topology — unless the site's shape still matches what
+/// `built` mirrors (a runtime poke bumped the version, nothing
+/// structural moved), in which case the graph, its forwarders and
+/// every cached stream stay as they are. `built` records the shape a
+/// successful build mirrors: snapshotted BEFORE the build and recorded
+/// only on success, so a mutation landing mid-build, or a failed
+/// build, leaves the next event free to rebuild.
+///
+/// `build_microgrid` does the work — it subscribes the new
+/// forwarders first, then atomically aborts the old ones and swaps
+/// the slot. The old `Microgrid` stays in the slot until then so the
+/// shared client's per-component broadcast Senders keep at least one
+/// live receiver across the handoff.
 ///
 /// Only the `LogicalMeterHandle` inside the new Microgrid is
 /// rebuilt; the `MicrogridClientHandle` cached in `slot.client` is
 /// reused. See the field doc for why the client is long-lived.
-async fn rebuild(grpc_url: &str, slot: &SharedMicrogrid, site: &MicrogridSite) {
-    log::info!("microgrid loopback: topology changed — rebuilding handle");
-    build_microgrid(grpc_url, slot, site).await;
+async fn build_if_needed(
+    grpc_url: &str,
+    slot: &SharedMicrogrid,
+    site: &MicrogridSite,
+    built: &mut Option<SiteShape>,
+) {
+    let shape = SiteShape::of(site);
+    if *built == Some(shape) {
+        log::debug!(
+            "microgrid loopback: site version moved without a structural change — keeping the graph"
+        );
+        return;
+    }
+    log::debug!("microgrid loopback: building the graph handle");
+    if build_microgrid(grpc_url, slot, site).await {
+        log::info!("microgrid loopback: graph built + forwarders running");
+        *built = Some(shape);
+    }
 }
 
 /// One build's forwarders: the tasks to abort on the next rebuild,
@@ -638,6 +661,27 @@ fn energy_stream_for(power_stream: &str) -> Option<&'static str> {
     })
 }
 
+/// The two site counters a rebuild is keyed on. Every successful eval
+/// bumps the plain site version so the UI refetches — a
+/// `(set-meter-power …)` from the inspector included — but the graph
+/// the loopback mirrors only moves with the structural version
+/// (components, connections, names) or a site reset (config
+/// hot-reload: new run generation).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SiteShape {
+    structural: u64,
+    generation: u64,
+}
+
+impl SiteShape {
+    fn of(site: &MicrogridSite) -> Self {
+        Self {
+            structural: site.structural_version(),
+            generation: site.run_generation(),
+        }
+    }
+}
+
 /// Drop the cached `latest` sample and history ring of every stream
 /// the rebuilt graph no longer publishes — a topology that lost its
 /// last PV must not keep serving `pv_power` via
@@ -927,6 +971,40 @@ mod tests {
         site.reset();
         clear_energy_on_new_run(&state, &site);
         assert!(state.energy.read().is_empty());
+    }
+
+    /// Every successful eval bumps the site version — a meter power
+    /// override included — but only a structural edit moves the graph
+    /// the loopback mirrors. A runtime poke must not trigger a rebuild,
+    /// which tears down and resubscribes every forwarder for nothing.
+    #[test]
+    fn runtime_pokes_do_not_change_the_site_shape() {
+        let site = MicrogridSite::new();
+        let built = SiteShape::of(&site);
+        // What `Overrides::eval` does after `(set-meter-power …)`.
+        site.bump_version();
+        assert_eq!(SiteShape::of(&site), built);
+    }
+
+    /// A structural edit or a site reset (config hot-reload: new run
+    /// generation) still rebuilds.
+    #[test]
+    fn structural_edits_and_resets_change_the_site_shape() {
+        let site = MicrogridSite::new();
+        let built = SiteShape::of(&site);
+        site.register(crate::sim::Meter::new(
+            5,
+            Duration::from_secs(1),
+            None,
+            None,
+            0.0,
+            false,
+        ));
+        assert_ne!(SiteShape::of(&site), built, "structural edit");
+
+        let built = SiteShape::of(&site);
+        site.reset();
+        assert_ne!(SiteShape::of(&site), built, "new run generation");
     }
 
     /// A rebuild drops the cached streams the new graph no longer

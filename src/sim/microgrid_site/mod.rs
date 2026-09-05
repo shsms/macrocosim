@@ -112,8 +112,10 @@ struct MicrogridSiteInner {
     /// regenerates the microgrid's managed file only when this
     /// counter moved; a transient poke like `set-meter-power` leaves
     /// it untouched and writes nothing, so it can't resurrect as
-    /// config on the next reload. Distinct from `version`, which
-    /// bumps on every eval as the UI's refetch signal.
+    /// config on the next reload. The UI's microgrid loopback reads it
+    /// too (`SiteShape`), to rebuild its graph handle only when this
+    /// counter or the run generation moved. Distinct from `version`,
+    /// which bumps on every eval as the UI's refetch signal.
     structural_version: AtomicU64,
     /// Bumped by `cancel_all_streams()`. Streaming tasks in server.rs
     /// compare against the value they captured at start and break when
@@ -163,8 +165,10 @@ struct MicrogridSiteInner {
     version: AtomicU64,
     /// Run generation — bumped by `reset()`, which a config hot-reload
     /// runs before rebuilding the site. Readers holding cumulative state
-    /// derived from this site (the UI's aggregate energy totals) compare
-    /// it to tell a fresh run (clear) from a topology mutation (keep).
+    /// derived from this site (the UI's aggregate energy totals and
+    /// stream caches) compare it to tell a fresh run (clear) from a
+    /// topology mutation (keep); the UI's microgrid loopback also
+    /// rebuilds its graph handle when it moved (`SiteShape`).
     run_generation: AtomicU64,
     /// Broadcast bus for live UI subscribers. Senders are cheap to
     /// clone; receivers are obtained via `subscribe_events`.
