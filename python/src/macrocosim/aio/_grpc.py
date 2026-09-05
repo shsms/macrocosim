@@ -15,7 +15,13 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, TypeVar
 
-from .._grpc import ComponentInfo, _component_id
+from .._grpc import (
+    ComponentInfo,
+    _component_id,
+    _evict_stream,
+    _opened_stream_key,
+    _stream_keys,
+)
 from ..errors import SetpointRejected
 
 _T = TypeVar("_T")
@@ -119,15 +125,28 @@ class AsyncGrpcClient:
 
         Swallows all errors (subscribe failure, stream closed on teardown):
         the task ends, ``reader.first`` is set, and readers see ``None``.
+
+        When the stream ends — an error, or the server closing it — the
+        cached value is dropped, the client's dead broadcaster for this
+        stream is evicted, and the pump record is removed. The next read
+        then opens a genuinely new stream instead of serving the last
+        pre-fault sample forever.
         """
         from frequenz.client.microgrid import metrics as m
 
         component_id, metric_name = key
         metric = m.Metric[metric_name]
+        stream_key: str | None = None
         try:
-            receiver = self._client.receive_component_data_samples_stream(
-                _component_id(component_id), [metric]
-            )
+            before = _stream_keys(self._client)
+            try:
+                receiver = self._client.receive_component_data_samples_stream(
+                    _component_id(component_id), [metric]
+                )
+            finally:
+                # Also on a failed subscribe: the client caches the
+                # broadcaster before handing out the receiver.
+                stream_key = _opened_stream_key(self._client, before)
             while True:
                 sample = await receiver.receive()
                 for ms in sample.metric_samples:
@@ -139,6 +158,13 @@ class AsyncGrpcClient:
         except Exception:  # noqa: BLE001 — end the pump cleanly on any error
             return
         finally:
+            reader.latest = None
+            # Evict the dead stream before dropping the reader, so the read
+            # that re-subscribes cannot pick the dead broadcaster up.
+            await _evict_stream(self._client, stream_key)
+            # Only if the reader is still ours: aclose() may have replaced it.
+            if self._readers.get(key) is reader:
+                del self._readers[key]
             reader.first.set()
 
     # --- writes -------------------------------------------------------------

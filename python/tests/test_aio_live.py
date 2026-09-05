@@ -6,7 +6,9 @@ PATH, or the wheel's scripts dir).
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from datetime import timedelta
 
 import pytest
@@ -87,3 +89,53 @@ async def test_signal_surface_end_to_end() -> None:
     # identity stays usable; verbs raise).
     with pytest.raises(RuntimeError, match="not bound"):
         await load.power.read()
+
+
+async def _read_until(
+    site: mc.aio.Site,
+    component_id: int,
+    *,
+    a_number: bool,
+    limit: timedelta = timedelta(seconds=10),
+) -> Power | None:
+    """Poll a component's gRPC active power until it is (or stops being) a number.
+
+    Each read may itself wait for a first sample, so this bounds the whole
+    wait rather than the number of attempts.
+    """
+    deadline = time.monotonic() + limit.total_seconds()
+    while True:
+        value = await site.active_power(component_id)
+        if (value is not None) == a_number:
+            return value
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"component {component_id} active power stayed {value!r} for {limit}"
+            )
+        await asyncio.sleep(0.2)
+
+
+async def test_a_closed_telemetry_stream_recovers_once_the_fault_clears() -> None:
+    """The CLOSED telemetry fault ends the component's stream.
+
+    Reads must go to None rather than serving the last pre-fault sample,
+    and once the fault is cleared a read must open a new stream and see
+    live data again.
+    """
+    load = mc.meter(id=5, power=kW(20))
+    mg = mc.Microgrid(
+        id=1,
+        topology=mc.grid(id=1, successors=[mc.meter(id=2, successors=[load])]),
+    )
+
+    async with mc.aio.launch(mg) as site:
+        assert await _read_until(site, 5, a_number=True) is not None
+
+        # The server closes the component's telemetry stream.
+        await site[5].status(telemetry_mode=mc.TelemetryMode.CLOSED)
+        assert await _read_until(site, 5, a_number=False) is None
+
+        # Clearing the fault must be enough: the next reads open a new
+        # stream instead of retrying the closed one.
+        await site[5].status(telemetry_mode=mc.TelemetryMode.NORMAL)
+        assert await _read_until(site, 5, a_number=True) is not None
