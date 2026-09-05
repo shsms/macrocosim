@@ -13,6 +13,7 @@ use crate::sim::{
     axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
     bounds::VecBounds,
     decay::{SocProtect, integrate_soc_pct, sanitize_soc_pct, soc_protected_bounds},
+    runtime::Health,
 };
 
 #[derive(Clone, Debug)]
@@ -27,6 +28,14 @@ pub struct EvChargerConfig {
     pub command_delay: Duration,
     pub ramp_rate_w_per_s: f32,
     pub stream_jitter_pct: f32,
+    /// Keep the armed command through a health fault and ramp back on
+    /// recovery, like the solar inverter; off, the fault clears the
+    /// command and recovery waits for a new one, like the battery
+    /// inverter. A setpoint TTL that expires while the charger is
+    /// faulted still clears the command — expiry is a control event,
+    /// independent of health — so a fault outlasting the request's
+    /// lifetime does not resume either way.
+    pub resume_on_recovery: bool,
 }
 
 impl Default for EvChargerConfig {
@@ -42,6 +51,7 @@ impl Default for EvChargerConfig {
             command_delay: Duration::from_millis(500),
             ramp_rate_w_per_s: f32::INFINITY,
             stream_jitter_pct: 0.0,
+            resume_on_recovery: false,
         }
     }
 }
@@ -152,7 +162,7 @@ impl SimulatedComponent for EvCharger {
         true
     }
 
-    fn tick(&self, _world: &MicrogridSite, now: DateTime<Utc>, dt: Duration) {
+    fn tick(&self, world: &MicrogridSite, now: DateTime<Utc>, dt: Duration) {
         // 1. Refresh SoC-derated bounds and snapshot them for the rest
         //    of the tick under a single lock acquisition. Splitting
         //    `(self.state.lock().lo, self.state.lock().up)` would
@@ -165,7 +175,29 @@ impl SimulatedComponent for EvCharger {
             (l, u)
         };
 
-        // 2. The axis composes rated ∩ live augmentations ∩ this
+        // 2. Own-health gate: a faulted or standby charger is
+        //    electrically offline. It sits after the bounds refresh
+        //    above on purpose — the SoC derate describes the connected
+        //    car's pack, not this charger's output, so it stays current
+        //    while the charger is faulted, the way solar resolves the
+        //    sunlight before its own gate. By default the command is
+        //    cleared too, so recovery waits for the controller to
+        //    re-dispatch, as a real charger stays off until it is
+        //    reset. With resume_on_recovery the output collapses but
+        //    the command survives, and recovery ramps back to it.
+        //    Returning here also skips the SoC integration in step 4:
+        //    a faulted charger draws nothing, so the pack's SoC does
+        //    not move on its own.
+        if world.runtime_of(self.id).health != Health::Ok {
+            if self.cfg.resume_on_recovery {
+                self.active.snap_output(0.0);
+            } else {
+                self.active.trip();
+            }
+            return;
+        }
+
+        // 3. The axis composes rated ∩ live augmentations ∩ this
         //    per-tick SoC derate into the tracking envelope, drops
         //    expired augmentations, promotes any pending command
         //    clamped into that envelope (band-aware — a multi-band
@@ -185,7 +217,7 @@ impl SimulatedComponent for EvCharger {
             },
         );
 
-        // 3. Integrate SoC (shared rectangular step, same as Battery).
+        // 4. Integrate SoC (shared rectangular step, same as Battery).
         let mut s = self.state.lock();
         s.soc_pct = integrate_soc_pct(s.soc_pct, p, dt, self.cfg.capacity_wh);
     }
@@ -271,11 +303,10 @@ impl SimulatedComponent for EvCharger {
     }
 
     fn reset_setpoint(&self) {
-        // Today's reset is delay.reset + ramp.snap_to(0) — exactly
-        // `PowerAxis::trip()` minus the published write. The EV never
-        // reads `active.published()` (telemetry and aggregate_power_w
-        // both read `actual()`), so that unused write is harmless.
-        self.active.trip();
+        // TTL expiry is a control event, not a physical discontinuity:
+        // the command is cleared and the output slews to zero at the
+        // ramp rate, as the inverters do.
+        self.active.reset(0.0);
     }
 
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
@@ -324,6 +355,9 @@ impl SimulatedComponent for EvCharger {
         }
         if self.cfg.stream_jitter_pct != 0.0 {
             kw.push((":stream-jitter-pct", lf(self.cfg.stream_jitter_pct)));
+        }
+        if self.cfg.resume_on_recovery {
+            kw.push((":resume-on-recovery", "t".to_string()));
         }
         kw
     }
@@ -483,5 +517,167 @@ mod tests {
         assert!(s.contains(":interval 500"));
         assert!(s.contains(":command-delay-ms 500"));
         assert!(!s.contains(":ramp-rate"), "infinite ramp is omitted");
+    }
+
+    /// Build `cfg` under id 7 in a fresh site and hand back both, so a
+    /// test can drive the charger's health through `MicrogridSite`.
+    fn sited(cfg: EvChargerConfig) -> (MicrogridSite, std::sync::Arc<dyn SimulatedComponent>) {
+        let w = MicrogridSite::new();
+        w.register(EvCharger::new(7, Duration::from_secs(1), cfg));
+        let ev = w.get(7).unwrap();
+        (w, ev)
+    }
+
+    /// `n` one-second ticks.
+    fn tick_n(w: &MicrogridSite, ev: &std::sync::Arc<dyn SimulatedComponent>, n: usize) {
+        for _ in 0..n {
+            ev.tick(w, Utc::now(), Duration::from_secs(1));
+        }
+    }
+
+    /// A faulted or standby charger is electrically offline: zero
+    /// output, and — like the battery inverter — the command is gone,
+    /// so recovery stays at zero until the controller re-dispatches.
+    #[test]
+    fn errored_charger_trips_and_awaits_redispatch() {
+        let (w, ev) = sited(EvChargerConfig {
+            soc_protect_margin_pct: 0.0,
+            command_delay: Duration::ZERO,
+            ramp_rate_w_per_s: f32::INFINITY,
+            ..Default::default()
+        });
+        ev.set_active_setpoint(10_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert!(
+            (ev.aggregate_power_w(&w) - 10_000.0).abs() < 1.0,
+            "healthy charger tracks its setpoint, got {}",
+            ev.aggregate_power_w(&w),
+        );
+
+        w.set_health(7, Health::Error);
+        tick_n(&w, &ev, 1);
+        assert_eq!(
+            ev.aggregate_power_w(&w),
+            0.0,
+            "a faulted charger draws nothing",
+        );
+
+        w.set_health(7, Health::Ok);
+        tick_n(&w, &ev, 5);
+        assert_eq!(
+            ev.aggregate_power_w(&w),
+            0.0,
+            "no command survives the trip",
+        );
+
+        ev.set_active_setpoint(10_000.0).unwrap();
+        tick_n(&w, &ev, 5);
+        assert!(
+            ev.aggregate_power_w(&w) > 0.0,
+            "a new command resumes charging",
+        );
+    }
+
+    /// Standby gets the same treatment as Error: the charger is off,
+    /// and waking it up does not resurrect the pre-fault command.
+    #[test]
+    fn standby_charger_trips_like_an_errored_one() {
+        let (w, ev) = sited(EvChargerConfig {
+            soc_protect_margin_pct: 0.0,
+            command_delay: Duration::ZERO,
+            ramp_rate_w_per_s: f32::INFINITY,
+            ..Default::default()
+        });
+        ev.set_active_setpoint(10_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert!((ev.aggregate_power_w(&w) - 10_000.0).abs() < 1.0);
+
+        w.set_health(7, Health::Standby);
+        tick_n(&w, &ev, 1);
+        assert_eq!(ev.aggregate_power_w(&w), 0.0, "standby is offline too");
+
+        w.set_health(7, Health::Ok);
+        tick_n(&w, &ev, 5);
+        assert_eq!(
+            ev.aggregate_power_w(&w),
+            0.0,
+            "waking up awaits a re-dispatch",
+        );
+    }
+
+    /// With `:resume-on-recovery` the fault still zeroes the output,
+    /// but the armed command survives and charging ramps back on
+    /// recovery, the way the solar inverter keeps its curtailment.
+    #[test]
+    fn resume_on_recovery_keeps_the_command_through_the_fault() {
+        let (w, ev) = sited(EvChargerConfig {
+            soc_protect_margin_pct: 0.0,
+            command_delay: Duration::ZERO,
+            ramp_rate_w_per_s: f32::INFINITY,
+            resume_on_recovery: true,
+            ..Default::default()
+        });
+        ev.set_active_setpoint(10_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert!((ev.aggregate_power_w(&w) - 10_000.0).abs() < 1.0);
+
+        w.set_health(7, Health::Error);
+        tick_n(&w, &ev, 1);
+        assert_eq!(ev.aggregate_power_w(&w), 0.0);
+        tick_n(&w, &ev, 3);
+        assert_eq!(ev.aggregate_power_w(&w), 0.0, "stays off while faulted",);
+
+        w.set_health(7, Health::Ok);
+        tick_n(&w, &ev, 5);
+        assert!(
+            (ev.aggregate_power_w(&w) - 10_000.0).abs() < 1.0,
+            "resumes the armed command, got {}",
+            ev.aggregate_power_w(&w),
+        );
+    }
+
+    /// TTL expiry is a control event, not a physical fault: the output
+    /// slews down at the ramp rate instead of snapping to zero in one
+    /// tick, exactly as both inverters do.
+    #[test]
+    fn ttl_expiry_slews_down() {
+        let (w, ev) = sited(EvChargerConfig {
+            soc_protect_margin_pct: 0.0,
+            command_delay: Duration::ZERO,
+            ramp_rate_w_per_s: 1_000.0,
+            ..Default::default()
+        });
+        ev.set_active_setpoint(10_000.0).unwrap();
+        // 1 kW/s from 0 needs ten seconds to reach the setpoint.
+        tick_n(&w, &ev, 12);
+        assert!((ev.aggregate_power_w(&w) - 10_000.0).abs() < 1.0);
+
+        ev.reset_setpoint();
+        tick_n(&w, &ev, 1);
+        let p = ev.aggregate_power_w(&w);
+        assert!(p > 8_000.0 && p < 10_000.0, "one tick of slew, got {p}",);
+    }
+
+    /// `:resume-on-recovery` round-trips only when it is on — the
+    /// default charger renders nothing for it.
+    #[test]
+    fn constructor_kwargs_render_resume_on_recovery_only_when_set() {
+        let kwargs = |resume| {
+            EvCharger::new(
+                9,
+                Duration::from_secs(1),
+                EvChargerConfig {
+                    resume_on_recovery: resume,
+                    ..Default::default()
+                },
+            )
+            .constructor_kwargs()
+        };
+        assert!(kwargs(true).contains(&(":resume-on-recovery", "t".to_string())));
+        assert!(
+            !kwargs(false)
+                .iter()
+                .any(|(k, _)| *k == ":resume-on-recovery"),
+        );
     }
 }

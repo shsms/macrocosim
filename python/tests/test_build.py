@@ -204,10 +204,17 @@ def test_builders_cover_every_server_arg() -> None:
     assert ":capacity 75000.0" in ev
     assert ":initial-soc 30.0" in ev
     assert ":command-delay-ms 200" in ev
+    # Off by default: the charger trips and awaits a re-dispatch, so the
+    # flag renders nothing at all rather than an explicit nil.
+    assert ":resume-on-recovery" not in ev
+    ev_resume = mc.ev_charger(id=6, resume_on_recovery=True).to_lisp()
+    assert ":resume-on-recovery t" in ev_resume
 
-    # make-chp takes no rated bounds; the builder no longer offers them.
     import inspect
 
+    # A named parameter, not something that only works via **extra.
+    assert "resume_on_recovery" in inspect.signature(mc.ev_charger).parameters
+    # make-chp takes no rated bounds; the builder no longer offers them.
     assert "rated" not in inspect.signature(mc.chp).parameters
     chp_lisp = mc.chp(id=7, stream_jitter_pct=Percentage.from_percent(2)).to_lisp()
     assert ":stream-jitter-pct 2.0" in chp_lisp

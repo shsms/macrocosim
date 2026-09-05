@@ -207,6 +207,10 @@ AsPlist! {
         command_delay_ms<":command-delay-ms">: Option<i64> {= None},
         ramp_rate<":ramp-rate">: Option<f64> {= None},
         stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        /// Keep the armed command through a health fault and ramp back
+        /// on recovery; off (the default), the fault clears the command
+        /// and recovery waits for a new one.
+        resume_on_recovery<":resume-on-recovery">: Option<bool> {= None},
         operational_mode<":operational-mode">: Option<OperationalMode> {= None},
         health<":health">: Option<Health> {= None},
         telemetry_mode<":telemetry-mode">: Option<TelemetryMode> {= None},
@@ -621,6 +625,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             if let Some(v) = a.stream_jitter_pct {
                 cfg.stream_jitter_pct = v as f32;
             }
+            cfg.resume_on_recovery = a.resume_on_recovery.unwrap_or(false);
             let h = register_with_modes(
                 &w,
                 EvCharger::new(id, interval, cfg),

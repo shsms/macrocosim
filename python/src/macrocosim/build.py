@@ -626,13 +626,20 @@ def ev_charger(
     command_delay: timedelta | None = None,
     ramp_rate: float | None = None,
     stream_jitter_pct: Percentage | None = None,
+    resume_on_recovery: bool | None = None,
     health: Health | None = None,
     telemetry_mode: TelemetryMode | None = None,
     command_mode: CommandMode | None = None,
     **extra: Value,
 ) -> Component:
     """An EV charger (leaf). Battery-like: the connected car's pack has a
-    ``capacity``, an ``initial_soc``, and an SoC operating band."""
+    ``capacity``, an ``initial_soc``, and an SoC operating band.
+
+    A charger whose health goes to ``error`` or ``standby`` trips to zero
+    and waits for a new setpoint. Pass ``resume_on_recovery=True`` for a
+    charger that keeps its armed command through the fault and ramps back
+    to it on recovery.
+    """
     args = {
         "id": id,
         "name": name,
@@ -645,6 +652,7 @@ def ev_charger(
         "command_delay_ms": _ms(command_delay),
         "ramp_rate": ramp_rate,
         "stream_jitter_pct": stream_jitter_pct,
+        "resume_on_recovery": resume_on_recovery,
         "health": health,
         "telemetry_mode": telemetry_mode,
         "command_mode": command_mode,

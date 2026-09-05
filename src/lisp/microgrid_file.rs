@@ -817,7 +817,7 @@ mod tests {
                             :reactive-pf-limit 0)
     (%make-battery :id 5 :capacity 50000.0 :initial-soc 20.0)
     (%make-solar-inverter :id 6 :sunlight% 40.0)
-    (%make-ev-charger :id 7)
+    (%make-ev-charger :id 7 :resume-on-recovery t)
     (%make-chp :id 8 :name "chp")
     (%make-meter :id 9 :operational-mode 'inactive)
     (%make-meter :id 10 :power 2000.0 :reactive-power 500.0)
@@ -887,6 +887,18 @@ mod tests {
             (v, site.all_connections())
         };
         assert_eq!(sig(&site), sig(&e2.site));
+        // `sig` compares the two sites against EACH OTHER, so a
+        // constructor that dropped `:resume-on-recovery` would lose it
+        // on both loads and still match. Assert the flag itself made it
+        // through the render → reload, so the persistence path is
+        // pinned rather than just its own symmetry.
+        let ev2 = e2.site.get(7).expect("the EV charger survives the reload");
+        assert!(
+            ev2.constructor_kwargs()
+                .contains(&(":resume-on-recovery", "t".to_string())),
+            ":resume-on-recovery must survive render → reload, got {:?}",
+            ev2.constructor_kwargs(),
+        );
         // …and the reloaded PV inverter is really following the sky
         // again, not sitting on a constant the render invented. Same
         // components/kwargs above only proves the kwarg stayed
