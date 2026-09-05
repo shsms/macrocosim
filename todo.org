@@ -347,11 +347,14 @@ linked in); the Python client is =MIT=, and its wheel ships both license
 texts next to the bundled binaries. An app driving the simulator over
 gRPC / HTTP or the Python client is a separate program, so not GPL-covered.
 
-Remaining before a public release:
-- Register the PyPI trusted publisher (owner / repo / =release.yml= /
-  environment =pypi=) and create the =pypi= environment in the repo settings.
-- Tag =v0.1.0= (the version lives in =Cargo.toml= only; the wheel derives
-  its PEP 440 version from it, so an alpha is =0.1.0-alpha.1= → =0.1.0a1=).
+Public release DONE [2026-09-03]: the PyPI trusted publisher and the
+=pypi= environment are registered, =v0.1.0= is tagged, the release run
+succeeded, and =macrocosim 0.1.0= is on PyPI with the GitHub Release
+attached. The repo is now =shsms/macrocosim=. (Versioning note kept: the
+version lives in =Cargo.toml= only; the wheel derives its PEP 440 version
+from it, so an alpha is =0.1.0-alpha.1= → =0.1.0a1=.)
+
+Still open:
 - Optional: a Docker image (GPL) consumers run in CI — no source, no linking.
 - A crates.io publish of macrocosim itself also needs the vendored proto build
   buildable from the published crate (git submodule today), and the
@@ -417,8 +420,8 @@ pytest plugin, and packaging. Shipped as a =maturin= platform wheel bundling
 the =macrocosim= + =macroctl= binaries (=pip install macrocosim= just works);
 uv-native dev; the tulisp family is on crates.io (0.29.0 / 0.1.0).
 
-Deferred follow-ups: an async surface (sync-only today); the PyPI publish
-itself (the release.yml pipeline and the licenses are in place — see D5); a library↔binary version-compat check; typed wrappers for the dispatch / assets
+Deferred follow-ups: an async surface (sync-only today); a library↔binary
+version-compat check; typed wrappers for the dispatch / assets
 APIs and a =timeline(hold/ramp)= drive helper; and deterministic
 app-in-the-loop (a clock-step RPC, ties to D8).
 
