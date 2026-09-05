@@ -497,6 +497,36 @@ async fn zero_power_is_always_allowed() {
     expect_accepted_then_success(resp.into_inner()).await;
 }
 
+/// An Augment request without a lifetime falls back to the proto's
+/// documented 5 s default, not SetPower's 60 s.
+#[tokio::test(flavor = "multi_thread")]
+async fn augment_without_lifetime_expires_after_five_seconds() {
+    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+    let before = std::time::SystemTime::now();
+    let resp = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 4, // the battery inverter
+            target_metric: Metric::AcPowerActive as i32,
+            bounds: vec![Bounds {
+                lower: Some(-1000.0),
+                upper: Some(1000.0),
+            }],
+            request_lifetime: None,
+        })
+        .await
+        .expect("augment ok")
+        .into_inner();
+    let ts = resp.valid_until_time.expect("expiry");
+    let until = std::time::SystemTime::UNIX_EPOCH
+        + std::time::Duration::new(ts.seconds as u64, ts.nanos as u32);
+    let ttl = until.duration_since(before).expect("expiry after request");
+    assert!(
+        (4..=6).contains(&ttl.as_secs()),
+        "expected a ~5 s fallback, got {ttl:?}"
+    );
+}
+
 /// A malformed augmentation — inverted, or disjoint from the component's
 /// bounds — must be rejected, not silently brick the component (every
 /// setpoint then rejected while the running output goes unconstrained).

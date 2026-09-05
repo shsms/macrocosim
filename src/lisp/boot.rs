@@ -2961,6 +2961,7 @@ mod tests {
         cfg.eval("(setq battery-defaults '(:capacity 12345.0))")
             .unwrap();
         cfg.eval("(set-enterprise-id 77)").unwrap();
+        cfg.eval("(set-default-augment-lifetime-ms 7000)").unwrap();
 
         // A second process on the same state dir — no boot scripts,
         // exactly what a bare `macrocosim --state-dir` does.
@@ -2972,6 +2973,11 @@ mod tests {
         };
         let restarted = boot(dir.clone()).expect("second boot reads enterprise.lisp");
         assert_eq!(restarted.metadata().enterprise_id, 77);
+        assert_eq!(
+            restarted.metadata().default_augment_lifetime,
+            std::time::Duration::from_millis(7000),
+            "the augment-lifetime knob persists across a restart too"
+        );
         restarted
             .eval(
                 "(make-microgrid :id 6 :grpc-port 8806 :topology \

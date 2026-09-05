@@ -70,6 +70,7 @@ export const COMPLETIONS = [
   "set-microgrid-tso",
   "set-socket-addr",
   "set-default-request-lifetime-ms",
+  "set-default-augment-lifetime-ms",
   // Scenarios — lifecycle, journal + reporter, CSV recording.
   // Lifecycle defuns are Rust-side; the *-end-after / random-*
   // helpers are Lisp wrappers in sim/common.lisp + sim/scenarios.lisp.

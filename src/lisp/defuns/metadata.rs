@@ -1,6 +1,7 @@
 //! Enterprise-scoped metadata setters: `(set-enterprise-id)`,
 //! `(set-assets-socket-addr)`, `(set-dispatch-socket-addr)`,
-//! `(set-default-request-lifetime-ms)`.
+//! `(set-default-request-lifetime-ms)`,
+//! `(set-default-augment-lifetime-ms)`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,10 +40,19 @@ pub(super) fn register(ctx: &mut TulispContext, metadata: Arc<RwLock<Metadata>>)
             Ok(true)
         },
     );
+    let m = metadata.clone();
     ctx.defun(
         "set-default-request-lifetime-ms",
         move |ms: i64| -> Result<bool, Error> {
-            metadata.write().default_request_lifetime = Duration::from_millis(ms.max(0) as u64);
+            m.write().default_request_lifetime = Duration::from_millis(ms.max(0) as u64);
+            Ok(true)
+        },
+    );
+    let m = metadata.clone();
+    ctx.defun(
+        "set-default-augment-lifetime-ms",
+        move |ms: i64| -> Result<bool, Error> {
+            m.write().default_augment_lifetime = Duration::from_millis(ms.max(0) as u64);
             Ok(true)
         },
     );

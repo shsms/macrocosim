@@ -273,6 +273,12 @@ impl Config {
         .unwrap();
         writeln!(
             out,
+            "(set-default-augment-lifetime-ms {})",
+            md.default_augment_lifetime.as_millis()
+        )
+        .unwrap();
+        writeln!(
+            out,
             "(set-assets-socket-addr \"{}\")",
             esc(&md.assets_socket_addr)
         )
@@ -398,6 +404,7 @@ const ENTERPRISE_SETTERS: &[&str] = &[
     "set-enterprise-id",
     "set-timezone",
     "set-default-request-lifetime-ms",
+    "set-default-augment-lifetime-ms",
     "set-assets-socket-addr",
     "set-dispatch-socket-addr",
 ];

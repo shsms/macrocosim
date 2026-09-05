@@ -22,7 +22,9 @@ use crate::proto::common::metrics::Metric;
 /// the 15 min cap on how long a forgotten request can park a
 /// component away from its default. Out-of-range values are
 /// rejected with InvalidArgument; absent values fall back to
-/// `Metadata::default_request_lifetime` (configurable from lisp).
+/// `Metadata::default_request_lifetime` for SetElectricalComponentPower
+/// or `Metadata::default_augment_lifetime` for
+/// AugmentElectricalComponentBounds (both configurable from lisp).
 const SET_POWER_LIFETIME_MIN_S: u64 = 10;
 const AUGMENT_LIFETIME_MIN_S: u64 = 5;
 const REQUEST_LIFETIME_MAX_S: u64 = 15 * 60;
@@ -706,7 +708,7 @@ impl microgrid_server::Microgrid for MicrogridServer {
         let lifetime = resolve_lifetime(
             req.request_lifetime,
             AUGMENT_LIFETIME_MIN_S,
-            self.config.metadata().default_request_lifetime,
+            self.config.metadata().default_augment_lifetime,
         )?;
         let lifetime_s = lifetime.as_secs() as i64;
         let now = chrono::Utc::now();

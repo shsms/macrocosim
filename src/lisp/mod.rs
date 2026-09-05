@@ -80,6 +80,15 @@ pub struct Metadata {
     /// fallbacks is responsible for picking values that align with
     /// its operational expectations).
     pub default_request_lifetime: Duration,
+    /// Fallback lifetime for an Augment request that carries none.
+    /// The proto documents 5 s for Augment where SetPower gets 60 s,
+    /// so the two fallbacks are separate knobs. Tunable via
+    /// `(set-default-augment-lifetime-ms N)`. Like
+    /// `default_request_lifetime`, this default isn't clamped to the
+    /// RPC's `[AUGMENT_LIFETIME_MIN_S, REQUEST_LIFETIME_MAX_S]`
+    /// (5 s, 15 min) range; a config that picks a value outside it is
+    /// responsible for the consequences.
+    pub default_augment_lifetime: Duration,
 }
 
 /// Escape `"` and `\` inside a Lisp string literal, and strip
@@ -161,6 +170,7 @@ impl Default for Metadata {
             assets_socket_addr: "[::1]:9900".to_string(),
             dispatch_socket_addr: "[::1]:8900".to_string(),
             default_request_lifetime: Duration::from_secs(60),
+            default_augment_lifetime: Duration::from_secs(5),
         }
     }
 }
