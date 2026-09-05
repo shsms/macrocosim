@@ -841,3 +841,64 @@ async fn steam_boiler_pool_streams_reach_the_loopback_snapshot() {
         "energy companion missing: {snapshot}"
     );
 }
+
+/// A runtime poke such as `(set-meter-power …)` fires TopologyChanged
+/// like every eval; the aggregate history behind the metrics charts
+/// must survive it end to end. (Before the loopback checked the site
+/// shape, the rebuild this triggered wiped the ring.) Whether the
+/// poke rebuilds at all is pinned by the loopback's own unit test
+/// `runtime_pokes_do_not_change_the_site_shape`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_meter_power_override_keeps_the_aggregate_history() {
+    // The component graph wants the battery behind an inverter, or the
+    // loopback's graph build never succeeds.
+    let topology = r#"
+(%make-grid-connection-point :id 1
+    :successors
+    (list (%make-meter :id 2
+                       :successors
+                       (list (%make-battery-inverter :id 3
+                                                     :successors
+                                                     (list (%make-battery :id 4)))))))
+"#;
+    let s = TestServer::start(topology).await;
+    let client = reqwest::Client::new();
+    let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
+    let id = mgs.as_array().expect("microgrids array")[0]["id"]
+        .as_u64()
+        .expect("microgrid id");
+    let history_url = format!("{}/api/mg/{id}/microgrid/history", s.ui_url);
+    let grid_power_len = |body: &Value| body["grid_power"].as_array().map_or(0, |a| a.len());
+
+    // Let the loopback connect and the grid_power ring fill a little.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let before = loop {
+        let n = grid_power_len(&json(&client, history_url.clone()).await);
+        if n >= 4 || tokio::time::Instant::now() >= deadline {
+            break n;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert!(
+        before >= 4,
+        "grid_power history never filled: {before} samples"
+    );
+
+    let resp = client
+        .post(format!("{}/api/eval", s.ui_url))
+        .body("(set-meter-power 2 1000.0)")
+        .send()
+        .await
+        .unwrap();
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"], true, "{body}");
+
+    // Past the supervisor's 300 ms debounce and long enough for a
+    // rebuild to have wiped the ring and refilled only a sample or two.
+    tokio::time::sleep(Duration::from_millis(2000)).await;
+    let after = grid_power_len(&json(&client, history_url.clone()).await);
+    assert!(
+        after >= before,
+        "grid_power history restarted across the override: {before} -> {after}"
+    );
+}
