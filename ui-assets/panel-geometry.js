@@ -18,17 +18,24 @@ export function cascadeSlot(taken, base, step) {
 }
 
 // The dy every card in `cards` claims in the top-right cascade column,
-// for `cascadeSlot`. A card is `{ pos, dock }`: a docked card is a
-// tile in a strip, not a column card; a placement anchored to the
+// for `cascadeSlot`. A card is `{ pos, shown, dock }`: a docked card
+// is a tile in a strip, not a column card; an offset anchored to the
 // bottom edge, or dragged sideways off the column's x by `drift` or
-// more, is out of the column.
+// more, is out of the column. A card claims the slot of its placement
+// (`pos`) and, while a refit shows it elsewhere, of what it shows too
+// (`shown`), so a slot freed only by a transient fit is not handed to
+// a second card that would stack on the first once the window comes
+// back.
 export function cascadeColumn(cards, drift) {
   const taken = [];
   for (const c of cards) {
     if (!c || c.dock) continue;
-    const at = c.pos;
-    if (at.bottom || Math.abs(at.dx) >= drift) continue;
-    taken.push(at.dy);
+    const { pos, shown } = c;
+    const offsets = shown && (shown.dx !== pos.dx || shown.dy !== pos.dy) ? [pos, shown] : [pos];
+    for (const at of offsets) {
+      if (at.bottom || Math.abs(at.dx) >= drift) continue;
+      taken.push(at.dy);
+    }
   }
   return taken;
 }

@@ -30,7 +30,7 @@ assert.equal(cascadeSlot([200], 40, 32), 40);
 assert.equal(cascadeSlot([104, 40, 72], 40, 32), 136);
 
 // ── cascadeColumn ─────────────────────────────────────────────────
-const card = (pos, extra = {}) => ({ pos, dock: null, ...extra });
+const card = (pos, extra = {}) => ({ pos, shown: null, dock: null, ...extra });
 const top = (dy, dx = 0) => ({ dx, dy, bottom: false });
 // Floating, top-anchored cards near the column's x claim their dy.
 assert.deepEqual(cascadeColumn([card(top(40)), card(top(72, 8))], 16), [40, 72]);
@@ -45,5 +45,10 @@ assert.deepEqual(cascadeColumn([card(top(40, -300))], 16), []);
 assert.deepEqual(cascadeColumn([card(top(40, 16)), card(top(72, -15))], 16), [72]);
 // A missing record is skipped.
 assert.deepEqual(cascadeColumn([undefined, card(top(40))], 16), [40]);
+// A card a refit shows elsewhere claims its placement and its shown
+// slot, so neither is handed to a second card.
+assert.deepEqual(cascadeColumn([card(top(40), { shown: top(10) })], 16), [40, 10]);
+// Shown where it is placed counts once.
+assert.deepEqual(cascadeColumn([card(top(72), { shown: top(72) })], 16), [72]);
 
 console.log("panel-geometry: ok");

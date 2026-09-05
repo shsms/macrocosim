@@ -18,8 +18,8 @@ import { cascadeColumn, cascadeSlot } from "./panel-geometry.js";
 import { makeSplitter } from "./splitter.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
-// name → { el, contentEl, teardown, pos, cascade, isStatic, refitTimer,
-// resizeTimer, dock, floatStyle, dragging }
+// name → { el, contentEl, teardown, pos, shown, cascade, isStatic,
+// refitTimer, resizeTimer, dock, floatStyle, dragging }
 // dock is the edge the card is docked to, or null while it floats;
 // floatStyle parks the card's inline float geometry while it is
 // docked.
@@ -29,6 +29,10 @@ import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 // sanitizePanel, the one thing that does, gates on this.
 // resizeTimer is the pending conversion of a gripper drag into a
 // stored cap (wireResize); settleResize runs it early.
+// pos is the user's placement (persisted); shown is the fit of pos
+// against the current geometry, what the card displays
+// (sanitizePanel); null until the first sanitize — read it as
+// `shown ?? pos`; a live drag writes it too.
 // pos carries `bottom`: which dock edge the stored dx/dy were
 // measured against, so a reload re-anchors the card the way its saved
 // offset expects (see .anchor-bottom, savePos).
@@ -213,6 +217,7 @@ function ensurePanel(name) {
     contentEl,
     teardown: null,
     pos: stored ?? { dx: 0, dy: 0, bottom: bottomAnchored },
+    shown: null,
     cascade: !stored,
     isStatic,
     refitTimer: 0,
@@ -241,7 +246,7 @@ function ensurePanel(name) {
       // timer fires, not just here: a card closed or grabbed inside
       // REFIT_SETTLE would otherwise be sanitized as a display:none
       // zero box, and clampOffset would write that nonsense back into
-      // p.pos. closePanel cancels it too.
+      // p.shown. closePanel cancels it too.
       if (p.dragging || p.dock || !el.classList.contains("open") || el.style.height) return;
       clearTimeout(p.refitTimer);
       p.refitTimer = setTimeout(() => {
@@ -331,10 +336,13 @@ function wireDrag(el, name, p) {
 // zone is dead until the pointer has been somewhere else once.
 function beginFloatDrag(el, strip, name, p, e, suppressEdge = null) {
   p.dragging = true;
-  const startX = e.clientX - p.pos.dx;
-  const startY = e.clientY - p.pos.dy;
-  const anchor = anchorOf(el, p.pos);
-  // Where the card floated before the gesture. A drag that ends in a
+  // The gesture continues from where the card is on screen, which is
+  // the fit of its placement; the drag end becomes the new placement.
+  const from = p.shown ?? p.pos;
+  const startX = e.clientX - from.dx;
+  const startY = e.clientY - from.dy;
+  const anchor = anchorOf(el, from);
+  // Where the card was placed before the gesture. A drag that ends in a
   // zone docks the card, and docking is not a placement: the drop
   // point is a point on the dock's rim, so persisting it would send a
   // later ⤒ back to the rim with the card mostly off screen.
@@ -354,6 +362,8 @@ function beginFloatDrag(el, strip, name, p, e, suppressEdge = null) {
   };
   const move = (ev) => {
     p.pos = { ...clampOffset(anchor, ev.clientX - startX, ev.clientY - startY), bottom: p.pos.bottom };
+    // A held card is shown exactly where the pointer drags it.
+    p.shown = { ...p.pos };
     applyPos(el, p.pos);
     zone = zoneAt(ev);
     armSnapZone(zone);
@@ -377,6 +387,7 @@ function beginFloatDrag(el, strip, name, p, e, suppressEdge = null) {
     armSnapZone(null);
     if (zone) {
       p.pos = before;
+      p.shown = { ...p.pos };
       applyPos(el, p.pos);
       savePos(name, p.pos);
       // That position is the card's placement now, so a float back
@@ -437,11 +448,15 @@ function reorderDrag(el, head, edge, name, p, pointerId) {
       }
       // Under the pointer: the head's middle at the pointer's x, its
       // vertical middle at the pointer's y.
-      const a = anchorOf(el, p.pos);
+      const a = anchorOf(el, p.shown ?? p.pos);
       p.pos = {
         ...clampOffset(a, ev.clientX - a.left - el.offsetWidth / 2, ev.clientY - a.top - head.offsetHeight / 2),
         bottom: p.pos.bottom,
       };
+      // The pointer holds the card here, so this is both the
+      // placement and what is shown — and the float drag this hands
+      // over to reads the shown offset.
+      p.shown = { ...p.pos };
       applyPos(el, p.pos);
       p.cascade = false;
       savePos(name, p.pos);
@@ -588,15 +603,17 @@ function saveSize(name, h) {
 // caller runs this on an open panel.
 //
 // `persist` says whether the correction is the user's new intent or
-// just this window's arithmetic. An open is their own toggle, so what
-// gets clamped there is their new cap and placement, written through.
-// A correction the window forced is transient: the live `p.pos` and
-// the applied cap follow the new geometry either way — that is what
-// keeps the card reachable — but storage keeps saying what the user
-// last chose, so widening the window gives the height and the
-// placement back instead of ratcheting them away. Storage going stale
-// against a much-changed window costs nothing: the next open sanitizes
-// it again, with `persist` on.
+// just this window's arithmetic. An open or a float-out is their own
+// toggle, so what gets clamped there is their new cap and placement,
+// written through.
+// A correction the window forced is transient: `p.shown` follows the
+// new geometry — that is what keeps the card reachable — while
+// `p.pos` keeps saying what the user last chose, so widening the
+// window gives the placement back instead of ratcheting it away. The
+// applied cap follows the new geometry the same way, while storage
+// keeps the height the user chose. Storage going stale against a
+// much-changed window costs nothing: the next open sanitizes it
+// again, with `persist` on.
 function sanitizePanel(p, name, persist = true) {
   // A tile's geometry is the strip's business, and a card the pointer
   // is holding is the gesture's: it is already following the pointer,
@@ -613,14 +630,21 @@ function sanitizePanel(p, name, persist = true) {
     applyCap(el, cap);
     if (persist && cap !== stored) saveSize(name, cap);
   }
+  // Fit the user's placement to this geometry. The fit is what the
+  // card shows; the placement itself only moves when the correction
+  // is the user's own (an open or a float-out), so a window that
+  // shrank and grew back fits the same placement twice and the card
+  // comes back.
   applyPos(el, p.pos);
-  const clamped = fitOffset(anchorOf(el, p.pos), p.pos.dx, p.pos.dy);
-  if (clamped.dx === p.pos.dx && clamped.dy === p.pos.dy) return;
-  p.pos = { ...clamped, bottom: p.pos.bottom };
-  applyPos(el, p.pos);
+  const fitted = fitOffset(anchorOf(el, p.pos), p.pos.dx, p.pos.dy);
+  p.shown = { ...fitted, bottom: p.pos.bottom };
+  applyPos(el, p.shown);
+  if (fitted.dx === p.pos.dx && fitted.dy === p.pos.dy) return;
+  if (!persist) return;
+  p.pos = { ...p.shown };
   // Only a position the user chose is worth correcting on disk; a
   // clamped cascade is this open's arithmetic, not their placement.
-  if (persist && !p.cascade) savePos(name, p.pos);
+  if (!p.cascade) savePos(name, p.pos);
 }
 
 // Place the card as it opens: an unplaced one cascades off the panels
