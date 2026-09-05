@@ -11,7 +11,7 @@ use macrocosim::proto::microgrid::{
     AugmentElectricalComponentBoundsRequest, ListElectricalComponentConnectionsRequest,
     ListElectricalComponentsRequest, PowerType, ReceiveElectricalComponentTelemetryStreamRequest,
     ReceiveElectricalComponentTelemetryStreamResponse, SetElectricalComponentPowerRequest,
-    SetElectricalComponentPowerRequestStatus,
+    SetElectricalComponentPowerRequestStatus, SetElectricalComponentPowerResponse,
 };
 
 /// Pull the AC active-power value (W) out of a telemetry response, if present.
@@ -103,6 +103,41 @@ async fn wait_for_active_power(
     assert!(reached, "component {id} never reached {at_least} W");
 }
 
+/// Drain a SetPower response stream: an ACCEPTED acknowledgement
+/// carrying the expiry, then a SUCCESS carrying the same expiry, then
+/// end of stream.
+async fn expect_accepted_then_success(
+    mut stream: tonic::Streaming<SetElectricalComponentPowerResponse>,
+) {
+    let first = stream
+        .message()
+        .await
+        .expect("stream poll")
+        .expect("an ACCEPTED status first");
+    assert_eq!(
+        first.status,
+        SetElectricalComponentPowerRequestStatus::Accepted as i32,
+    );
+    assert!(
+        first.valid_until_time.is_some(),
+        "ACCEPTED carries the expiry"
+    );
+    let second = stream
+        .message()
+        .await
+        .expect("stream poll")
+        .expect("a SUCCESS status second");
+    assert_eq!(
+        second.status,
+        SetElectricalComponentPowerRequestStatus::Success as i32,
+    );
+    assert_eq!(second.valid_until_time, first.valid_until_time);
+    assert!(
+        stream.message().await.expect("stream poll").is_none(),
+        "the stream closes after the final status"
+    );
+}
+
 const TINY_TOPOLOGY: &str = r#"
 (%make-grid-connection-point :id 1
             :successors
@@ -155,7 +190,7 @@ async fn list_connections_returns_edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_power_happy_path_returns_success() {
+async fn set_power_streams_accepted_then_success() {
     let s = TestServer::start(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let resp = c
@@ -167,16 +202,7 @@ async fn set_power_happy_path_returns_success() {
         })
         .await
         .expect("set-power ok");
-    let mut stream = resp.into_inner();
-    let first = stream
-        .message()
-        .await
-        .expect("stream poll")
-        .expect("at least one status");
-    assert_eq!(
-        first.status,
-        SetElectricalComponentPowerRequestStatus::Success as i32,
-    );
+    expect_accepted_then_success(resp.into_inner()).await;
 }
 
 const ERRORED_INVERTER_TOPOLOGY: &str = r#"
@@ -424,10 +450,7 @@ async fn set_power_outside_battery_inverter_intersection_is_rejected() {
         })
         .await
         .expect("800 W is within the intersection");
-    assert_eq!(
-        resp.into_inner().message().await.unwrap().unwrap().status,
-        SetElectricalComponentPowerRequestStatus::Success as i32,
-    );
+    expect_accepted_then_success(resp.into_inner()).await;
 }
 
 /// 0 W (the fail-safe park) must always be accepted, even when an
@@ -471,16 +494,7 @@ async fn zero_power_is_always_allowed() {
         })
         .await
         .expect("0 W must be accepted");
-    let first = resp
-        .into_inner()
-        .message()
-        .await
-        .expect("stream poll")
-        .expect("a status");
-    assert_eq!(
-        first.status,
-        SetElectricalComponentPowerRequestStatus::Success as i32,
-    );
+    expect_accepted_then_success(resp.into_inner()).await;
 }
 
 /// A malformed augmentation — inverted, or disjoint from the component's
@@ -920,10 +934,7 @@ async fn set_reactive_power_outside_the_combined_envelope_is_rejected() {
             })
             .await
             .unwrap_or_else(|e| panic!("{power} VAr must be accepted, got {e:?}"));
-        assert_eq!(
-            resp.into_inner().message().await.unwrap().unwrap().status,
-            SetElectricalComponentPowerRequestStatus::Success as i32,
-        );
+        expect_accepted_then_success(resp.into_inner()).await;
     }
 }
 

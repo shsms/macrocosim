@@ -195,6 +195,9 @@ impl MicrogridServer {
     /// power-type validation up front. Split out so the wrapper can
     /// log the outcome of every code path (early-return rejection or
     /// success) at a single tail point.
+    ///
+    /// On success the returned stream carries two responses, ACCEPTED
+    /// then SUCCESS, and then closes.
     async fn do_set_power(
         &self,
         req: SetElectricalComponentPowerRequest,
@@ -301,15 +304,24 @@ impl MicrogridServer {
         )
         .map_err(setpoint_error_to_status)?;
 
-        // Per the proto, a successful response carries the expiry the
-        // TTL was armed with so a client can time its refresh.
+        // Per the proto, the first response acknowledges the request
+        // and the final one reports how it ended; both carry the
+        // expiry the TTL was armed with so a client can time its
+        // refresh. The setpoint is applied by the time the stream
+        // opens, so the two follow each other at once.
         let valid_until = Some(Timestamp::from(SystemTime::now() + duration));
-        Ok(tonic::Response::new(Box::pin(tokio_stream::once(Ok(
-            SetElectricalComponentPowerResponse {
-                valid_until_time: valid_until,
-                status: SetElectricalComponentPowerRequestStatus::Success as i32,
-            },
-        )))))
+        let statuses = [
+            SetElectricalComponentPowerRequestStatus::Accepted,
+            SetElectricalComponentPowerRequestStatus::Success,
+        ];
+        Ok(tonic::Response::new(Box::pin(tokio_stream::iter(
+            statuses.map(|status| {
+                Ok(SetElectricalComponentPowerResponse {
+                    valid_until_time: valid_until,
+                    status: status as i32,
+                })
+            }),
+        ))))
     }
 }
 
