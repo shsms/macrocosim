@@ -70,15 +70,17 @@ pub struct MicrogridState {
     /// each recv; the `/api/microgrid/latest` endpoint snapshots the
     /// whole map on each call. `parking_lot::RwLock` because writes
     /// are non-async (no await between lock + drop) and contention
-    /// is tiny (one writer per stream at 1 Hz). Cleared on each
-    /// rebuild so absent streams in the new graph don't surface
-    /// stale values.
+    /// is tiny (one writer per stream at 1 Hz). A rebuild prunes it
+    /// to the streams the new graph publishes, so absent streams
+    /// don't surface stale values while the rest carry on; a new run
+    /// (site reset) clears it.
     pub latest: RwLock<HashMap<&'static str, MicrogridSampleSnapshot>>,
     /// Rolling history per stream (timestamp + value), ring-buffered
     /// to 1000 entries — 15 minutes at the 1 Hz forwarder cadence
     /// with a little slack. Feeds `/api/microgrid/history` so the
     /// Dashboard tile sparklines can backfill on page load instead
-    /// of starting empty.
+    /// of starting empty. Pruned and cleared on rebuilds like
+    /// `latest`.
     pub history: RwLock<HashMap<&'static str, VecDeque<HistorySample>>>,
     /// Currently-running forwarder tasks. Rebuilds abort these +
     /// spawn fresh ones bound to the new Microgrid handle's
@@ -90,15 +92,17 @@ pub struct MicrogridState {
     pub forwarders: Mutex<Vec<JoinHandle<()>>>,
     /// Running energy integral per aggregate stream (`grid_energy`,
     /// …). Kept here, *not* in `latest`, precisely because it must
-    /// survive rebuilds: a topology mutation (e.g. `set-meter-power`)
-    /// clears `latest`, but the cumulative energy the run has moved so
-    /// far must not reset to zero. The latest cache re-derives its
-    /// `*_energy` snapshot from this on the next forwarded sample.
+    /// survive rebuilds: a topology mutation prunes `latest` of the
+    /// streams the new graph dropped, but the cumulative energy the run
+    /// has moved so far must not reset to zero. The latest cache
+    /// re-derives its `*_energy` snapshot from this on the next
+    /// forwarded sample.
     pub energy: RwLock<HashMap<&'static str, EnergyAccum>>,
     /// The site run generation the `energy` totals belong to (see
     /// `MicrogridSite::run_generation`). A rebuild seeing a different
-    /// generation clears the totals: the site was reset by a config
-    /// reload, so they belong to a previous run.
+    /// generation clears the totals, and `latest` and `history` with
+    /// them: the site was reset by a config reload, so they all
+    /// belong to a previous run.
     pub energy_generation: AtomicU64,
 }
 

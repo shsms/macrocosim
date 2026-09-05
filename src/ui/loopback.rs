@@ -9,6 +9,7 @@
 //! `Microgrid` handle every time the topology changes (which also
 //! resubscribes every forwarder against the new graph).
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use frequenz_microgrid::{
@@ -118,7 +119,7 @@ async fn build_microgrid(grpc_url: &str, slot: &SharedMicrogrid, site: &Microgri
     // forwarder reviving it would otherwise integrate a trapezoid across
     // that whole gap the moment its first sample lands.
     reset_energy_cursors(slot);
-    let handles = subscribe_power_forwarders(&mut mg, site, slot.clone()).await;
+    let forwarders = subscribe_power_forwarders(&mut mg, site, slot.clone()).await;
     // Atomic swap. Aborting the old forwarders + dropping the old
     // Microgrid happens AFTER the new LM has subscribed to every
     // component it cares about (above), so the shared client's
@@ -134,24 +135,22 @@ async fn build_microgrid(grpc_url: &str, slot: &SharedMicrogrid, site: &Microgri
     // total loses at most the sub-second span since their subscribe, and a
     // reset cursor just re-seeds on their next sample.
     //
-    // A site reset (config hot-reload) started a new run: the site cleared
-    // its per-component energy accumulators, so the aggregate totals clear
-    // too. A plain topology mutation keeps them (same generation).
-    clear_energy_on_new_run(slot, site);
+    // A site reset (config hot-reload) started a new run: the caches
+    // belong to the previous run and go, like the site's own
+    // per-component accumulators and histories. A plain topology
+    // mutation (same generation) keeps the energy totals and prunes
+    // the caches to the streams the new graph publishes, so the charts
+    // reading the survivors carry on instead of restarting from empty.
+    prune_for_rebuild(slot, site, &forwarders.streams);
     // Second cursor reset: any cursor present now was re-seeded during the
     // handoff (by an old forwarder up to the abort, or a new one already
     // delivering). Dropping it costs at most one real ~1 s interval and
     // guarantees no stream integrates across the swap gap.
     reset_energy_cursors(slot);
-    slot.latest.write().clear();
-    // The sparkline rings too — a rebuild that drops a stream
-    // category (no more PV, say) must not keep serving the stale
-    // series via /api/mg/{id}/microgrid/history forever.
-    slot.history.write().clear();
-    // The cumulative energy totals, however, survive the rebuild —
-    // re-expose them in the just-cleared cache.
+    // The cumulative energy totals survive a same-generation rebuild —
+    // re-expose the ones the prune dropped from the cache.
     republish_energy_totals(slot, site);
-    *slot.forwarders.lock() = handles;
+    *slot.forwarders.lock() = forwarders.handles;
     *slot.microgrid.write() = Some(mg);
     true
 }
@@ -219,6 +218,24 @@ async fn rebuild(grpc_url: &str, slot: &SharedMicrogrid, site: &MicrogridSite) {
     build_microgrid(grpc_url, slot, site).await;
 }
 
+/// One build's forwarders: the tasks to abort on the next rebuild,
+/// and the stream names they publish, which is the set of streams
+/// `retain_streams` keeps in the caches.
+#[derive(Default)]
+struct Forwarders {
+    handles: Vec<JoinHandle<()>>,
+    streams: Vec<&'static str>,
+}
+
+impl Forwarders {
+    /// Record one task and the streams it publishes (a bounds
+    /// forwarder publishes two).
+    fn push(&mut self, streams: &[&'static str], handle: JoinHandle<()>) {
+        self.handles.push(handle);
+        self.streams.extend_from_slice(streams);
+    }
+}
+
 /// Build subscriptions for the aggregate streams the metrics panel
 /// charts — grid, consumer, producer and PV active power, site and
 /// per-source reactive power, and the battery pool's power plus its
@@ -241,8 +258,8 @@ async fn subscribe_power_forwarders(
     microgrid: &mut Microgrid,
     site: &MicrogridSite,
     state: SharedMicrogrid,
-) -> Vec<JoinHandle<()>> {
-    let mut handles = Vec::new();
+) -> Forwarders {
+    let mut forwarders = Forwarders::default();
     let lm = microgrid.logical_meter();
     let metered: [(&'static str, _); 4] = [
         ("grid_power", lm.grid::<metric::AcPowerActive>()),
@@ -252,7 +269,7 @@ async fn subscribe_power_forwarders(
     ];
     for (stream, formula) in metered {
         if let Some(h) = subscribe_power_forwarder(stream, formula, site, state.clone()).await {
-            handles.push(h);
+            forwarders.push(&[stream], h);
         }
     }
     // Site Q at the connection point.
@@ -264,7 +281,7 @@ async fn subscribe_power_forwarders(
     )
     .await
     {
-        handles.push(h);
+        forwarders.push(&["grid_reactive_power"], h);
     }
     // Per-source Q for the metrics panel's Reactive card: the same
     // logical-meter formulas as the power streams, metric
@@ -278,7 +295,7 @@ async fn subscribe_power_forwarders(
         ),
     ] {
         if let Some(h) = subscribe_reactive_forwarder(stream, formula, site, state.clone()).await {
-            handles.push(h);
+            forwarders.push(&[stream], h);
         }
     }
     // Site frequency via the grid Frequency formula — a COALESCE over
@@ -294,7 +311,7 @@ async fn subscribe_power_forwarders(
     )
     .await
     {
-        handles.push(h);
+        forwarders.push(&["grid_frequency"], h);
     }
     // BatteryPool and SteamBoilerPool have the same shape — an
     // aggregate power formula plus a bounds envelope — and both take
@@ -310,7 +327,7 @@ async fn subscribe_power_forwarders(
                 pool.power_bounds(),
                 site,
                 state.clone(),
-                &mut handles,
+                &mut forwarders,
             )
             .await;
         }
@@ -328,13 +345,13 @@ async fn subscribe_power_forwarders(
                 pool.power_bounds(),
                 site,
                 state,
-                &mut handles,
+                &mut forwarders,
             )
             .await;
         }
         Err(e) => log::info!("microgrid loopback: steam boiler pool unavailable — skipping: {e}"),
     }
-    handles
+    forwarders
 }
 
 /// Forward a pool's aggregate power formula as the `power_stream`
@@ -350,15 +367,18 @@ async fn spawn_pool_forwarders(
     bounds: tokio::sync::broadcast::Receiver<Vec<frequenz_microgrid::Bounds<Power>>>,
     site: &MicrogridSite,
     state: SharedMicrogrid,
-    handles: &mut Vec<JoinHandle<()>>,
+    forwarders: &mut Forwarders,
 ) {
     // The two travel together: a pool whose power stream could not
     // be subscribed gets no envelope stream either.
     let Some(h) = subscribe_power_forwarder(power_stream, power, site, state.clone()).await else {
         return;
     };
-    handles.push(h);
-    handles.push(spawn_bounds_forwarder(bounds_streams, bounds, site, state));
+    forwarders.push(&[power_stream], h);
+    forwarders.push(
+        &bounds_streams,
+        spawn_bounds_forwarder(bounds_streams, bounds, site, state),
+    );
 }
 
 /// Forward a pool's `Vec<Bounds<Power>>` stream as the two point
@@ -618,20 +638,47 @@ fn energy_stream_for(power_stream: &str) -> Option<&'static str> {
     })
 }
 
+/// Drop the cached `latest` sample and history ring of every stream
+/// the rebuilt graph no longer publishes — a topology that lost its
+/// last PV must not keep serving `pv_power` via
+/// `/api/mg/{id}/microgrid/history` forever — and keep the rest, so
+/// the surviving charts don't restart from empty on every rebuild. An
+/// energy total belongs to its power stream: it stays while that
+/// stream is live (its forwarder keeps advancing it) and goes with it
+/// otherwise (`republish_energy_totals` then re-exposes the retained
+/// total as a single point, as before).
+fn retain_streams(state: &SharedMicrogrid, live: &[&'static str]) {
+    let mut keep: HashSet<&'static str> = live.iter().copied().collect();
+    keep.extend(live.iter().filter_map(|s| energy_stream_for(s)));
+    state.latest.write().retain(|s, _| keep.contains(s));
+    state.history.write().retain(|s, _| keep.contains(s));
+}
+
+/// Bring the slot's caches in line with the rebuilt graph. On a new run
+/// (the run generation moved: `reset()`, a config hot-reload) every
+/// cached stream goes, the energy totals included. On a same-generation
+/// rebuild the totals stay and the caches keep the streams in `live`.
+fn prune_for_rebuild(state: &SharedMicrogrid, site: &MicrogridSite, live: &[&'static str]) {
+    let new_run = clear_energy_on_new_run(state, site);
+    retain_streams(state, if new_run { &[] } else { live });
+}
+
 /// Clear the aggregate energy totals when `site`'s run generation moved
 /// past the one the slot's totals were gathered under: the site was reset
 /// (a config hot-reload), so the energy belongs to a previous run — just
 /// like the site's own per-component accumulators, which `reset()` clears.
-/// Same-generation rebuilds (topology mutations) keep the totals.
-fn clear_energy_on_new_run(state: &SharedMicrogrid, site: &MicrogridSite) {
+/// Same-generation rebuilds (topology mutations) keep the totals. Returns
+/// whether the generation moved.
+fn clear_energy_on_new_run(state: &SharedMicrogrid, site: &MicrogridSite) -> bool {
     let generation = site.run_generation();
-    if state
+    let new_run = state
         .energy_generation
         .swap(generation, std::sync::atomic::Ordering::Relaxed)
-        != generation
-    {
+        != generation;
+    if new_run {
         state.energy.write().clear();
     }
+    new_run
 }
 
 /// Drop every aggregate integrator cursor (`EnergyAccum::reset_cursor`),
@@ -647,11 +694,11 @@ fn reset_energy_cursors(state: &SharedMicrogrid) {
     }
 }
 
-/// Re-expose the retained energy totals after a rebuild cleared
+/// Re-expose the retained energy totals after a rebuild pruned
 /// `latest`/`history`, so a read of e.g. `pv_energy` still returns the
 /// accumulated value even when that stream's power never fires again (a
-/// topology that dropped PV) and would otherwise never repopulate the
-/// cleared cache. Streams a new forwarder already repopulated are left
+/// topology that dropped PV, taking `pv_energy` out of the caches with
+/// it) and would otherwise never repopulate the cache. Streams a new forwarder already repopulated are left
 /// alone — their cached sample is newer than this wall-clock-stamped
 /// republish. (A racing sample between the check and the publish can
 /// still be overwritten, but only on a live stream, whose next 1 Hz
@@ -687,7 +734,7 @@ fn republish_energy_totals(state: &SharedMicrogrid, site: &MicrogridSite) {
 /// Advance an aggregate energy total by the trapezoid between the last power
 /// sample and the incoming one, and publish the running total. The total
 /// lives in `state.energy` (persistent across rebuilds), not in `latest`
-/// (cleared on rebuild) — so a topology mutation mid-run doesn't reset the
+/// (pruned on rebuild) — so a topology mutation mid-run doesn't reset the
 /// integral. A `None` power (stream gap) carries the total forward without
 /// advancing it. Signed like the power, so the total is net energy (Wh).
 fn accumulate_energy(
@@ -804,9 +851,10 @@ mod tests {
         assert!((before - 1000.0).abs() < 1e-6, "{before}");
 
         // A rebuild resets the cursors (before its forwarders spawn),
-        // clears `latest`, then republishes the retained totals.
+        // prunes the streams the new graph dropped (here: all of them),
+        // then republishes the retained totals.
         reset_energy_cursors(&state);
-        state.latest.write().clear();
+        retain_streams(&state, &[]);
         republish_energy_totals(&state, &site);
 
         // #2: the retained total is republished into the cleared `latest`,
@@ -843,7 +891,7 @@ mod tests {
         assert!((resumed - (before + 1000.0)).abs() < 1e-6, "{resumed}");
     }
 
-    /// A forwarder sample that lands between the `latest` clear and the
+    /// A forwarder sample that lands between the `latest` prune and the
     /// republish owns the fresher value — the republish must not
     /// overwrite it with the wall-clock-stamped copy.
     #[test]
@@ -852,7 +900,7 @@ mod tests {
         let site = MicrogridSite::new();
         accumulate_energy("grid_energy", Some(1000.0), 0, &site, &state);
         reset_energy_cursors(&state);
-        state.latest.write().clear();
+        retain_streams(&state, &[]);
         // A new forwarder fires before the republish runs.
         accumulate_energy("grid_energy", Some(1000.0), HOUR_MS, &site, &state);
         let fresh_ts = state.latest.read()["grid_energy"].ts_ms;
@@ -879,6 +927,82 @@ mod tests {
         site.reset();
         clear_energy_on_new_run(&state, &site);
         assert!(state.energy.read().is_empty());
+    }
+
+    /// A rebuild drops the cached streams the new graph no longer
+    /// serves (no more PV, say) and keeps the rest — `latest` and the
+    /// history rings alike — so the surviving charts don't restart.
+    /// An energy total follows its power stream.
+    #[test]
+    fn rebuild_prunes_only_the_streams_the_new_graph_dropped() {
+        let state = new_microgrid_slot();
+        let site = MicrogridSite::new();
+        publish_scalar("grid_power", "Power", "W", Some(1.0), 0, &site, &state);
+        publish_scalar("pv_power", "Power", "W", Some(2.0), 0, &site, &state);
+        accumulate_energy("grid_energy", Some(1000.0), 0, &site, &state);
+        accumulate_energy("pv_energy", Some(1000.0), 0, &site, &state);
+        // The bounds halves have no energy companion; they survive only
+        // because the pool forwarder records both names with its task.
+        for s in ["battery_pool_bounds_lower", "battery_pool_bounds_upper"] {
+            publish_scalar(s, "Power", "W", Some(3.0), 0, &site, &state);
+        }
+
+        prune_for_rebuild(
+            &state,
+            &site,
+            &[
+                "grid_power",
+                "battery_pool_bounds_lower",
+                "battery_pool_bounds_upper",
+            ],
+        );
+
+        let latest = state.latest.read();
+        let history = state.history.read();
+        for kept in [
+            "grid_power",
+            "grid_energy",
+            "battery_pool_bounds_lower",
+            "battery_pool_bounds_upper",
+        ] {
+            assert!(latest.contains_key(kept), "latest keeps {kept}");
+            assert!(history.contains_key(kept), "history keeps {kept}");
+        }
+        for dropped in ["pv_power", "pv_energy"] {
+            assert!(!latest.contains_key(dropped), "latest drops {dropped}");
+            assert!(!history.contains_key(dropped), "history drops {dropped}");
+        }
+    }
+
+    /// A site reset (config hot-reload) starts a new run: every cached
+    /// stream goes, surviving names included, like the site's own
+    /// per-component histories. Keeping them would splice two runs
+    /// into one ring, with a cliff where the cleared energy totals
+    /// restart at zero.
+    #[test]
+    fn a_new_run_drops_every_cached_stream() {
+        let state = new_microgrid_slot();
+        let site = MicrogridSite::new();
+        publish_scalar("grid_power", "Power", "W", Some(1.0), 0, &site, &state);
+        accumulate_energy("grid_energy", Some(1000.0), 0, &site, &state);
+        prune_for_rebuild(&state, &site, &["grid_power"]);
+        assert!(
+            state.latest.read().contains_key("grid_power"),
+            "same run keeps"
+        );
+
+        site.reset();
+        prune_for_rebuild(&state, &site, &["grid_power"]);
+        assert!(
+            state.latest.read().is_empty(),
+            "{:?}",
+            state.latest.read().keys()
+        );
+        assert!(
+            state.history.read().is_empty(),
+            "{:?}",
+            state.history.read().keys()
+        );
     }
 
     #[test]
