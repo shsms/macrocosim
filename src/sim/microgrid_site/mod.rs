@@ -7,7 +7,10 @@
 //! On every `physics_tick_ms` interval, `tick_once` walks the
 //! components in registration order (children first because Lisp
 //! evaluates `:successors` before the surrounding `make-*` call) and
-//! invokes `SimulatedComponent::tick` on each.
+//! invokes `SimulatedComponent::tick` on each. That child-first
+//! registration order is the tick-order contract every emitter of
+//! `make-*` forms owes this scheduler — `site_import::forms()`, for
+//! one, sorts its output to satisfy it.
 
 use std::{
     collections::{BTreeMap, HashMap},

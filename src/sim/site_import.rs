@@ -35,6 +35,7 @@
 //! `:rated-upper`, same as an EV charger.
 
 use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 
 /// The `components.json` shape: `{"electricalComponents": [...]}`.
 #[derive(Deserialize)]
@@ -429,6 +430,45 @@ fn cycle_edge(edges: &[(u64, u64)]) -> Option<(u64, u64)> {
         .find(|(s, d)| indegree.contains_key(s) && indegree.contains_key(d))
 }
 
+/// Depth-first post-order visit over the parent → child edges: every
+/// child of `id` is emitted before `id` itself. `seen` stops a
+/// component reached from more than one parent, or through more than
+/// one path, from being pushed twice — and, because it is also
+/// checked on entry, from being *descended into* twice. That entry
+/// check is what keeps the walk linear: a component is marked only
+/// once its whole subtree has been emitted, so meeting a marked id
+/// again means that subtree is already in `ordered` and re-walking it
+/// would only rediscover the same nodes. Without it a chain of
+/// diamonds re-walks every shared subtree once per path into it,
+/// which is exponential in the chain's length (see
+/// `forms_walk_shared_subtrees_once`). `parse` has already rejected
+/// cycles (see `import_rejects_self_edges_and_cycles`), so the entry
+/// check is a performance guard, not the recursion's base case.
+///
+/// `calls` counts every entry, including the ones the memo turns
+/// straight back — that count is what the test asserts on, since the
+/// memo changes only the walk's cost, never its output.
+fn visit_post_order(
+    id: u64,
+    children: &HashMap<u64, Vec<u64>>,
+    seen: &mut HashSet<u64>,
+    ordered: &mut Vec<u64>,
+    calls: &mut u64,
+) {
+    *calls += 1;
+    if seen.contains(&id) {
+        return;
+    }
+    if let Some(kids) = children.get(&id) {
+        for &child in kids {
+            visit_post_order(child, children, seen, ordered, calls);
+        }
+    }
+    if seen.insert(id) {
+        ordered.push(id);
+    }
+}
+
 impl SiteImport {
     /// The highest component id in the import — the enterprise id
     /// allocator must move past it so later auto-assigned ids can't
@@ -437,14 +477,55 @@ impl SiteImport {
         self.components.iter().map(|c| c.id).max().unwrap_or(0)
     }
 
+    /// The order the components must be emitted in, and the number
+    /// of `visit_post_order` calls it took to work that out.
+    ///
+    /// Children before parents, as an authored config registers them:
+    /// Lisp evaluates :successors before the surrounding make-*, so an
+    /// import must not tick an inverter before the battery it pushes
+    /// into. A post-order walk over the parent → child edges gives
+    /// that order; cycles were refused at parse time. A component in
+    /// no edge is its own whole subtree, so it is emitted at the point
+    /// the outer export-order loop reaches it — interleaved with the
+    /// connected components, not collected at the end.
+    ///
+    /// The call count is here for `forms_walk_shared_subtrees_once`.
+    /// Losing the entry memo does not change the order this returns,
+    /// only how long it takes: on a chain of 25 diamonds the walk
+    /// still finishes, in minutes, with exactly the same answer. So a
+    /// test that reads the output alone stays green on the regressed
+    /// walk, and the count is the one cheap thing that does not.
+    fn ordered_ids_counting(&self) -> (Vec<u64>, u64) {
+        let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+        for &(from, to) in &self.connections {
+            children.entry(from).or_default().push(to);
+        }
+        let mut ordered = Vec::with_capacity(self.components.len());
+        let mut seen = HashSet::new();
+        let mut calls = 0;
+        for c in &self.components {
+            visit_post_order(c.id, &children, &mut seen, &mut ordered, &mut calls);
+        }
+        (ordered, calls)
+    }
+
     /// Renders one atomic form: `(progn (make-* …) … (connect …) …)`.
     /// Evaluated against the new microgrid through the same eval path
     /// UI edits take, so the persist pass regenerates that
     /// microgrid's managed file around the components this form built
     /// — the form itself is never stored, the resulting structure is.
     pub fn forms(&self) -> String {
+        // Children before parents — see `ordered_ids_counting`, which
+        // owns the walk and the reasoning behind its order.
+        let (ordered_ids, _calls) = self.ordered_ids_counting();
+        let by_id: HashMap<u64, &ImportedComponent> =
+            self.components.iter().map(|c| (c.id, c)).collect();
+
         let mut out = String::from("(progn\n");
-        for c in &self.components {
+        for id in &ordered_ids {
+            let c = by_id
+                .get(id)
+                .expect("edge endpoints exist: parse rejects dangling edges");
             out.push_str(&format!("  ({} :id {}", c.make_fn, c.id));
             for (k, v) in &c.kwargs {
                 out.push_str(&format!(" {k} {v}"));
@@ -683,6 +764,184 @@ mod tests {
         .unwrap();
         let err = parse(generic_components(), Some(dangling)).unwrap_err();
         assert!(err.contains("99"));
+    }
+
+    /// Forms come out children first, as an authored config registers
+    /// them: a battery's make precedes its inverter's, whatever the
+    /// export order, so the tick order matches.
+    #[test]
+    fn forms_emit_children_before_parents() {
+        let import = parse(generic_components(), Some(generic_connections())).unwrap();
+        let out = import.forms();
+        // Every component here carries at least one kwarg (a name),
+        // so ":id N" is always followed by a space before the next
+        // kwarg — that space, not just ":id 4", is the delimiter,
+        // since ":id 4" alone would also match ":id 40".
+        let pos = |needle: &str| {
+            out.find(needle)
+                .unwrap_or_else(|| panic!("{needle} missing in {out}"))
+        };
+        assert!(
+            pos(":id 4 ") < pos(":id 3 "),
+            "battery 4 before inverter 3:\n{out}"
+        );
+        assert!(
+            pos(":id 3 ") < pos(":id 2 "),
+            "inverter 3 before meter 2:\n{out}"
+        );
+        assert!(
+            pos(":id 2 ") < pos(":id 1 "),
+            "meter 2 before grid 1:\n{out}"
+        );
+        // connections still follow every make
+        assert!(pos("(connect") > pos(":id 1 "));
+    }
+
+    /// A diamond (1→2, 1→3, 2→4, 3→4) plus an edge-less component 5
+    /// listed between 2 and 3 in export order: 4 has two parents (2
+    /// and 3) and must still be emitted exactly once, and 5 — reached
+    /// by no edge at all — keeps its export-order place at the end,
+    /// after every edge-connected component.
+    #[test]
+    fn forms_emit_each_component_once_and_keep_unconnected_ones_in_export_order() {
+        let components: ComponentsFile = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "name": "grid", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"},
+                {"id": "2", "name": "m2", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+                {"id": "5", "name": "m5", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+                {"id": "3", "name": "m3", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+                {"id": "4", "name": "m4", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"}
+            ]}"#,
+        )
+        .unwrap();
+        let connections: ConnectionsFile = serde_json::from_str(
+            r#"{"electricalComponentConnections": [
+                {"sourceElectricalComponentId": "1", "destinationElectricalComponentId": "2"},
+                {"sourceElectricalComponentId": "1", "destinationElectricalComponentId": "3"},
+                {"sourceElectricalComponentId": "2", "destinationElectricalComponentId": "4"},
+                {"sourceElectricalComponentId": "3", "destinationElectricalComponentId": "4"}
+            ]}"#,
+        )
+        .unwrap();
+        let out = parse(components, Some(connections)).unwrap().forms();
+        // Every component here also carries a name kwarg, so ":id N "
+        // (with the trailing space) is again the safe delimiter.
+        let pos = |needle: &str| {
+            out.find(needle)
+                .unwrap_or_else(|| panic!("{needle} missing in {out}"))
+        };
+        assert_eq!(
+            out.matches(":id 4 ").count(),
+            1,
+            "component 4 emitted exactly once:\n{out}"
+        );
+        assert!(pos(":id 4 ") < pos(":id 2 "), "4 before 2:\n{out}");
+        assert!(pos(":id 4 ") < pos(":id 3 "), "4 before 3:\n{out}");
+        assert!(pos(":id 2 ") < pos(":id 1 "), "2 before 1:\n{out}");
+        assert!(pos(":id 3 ") < pos(":id 1 "), "3 before 1:\n{out}");
+        assert!(
+            pos(":id 1 ") < pos(":id 5 "),
+            "unconnected 5 after 1:\n{out}"
+        );
+    }
+
+    /// 25 chained diamonds: node k fans out to `a_k` and `b_k`, both
+    /// of which point at node k+1. Every node below the root is a
+    /// shared subtree, so a walk that only marks `seen` on the way
+    /// back up re-descends node 25 once per root-to-leaf path — 2^25
+    /// of them, minutes of spinning while the import lock is held.
+    ///
+    /// Counted, not timed. The regressed walk reaches the SAME answer,
+    /// just after exponentially many calls — about three minutes on
+    /// this fixture — so asserting on the emitted order alone would
+    /// pass on it and merely take a while doing so. The assertion
+    /// below is on the call count instead: a memoized post-order walk
+    /// enters once per component plus once per edge, so
+    /// `2 * (nodes + edges)` leaves that room and no room at all for
+    /// re-descending a shared subtree.
+    #[test]
+    fn forms_walk_shared_subtrees_once() {
+        const DIAMONDS: u64 = 25;
+        let node = |k: u64| 10 + k;
+        let fork = |k: u64, side: u64| 100 + 2 * k + side;
+        let meter = |id: u64| {
+            format!(
+                r#"{{"id": "{id}", "name": "m{id}", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"}}"#
+            )
+        };
+
+        // Export order puts the root first, so the very first walk is
+        // the one that has to cross every diamond.
+        let mut comps = vec![format!(
+            r#"{{"id": "{}", "name": "grid", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"}}"#,
+            node(0)
+        )];
+        let mut edges = Vec::new();
+        for k in 0..DIAMONDS {
+            comps.push(meter(fork(k, 0)));
+            comps.push(meter(fork(k, 1)));
+            comps.push(meter(node(k + 1)));
+            for side in 0..2 {
+                for (from, to) in [(node(k), fork(k, side)), (fork(k, side), node(k + 1))] {
+                    edges.push(format!(
+                        r#"{{"sourceElectricalComponentId": "{from}", "destinationElectricalComponentId": "{to}"}}"#
+                    ));
+                }
+            }
+        }
+        assert_eq!(comps.len(), 76, "26 chain nodes plus two forks per diamond");
+
+        let components: ComponentsFile = serde_json::from_str(&format!(
+            r#"{{"electricalComponents": [{}]}}"#,
+            comps.join(",")
+        ))
+        .unwrap();
+        let connections: ConnectionsFile = serde_json::from_str(&format!(
+            r#"{{"electricalComponentConnections": [{}]}}"#,
+            edges.join(",")
+        ))
+        .unwrap();
+
+        let import = parse(components, Some(connections)).unwrap();
+        let (_, calls) = import.ordered_ids_counting();
+        let nodes = import.components.len() as u64;
+        let edges = import.connections.len() as u64;
+        assert!(
+            calls <= 2 * (nodes + edges),
+            "the walk entered {calls} times for {nodes} nodes and {edges} edges; \
+             a memoized post-order walk enters about {} times",
+            nodes + edges
+        );
+
+        let out = import.forms();
+        // Every component carries a name kwarg, so ":id N " with the
+        // trailing space is again the safe delimiter.
+        let pos = |needle: &str| {
+            out.find(needle)
+                .unwrap_or_else(|| panic!("{needle} missing in {out}"))
+        };
+        let once = |id: u64| {
+            assert_eq!(
+                out.matches(&format!(":id {id} ")).count(),
+                1,
+                "component {id} emitted exactly once"
+            );
+        };
+        for k in 0..=DIAMONDS {
+            once(node(k));
+        }
+        for k in 0..DIAMONDS {
+            once(fork(k, 0));
+            once(fork(k, 1));
+            for side in 0..2 {
+                assert!(
+                    pos(&format!(":id {} ", node(k + 1))) < pos(&format!(":id {} ", fork(k, side))),
+                    "shared child {} before its parent {}",
+                    node(k + 1),
+                    fork(k, side)
+                );
+            }
+        }
     }
 
     /// Names with quote characters cannot break out of their string
