@@ -19,7 +19,7 @@ import { makeSplitter } from "./splitter.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
 // name → { el, contentEl, teardown, pos, cascade, isStatic, refitTimer,
-// dock, floatStyle, dragging }
+// resizeTimer, dock, floatStyle, dragging }
 // dock is the edge the card is docked to, or null while it floats;
 // floatStyle parks the card's inline float geometry while it is
 // docked.
@@ -27,6 +27,8 @@ import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 // either drag, and across the hand-over between them. The card is
 // following the pointer then, so nothing else may move it:
 // sanitizePanel, the one thing that does, gates on this.
+// resizeTimer is the pending conversion of a gripper drag into a
+// stored cap (wireResize); settleResize runs it early.
 // pos carries `bottom`: which dock edge the stored dx/dy were
 // measured against, so a reload re-anchors the card the way its saved
 // offset expects (see .anchor-bottom, savePos).
@@ -214,6 +216,7 @@ function ensurePanel(name) {
     cascade: !stored,
     isStatic,
     refitTimer: 0,
+    resizeTimer: 0,
     dock: null,
     floatStyle: "",
     dragging: false,
@@ -248,7 +251,7 @@ function ensurePanel(name) {
     }).observe(el);
   }
   wireDrag(el, name, p);
-  wireResize(el, name);
+  wireResize(el, name, p);
   panels.set(name, p);
   return p;
 }
@@ -508,24 +511,36 @@ function applyCap(el, cap) {
 // a cap in force a drag downward writes a taller inline height while
 // max-height keeps the box pinned, so a size observer never fires,
 // the cap never clears, and the drag looks dead in that direction.
-function wireResize(el, name) {
-  let timer = 0;
-  const settle = () => {
-    const h = Number.parseFloat(el.style.height);
-    el.style.height = "";
-    if (!h) return;
-    const cap = capOf(el, h);
-    applyCap(el, cap);
-    saveSize(name, cap);
-  };
+// The conversion waits RESIZE_SETTLE after the last tick, on the
+// record's resizeTimer, so a close or a dock inside that window can
+// run settleResize first, while the card is still where the drag
+// measured it, rather than letting the timer fire on a hidden or
+// re-parented card.
+function wireResize(el, name, p) {
   new MutationObserver(() => {
     if (!el.style.height) return;
     // Let the card follow the pointer while the gesture runs: the old
     // cap would otherwise pin it and the drag would look dead.
     el.style.maxHeight = "";
-    clearTimeout(timer);
-    timer = setTimeout(settle, RESIZE_SETTLE);
+    clearTimeout(p.resizeTimer);
+    p.resizeTimer = setTimeout(() => settleResize(p, name), RESIZE_SETTLE);
   }).observe(el, { attributes: true, attributeFilter: ["style"] });
+}
+
+// Turn a pending gripper drag into the stored cap now. Only an open
+// floating card can be measured against its dock; anything else just
+// drops the in-flight height — so a caller about to hide or re-parent
+// the card runs this first, while the card still counts as open and
+// floating. A no-op when no drag is pending.
+function settleResize(p, name) {
+  clearTimeout(p.resizeTimer);
+  const { el } = p;
+  const h = Number.parseFloat(el.style.height);
+  el.style.height = "";
+  if (!h || p.dock || !el.classList.contains("open")) return;
+  const cap = capOf(el, h);
+  applyCap(el, cap);
+  saveSize(name, cap);
 }
 
 function loadPos(name) {
@@ -692,6 +707,9 @@ function dockPanel(name, edge = "bottom") {
   if (!p || p.dock === edge) return;
   if (p.dock) floatPanel(name);
   ensureStripSplitter(edge);
+  // Commit a pending gripper drag before the float style is parked,
+  // so the parked style carries the cap and not a mid-drag height.
+  settleResize(p, name);
   p.floatStyle = p.el.style.cssText;
   p.el.style.cssText = "";
   p.dock = edge;
@@ -1061,6 +1079,10 @@ export function closePanel(name) {
   clearTimeout(p.refitTimer);
   // The card is going away; its dock menu must not outlive it.
   if (openMenu?.dataset.panel === name) closeDockMenu();
+  // A gripper drag that has not settled yet is committed now, while
+  // the card is still visible to measure; the timer would otherwise
+  // fire on a hidden card.
+  settleResize(p, name);
   p.el.classList.remove("open");
   // A closed tile keeps its slot but no longer counts; the strip may
   // empty.
