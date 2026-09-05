@@ -454,6 +454,12 @@ GCP active-power limiter is the motivating case).
   to zero output** *and* is dropped from the healthy `power_bounds`
   aggregate. A battery inverter clears its setpoint and awaits
   re-dispatch on recovery; a PV inverter resumes from sunlight.
+- Only a component with a power axis on the requested side stores an
+  augmentation — both inverters on P and Q, the EV charger and the
+  steam boiler on P. Every other component or axis (grid, meter,
+  battery; the charger's and boiler's Q) answers `UNIMPLEMENTED`, as
+  the setpoint path already does for a component that takes no
+  setpoint.
 - Drive sim state ad-hoc by POSTing lisp to
   `http://127.0.0.1:8801/api/eval`, e.g.
   `--data "(set-component-health 201 'error)"` → `{"ok":true,…}`.

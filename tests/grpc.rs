@@ -578,50 +578,66 @@ async fn malformed_augmentation_is_rejected() {
     .expect("valid augmentation must be accepted");
 }
 
-/// A component with no `PowerAxis` behind the augment door — a
-/// battery — still rejects a band disjoint from the envelope it
-/// advertises. The trait default is a no-op ACK only for a proposal
-/// that OVERLAPS (or a component advertising no envelope at all);
-/// blanket-ACKing everything would have let a ±5 kW battery agree to
-/// [50 kW, 60 kW] and then report bounds contradicting it.
+/// A component with no augmentation storage on the requested axis
+/// says so instead of acknowledging a cap that is never armed —
+/// the same answer a setpoint gets from a component that takes none.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_disjoint_augmentation_on_an_axis_less_component_is_rejected() {
+async fn augment_on_a_component_without_storage_is_unimplemented() {
     let s = TestServer::start(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
+    for (id, what) in [(3, "the battery"), (2, "the meter"), (1, "the grid")] {
+        let err = c
+            .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+                electrical_component_id: id,
+                target_metric: Metric::AcPowerActive as i32,
+                bounds: vec![Bounds {
+                    lower: Some(-1000.0),
+                    upper: Some(1000.0),
+                }],
+                request_lifetime: Some(30),
+            })
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{what} accepted an augmentation it cannot store"));
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{what}: {err:?}");
+        // The refusal names the component and the axis, so a client
+        // driving several at once can tell which request bounced.
+        assert!(
+            err.message().contains(&id.to_string()) && err.message().contains("AC_POWER_ACTIVE"),
+            "{what}: expected the id and metric named, got {:?}",
+            err.message(),
+        );
+    }
+}
 
-    let err = c
-        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
-            electrical_component_id: 3, // the battery: no PowerAxis
-            target_metric: Metric::AcPowerActive as i32,
-            bounds: vec![Bounds {
-                lower: Some(50_000.0),
-                upper: Some(60_000.0),
-            }],
-            request_lifetime: Some(30),
-        })
-        .await
-        .expect_err("disjoint from the battery's ±5 kW envelope");
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert!(
-        err.message().contains("current envelope")
-            && err.message().contains("5000")
-            && !err.message().contains("envelope []"),
-        "expected a non-empty current envelope named in the message, got {:?}",
-        err.message(),
-    );
-
-    // An overlapping band is still ACKed as the documented no-op.
-    c.augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
-        electrical_component_id: 3,
-        target_metric: Metric::AcPowerActive as i32,
-        bounds: vec![Bounds {
-            lower: Some(-2000.0),
-            upper: Some(2000.0),
-        }],
-        request_lifetime: Some(30),
-    })
-    .await
-    .expect("an overlapping augmentation on an axis-less component is ACKed");
+/// The refusal does not depend on the band. A battery has no
+/// `PowerAxis` to store an augmentation in, so a band disjoint from
+/// the ±5 kW envelope it advertises and a band that overlaps it are
+/// both answered UNIMPLEMENTED: neither would have armed anything, so
+/// neither is a matter of the client picking better numbers.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_axis_less_component_refuses_every_augmentation_band() {
+    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+    for (lower, upper, what) in [
+        (50_000.0, 60_000.0, "a band disjoint from the battery"),
+        (-2000.0, 2000.0, "a band overlapping the battery"),
+    ] {
+        let err = c
+            .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+                electrical_component_id: 3, // the battery: no PowerAxis
+                target_metric: Metric::AcPowerActive as i32,
+                bounds: vec![Bounds {
+                    lower: Some(lower),
+                    upper: Some(upper),
+                }],
+                request_lifetime: Some(30),
+            })
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{what} was accepted"));
+        assert_eq!(err.code(), tonic::Code::Unimplemented, "{what}: {err:?}");
+    }
 }
 
 /// A boiler sitting at target pressure with no steam demand needs no
@@ -667,6 +683,44 @@ async fn an_augmentation_disjoint_from_a_derate_is_rejected() {
     })
     .await
     .expect("a band overlapping the derate is accepted");
+}
+
+/// Storage on one axis is not storage on the other. A steam boiler
+/// has an active `PowerAxis` but no reactive one, so it stores an
+/// active augmentation and refuses a reactive one as unimplemented —
+/// the per-axis answer, not a per-component one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_component_with_only_an_active_axis_refuses_reactive_augmentation() {
+    let s = TestServer::start(BOILER_TOPOLOGY).await;
+    let mut c = connect(&s).await;
+
+    let err = c
+        .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+            electrical_component_id: 5,
+            target_metric: Metric::AcPowerReactive as i32,
+            bounds: vec![Bounds {
+                lower: Some(-1000.0),
+                upper: Some(1000.0),
+            }],
+            request_lifetime: Some(30),
+        })
+        .await
+        .expect_err("the boiler has no reactive axis to store an augmentation in");
+    assert_eq!(err.code(), tonic::Code::Unimplemented, "{err:?}");
+
+    // The same component's active axis still takes one. `[0, 20 kW]`
+    // overlaps the idle boiler's `[0, 0]` demand band.
+    c.augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
+        electrical_component_id: 5,
+        target_metric: Metric::AcPowerActive as i32,
+        bounds: vec![Bounds {
+            lower: Some(0.0),
+            upper: Some(20_000.0),
+        }],
+        request_lifetime: Some(30),
+    })
+    .await
+    .expect("the boiler's active axis stores the augmentation");
 }
 
 /// Two sequential augmentations with mutually disjoint bands: the
@@ -823,14 +877,14 @@ async fn reactive_augmentation_is_accepted_and_narrows_the_stream() {
 
 /// Zero Q headroom must not be a loophole in the augment gate.
 ///
-/// The disjoint check runs against the component's LIVE Q envelope.
-/// Telemetry normalizes a genuinely empty envelope to a present
-/// `(0, 0)` band (`VecBounds::or_zero_band`) so consumers see "zero
-/// headroom" rather than an absent bound — but if the gate saw that
-/// normalized band it would accept any augmentation straddling zero,
-/// leaving two live, mutually disjoint augmentations on the axis. So
-/// the gate reads the RAW envelope, and an empty one is disjoint from
-/// everything.
+/// The disjoint check runs against the component's LIVE Q envelope,
+/// composed inside `PowerAxis::try_augment`. Telemetry normalizes a
+/// genuinely empty envelope to a present `(0, 0)` band
+/// (`VecBounds::or_zero_band`) so consumers see "zero headroom"
+/// rather than an absent bound — but the axis never applies that
+/// normalization, and if it did it would accept any augmentation
+/// straddling zero, leaving two live, mutually disjoint augmentations
+/// on the axis. An empty envelope is disjoint from everything.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_disjoint_q_augmentation_is_rejected_at_zero_headroom() {
     let s = TestServer::start(REACTIVE_TOPOLOGY).await;
@@ -995,16 +1049,14 @@ async fn augment_rejects_an_unsupported_metric_by_name() {
     );
 }
 
-/// A reactive augmentation on a component with no Q axis is ACKed as
-/// a no-op — the same gateway behavior the active side has for
-/// axis-less components (todo #1007), chosen deliberately in the
-/// design spec rather than inherited by accident. The ACK carries an
-/// expiry, and the component's telemetry never grows a Q band.
+/// A reactive augmentation on a component with no Q axis is refused,
+/// like an active one on a component with no augmentation storage:
+/// nothing would be armed, so an ACK would lie.
 #[tokio::test(flavor = "multi_thread")]
-async fn reactive_augmentation_on_a_q_less_component_is_acked_as_a_no_op() {
+async fn reactive_augmentation_on_a_q_less_component_is_unimplemented() {
     let s = TestServer::start(REACTIVE_TOPOLOGY).await;
     let mut c = connect(&s).await;
-    let resp = c
+    let err = c
         .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
             electrical_component_id: 3, // the battery: no reactive axis
             target_metric: Metric::AcPowerReactive as i32,
@@ -1015,34 +1067,8 @@ async fn reactive_augmentation_on_a_q_less_component_is_acked_as_a_no_op() {
             request_lifetime: Some(30),
         })
         .await
-        .expect("a Q augmentation on a Q-less component is ACKed")
-        .into_inner();
-    assert!(resp.valid_until_time.is_some());
-
-    // Nothing was stored: the battery's stream stays free of reactive
-    // bounds. Read a handful of samples rather than waiting out a
-    // negative timeout.
-    let mut stream = c
-        .receive_electrical_component_telemetry_stream(
-            ReceiveElectricalComponentTelemetryStreamRequest {
-                electrical_component_id: 3,
-                filter: None,
-            },
-        )
-        .await
-        .expect("subscribe")
-        .into_inner();
-    for _ in 0..3 {
-        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), stream.message())
-            .await
-            .expect("telemetry stream timed out")
-            .expect("stream open")
-            .expect("a sample");
-        assert!(
-            reactive_sample_bounds(&msg).is_none_or(|b| b.is_empty()),
-            "a Q-less component must not grow reactive bounds from an ACKed no-op",
-        );
-    }
+        .expect_err("a Q augmentation on a Q-less component must be refused");
+    assert_eq!(err.code(), tonic::Code::Unimplemented, "{err:?}");
 }
 
 /// The reactive route feeds client input into `PowerAxis::augment`

@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
 use crate::sim::{
-    Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
+    AugmentError, Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
     bounds::VecBounds,
     decay::{SocProtect, integrate_soc_pct, sanitize_soc_pct, soc_protected_bounds},
@@ -247,13 +247,14 @@ impl SimulatedComponent for EvCharger {
         ts: DateTime<Utc>,
         bounds: VecBounds,
         lifetime: Duration,
-    ) -> Result<(), VecBounds> {
+    ) -> Result<(), AugmentError> {
         let soc = {
             let s = self.state.lock();
             VecBounds::single(s.effective_lower_w, s.effective_upper_w)
         };
         self.active
             .try_augment(ts, bounds, lifetime, 0.0, Some(&soc))
+            .map_err(AugmentError::Disjoint)
     }
 
     fn augmentation_active(
@@ -349,10 +350,11 @@ mod tests {
     }
 
     /// Augmenting the active-power bounds tightens both the
-    /// validation envelope and the telemetry-reported bounds. Before
-    /// the override on `try_augment_active_bounds` the call silently
-    /// dropped — the rated bounds stayed in effect and clients saw
-    /// a setpoint they thought they'd narrowed go through.
+    /// validation envelope and the telemetry-reported bounds. The
+    /// override on `try_augment_active_bounds` is what routes the
+    /// narrowing into the charger's power axis; without it the
+    /// trait default would refuse the augmentation as unsupported,
+    /// because there would be nowhere to store it.
     #[test]
     fn try_augment_active_bounds_narrows_validation_and_telemetry() {
         let w = MicrogridSite::new();

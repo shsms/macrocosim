@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, RwLock};
 
 use crate::sim::{
-    Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
+    AugmentError, Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
     bounds::VecBounds,
     component::{KnobKind, KnobSnapshot, ScalarReading},
@@ -286,13 +286,14 @@ impl SimulatedComponent for SteamBoiler {
         ts: DateTime<Utc>,
         bounds: VecBounds,
         lifetime: Duration,
-    ) -> Result<(), VecBounds> {
+    ) -> Result<(), AugmentError> {
         let need = {
             let s = self.state.lock();
             VecBounds::single(0.0, s.effective_upper_w)
         };
         self.active
             .try_augment(ts, bounds, lifetime, 0.0, Some(&need))
+            .map_err(AugmentError::Disjoint)
     }
 
     fn augmentation_active(

@@ -16,7 +16,7 @@ use rand::Rng;
 use tulisp::TulispContext;
 
 use crate::sim::{
-    Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
+    AugmentError, Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
     bounds::VecBounds,
     component::{KnobKind, KnobSnapshot, ScalarReading},
@@ -516,8 +516,10 @@ impl SimulatedComponent for SolarInverter {
         ts: DateTime<Utc>,
         bounds: crate::sim::bounds::VecBounds,
         lifetime: Duration,
-    ) -> Result<(), crate::sim::bounds::VecBounds> {
-        self.active.try_augment(ts, bounds, lifetime, 0.0, None)
+    ) -> Result<(), AugmentError> {
+        self.active
+            .try_augment(ts, bounds, lifetime, 0.0, None)
+            .map_err(AugmentError::Disjoint)
     }
 
     fn try_augment_reactive_bounds(
@@ -525,11 +527,12 @@ impl SimulatedComponent for SolarInverter {
         ts: DateTime<Utc>,
         bounds: crate::sim::bounds::VecBounds,
         lifetime: Duration,
-    ) -> Result<(), crate::sim::bounds::VecBounds> {
+    ) -> Result<(), AugmentError> {
         // `None`: the Q axis carries no dynamic band (`step` passes
         // none either) — its whole shape is the caps band at P.
         self.reactive
             .try_augment(ts, bounds, lifetime, self.active.actual(), None)
+            .map_err(AugmentError::Disjoint)
     }
 
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {

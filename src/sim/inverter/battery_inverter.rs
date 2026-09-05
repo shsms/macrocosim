@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
 use crate::sim::{
-    Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
+    AugmentError, Category, MicrogridSite, SetpointError, SimulatedComponent, Telemetry,
     axis::{AxisConfig, IdleTarget, PowerAxis, StepCtx},
     reactive::ReactiveCapability,
     runtime::Health,
@@ -322,8 +322,10 @@ impl SimulatedComponent for BatteryInverter {
         ts: DateTime<Utc>,
         bounds: crate::sim::bounds::VecBounds,
         lifetime: Duration,
-    ) -> Result<(), crate::sim::bounds::VecBounds> {
-        self.active.try_augment(ts, bounds, lifetime, 0.0, None)
+    ) -> Result<(), AugmentError> {
+        self.active
+            .try_augment(ts, bounds, lifetime, 0.0, None)
+            .map_err(AugmentError::Disjoint)
     }
 
     fn try_augment_reactive_bounds(
@@ -331,7 +333,7 @@ impl SimulatedComponent for BatteryInverter {
         ts: DateTime<Utc>,
         bounds: crate::sim::bounds::VecBounds,
         lifetime: Duration,
-    ) -> Result<(), crate::sim::bounds::VecBounds> {
+    ) -> Result<(), AugmentError> {
         // Read P and release the lock before entering the axis's own
         // compose-check-insert section — matches the `reactive_bounds_raw`
         // idiom below, and keeps `measured_w` from being held across
@@ -340,7 +342,9 @@ impl SimulatedComponent for BatteryInverter {
         // `None`: the Q axis's whole shape is the caps band at `p`,
         // which `try_augment` composes itself — `reactive_bounds_raw`
         // passes no dynamic band either.
-        self.reactive.try_augment(ts, bounds, lifetime, p, None)
+        self.reactive
+            .try_augment(ts, bounds, lifetime, p, None)
+            .map_err(AugmentError::Disjoint)
     }
 
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {

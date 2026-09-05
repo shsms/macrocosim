@@ -113,7 +113,7 @@ use crate::proto::microgrid::{
 use crate::proto_conv::{make_component_proto, telemetry_to_proto};
 use crate::sim::runtime::{CommandMode, Health, TelemetryMode};
 use crate::sim::setpoints::{SetpointEvent, SetpointKind, SetpointOutcome};
-use crate::sim::{SetpointError, bounds::VecBounds};
+use crate::sim::{AugmentError, SetpointError, bounds::VecBounds};
 use crate::timeout_tracker::SetpointAxis;
 
 /// gRPC frontend for one microgrid. Each microgrid registered in
@@ -744,12 +744,13 @@ impl microgrid_server::Microgrid for MicrogridServer {
                     let proposed = VecBounds::new(req.bounds);
                     // `validate_augmentation` is now shape-only (empty,
                     // non-finite edge, inverted); disjoint-from-the-live-
-                    // envelope is checked by the component itself —
+                    // envelope is checked by the component itself,
                     // atomically with applying it on an axis-backed
                     // component (`PowerAxis::try_augment`, derate band
-                    // included), and against the advertised envelope in
-                    // the trait default for everything else. That closes the race
-                    // this function used to have: validating against a
+                    // included). A component with no axis to store the
+                    // augmentation in answers `Unsupported` instead of
+                    // checking anything. That closes the race this
+                    // function used to have: validating against a
                     // lock-free read here, then applying in a second,
                     // separate lock acquisition, let two concurrent
                     // clients with mutually disjoint bands each pass
@@ -772,18 +773,31 @@ impl microgrid_server::Microgrid for MicrogridServer {
                                         },
                                     ))
                                 }
-                                // The `Err` payload is the component's
-                                // CURRENT envelope — what a client
-                                // could still command — not the
+                                // The component stores no augmentation
+                                // on this axis, so there is nothing an
+                                // ACK could promise. Same answer the
+                                // setpoint path gives a component that
+                                // takes no setpoint on this axis.
+                                Err(AugmentError::Unsupported) => {
+                                    Err(tonic::Status::unimplemented(format!(
+                                        "component {id} stores no augmentation for {}",
+                                        target_metric.as_str_name()
+                                    )))
+                                }
+                                // The `Disjoint` payload is the
+                                // component's CURRENT envelope — what a
+                                // client could still command — not the
                                 // composed result, which is empty
                                 // whenever this arm is reached and so
                                 // renders as a constant "[]". Naming
                                 // the live envelope tells the client
                                 // where to retry.
-                                Err(env) => Err(tonic::Status::invalid_argument(format!(
-                                    "augmentation is disjoint from the component's current \
-                                     envelope {env}; no valid setpoint would remain",
-                                ))),
+                                Err(AugmentError::Disjoint(env)) => {
+                                    Err(tonic::Status::invalid_argument(format!(
+                                        "augmentation is disjoint from the component's current \
+                                         envelope {env}; no valid setpoint would remain",
+                                    )))
+                                }
                             }
                         }
                         Err(status) => Err(status),

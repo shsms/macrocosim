@@ -177,6 +177,17 @@ impl fmt::Display for SetpointError {
 
 impl std::error::Error for SetpointError {}
 
+/// Why an augmentation was not stored. `Unsupported` is a component
+/// with no augmentation storage on that axis (the gateway answers
+/// UNIMPLEMENTED, as for a setpoint it takes none of); `Disjoint`
+/// carries the component's current envelope, which the proposal does
+/// not overlap.
+#[derive(Debug)]
+pub enum AugmentError {
+    Unsupported,
+    Disjoint(VecBounds),
+}
+
 /// Per-tick snapshot a component emits for the gRPC telemetry
 /// stream and the UI's history sampler. All numeric fields are
 /// SI units (W, VAR, V, A, %, Wh).
@@ -513,54 +524,32 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// through their axis's `PowerAxis::try_augment`, which composes,
     /// checks and inserts under one lock.
     ///
-    /// The default covers everything else — a battery, a meter, a
-    /// grid connection point: there is no axis to insert into, so
-    /// nothing is stored, but the proposal is still CHECKED against
-    /// whatever envelope the component advertises. A band disjoint
-    /// from `effective_active_bounds()` is rejected (`Err(current)`,
-    /// the same actionable payload the axis returns) rather than
-    /// ACKed as a no-op — a client asking a ±5 kW battery for
-    /// [50 kW, 60 kW] has made a mistake and must hear about it. A
-    /// component advertising no envelope at all (`None`), or one the
-    /// proposal overlaps, keeps the no-op ACK.
-    ///
-    /// No TOCTOU concern in the default: nothing here mutates the
-    /// component, and a non-axis component's bounds are not moved by
-    /// augmentations, so there is no compose-then-insert window to
-    /// close (which is exactly why it needn't hold a lock the way
-    /// `PowerAxis::try_augment` must).
+    /// The default says `Unsupported`: this component stores no
+    /// augmentation on its active axis. A battery, a meter, a grid
+    /// connection point have no `PowerAxis` to insert into, so there
+    /// is nothing an ACK could promise — the gateway answers
+    /// UNIMPLEMENTED, exactly as it does for a setpoint a component
+    /// takes none of.
     fn try_augment_active_bounds(
         &self,
         _create_ts: DateTime<Utc>,
-        bounds: VecBounds,
+        _bounds: VecBounds,
         _lifetime: Duration,
-    ) -> Result<(), VecBounds> {
-        match self.effective_active_bounds() {
-            Some(current) if current.intersect(&bounds).0.is_empty() => Err(current),
-            _ => Ok(()),
-        }
+    ) -> Result<(), AugmentError> {
+        Err(AugmentError::Unsupported)
     }
 
-    /// Q twin of [`Self::try_augment_active_bounds`], checking against
-    /// [`Self::reactive_bounds_raw`] — RAW, not `reactive_bounds`,
-    /// for the reason spelled out on that method: the normalized
-    /// `(0, 0)` band would let an augmentation straddling zero look
-    /// compatible with a zero-headroom axis.
-    ///
-    /// A component with no Q axis at all reports `None` and keeps the
-    /// no-op ACK, matching the pinned gateway behaviour (see
-    /// `reactive_augmentation_on_a_q_less_component_is_acked_as_a_no_op`
-    /// in `tests/grpc.rs`).
+    /// Q twin of [`Self::try_augment_active_bounds`], with the same
+    /// default: a component with no reactive `PowerAxis` stores no
+    /// reactive augmentation and says `Unsupported` rather than
+    /// acknowledging a cap that is never armed.
     fn try_augment_reactive_bounds(
         &self,
         _create_ts: DateTime<Utc>,
-        bounds: VecBounds,
+        _bounds: VecBounds,
         _lifetime: Duration,
-    ) -> Result<(), VecBounds> {
-        match self.reactive_bounds_raw() {
-            Some(current) if current.intersect(&bounds).0.is_empty() => Err(current),
-            _ => Ok(()),
-        }
+    ) -> Result<(), AugmentError> {
+        Err(AugmentError::Unsupported)
     }
 
     /// Override the active-power value a meter publishes with a
@@ -790,12 +779,14 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// The same envelope WITHOUT the zero-headroom normalization: an
     /// empty `VecBounds` really means "no band is legal right now".
     ///
-    /// The augment gate must use this one — its disjoint check is the
-    /// reason it exists: against the normalized band an
-    /// augmentation straddling zero looks like it overlaps a
-    /// zero-headroom axis, and accepting it can leave two live,
-    /// mutually disjoint augmentations. Against the raw envelope an
-    /// empty band is disjoint from everything, which is the truth.
+    /// The raw form exists so that `reactive_bounds()`'s zero-headroom
+    /// normalization stays a telemetry-only concern: a `(0, 0)` band
+    /// is what a stream consumer needs to see, but it would read as
+    /// "zero is still legal" to anything doing set arithmetic. No
+    /// augment path calls either method — `PowerAxis::try_augment`
+    /// composes the axis's own band under its lock and checks against
+    /// that. Callers that need the envelope as a set, rather than as a
+    /// sample to display, want this one.
     fn reactive_bounds_raw(&self) -> Option<VecBounds> {
         None
     }
