@@ -716,7 +716,10 @@ fix or rename until fixed.
 even receive the =json= flag — they ignore =--json= entirely rather
 than printing Debug. Fold them into this fix.
 
-** TODO [#C] index.html + style.css fail biome's recommended rules       :ui:
+** DONE [#C] index.html + style.css fail biome's recommended rules       :ui:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
 
 CI lints only the hand-written JS (all clean). Running biome over
 =ui-assets/= also flags 17 errors + ~29 warnings in =index.html= and
@@ -725,6 +728,12 @@ CI lints only the hand-written JS (all clean). Running biome over
 the stylesheet. Worth a dedicated cleanup pass that then widens the
 CI lint to the whole directory; mechanical but touches a lot of
 lines, and the specificity fixes need visual verification.
+
+Done 2026-09-06: index.html a11y errors fixed; CI runs =biome check
+ui-assets= (also enforces import order); noDescendingSpecificity is
+off for style.css in biome.json until its rules are reordered with a
+browser. Left: 6 noImportantStyles warnings; the pulse sparkline's
+aria-label never carries the current rate.
 
 * Review backlog — 2026-07-16
 
@@ -894,7 +903,10 @@ tick's ramp value stand (don't zero published on a slewing reset)
 or accept the artifact. Interacts with the trip/reset split fixed
 in =0fb01e3= (health trips now snap; TTL resets still slew).
 
-*** TODO [#C] Imported sites tick parents before children     :consistency:
+*** DONE [#C] Imported sites tick parents before children       :consistency:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
 
 =site_import::forms()= emits =(make-*)= forms in export order, so
 a battery can register after its inverter — the opposite tick
@@ -905,7 +917,13 @@ one-tick-lagged for authored configs. Settles either way; a
 topological sort of the emitted makes would normalize the step
 response.
 
-*** TODO [#C] Site-level runtime-knob setters accept unregistered ids :consistency:
+Done 2026-09-06: forms() emits children first via a post-order walk
+over the connections (cycles are refused at parse time).
+
+*** DONE [#C] Site-level runtime-knob setters accept unregistered ids :consistency:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
 
 =set_health= / =set_telemetry_mode= / =set_command_mode= use
 =entry(id).or_default()= with no registration check (a unit test
@@ -915,6 +933,9 @@ with a documented rationale. A ghost entry sticks around until
 fault knob. The Lisp defuns validate since =fa39fc3=, so only
 direct Rust callers can still hit it — decide whether the site API
 should validate too (behavior change + test update).
+
+Done 2026-09-06: all three setters reject an unregistered id;
+set_health returns a Result like its siblings.
 
 *** TODO [#C] Dispatch Update cannot clear a recurrence rule          :api:
 
@@ -1138,7 +1159,11 @@ in the same pass; the items below each need a design call.
 
 ** Fidelity / API semantics
 
-*** TODO [#B] EvCharger has no own-health gate                :fidelity:
+*** DONE [#B] EvCharger has no own-health gate                     :fidelity:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
+
 An =:health 'error= / ='standby= charger keeps charging at its armed
 setpoint (=ev_charger.rs tick= has no trip; both inverters trip to
 zero). Contradicts =integrate_energy=, which freezes the errored
@@ -1146,6 +1171,9 @@ component's energy cursor while meter aggregates keep accruing the
 same watts. Decision: give it the inverter-style trip — and pick the
 recovery semantic (await re-dispatch like the battery inverter, or
 auto-resume).
+
+Done 2026-09-06: trips like the battery inverter by default;
+=:resume-on-recovery t= keeps the command and ramps back on recovery.
 
 *** DONE [#B] PV health-trip never trips the reactive ramp :reactive:fidelity:
 :LOGBOOK:
@@ -1166,7 +1194,11 @@ own doc says the snap exists to prevent. Decision: full
 command) vs keep the armed command but snap the ramp actual to 0
 (needs a small ReactivePath API addition).
 
-*** TODO [#B] Augment on a non-augmentable component is ACKed :api:bounds:
+*** DONE [#B] Augment on a non-augmentable component is ACKed    :api:bounds:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
+
 =augment_active_bounds= is a default no-op (only inverters + EV
 charger override), and the gRPC handler ACKs with a =valid_until= —
 a bounds-driving app augmenting a battery/meter/grid believes a cap
@@ -1177,25 +1209,54 @@ and reject at the gateway (which status — UNIMPLEMENTED to mirror
 setpoints, or INVALID_ARGUMENT?), or implement augmentation storage
 for more categories.
 
-*** TODO [#C] EvCharger TTL-expiry snaps to 0, inverters slew :fidelity:
+Done 2026-09-06 (ruling: UNIMPLEMENTED on both axes): the trait doors
+default to =AugmentError::Unsupported=; only PowerAxis-backed
+components store augmentations. This replaced the pinned no-op ACK a
+Q-less component gave a reactive augment.
+
+*** DONE [#C] EvCharger TTL-expiry snaps to 0, inverters slew      :fidelity:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
+
 =EvCharger::reset_setpoint= uses =snap_to= (22 kW → 0 in one tick)
 while both inverters treat the same reset as "a control event, not a
 physical discontinuity" and slew down. Decision: align on slew-down
 or document snap-to-park as intended for chargers.
 
-*** TODO [#C] SetPower response stream skips the ACCEPTED phase   :api:
+Done 2026-09-06: TTL expiry slews down at the ramp rate. The steam
+boiler is now the last component that snaps on reset and has no
+health gate.
+
+*** DONE [#C] SetPower response stream skips the ACCEPTED phase         :api:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
+
 The proto documents initial-response (ACCEPTED) then final
 (SUCCESS/FAILED/OVERRIDDEN); macrocosim sends one SUCCESS and closes
 (=server.rs do_set_power=). Known frequenz clients tolerate it.
 Decision: emit ACCEPTED-then-SUCCESS for fidelity, or document the
 single-message simplification.
 
-*** TODO [#C] Augment lifetime fallback is 60 s, proto says 5 s   :api:
+Done 2026-09-06: the stream carries ACCEPTED then SUCCESS, both with
+the armed expiry. Left open: an invalid request is still a gRPC error
+status, not the proto's in-stream REJECTED (the Python client relies
+on the error).
+
+*** DONE [#C] Augment lifetime fallback is 60 s, proto says 5 s         :api:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
+
 An absent =request_lifetime= on Augment falls back to the shared
 =default_request_lifetime= (60 s); the vendored proto documents 5 s
 for Augment (60 s matches only SetPower). Recovery-timing tests
 against macrocosim run differently than against production.
 Decision: per-RPC fallbacks or one knob + documented deviation.
+
+Done 2026-09-06: per-RPC knob =default_augment_lifetime= (5 s) with
+=(set-default-augment-lifetime-ms)=, persisted to enterprise.lisp.
 
 ** Config semantics
 
@@ -1233,7 +1294,11 @@ but if the convention is load-dir the fix is the same
 
 ** Python client
 
-*** TODO [#B] A dead metric pump serves frozen values forever :python:api:
+*** DONE [#B] A dead metric pump serves frozen values forever    :python:api:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
+
 =_grpc.py= (both flavors): a stream the server ends cleanly (e.g.
 =TelemetryMode.CLOSED=) exhausts the pump; =GrpcStreamBroadcaster=
 only retries gRPC errors, so after the fault knob is restored every
@@ -1242,20 +1307,45 @@ sample until timeout, or passes against pre-fault data. Decision: on
 pump exit, evict the cached value (reads return None) and/or re-open
 the stream on the next read.
 
-*** TODO [#C] assert_passed() passes when zero checks ran :python:scenarios:
+Done 2026-09-06: both clients evict the cached value and the client's
+dead stream broadcaster when a pump ends, so the next read returns
+None and opens a fresh stream; pinned by a live test (CLOSED → None →
+restore → value). Depends on the private
+=_component_data_broadcasters= cache of frequenz-client-microgrid
+~=0.18 (getattr-guarded; the live test is the tripwire).
+
+*** DONE [#C] assert_passed() passes when zero checks ran  :python:scenarios:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
+
 A scenario stopped before its first =(check …)= fires reports
 =checks_failed: 0= and the gate goes green having verified nothing.
 Decision: fail (or warn) when =checks_passed + checks_failed == 0=,
 or compare against the authored =Scenario._checks= count when the
 client authored the scenario.
 
-*** TODO [#C] pytest marker gate runs after an already-failed test :python:testing:
+Done 2026-09-06: zero checks is a failure in the sync and async
+clients and in the stepped runner. Left open: macroctl's own --assert
+still exits 0 on zero checks; partial truncation (1 of 5 checks) still
+passes.
+
+*** DONE [#C] pytest marker gate runs after an already-failed test :python:testing:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
+:END:
+
 The =macrocosim_scenario= marker path runs-and-gates the scenario in
 fixture teardown even when the test body failed (spending the full
 scenario length on a red test), and a failed gate surfaces as a
 teardown ERROR, not the FAILURE the docstring promises. Decision:
 observe the test outcome via a =pytest_runtest_makereport= hook and
 skip the gate on failure, or document the teardown-error semantics.
+
+Done 2026-09-06: a makereport hook records the call outcome; the gate
+runs only after a passing body (skip, xfail and setup errors do not
+gate). A failed gate is documented as a teardown error. Plugin floor:
+pytest >= 7.4.
 
 *** TODO [#C] Sync Site close-race comments overstate the locks :python:cleanup:
 A =to_thread= read blocked on =_grpc_lock=/=_pump_lock= during
@@ -1941,8 +2031,9 @@ or generated).
 Done 2026-09-05: --panel-min-height on :root; side-panel.js reads it
 once at load (literal 60 only for the DOM-shim fallback).
 
-** TODO SPA structural cleanups: alive-token helpers, store-panel coupling, fmtValue dedup :ui:cleanup:
+** DONE SPA structural cleanups: alive-token helpers, store-panel coupling, fmtValue dedup :ui:cleanup:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-06 So 01:13]
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
@@ -1951,6 +2042,10 @@ merge the chartsAliveToken / snapshotAliveToken idiom into one
 helper; decouple metrics-store's reseed gating from side-panel's
 isPanelOpen; dedupe fmtValue vs formatScaled. Behavior-neutral
 batch, needs its own review pass.
+
+Done 2026-09-06: one aliveToken helper, startAutoReseed takes a
+predicate, fmtValue delegates to formatScaled (26M-case fuzz found no
+output difference).
 
 ** DONE SteamBoiler::new accepts configs that panic in tick   :rust:fidelity:
 :LOGBOOK:
@@ -2055,3 +2150,71 @@ The clap help says --state-dir "Defaults to the current directory"
 and the binary resolves None to "." — but Config::new defaults to
 the script's own directory. Two constructors, two defaults; decide
 which is right and align the other (plus the help text).
+
+* Review backlog — 2026-09-06
+** TODO SteamBoiler has no health gate and snaps on TTL expiry :rust:fidelity:
+:LOGBOOK:
+- State "TODO"       from              [2026-09-06 So 01:14]
+:END:
+
+After the EV charger fix the boiler is the last component whose tick
+ignores =:health= (an errored boiler keeps drawing) and whose
+=reset_setpoint= snaps to zero instead of slewing. The trait doc for
+=reset_setpoint= ("snaps back to the idle value") now describes only
+it. Give it the inverter-style trip and the slewing reset.
+
+** TODO macroctl --assert exits 0 when a scenario ran no check :api:scenarios:
+:LOGBOOK:
+- State "TODO"       from              [2026-09-06 So 01:14]
+:END:
+
+=scenario run --assert= (live and stepped) tests =failed > 0= only
+(=src/bin/macroctl.rs= ~967-972, ~1029-1032). The Python wrappers
+now fail on zero checks; direct CLI users still get a green exit for
+a scenario that verified nothing. Mirror the Python rule.
+
+Deeper fix: a =passed= verdict in the report producer
+(=scenario_report_json=), so macroctl and the three Python sites read
+one boolean instead of re-deriving it.
+
+** TODO SetPower rejects with a gRPC status, proto says in-stream REJECTED :api:
+:LOGBOOK:
+- State "TODO"       from              [2026-09-06 So 01:14]
+:END:
+
+An invalid or out-of-envelope SetPower is refused with a gRPC error
+status; the proto models it as a first response carrying REJECTED.
+Known clients (and =python/src/macrocosim/_grpc.py=, which raises
+=SetpointRejected= from the error) rely on today's shape. Decision:
+document the deviation or switch and adapt the client.
+
+** TODO macroctl augment-bounds --lifetime help drifts from the RPC :cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-09-06 So 01:14]
+:END:
+
+The help says =(10..=900)= and defaults to 60 s; the Augment RPC
+accepts 5..=900 and now falls back to 5 s. Cosmetic: the CLI always
+sends an explicit lifetime.
+
+** TODO Pulse sparkline is unreadable non-visually                  :ui:a11y:
+:LOGBOOK:
+- State "TODO"       from              [2026-09-06 So 01:14]
+:END:
+
+=#pulse-spark= carries =role="img"= and a static aria-label; the
+setpoints group has no numeric readout, so the rate is unreachable
+for a screen reader. Set the aria-label from =renderSpark()= or add
+an sr-only count. Also: five JS-generated buttons (dialogs.js:250,
+app.js:280-281, editor.js:213, inspect.js:398) have no =type=; biome
+cannot see them; none sits in a form.
+
+** TODO Pasted components register in selection order        :ui:consistency:
+:LOGBOOK:
+- State "TODO"       from              [2026-09-06 So 07:18]
+:END:
+
+=editor.js= =pasteClipboard= emits =(let* ((m1 (make-…)) …) (connect m1
+m2) …)= in topology selection order, so a pasted inverter can register
+before its battery — the tick-order bug 865a66a fixed for imports.
+Apply the same child-first sort to the pasted bindings.
