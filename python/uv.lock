@@ -281,6 +281,8 @@ dependencies = [
 [package.optional-dependencies]
 grpc = [
     { name = "frequenz-client-microgrid" },
+    { name = "pluggy" },
+    { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
 
@@ -298,6 +300,8 @@ requires-dist = [
     { name = "frequenz-client-microgrid", marker = "extra == 'grpc'", specifier = "~=0.18" },
     { name = "frequenz-quantities", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "pluggy", marker = "extra == 'grpc'", specifier = ">=1.2" },
+    { name = "pytest", marker = "extra == 'grpc'", specifier = ">=7.4" },
     { name = "pytest-asyncio", marker = "extra == 'grpc'", specifier = ">=0.24" },
 ]
 provides-extras = ["grpc"]

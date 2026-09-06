@@ -27,11 +27,15 @@ and the test passes green.
 
 The binary is found via ``MACROCOSIM_BIN`` / ``$PATH`` (or pass one through
 a ``macrocosim_bin`` fixture).
+
+The plugin needs pytest 7.4 or newer and pluggy 1.2 or newer (``StashKey``,
+new-style hook wrappers); older pytests fail to load it at the ``pytest11``
+entry point.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 
 import pytest
 
@@ -42,9 +46,24 @@ from macrocosim.build import LaunchConfig
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
-        "macrocosim_scenario(name): run the named registered scenario and "
-        "fail the test on any failed check, or if none ran.",
+        "macrocosim_scenario(name): run the named registered scenario after a "
+        "passing test body and fail on any failed check, or if none ran. The "
+        "failure is reported as a teardown error on the test.",
     )
+
+
+_CALL_PASSED = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Record whether the test body itself passed, for the fixture to read."""
+    report = yield
+    if report.when == "call":
+        item.stash[_CALL_PASSED] = report.passed
+    return report
 
 
 @pytest.fixture
@@ -70,10 +89,18 @@ def macrocosim(
     """A freshly launched Site per test, torn down afterwards.
 
     If the test is marked ``@pytest.mark.macrocosim_scenario("name")``, the
-    named scenario is run and gated after the test body returns.
+    named scenario is run and gated after a passing test body. A failed check
+    is reported as a teardown error on the test, which is what pytest reports
+    for a fixture that raises after its yield.
     """
     with mc.launch(macrocosim_config, bin=macrocosim_bin) as site:
         yield site
+        # Only a body that ran and passed leaves something worth gating.
+        # Skipping saves the scenario's full length on a red test, and a
+        # body that was skipped, xfailed, or never ran because another
+        # fixture failed in setup has no result for the scenario to confirm.
+        if not request.node.stash.get(_CALL_PASSED, False):
+            return
         marker = request.node.get_closest_marker("macrocosim_scenario")
         if marker is not None:
             if not marker.args:

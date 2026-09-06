@@ -1,5 +1,6 @@
 """Demo of the ``macrocosim_scenario`` marker: the named registered
-scenario is run and gated after the test body."""
+scenario is run and gated after a passing test body; a failed check is a
+teardown error."""
 
 from __future__ import annotations
 

@@ -230,7 +230,9 @@ async def test_grid_holds(macrocosim):
     await macrocosim.expect.grid_power(
         approx=Power.from_kilowatts(7), tol=Power.from_watts(500))
 
-@pytest.mark.macrocosim_scenario("cloud-fade")   # runs + gates after the test
+@pytest.mark.macrocosim_scenario("cloud-fade")   # runs and gates after a
+                                                # passing test body; a failed
+                                                # check is a teardown error
 def test_scenario(macrocosim): ...
 ```
 
