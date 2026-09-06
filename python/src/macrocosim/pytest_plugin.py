@@ -43,7 +43,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "macrocosim_scenario(name): run the named registered scenario and "
-        "fail the test on any failed check.",
+        "fail the test on any failed check, or if none ran.",
     )
 
 
@@ -79,6 +79,6 @@ def macrocosim(
             if not marker.args:
                 raise pytest.UsageError(
                     "@pytest.mark.macrocosim_scenario needs the scenario name, "
-                    'e.g. @pytest.mark.macrocosim_scenario("peak-evening")'
+                    'e.g. @pytest.mark.macrocosim_scenario("hold-load")'
                 )
             site.scenario(str(marker.args[0])).run(wait=True).assert_passed()

@@ -43,6 +43,7 @@ from ..build import RawLisp, to_lisp_atom
 from ..errors import EvalRejected
 from ..metrics import MetricSpec
 from ..runtime import MicrogridEndpoint
+from ..scenarios import _assert_report_passed
 from ..signals import CumulativeSignal, Signal
 from ._grpc import AsyncGrpcClient
 from ._http import AsyncHttpClient
@@ -610,14 +611,10 @@ class ScenarioRun:
         return report
 
     async def assert_passed(self) -> ScenarioReport:
-        """Raise if any ``(check …)`` failed; return the report otherwise."""
+        """Raise if any ``(check …)`` failed, or if none ran; return the report
+        otherwise."""
         report = await self.report()
-        failed = report.get("checks_failed", 0)
-        if failed:
-            broken = [c for c in report.get("checks", []) if not c.get("passed", True)]
-            raise AssertionError(
-                f"scenario {self._name!r}: {failed} check(s) failed: {broken}"
-            )
+        _assert_report_passed(self._name, report)
         return report
 
     async def events(self, *, since: int = 0) -> list[JournalEvent]:

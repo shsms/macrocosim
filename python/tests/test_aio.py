@@ -245,3 +245,27 @@ async def test_scenario_wait_requires_a_length() -> None:
     site._http.get_json = fake_get_json  # type: ignore[method-assign]
     with pytest.raises(ValueError, match="no :length"):
         await site.scenario("soak").wait()
+
+
+async def test_scenario_assert_passed_returns_report_when_clean() -> None:
+    site = _site()
+
+    async def fake_get_json(path: str) -> Any:
+        assert path == "/api/scenario/report"
+        return {"name": "s", "checks_passed": 2, "checks_failed": 0, "checks": []}
+
+    site._http.get_json = fake_get_json  # type: ignore[method-assign]
+    report = await site.scenario("s").assert_passed()
+    assert report["checks_passed"] == 2
+
+
+async def test_scenario_assert_passed_raises_when_no_check_ran() -> None:
+    site = _site()
+
+    async def fake_get_json(path: str) -> Any:
+        assert path == "/api/scenario/report"
+        return {"name": "s", "checks_passed": 0, "checks_failed": 0, "checks": []}
+
+    site._http.get_json = fake_get_json  # type: ignore[method-assign]
+    with pytest.raises(AssertionError, match="'s'.*no check ran"):
+        await site.scenario("s").assert_passed()

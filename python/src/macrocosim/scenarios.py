@@ -9,7 +9,7 @@ reach it via ``site.scenario(name)``:
 ``:length`` or ``until=``), then stops it so the report freezes — the same
 sequence as ``macroctl scenario run --wait``. ``report()`` returns the parsed
 pass/fail ledger + stats; ``assert_passed()`` raises on any failed
-``(check …)``; ``events()`` reads the journal.
+``(check …)``, or if none ran; ``events()`` reads the journal.
 
 Times are :mod:`datetime` (a ``timedelta`` offset, or a ``datetime.time``
 for an absolute schedule); check values are ``frequenz-quantities``.
@@ -65,6 +65,20 @@ def _time_literal(value: timedelta | clock_time) -> str:
         # microsecond resolution.
         text = f"{secs:.6f}".rstrip("0")
     return f'"{text}s"'
+
+
+def _assert_report_passed(name: str, report: ScenarioReport) -> None:
+    """Raise unless the report shows at least one check and no failures."""
+    failed = report.get("checks_failed", 0)
+    if failed:
+        broken = [c for c in report.get("checks", []) if not c.get("passed", True)]
+        raise AssertionError(f"scenario {name!r}: {failed} check(s) failed: {broken}")
+    # The failed branch above already returned, so failed == 0 here.
+    if not report.get("checks_passed", 0):
+        raise AssertionError(
+            f"scenario {name!r}: no check ran — the scenario ended "
+            "before its first (check …) fired, so nothing was verified"
+        )
 
 
 @dataclass
@@ -309,14 +323,10 @@ class ScenarioRun:
         return report
 
     def assert_passed(self) -> ScenarioReport:
-        """Raise if any ``(check …)`` failed; return the report otherwise."""
+        """Raise if any ``(check …)`` failed, or if none ran; return the report
+        otherwise."""
         report = self.report()
-        failed = report.get("checks_failed", 0)
-        if failed:
-            broken = [c for c in report.get("checks", []) if not c.get("passed", True)]
-            raise AssertionError(
-                f"scenario {self._name!r}: {failed} check(s) failed: {broken}"
-            )
+        _assert_report_passed(self._name, report)
         return report
 
     def events(self, *, since: int = 0) -> list[JournalEvent]:
@@ -340,7 +350,8 @@ def run_scenario_stepped(
     (e2e-testing.md mode 1). ``config`` is a ``.lisp`` path, or builder
     object(s) (a ``Microgrid`` and ``Scenario``) rendered to a temp config.
     Shells ``macroctl scenario run NAME --stepped --config … --json``; with
-    ``assert_pass`` a non-zero exit (a failed ``(check …)``) raises.
+    ``assert_pass`` a non-zero exit (a failed ``(check …)``), or a report
+    with no checks run, raises.
     """
     binary = resolve_binary(
         "macroctl", env_var="MACROCTL_BIN", explicit=macroctl_bin, flag="macroctl_bin"
@@ -399,6 +410,8 @@ def run_scenario_stepped(
         )
     if report is None:
         raise RuntimeError(f"macroctl produced no JSON report:\n{result.stderr}")
+    if assert_pass:
+        _assert_report_passed(name, report)
     return report
 
 

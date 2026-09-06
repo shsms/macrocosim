@@ -144,6 +144,12 @@ def test_assert_passed_returns_report_when_clean() -> None:
     assert report["checks_passed"] == 2
 
 
+def test_assert_passed_raises_when_no_check_ran() -> None:
+    site = FakeSite({"checks_passed": 0, "checks_failed": 0, "checks": []})
+    with pytest.raises(AssertionError, match="'s'.*no check ran"):
+        ScenarioRun(site, "s").assert_passed()
+
+
 def test_assert_passed_raises_on_failure() -> None:
     report = {
         "checks_passed": 0,
@@ -199,6 +205,19 @@ def test_run_scenario_stepped_returns_report(monkeypatch, tmp_path) -> None:
     )
     report = run_scenario_stepped(str(tmp_path / "c.lisp"), "s")
     assert report["checks_passed"] == 1
+
+
+def test_run_scenario_stepped_raises_when_no_check_ran(monkeypatch, tmp_path) -> None:
+    # macroctl's --assert exits 0 when nothing ran; the zero-check counts
+    # must be caught even though the exit code alone looks clean.
+    monkeypatch.setattr(scenarios_mod, "resolve_binary", lambda *a, **k: "macroctl")
+    monkeypatch.setattr(
+        scenarios_mod.subprocess,
+        "run",
+        lambda *a, **k: _FakeProc(0, '{"checks_passed": 0, "checks_failed": 0}'),
+    )
+    with pytest.raises(AssertionError, match="'s'.*no check ran"):
+        run_scenario_stepped(str(tmp_path / "c.lisp"), "s")
 
 
 def test_run_scenario_stepped_raises_on_nonzero_exit(monkeypatch, tmp_path) -> None:
