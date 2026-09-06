@@ -14,6 +14,32 @@ import { mgPath, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
 import { topology } from "./topology.js";
 
+// A recency token for work that awaits and then installs something a
+// teardown must be able to disown. `capture()` before the await,
+// `stale(token)` after: a teardown that ran in between `bump()`s the
+// token, and the late result is dropped instead of installed. Both
+// uses here are orthogonal to `showGen`, which only moves when a NEW
+// node is selected — closePanel("node") and a node-panel re-render
+// run the panel's teardown WITHOUT touching showGen, so a late result
+// would otherwise pass the unchanged gen check and install a uPlot,
+// a live metricsStore subscription, or a TTL timer that nothing is
+// registered to ever clear. Two live in this file: one for the
+// deferred chart builds, one for the /api/component snapshot fetches
+// (which also keep a sequence so two in-flight fetches for the same
+// open node resolve in start order).
+function aliveToken() {
+  let alive = 0;
+  return {
+    capture: () => alive,
+    stale: (token) => token !== alive,
+    bump: () => {
+      alive++;
+    },
+  };
+}
+const chartsAlive = aliveToken();
+const snapshotAlive = aliveToken();
+
 // Per-component history metrics, keyed by category. No `grid` entry:
 // the sim's Grid publishes no per-component telemetry by design, so
 // the GCP charts the site-wide grid_frequency stream instead — see
@@ -136,18 +162,6 @@ function clearGridChart() {
   gridChart = null;
   chart?.destroy();
 }
-
-// Recency guard for the two deferred chart builds, orthogonal to
-// showComponent's `showGen` for the same reason snapshotAliveToken is
-// (see its comment below): closePanel("node") runs the node panel's
-// teardown WITHOUT bumping showGen. A build parked on its history
-// fetch / store backfill would then resolve after the close, pass the
-// unchanged gen check, and install itself with `p.teardown` already
-// null — a uPlot, and for the grid a live metricsStore subscription,
-// that nothing is registered to ever clear. The teardown closure
-// bumps this; each build captures it before its await and treats a
-// change as stale.
-let chartsAliveToken = 0;
 
 // The operational modes a component can be declared with, plus a
 // hover hint each — shared with the topology context menu's bulk
@@ -654,36 +668,23 @@ function renderInspect(d, parentIds, childIds) {
 let liveState = null;
 let ttlTimerId = null;
 
-// Recency guards for /api/component fetches — orthogonal to
-// showComponent's own `showGen`, which only changes when a NEW node
-// is selected. Two failure modes `showGen` alone doesn't cover:
-//
-//   - closePanel("node"), or re-rendering the node panel, runs this
-//     panel's teardown (stopTtlTimer) WITHOUT bumping showGen — a
-//     fetch already in flight for the closed
-//     node would otherwise resolve, pass the (unchanged) gen check,
-//     and resurrect a timer no teardown will ever clear again.
-//     `snapshotAliveToken` closes this: stopTtlTimer bumps it, and
-//     every fetch's resolution checks it's still the token it
-//     started with.
-//   - inspectorLive.applySetpoint's re-fetch has no `gen` at all (it
-//     isn't triggered by a render), and two accepted setpoint events
-//     for the same still-open node can resolve out of order.
-//     `snapshotSeq` closes this: every snapshot-triggering fetch
-//     (the initial one AND every applySetpoint re-fetch) bumps it on
-//     start, and only the most-recently-STARTED one's resolution is
-//     allowed to paint.
-let snapshotAliveToken = 0;
+// The start-order half of the /api/component fetch guard, alongside
+// `snapshotAlive`: inspectorLive.applySetpoint's re-fetch has no
+// `gen` at all (it isn't triggered by a render), so two accepted
+// setpoint events for the same still-open node can resolve out of
+// order. Every snapshot-triggering fetch (the initial one AND every
+// applySetpoint re-fetch) bumps this on start, and only the
+// most-recently-STARTED one's resolution is allowed to paint.
 let snapshotSeq = 0;
 
 // Call when starting any /api/component fetch that will (on success)
 // call applySnapshot. Returns a token to pass to snapshotFetchStale
 // once the fetch settles.
 function beginSnapshotFetch() {
-  return { alive: snapshotAliveToken, seq: ++snapshotSeq };
+  return { alive: snapshotAlive.capture(), seq: ++snapshotSeq };
 }
 function snapshotFetchStale(token) {
-  return token.alive !== snapshotAliveToken || token.seq !== snapshotSeq;
+  return snapshotAlive.stale(token.alive) || token.seq !== snapshotSeq;
 }
 
 const EXPR_PLACEHOLDER = "(expression)";
@@ -1012,12 +1013,9 @@ function stopTtlTimer() {
     ttlTimerId = null;
   }
   liveState = null;
-  // Invalidate any /api/component fetch still in flight for the
-  // panel being torn down — without this, a fetch that resolves after
-  // closePanel("node") (or after the node panel re-renders) would
-  // still pass fetchSnapshot's gen check (closePanel never touches
-  // showGen) and resurrect a timer this teardown just killed.
-  snapshotAliveToken++;
+  // Disown any /api/component fetch still in flight for the panel
+  // being torn down, so it can't resurrect this timer (see aliveToken).
+  snapshotAlive.bump();
 }
 
 // Prepend one WS setpoint event to the Recent setpoints list, keyed
@@ -1136,9 +1134,8 @@ export function showComponent(d) {
   // charts, store subscription, and timers down first.
   openPanel("node", () => renderNode(d, gen), () => {
     // The bump IS the teardown for any chart build still parked on
-    // its await — closePanel never touches showGen, so it is the only
-    // signal such a build gets. See chartsAliveToken.
-    chartsAliveToken++;
+    // its await (see aliveToken).
+    chartsAlive.bump();
     liveCharts.clear();
     clearGridChart();
     stopTtlTimer();
@@ -1173,9 +1170,9 @@ async function renderNode(d, gen) {
     built = true;
     // Captured before the await: a reselect moves showGen, a panel
     // close moves only the token, and either one makes this build's
-    // result stale (see chartsAliveToken).
-    const alive = chartsAliveToken;
-    const stale = () => gen !== showGen || alive !== chartsAliveToken;
+    // result stale (see aliveToken).
+    const alive = chartsAlive.capture();
+    const stale = () => gen !== showGen || chartsAlive.stale(alive);
     if (isGrid) {
       const chart = await buildGridFrequencyChart(chartsContainer);
       // Destroy here rather than parking a live store subscription in
