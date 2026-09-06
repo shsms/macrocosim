@@ -128,6 +128,63 @@ jobs:
       - name: Type check (ty, all rules as errors)
         run: uv run --no-sync ty check --error all src
 
+  # Run the Python test suite — the pytest plugin's gates, the client's
+  # stream handling, and the live tests that boot a real server.
+  #
+  # Unlike python-lint, this job builds the crate. `uv sync` here is
+  # deliberately WITHOUT `--no-install-project`, so it runs the maturin
+  # build of the project wheel, which needs protoc and the vendored
+  # proto submodules. python-lint skips all of that on purpose — ruff
+  # and ty only read the source — but the tests import the installed
+  # package and launch the binary, so here the build is the point. Two
+  # things fall out of that sync: the wheel drops the `macrocosim`
+  # binary into the venv's scripts directory, which `uv run` puts on
+  # PATH, so the live tests' binary discovery finds it with no
+  # MACROCOSIM_BIN to set (and they skip rather than fail if it is ever
+  # missing); and the package's pytest11 entry point is registered, so
+  # pytest auto-loads the plugin under test.
+  #
+  # maturin builds RELEASE, so none of the debug artifacts the `rust`
+  # job caches are reusable here — this job keeps its own `-pywheel-`
+  # cache (a prefix no other job restores by) and depends on nothing,
+  # running in parallel with the rest.
+  python-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Cache cargo registry + release target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-pywheel-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pywheel-
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: python/uv.lock
+
+      - name: Sync (builds the release wheel)
+        run: uv sync
+
+      - name: pytest
+        run: uv run --no-sync pytest -q
+
   # Live browser smoke: boots the binary against a scratch Berlin-demo
   # microgrid (same recipe AGENTS.md documents for running
   # tools/ui-smoke/live-topology.mjs by hand) and drives the real SPA
