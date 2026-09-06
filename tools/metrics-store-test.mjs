@@ -71,10 +71,38 @@ assert.equal(pfText(8000, null), "PF —");
 assert.equal(pfText(Number.NaN, 6000), "PF —");
 
 // ── fmtValue ────────────────────────────────────────────────────
+// Every branch of the readout is pinned here, because the power
+// branch delegates its ladder to live.js and the two have to keep
+// producing the same strings: the M and k rungs and their exact
+// boundaries, the sub-kilo rung's single decimal, the "var" → "VAr"
+// spelling on each rung, and the two decimals the non-power branch
+// uses instead of the ladder.
 assert.equal(fmtValue("Power", "W", 1_234_000), "1.23 MW");
 assert.equal(fmtValue("ReactivePower", "var", -1234), "-1.23 kVAr");
+assert.equal(fmtValue("ReactivePower", "var", 1_500_000), "1.50 MVAr");
+assert.equal(fmtValue("ReactivePower", "var", 500), "500.0 VAr");
+assert.equal(fmtValue("Power", "W", 999.94), "999.9 W");
+assert.equal(fmtValue("Power", "W", 0), "0.0 W");
+assert.equal(fmtValue("Power", "W", -0.04), "-0.0 W");
+// The rungs switch at exactly 1e3 and 1e6, not above them.
+assert.equal(fmtValue("Power", "W", 1000), "1.00 kW");
+assert.equal(fmtValue("Power", "W", 1_000_000), "1.00 MW");
+// The ladder is reached by quantity OR by wire unit, independently:
+// a power quantity carrying an already-scaled unit still scales, and
+// a non-power quantity carrying "var" still scales and still spells
+// the unit "VAr".
+assert.equal(fmtValue("Power", "kW", 5), "5.0 kW");
+assert.equal(fmtValue("ApparentPower", "var", 2500), "2.50 kVAr");
+// Non-power quantities skip the ladder entirely: two decimals and
+// the raw unit, however large the number.
 assert.equal(fmtValue("Frequency", "Hz", 50.0171), "50.02 Hz");
+assert.equal(fmtValue("Soc", "%", 83.456), "83.46 %");
+assert.equal(fmtValue("Frequency", "Hz", 1_234_567), "1234567.00 Hz");
+// Missing and non-finite readings are a dash on both branches.
 assert.equal(fmtValue("Power", "W", null), "—");
+assert.equal(fmtValue("Power", "W", undefined), "—");
+assert.equal(fmtValue("Power", "W", Number.POSITIVE_INFINITY), "—");
+assert.equal(fmtValue("Frequency", "Hz", Number.NaN), "—");
 
 // ── ring + series windowing ─────────────────────────────────────
 // The ring is keyed by each sample's own server second (second % 900),

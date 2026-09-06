@@ -16,28 +16,23 @@
 // applySample); the two clocks are unrelated and mixing them threw
 // the x-axis years off.
 
+import { formatScaled } from "./live.js";
 import { mgPath } from "./routing.js";
-import { isPanelOpen } from "./side-panel.js";
 
-const PANEL = "metrics-btn";
 const SPARK_LEN = 900;
 
-// Power auto-scale: W → kW → MW etc. on the same ladder as live.js
-// formatScaled, which cross-references this copy from its own header
-// — the two have to move together. Copied rather than imported for
-// the signature, not for load order: live.js imports nothing, so
-// reaching for it here would be cycle-free, but its helpers take a
-// display unit while every caller of this one holds a raw sample's
-// quantity + wire unit (SI "var", which every readout spells "VAr")
-// and non-power quantities that skip the ladder entirely.
+// Readout for a raw sample, which arrives as a quantity + a wire unit
+// (SI "var", which every readout spells "VAr") rather than the
+// display unit live.js's helpers take. This is the adapter over that
+// difference: a power-family reading delegates to formatScaled for
+// the W → kW → MW ladder, so the two surfaces scale identically by
+// construction; every other quantity skips the ladder and keeps two
+// decimals on its unit as-is.
 export function fmtValue(quantity, unit, value) {
   if (value == null || !Number.isFinite(value)) return "—";
   const shown = unit === "var" ? "VAr" : unit;
   if (quantity === "Power" || quantity === "ReactivePower" || unit === "W" || unit === "var") {
-    const a = Math.abs(value);
-    if (a >= 1e6) return `${(value / 1e6).toFixed(2)} M${shown}`;
-    if (a >= 1e3) return `${(value / 1e3).toFixed(2)} k${shown}`;
-    return `${value.toFixed(1)} ${shown}`;
+    return formatScaled(value, shown);
   }
   return `${value.toFixed(2)} ${shown}`;
 }
@@ -204,17 +199,19 @@ export const metricsStore = (() => {
         // Best-effort.
       }
     },
-    // Safety net against dropped WS frames while the panel is open:
-    // slow-poll the latest snapshot, and refresh immediately when
-    // the tab returns to the foreground. Idempotent — a second call
-    // replaces the timer instead of stacking one.
-    startAutoReseed(periodMs = 5000) {
+    // Safety net against dropped WS frames while the consumer is on
+    // screen: slow-poll the latest snapshot, and refresh immediately
+    // when the tab returns to the foreground. `isOpen` says whether
+    // the consumer is on screen; the store polls only while it is.
+    // Idempotent — a second call replaces the timer instead of
+    // stacking one.
+    startAutoReseed(isOpen, periodMs = 5000) {
       this.stopAutoReseed();
       reseedTimer = setInterval(() => {
-        if (isPanelOpen(PANEL)) this.reseedLatest();
+        if (isOpen()) this.reseedLatest();
       }, periodMs);
       reseedVisHandler = () => {
-        if (!document.hidden && isPanelOpen(PANEL)) this.reseedLatest();
+        if (!document.hidden && isOpen()) this.reseedLatest();
       };
       document.addEventListener("visibilitychange", reseedVisHandler);
     },

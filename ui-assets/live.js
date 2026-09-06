@@ -2,8 +2,9 @@
 // the dead band and edge flow attributes. No DOM, no vis-network —
 // unit-testable alone.
 
-// W → kW → MW ladder, mirrored by metrics-store.js's fmtValue() so
-// every power readout in the app scales identically.
+// W → kW → MW ladder. The one implementation: metrics-store.js's
+// fmtValue() delegates its power branch here, so every power readout
+// in the app scales identically.
 export function formatScaled(value, unit) {
   if (value == null || !Number.isFinite(value)) return "—";
   const a = Math.abs(value);

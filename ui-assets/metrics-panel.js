@@ -571,7 +571,7 @@ function render(contentEl) {
   // is on screen, so it runs on the panel's own lifetime rather than
   // the document's — a process-lifetime interval also keeps the
   // headless boot smoke's event loop alive forever.
-  metricsStore.startAutoReseed();
+  metricsStore.startAutoReseed(() => isPanelOpen(PANEL));
   metricsStore.backfill().then(() => {
     if (!isPanelOpen(PANEL)) return;
     for (const c of CARDS) rebuildCard(c.key);
