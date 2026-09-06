@@ -15,21 +15,21 @@
       <strong>macrocosim</strong>
       <span id="status" class="status">connecting…</span>
       <nav id="mode-toggle" aria-label="view mode">
-        <button class="mode-btn" data-mode="microgrids">Microgrids</button>
-        <button class="mode-btn" data-mode="scenarios">Scenarios</button>
+        <button type="button" class="mode-btn" data-mode="microgrids">Microgrids</button>
+        <button type="button" class="mode-btn" data-mode="scenarios">Scenarios</button>
       </nav>
       <span id="active-scenarios" class="active-scenarios" hidden></span>
       <span class="spacer"></span>
-      <button id="help-btn" class="hdr-btn" title="Keyboard + mouse shortcuts">?</button>
-      <button id="scenario-report-btn" class="hdr-btn">Report</button>
-      <button id="defaults-btn" class="hdr-btn">Defaults</button>
-      <button id="snapshots-btn" class="hdr-btn" title="Save / load a copy of the selected microgrid's file">Snapshots</button>
+      <button type="button" id="help-btn" class="hdr-btn" title="Keyboard + mouse shortcuts">?</button>
+      <button type="button" id="scenario-report-btn" class="hdr-btn">Report</button>
+      <button type="button" id="defaults-btn" class="hdr-btn">Defaults</button>
+      <button type="button" id="snapshots-btn" class="hdr-btn" title="Save / load a copy of the selected microgrid's file">Snapshots</button>
     </header>
     <section id="pulse" aria-label="system pulse">
       <span class="pulse-group">
         <span class="pulse-label">setpoints/5s</span>
         <svg id="pulse-spark" viewBox="0 0 60 16" preserveAspectRatio="none"
-             aria-label="setpoint rate over last 60 seconds"></svg>
+             role="img" aria-label="setpoint rate over last 60 seconds"></svg>
       </span>
       <span class="pulse-sep"></span>
       <span class="pulse-group" id="pulse-health" title="component health"></span>
@@ -66,8 +66,8 @@
                 title="Write the live structure into this file so macrocosim may rewrite it from now on"
                 hidden>Adopt</button>
         <nav id="mg-subtoggle" aria-label="microgrid view">
-          <button class="mode-btn" data-subview="topology">Topology</button>
-          <button class="mode-btn" data-subview="dispatches">Dispatches</button>
+          <button type="button" class="mode-btn" data-subview="topology">Topology</button>
+          <button type="button" class="mode-btn" data-subview="dispatches">Dispatches</button>
         </nav>
       </header>
       <div id="topology"></div>

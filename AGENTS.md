@@ -270,8 +270,12 @@ cargo run --bin macroctl -- set-power 1001 5000
 `ui-assets/` changes: `npx @biomejs/biome check ui-assets` (config in
 `biome.json`) — `npx biome` alone resolves to an unrelated no-op
 package on the npm registry, not this project's linter, so always
-spell out `@biomejs/biome`. Plus six node-only gates that need
-neither a browser nor a running server:
+spell out `@biomejs/biome`. `check` also runs the organizeImports
+assist, not just the linter, so an unsorted import or export
+specifier list fails as an error. `noDescendingSpecificity` is turned
+off for `style.css` in biome.json's `overrides` block, until its
+rules are reordered with a browser to check. Plus six node-only gates
+that need neither a browser nor a running server:
 
 ```sh
 node tools/boot-smoke.mjs        # imports app.js under a DOM shim:

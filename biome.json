@@ -22,5 +22,17 @@
       "vis",
       "uPlot"
     ]
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["ui-assets/style.css"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noDescendingSpecificity": "off"
+          }
+        }
+      }
+    }
+  ]
 }
