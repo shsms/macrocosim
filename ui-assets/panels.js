@@ -4,7 +4,7 @@
 
 import { escapeHtml, mutate, notify, selectMicrogrid } from "./app.js";
 import { refreshPaletteLock } from "./editor.js";
-import { publishMgFlags, readSelectedMg, renderReplMgChip } from "./routing.js";
+import { publishMgFlags, readSelectedMg, reconcileSelection, renderReplMgChip } from "./routing.js";
 
 // Lowest id `/api/microgrids/create` allocates when none is asked
 // for (`DEFAULT_MICROGRID_ID` server-side). The create dialog
@@ -577,10 +577,28 @@ export const microgridsPanel = (() => {
 
   // Shared by refresh() and the 5 s poll. A non-ok response keeps
   // the previous list; the two callers differ only in what a thrown
-  // (network-level) failure does to `cached`.
+  // (network-level) failure does to `cached`. Two fetches can be in
+  // flight at once (the poll's and the one a selection write
+  // triggers), so responses land in issue order or not at all: a
+  // list older than the one on screen is dropped. A list fresh from
+  // the server is the one place the selection can be checked against
+  // what the server has — unless the selection moved while the
+  // response was in flight: the user can pick a microgrid the list
+  // was fetched too early to know (create, import, a card click), so
+  // such a list is kept but not made a judge. The fetch the selection
+  // write itself triggers, or the next poll, judges it instead.
+  let listIssued = 0;
+  let listApplied = 0;
   async function fetchList() {
+    const seq = ++listIssued;
+    const mg = readSelectedMg();
     const res = await fetch("/api/microgrids");
-    if (res.ok) cached = await res.json();
+    if (!res.ok) return;
+    const rows = await res.json();
+    if (seq < listApplied) return;
+    listApplied = seq;
+    cached = rows;
+    if (readSelectedMg() === mg) reconcileSelection(cached);
   }
   function renderAll() {
     window.__mgPanelCache = cached;

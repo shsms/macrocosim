@@ -5,7 +5,7 @@
 // refreshTopology fetch that ferries /api/topology data into the
 // canvas + chrome pulse bar.
 
-import { dispatchesPanel, setStatus } from "./app.js";
+import { dispatchesPanel, notify, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
 import { refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
@@ -206,13 +206,23 @@ function applyInitialRoute() {
   applyMode(cur.mode);
 }
 
-// The (mode, mg, subview) triple the last applyMode() settled on, so a
+// The (mode, mg, subview) triple the last applyRoute() settled on, so a
 // re-entrant call for the SAME route can be told apart from a real
 // navigation. null until the first call, which therefore always counts
 // as a change.
 let lastAppliedRoute = null;
 
+// Applies the stored route, then refreshes the mode's panel.
 function applyMode(mode) {
+  mode = applyRoute(mode);
+  if (mode === "microgrids") microgridsPanel.refresh();
+  if (mode === "scenarios") scenariosPanel.refresh();
+}
+
+// Puts the stored (mode, mg, subview) on the DOM — body flags, toggle
+// buttons, panel dismissal, canvas nudges — without touching any
+// panel's data. Returns the mode it applied.
+function applyRoute(mode) {
   if (!VALID_MODES.has(mode)) mode = "microgrids";
   const selected = readSelectedMg();
   const subview = readSubview();
@@ -260,8 +270,7 @@ function applyMode(mode) {
   if (mode === "microgrids" && selected != null && subview === "dispatches") {
     dispatchesPanel.render(selected);
   }
-  if (mode === "microgrids") microgridsPanel.refresh();
-  if (mode === "scenarios") scenariosPanel.refresh();
+  return mode;
 }
 
 // Jump to the topology subview within the current mode and select
@@ -288,6 +297,27 @@ export function jumpToTopology(id) {
   // behind the panel.
   const inspector = document.getElementById("inspector");
   topology.reveal(id, inspector ? inspector.getBoundingClientRect().width : 0);
+}
+
+// The selection must name a microgrid the server has. The list panel
+// calls this with every list fresh from the server; a remembered id
+// the server no longer knows — a fresh state dir, a file unloaded
+// from the REPL — is dropped for the list view, saying why. A
+// correction rather than a navigation (replaceState, not push), so
+// Back does not walk into the dead route. Applies the route only:
+// the caller holds the fresh list and renders it itself.
+export function reconcileSelection(rows) {
+  const id = readSelectedMg();
+  if (id == null || rows.some((m) => m.id === id)) return;
+  const next = { ...currentRoute(), selectedMg: null };
+  writeRouteToStorage(next);
+  history.replaceState(next, "", routeToHash(next));
+  // A topology fetch for the dead id may already have stamped its
+  // 404 into the status pill; the list view has nothing to say there.
+  setStatus("", "");
+  notify(`Microgrid #${id} is no longer loaded`);
+  applyRoute(next.mode);
+  renderReplMgChip();
 }
 
 export function selectMicrogrid(id) {
@@ -397,6 +427,10 @@ export async function refreshTopology() {
     // already drives a refresh.
     pulseBar.applyTopology(data.components || [], data.graph_status);
   } catch (err) {
+    // Same rule as a late success: an error for a microgrid that is
+    // no longer selected (switched away, or dropped as vanished)
+    // belongs to a view that is gone.
+    if (readSelectedMg() !== mg) return;
     setStatus(`error: ${err.message}`, "error");
   }
 }

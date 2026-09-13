@@ -2108,6 +2108,61 @@ check(
 await page.click("#logs-btn");
 await page.click("#metrics-btn");
 
+// ── e2e: a remembered microgrid that is no longer loaded ─────────
+// The router restores the last-selected microgrid from localStorage
+// on boot. When the server no longer has it (a fresh state dir, an
+// unloaded file), the list panel's first fresh list lets the router
+// drop it back to the list view instead of leaving a 404'd
+// "(unknown)" topology on screen — as a correction, so Back does
+// not walk into the dead route.
+await page.evaluate(() => localStorage.setItem("macrocosim-selected-mg", "2200"));
+await page.goto(BASE, { waitUntil: "networkidle" });
+await new Promise((r) => setTimeout(r, 1500));
+check("e2e: a loaded microgrid selection restores", await page.evaluate(() => document.body.dataset.mgView === "selected" && location.hash.startsWith("#microgrids/2200/")), await page.evaluate(() => location.hash));
+// The same check runs on the 5 s poll, and only a list fresh from
+// the server counts: a failing poll must not bounce a live
+// microgrid, a fresh list without it must — with no reload anywhere
+// in this block, so it is provably the poll that acted.
+const downAt = [];
+await page.route("**/api/microgrids", (route) => {
+  downAt.push(Date.now());
+  route.fulfill({ status: 500, body: "down" });
+});
+// Wait on the interceptions, not the clock, and demand two of them a
+// poll interval apart: the poll re-arms on every refresh, and a WS
+// reconnect's refresh would also hit this route, so only the cadence
+// proves a timer tick was served the 500.
+const twoTicks = () => downAt.length >= 2 && downAt.at(-1) - downAt[0] >= 4500;
+await waitFor(async () => twoTicks(), 20000).catch(() => null);
+check("e2e: two polls a tick apart were served a 500", twoTicks(), JSON.stringify(downAt));
+check(
+  "e2e: a failing poll keeps the live microgrid selected",
+  await page.evaluate(() => document.body.dataset.mgView === "selected" && localStorage.getItem("macrocosim-selected-mg") === "2200"),
+  await page.evaluate(() => `${document.body.dataset.mgView} ${localStorage.getItem("macrocosim-selected-mg")}`),
+);
+await page.unroute("**/api/microgrids");
+await page.route("**/api/microgrids", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+const polledOut = await waitFor(async () => {
+  const s = await page.evaluate(() => ({ view: document.body.dataset.mgView, stored: localStorage.getItem("macrocosim-selected-mg"), toast: [...document.querySelectorAll(".toast")].some((t) => /2200/.test(t.textContent)) }));
+  return s.view === "list" ? s : null;
+}, 12000).catch(() => null);
+check("e2e: a fresh list without the microgrid bounces it on the poll", polledOut !== null && polledOut.stored === null && polledOut.toast, JSON.stringify(polledOut));
+await page.unroute("**/api/microgrids");
+await page.evaluate(() => localStorage.setItem("macrocosim-selected-mg", "424242"));
+const historyBefore = await page.evaluate(() => history.length);
+await page.goto(BASE, { waitUntil: "networkidle" });
+const staleLanding = await waitFor(async () => {
+  const s = await page.evaluate(() => ({ hash: location.hash, view: document.body.dataset.mgView, stored: localStorage.getItem("macrocosim-selected-mg"), history: history.length }));
+  return s.view === "list" ? s : null;
+}, 8000).catch(() => null);
+check("e2e: a vanished microgrid selection falls back to the list view", staleLanding !== null, JSON.stringify(staleLanding));
+check("e2e: the fallback rewrites the hash to the list route", staleLanding?.hash === "#microgrids", JSON.stringify(staleLanding));
+check("e2e: the fallback forgets the stale selection", staleLanding?.stored === null, JSON.stringify(staleLanding));
+// One navigation (the goto) added one history entry; a pushState
+// correction would have added a second, and Back would land on it.
+check("e2e: the fallback leaves no history entry behind", staleLanding?.history === historyBefore + 1, JSON.stringify({ historyBefore, staleLanding }));
+check("e2e: the fallback says why", await page.evaluate(() => [...document.querySelectorAll(".toast")].some((t) => /424242/.test(t.textContent))), "no toast naming the microgrid");
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }
