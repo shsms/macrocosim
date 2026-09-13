@@ -72,6 +72,11 @@ jobs:
       - name: metrics-store tests
         run: node tools/metrics-store-test.mjs
 
+      # The live overlay's edge flow: the direction and width an
+      # edge gets from its child's power.
+      - name: live tests
+        run: node tools/live-test.mjs
+
       # The weather panel's split contract: the cloud LIST drops what
       # the sky is already past (filtered against the server's stamp,
       # not the browser's clock), while the day CURVE keeps drawing it.
