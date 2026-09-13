@@ -2148,6 +2148,128 @@ const polledOut = await waitFor(async () => {
 }, 12000).catch(() => null);
 check("e2e: a fresh list without the microgrid bounces it on the poll", polledOut !== null && polledOut.stored === null && polledOut.toast, JSON.stringify(polledOut));
 await page.unroute("**/api/microgrids");
+// A fetch that fails outright after a newer list already landed must
+// not blank that list; one that fails as the newest must (refresh
+// blanks, so a dead server shows as no cards). First let a real list
+// render again, then hold the next request — armed just after a poll
+// went by, so the next poll is ~5 s away and the held one is the
+// card click's refresh — let the poll's request through, and fail
+// the held one.
+await waitFor(async () => (await page.locator(DEMO_CARD).count()) > 0, 15000);
+let holding = false;
+let heldRoute = null;
+let heldWasFirst = false; // the held request came before any pass-through after arming
+let heldDelayMs = null; // arming → held: a poll cannot land that soon after the one just seen
+let passedThrough = 0;
+let armedAt = 0;
+await page.route("**/api/microgrids", (route) => {
+  if (holding && heldRoute === null) {
+    heldRoute = route;
+    heldWasFirst = passedThrough === 0;
+    heldDelayMs = Date.now() - armedAt;
+  } else {
+    passedThrough += 1;
+    route.continue();
+  }
+});
+const pollSeen = await waitFor(async () => passedThrough >= 1, 10000).catch(() => false);
+passedThrough = 0;
+armedAt = Date.now();
+holding = true;
+await page.click(DEMO_CARD);
+await waitFor(async () => heldRoute !== null && passedThrough >= 1, 15000).catch(() => null);
+await new Promise((r) => setTimeout(r, 500)); // let the passed-through list render
+const listBeforeFailure = await page.evaluate(() => window.__mgPanelCache?.length ?? -1);
+await heldRoute?.abort();
+await new Promise((r) => setTimeout(r, 500));
+const listAfterFailure = await page.evaluate(() => window.__mgPanelCache?.length ?? -1);
+check(
+  "e2e: a failed fetch older than the list on screen leaves it alone",
+  pollSeen === true && heldWasFirst && heldDelayMs !== null && heldDelayMs < 2000 && passedThrough >= 1 && listBeforeFailure > 0 && listAfterFailure === listBeforeFailure,
+  JSON.stringify({ pollSeen, heldWasFirst, heldDelayMs, listBeforeFailure, listAfterFailure, passedThrough }),
+);
+// A newer answer that applied nothing (a 500) still outranks an
+// older failure: hold the back button's refresh, answer the poll
+// with a 500, then fail the held one — the list stays. The abort
+// above re-armed the poll (refresh() ends in schedulePoll()), so the
+// next tick is ~5 s out and a request within 2 s of the click can
+// only be the click's own refresh.
+await page.unroute("**/api/microgrids");
+heldRoute = null;
+heldDelayMs = null;
+let answered500 = 0;
+let clickedAt = 0;
+await page.route("**/api/microgrids", (route) => {
+  if (heldRoute === null) {
+    heldRoute = route;
+    heldDelayMs = Date.now() - clickedAt;
+  } else {
+    answered500 += 1;
+    route.fulfill({ status: 500, body: "down" });
+  }
+});
+clickedAt = Date.now();
+await page.click("#mg-back");
+await waitFor(async () => heldRoute !== null && answered500 >= 1, 15000).catch(() => null);
+const listBeforeOldFailure = await page.evaluate(() => window.__mgPanelCache?.length ?? -1);
+await heldRoute?.abort();
+await new Promise((r) => setTimeout(r, 500));
+const listAfterOldFailure = await page.evaluate(() => window.__mgPanelCache?.length ?? -1);
+// Only the click's own refresh can be held within 2 s of the click.
+check(
+  "e2e: a failed fetch older than a newer non-ok answer leaves the list alone",
+  heldDelayMs !== null && heldDelayMs >= 0 && heldDelayMs < 2000 && answered500 >= 1 && listBeforeOldFailure > 0 && listAfterOldFailure === listBeforeOldFailure,
+  JSON.stringify({ heldDelayMs, answered500, listBeforeOldFailure, listAfterOldFailure }),
+);
+// A blank holds no sequence slot: hold the next poll, let a card
+// click's refresh fail as the newest outcome (blank), then answer
+// the held, older poll with a real list — it must repaint.
+await page.unroute("**/api/microgrids");
+heldRoute = null;
+let failedAfterHold = 0;
+await page.route("**/api/microgrids", (route) => {
+  if (heldRoute === null) heldRoute = route;
+  else {
+    failedAfterHold += 1;
+    route.abort();
+  }
+});
+await waitFor(async () => heldRoute !== null, 10000).catch(() => null);
+await waitFor(async () => (await page.locator(DEMO_CARD).count()) > 0, 5000).catch(() => null);
+await page.click(DEMO_CARD);
+const blankedByNewer = await waitFor(async () => {
+  const n = await page.evaluate(() => window.__mgPanelCache?.length ?? -1);
+  return n === 0 ? "blank" : null;
+}, 8000).catch(() => null);
+const realList = await (await page.request.get(`${BASE}/api/microgrids`)).text(); // bypasses page routes
+await heldRoute?.fulfill({ status: 200, contentType: "application/json", body: realList });
+const repainted = await waitFor(async () => {
+  const n = await page.evaluate(() => window.__mgPanelCache?.length ?? -1);
+  return n > 0 ? n : null;
+}, 5000).catch(() => null);
+check(
+  "e2e: an older list arriving after a blank repaints it",
+  blankedByNewer === "blank" && failedAfterHold >= 1 && repainted !== null,
+  JSON.stringify({ blankedByNewer, failedAfterHold, repainted }),
+);
+await page.click("#mg-back");
+// The complement: fail every request, so a card click's refresh
+// fails as the newest outcome (a failed poll applies nothing and
+// cannot outrank it) — and blanks. The back click above was aborted
+// by the previous route and blanked the list too, so unroute first
+// and let the next poll bring the cards back before failing
+// everything.
+await page.unroute("**/api/microgrids");
+check("e2e: the cards return once the list fetch succeeds again", Boolean(await waitFor(async () => (await page.locator(DEMO_CARD).count()) > 0, 10000).catch(() => null)));
+await page.route("**/api/microgrids", (route) => route.abort());
+await page.click(DEMO_CARD);
+const blankedList = await waitFor(async () => {
+  const n = await page.evaluate(() => window.__mgPanelCache?.length ?? -1);
+  return n === 0 ? "blank" : null;
+}, 8000).catch(() => null);
+check("e2e: a failed fetch that is the newest outcome blanks the list", blankedList === "blank", await page.evaluate(() => String(window.__mgPanelCache?.length)));
+await page.unroute("**/api/microgrids");
+await waitFor(async () => (await page.locator(DEMO_CARD).count()) > 0, 15000).catch(() => null);
 await page.evaluate(() => localStorage.setItem("macrocosim-selected-mg", "424242"));
 const historyBefore = await page.evaluate(() => history.length);
 await page.goto(BASE, { waitUntil: "networkidle" });

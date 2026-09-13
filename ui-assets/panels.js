@@ -576,29 +576,42 @@ export const microgridsPanel = (() => {
   }
 
   // Shared by refresh() and the 5 s poll. A non-ok response keeps
-  // the previous list; the two callers differ only in what a thrown
-  // (network-level) failure does to `cached`. Two fetches can be in
-  // flight at once (the poll's and the one a selection write
-  // triggers), so responses land in issue order or not at all: a
-  // list older than the one on screen is dropped. A list fresh from
-  // the server is the one place the selection can be checked against
-  // what the server has — unless the selection moved while the
-  // response was in flight: the user can pick a microgrid the list
-  // was fetched too early to know (create, import, a card click), so
-  // such a list is kept but not made a judge. The fetch the selection
-  // write itself triggers, or the next poll, judges it instead.
+  // the previous list. A fetch that fails outright (network-level)
+  // blanks it for refresh() and keeps it for the poll
+  // (`blankOnFailure`). Two fetches can be in flight at once (the
+  // poll's and the one a selection write triggers), so outcomes land
+  // in issue order or not at all: a list older than the one on screen
+  // is dropped, and a failure blanks only while nothing newer has
+  // answered at all (a newer non-ok answer is still an answer). A
+  // list fresh from the server is the one place the selection can be
+  // checked against what the server has — unless the selection moved
+  // while the response was in flight: the user can pick a microgrid
+  // the list was fetched too early to know (create, import, a card
+  // click), so such a list is kept but not made a judge. The fetch
+  // the selection write itself triggers, or the next poll, judges it
+  // instead.
   let listIssued = 0;
-  let listApplied = 0;
-  async function fetchList() {
+  let listApplied = 0; // the request whose list is on screen
+  let listAnswered = 0; // the newest request the server answered
+  async function fetchList(blankOnFailure) {
     const seq = ++listIssued;
     const mg = readSelectedMg();
-    const res = await fetch("/api/microgrids");
-    if (!res.ok) return;
-    const rows = await res.json();
+    let rows = null; // null: the fetch failed outright
+    try {
+      const res = await fetch("/api/microgrids");
+      listAnswered = Math.max(listAnswered, seq);
+      if (!res.ok) return;
+      rows = await res.json();
+    } catch (_) {
+      if (!blankOnFailure || seq < listAnswered) return;
+    }
     if (seq < listApplied) return;
-    listApplied = seq;
-    cached = rows;
-    if (readSelectedMg() === mg) reconcileSelection(cached);
+    // A blank holds no sequence slot: an older body still in flight
+    // is a real list, and repaints over it.
+    if (rows) listApplied = seq;
+    cached = rows ?? [];
+    // Only a list fresh from the server may drop the selection.
+    if (rows && readSelectedMg() === mg) reconcileSelection(rows);
   }
   function renderAll() {
     window.__mgPanelCache = cached;
@@ -612,11 +625,7 @@ export const microgridsPanel = (() => {
   }
 
   async function refresh() {
-    try {
-      await fetchList();
-    } catch (_) {
-      cached = [];
-    }
+    await fetchList(true);
     renderAll();
     schedulePoll();
   }
@@ -633,9 +642,7 @@ export const microgridsPanel = (() => {
       // Unlike refresh(), a transient poll failure keeps the old
       // list — blanking the cards every 5 s while the server
       // restarts would just flicker.
-      try {
-        await fetchList();
-      } catch (_) {}
+      await fetchList(false);
       renderAll();
     }, 5000);
   }
