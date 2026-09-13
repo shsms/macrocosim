@@ -2,9 +2,9 @@
 // Run: node tools/weather-panel-test.mjs   (exits non-zero on failure)
 //
 // The panel's arithmetic — the day curve and the cloud list — is pure
-// over one payload, but the module itself imports two browser-bound
+// over one payload, but the module itself imports three browser-bound
 // siblings (routing.js reaches the whole SPA graph). So rather than a
-// DOM shim, the two import lines are swapped for local stubs and the
+// DOM shim, the three import lines are swapped for local stubs and the
 // internals under test are re-exported, and the result is imported as
 // a data: URL. Nothing inside the functions is touched: this reads the
 // real source, and a rename here fails loudly rather than silently
@@ -16,15 +16,16 @@ const IMPORT_LINE = /^import .*$/gm;
 const raw = readFileSync(SRC, "utf8");
 const stripped = raw.replace(IMPORT_LINE, "");
 const removed = (raw.match(IMPORT_LINE) || []).length;
-if (removed !== 2) {
+if (removed !== 3) {
   console.error(
-    `weather-panel-test: expected 2 single-line imports to stub, found ${removed} — ` +
+    `weather-panel-test: expected 3 single-line imports to stub, found ${removed} — ` +
       "the stubs below no longer cover what weather-panel.js imports",
   );
   process.exit(1);
 }
 const shimmed = [
   'const mgPath = () => "";',
+  "const requireUplot = () => null;",
   "const isPanelOpen = () => false;",
   "const makeSidePanelToggle = () => {};",
   stripped,

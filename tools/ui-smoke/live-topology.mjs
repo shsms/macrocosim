@@ -2285,6 +2285,60 @@ check("e2e: the fallback forgets the stale selection", staleLanding?.stored === 
 check("e2e: the fallback leaves no history entry behind", staleLanding?.history === historyBefore + 1, JSON.stringify({ historyBefore, staleLanding }));
 check("e2e: the fallback says why", await page.evaluate(() => [...document.querySelectorAll(".toast")].some((t) => /424242/.test(t.textContent))), "no toast naming the microgrid");
 
+// ── e2e: charts without uPlot ─────────────────────────────────────
+// uPlot is a classic <script>, not a module: when it does not load
+// (a blocked asset, a bad vendor bump, its own load-time throw on an
+// invalid browser language tag) nothing in the import graph fails.
+// The chart builders must then say so in their slot and let the rest
+// of the panel work, instead of dying in a render.
+const noPlotCtx = await browser.newContext({ viewport: { width: 1600, height: 950 }, locale: "en-US" });
+const noPlot = await noPlotCtx.newPage();
+const noPlotErrors = [];
+noPlot.on("pageerror", (e) => noPlotErrors.push(String(e)));
+await noPlot.route("**/vendor/uplot.min.js", (route) => route.abort());
+await noPlot.goto(BASE, { waitUntil: "networkidle" });
+await noPlot.click(DEMO_CARD);
+await noPlot.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+await noPlot.click("#metrics-btn");
+const unavailableNote = await waitFor(
+  async () => noPlot.evaluate(() => document.querySelector('.mcard[data-card="power"] [data-chart] .hint')?.textContent || null),
+  8000,
+).catch(() => null);
+check("e2e: without uPlot the metrics panel says charts are unavailable", /uPlot/.test(unavailableNote ?? ""), String(unavailableNote));
+const chipsWithoutPlot = await waitFor(async () => {
+  const vs = await noPlot.evaluate(() => [...document.querySelectorAll(".mchip .mchip-value")].map((e) => e.textContent));
+  return vs.some((v) => v && v !== "—") ? vs : null;
+}, 15000).catch(() => null);
+check("e2e: without uPlot the metrics chips still fill", Array.isArray(chipsWithoutPlot), JSON.stringify(chipsWithoutPlot));
+// The repaint loop must not rebuild a chart that can never be built:
+// the note it wrote once has to be the same element a second later.
+await noPlot.evaluate(() => {
+  const el = document.querySelector('.mcard[data-card="power"] [data-chart] .hint');
+  if (el) el.dataset.seen = "1";
+});
+await new Promise((r) => setTimeout(r, 1500));
+check("e2e: without uPlot the note is written once, not every frame", await noPlot.evaluate(() => document.querySelector('.mcard[data-card="power"] [data-chart] .hint')?.dataset.seen === "1"));
+// The other three builders: the inspector's grid chart (built on
+// arrival), a component's charts fold, and the weather chart — the
+// weather panel last, since it floats over the inspector's folds.
+await noPlot.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
+const gridNote = await waitFor(async () => noPlot.evaluate(() => document.querySelector("#charts .chart .hint")?.textContent || null), 8000).catch(() => null);
+check("e2e: without uPlot the grid's frequency chart says so", /uPlot/.test(gridNote ?? ""), String(gridNote));
+await noPlot.evaluate(async () => (await import("/assets/topology.js")).topology.select([2]));
+await waitFor(async () => noPlot.evaluate(() => Boolean(document.querySelector("#card-charts [data-fold-toggle]"))), 8000).catch(() => null);
+if (!(await noPlot.evaluate(() => document.getElementById("card-charts")?.classList.contains("open")))) await noPlot.click("#card-charts [data-fold-toggle]");
+const componentNote = await waitFor(async () => noPlot.evaluate(() => document.querySelector("#charts .hint")?.textContent || null), 8000).catch(() => null);
+check("e2e: without uPlot a component's charts fold says so", /uPlot/.test(componentNote ?? ""), String(componentNote));
+await noPlot.click("#weather-btn");
+// A site without weather offers to create it; the chart exists only
+// once it has.
+await new Promise((r) => setTimeout(r, 800));
+if ((await noPlot.locator("#weather-create").count()) > 0) await noPlot.click("#weather-create");
+const weatherNote = await waitFor(async () => noPlot.evaluate(() => document.querySelector("#weather-chart .hint")?.textContent || null), 10000).catch(() => null);
+check("e2e: without uPlot the weather panel says charts are unavailable", /uPlot/.test(weatherNote ?? ""), String(weatherNote));
+check("e2e: without uPlot no page error", noPlotErrors.length === 0, JSON.stringify(noPlotErrors));
+await noPlotCtx.close();
+
 check("no page errors", errors.length === 0, JSON.stringify(errors));
 await browser.close();
 if (failures) { console.error(`${failures} FAILED`); process.exit(1); }

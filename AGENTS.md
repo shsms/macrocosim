@@ -57,6 +57,8 @@ is wiring the topology + animating the environment.
   `dialogs.js`, `editor.js`, … own one concern each;
   `metrics-store.js` holds the derived-stream rings + the PF helpers
   and `metrics-panel.js` the floating charts panel that reads them;
+  `chart-lib.js` the uPlot gate every chart builder asks first
+  (a note in the slot when the vendored global did not load);
   `live.js` owns the live-overlay pure helpers: label
   text, number formatting, the dead band and edge flow; `pill.js`
   owns the node model and canvas renderer both graph canvases draw

@@ -6,6 +6,7 @@
 // (side-panel.js runs it on re-render or close).
 
 import { escapeHtml, inspectEl } from "./app.js";
+import { requireUplot } from "./chart-lib.js";
 import { evalQuoted, jsToLispString } from "./eval.js";
 import { deadBandW, formatScaled } from "./live.js";
 import { metricsStore } from "./metrics-store.js";
@@ -1177,7 +1178,7 @@ async function renderNode(d, gen) {
       const chart = await buildGridFrequencyChart(chartsContainer);
       // Destroy here rather than parking a live store subscription in
       // a slot nothing will ever clear again.
-      if (stale()) chart.destroy();
+      if (stale()) chart?.destroy();
       else gridChart = chart;
       return;
     }
@@ -1241,6 +1242,8 @@ async function buildGridFrequencyChart(container) {
   const slot = document.createElement("div");
   slot.className = "chart";
   container.appendChild(slot);
+  const Plot = requireUplot(slot);
+  if (!Plot) return null;
   // Backfill first so the chart opens on the last 15 min of trend
   // instead of growing from empty; it is a no-op-ish refresh when
   // the metrics panel has already pulled it.
@@ -1265,7 +1268,7 @@ async function buildGridFrequencyChart(container) {
       { stroke: "#79b8ff", width: 1.5, points: { show: false }, spanGaps: false },
     ],
   };
-  const plot = new uPlot(opts, series(), slot);
+  const plot = new Plot(opts, series(), slot);
   // The store notifies per sample; coalesce to one repaint a frame so
   // a burst of streams can't schedule a redraw each. `dead` covers the
   // frame already queued when teardown lands — unsubscribing stops new
@@ -1301,6 +1304,8 @@ async function buildGridFrequencyChart(container) {
 async function buildCharts(d, container, snapshotJsonP) {
   const metrics = CHARTS_BY_CATEGORY[d.category] || [];
   const charts = new Map(); // metric → { plot, xs, ys }
+  const Plot = requireUplot(container);
+  if (!Plot) return charts;
 
   // A steam boiler's pressure chart annotates the controller's
   // thermostat target in its title — no cheap reference-line idiom
@@ -1352,6 +1357,7 @@ async function buildCharts(d, container, snapshotJsonP) {
     const xs = samples.map(([t]) => t / 1000);
     const ys = samples.map(([, v]) => v);
     const { plot, scale } = makePlot(
+      Plot,
       slot,
       metric,
       resp.quantity,
@@ -1420,7 +1426,7 @@ async function renderSetpoints(id, container) {
   }
 }
 
-function makePlot(container, metric, quantity, unit, xs, ys, target = null) {
+function makePlot(Plot, container, metric, quantity, unit, xs, ys, target = null) {
   const title = METRIC_TITLES[metric] || metric;
   const scale = chooseScale(quantity, unit, ys);
   const scaledYs = ys.map((y) => y / scale.div);
@@ -1449,5 +1455,5 @@ function makePlot(container, metric, quantity, unit, xs, ys, target = null) {
       { stroke: "#79b8ff", width: 1.5, points: { show: false } },
     ],
   };
-  return { plot: new uPlot(opts, [xs, scaledYs], container), scale };
+  return { plot: new Plot(opts, [xs, scaledYs], container), scale };
 }

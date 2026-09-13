@@ -6,6 +6,7 @@
 // module owns the DOM. Series colors follow the category palette so
 // chart lines mean what the canvas already means.
 
+import { requireUplot, uplot } from "./chart-lib.js";
 import { fmtValue, latestSecond, metricsStore, pfText, pfValue } from "./metrics-store.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 
@@ -275,6 +276,8 @@ function cardFrame(card, secs, currentDiv = 1, shape = null) {
 }
 
 function buildChart(card, slot) {
+  const Plot = requireUplot(slot);
+  if (!Plot) return;
   // Scale + shape decisions are made once per build and stored on the
   // plots entry: the band/PF layout, which repaint() feeds back into
   // cardFrame() so the array it hands setData() matches the built shape
@@ -365,7 +368,7 @@ function buildChart(card, slot) {
     hooks: { draw: [drawZeroLine] },
   };
   plots.set(card.key, {
-    plot: new uPlot(opts, data, slot),
+    plot: new Plot(opts, data, slot),
     unit,
     div,
     activeKeys: activeKeysOf(active),
@@ -443,6 +446,9 @@ function repaint(contentEl) {
   // build trigger. Same fold as cardFrame's, or the two would
   // disagree: a bounds sample alone gives no anchor, so building on
   // one would draw the placeholder straight back.
+  // rebuildCard clears the slot first, so with no uPlot this would
+  // rewrite the "unavailable" note every frame.
+  if (!uplot) return;
   for (const card of CARDS) {
     if (plots.has(card.key) || !cardOpen(card)) continue;
     const active = card.series.filter(seriesOn);

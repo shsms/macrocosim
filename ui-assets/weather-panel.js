@@ -17,6 +17,7 @@
 // apiece would be a poll-rate stampede for a curve that only moves
 // when the config does.
 
+import { requireUplot } from "./chart-lib.js";
 import { mgPath } from "./routing.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 
@@ -243,6 +244,8 @@ function drawNowMarker(u) {
 }
 
 function buildChart(slot, data) {
+  const Plot = requireUplot(slot);
+  if (!Plot) return;
   const solar = cssColor("--cat-inverter-solar") || "#a8d35a";
   const opts = {
     width: slot.clientWidth || 380,
@@ -287,7 +290,7 @@ function buildChart(slot, data) {
     bands: [{ series: [1, 2], fill: "rgba(168, 211, 90, 0.14)" }],
     hooks: { draw: [drawNowMarker] },
   };
-  plot = new uPlot(opts, data, slot);
+  plot = new Plot(opts, data, slot);
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────
