@@ -24,7 +24,13 @@ async function waitFor(fn, ms = 10000, every = 200) {
 }
 
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
-const page = await (await browser.newContext({ viewport: { width: 1600, height: 950 } })).newPage();
+// A headless Chromium with no locale of its own inherits the host's
+// POSIX one and reports it as "en-US@posix" — not a BCP 47 tag, so
+// uPlot's load-time `new Intl.NumberFormat(navigator.language)`
+// throws, uPlot never defines itself, and the metrics panel dies on
+// open. Real browsers always carry a valid tag; give this one the
+// same.
+const page = await (await browser.newContext({ viewport: { width: 1600, height: 950 }, locale: "en-US" })).newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 await page.goto(BASE, { waitUntil: "networkidle" });
