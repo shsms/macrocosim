@@ -140,7 +140,7 @@
                   title="Dragged nodes snap to a grid, relative to where the drag started. Hold Alt while dragging to move along one axis only.">snap</button>
           <span class="ctl-label">show</span>
           <button type="button" class="pill values-btn active"
-                  title="Show live power, reactive power / SoC on nodes and flow chevrons on edges. Off: name and id only.">values</button>
+                  title="Show live power, reactive power / SoC on nodes; edges take the flow direction's colour and thicken with power. Off: name and id only.">values</button>
         </span>
         <span class="ctl-label">panels</span>
         <button type="button" id="formula-btn" class="pill"
@@ -530,7 +530,7 @@
           <li><strong>Inspector</strong> — one of the floating panels, alongside the formula explorer, metrics, weather, the REPL, the log tail, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
           <li><strong>Docking</strong> — every panel's <em>⤓</em> button offers to dock it into a strip along the bottom or down the right edge of the window, where it becomes a tile and stops covering the canvas; a strip appears only while it holds a tile, and the bar beside it drags to change its size. The tile's <em>⤒</em> floats it back to where it was. Several docked panels share a strip: drag the bar between two tiles to trade space, drag a tile's head along the strip to reorder. A docked panel that you close comes back docked. You can also drag a floating panel's grab strip onto the bottom or right edge of the canvas to dock it there, and drag a tile's head out of its strip to float it again.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a category and an auto-id'd component appears, with a color dot matching its node's category colour. Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
-          <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges a chevron in the direction power actually flows, sized by magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
+          <li><strong>Values</strong> — nodes show current power (and reactive power or SoC), edges take the colour of the direction power actually flows (blue import, green export) and thicken with its magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — per-category defaults (Lisp values), opened in its own floating panel; edits write to <code>enterprise.lisp</code>.</li>
           <li><strong>Managed files</strong> — every microgrid is a file. A <em>managed</em> one (created here, or adopted) carries a macrocosim-generated block that is rewritten on each structural edit; an <em>unmanaged</em> one is hand-written, so its structure is read-only in the UI and its card carries an <em>unmanaged</em> chip. Hit <em>Adopt</em> in the microgrid header to take it over. An <em>unsaved</em> chip means a live edit the file could not record.</li>
         </ul>

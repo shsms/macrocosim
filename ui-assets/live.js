@@ -13,7 +13,7 @@ export function formatScaled(value, unit) {
   return `${value.toFixed(1)} ${unit}`;
 }
 
-// The "nothing is flowing" threshold shared by the chevrons and the
+// The "nothing is flowing" threshold shared by the edge flow and the
 // pill colours: 1 % of the site's largest rated bound, never under
 // 50 W. Falls back to a 10 kW site when nothing is rated.
 export function deadBandW(siteMaxRatedW) {
@@ -21,24 +21,26 @@ export function deadBandW(siteMaxRatedW) {
   return Math.max(0.01 * max, 50);
 }
 
+// What edgeFlow() returns below the dead band: the rest look.
+export const DEAD_FLOW = Object.freeze({ direction: "dead", width: 1.5 });
+
 // Flow attributes for a parent→child edge. `childPowerW` is the
 // child's active power (consumption-positive); the edge's share is
 // 1/parentCount (the meter aggregation rule, so parallel paths
-// split visually too). The chevron shows *physical* flow: export
-// (negative) points toward the parent. Below the dead band the
-// chevron disappears so dead legs look dead.
+// split visually too). `direction` picks the edge colour by the
+// same import/export/dead rule the pills use, and `width` is the
+// magnitude: from the rest 1.5 px up to 6 px on a square-root scale
+// against the site's largest rating. Below the dead band the edge
+// is dead, so dead legs look dead.
 export function edgeFlow(childPowerW, parentCount, siteMaxRatedW) {
   const max = siteMaxRatedW > 0 ? siteMaxRatedW : 10_000;
   const flow = (childPowerW ?? 0) / Math.max(parentCount, 1);
   const dead = deadBandW(siteMaxRatedW);
-  if (!Number.isFinite(flow) || Math.abs(flow) < dead) {
-    return { chevron: false, towardParent: false, width: 1.5, scale: 0 };
-  }
+  if (!Number.isFinite(flow) || Math.abs(flow) < dead) return DEAD_FLOW;
   const norm = Math.min(1, Math.sqrt(Math.abs(flow) / max));
   return {
-    chevron: true,
-    towardParent: flow < 0,
+    direction: flow < 0 ? "export" : "import",
     width: Math.min(6, Math.max(1.5, 1 + 5 * norm)),
-    scale: Math.max(0.5, 1.4 * norm),
   };
 }
+

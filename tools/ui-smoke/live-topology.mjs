@@ -44,16 +44,12 @@ const unit = await page.evaluate(async () => {
   eq("fmt null", m.formatScaled(null, "W"), "—");
   eq("fmt NaN", m.formatScaled(Number.NaN, "W"), "—");
 
-  // edgeFlow: dead band, direction, sharing, clamps
-  eq("flow dead", m.edgeFlow(10, 1, 30000).chevron, false);
-  eq("flow consume", m.edgeFlow(5000, 1, 30000).towardParent, false);
-  eq("flow export", m.edgeFlow(-5000, 1, 30000).towardParent, true);
-  eq("flow shared halves", m.edgeFlow(-5000, 2, 30000).chevron, true);
-  out.push({ name: "flow shared magnitude", ok: m.edgeFlow(-5000, 2, 30000).scale < m.edgeFlow(-5000, 1, 30000).scale });
-  out.push({ name: "flow width clamp hi", ok: m.edgeFlow(-10e6, 1, 30000).width <= 6 });
-  out.push({ name: "flow width clamp lo", ok: m.edgeFlow(-400, 1, 30000).width >= 1 });
-  eq("flow zero parents treated as 1", m.edgeFlow(-5000, 0, 30000).chevron, true);
-  eq("flow fallback max", m.edgeFlow(-5000, 1, 0).chevron, true);
+  // edgeFlow: the pure contract lives in tools/live-test.mjs; this
+  // is the in-browser sanity pass over the same module.
+  eq("flow dead", m.edgeFlow(10, 1, 30000).direction, "dead");
+  eq("flow consume", m.edgeFlow(5000, 1, 30000).direction, "import");
+  eq("flow export", m.edgeFlow(-5000, 1, 30000).direction, "export");
+  eq("flow width clamps", m.edgeFlow(-10e6, 1, 30000).width, 6);
 
   // pill.js: the pure node model
   const pill = await import("/assets/pill.js");
@@ -68,6 +64,10 @@ const unit = await page.evaluate(async () => {
   eq("reactiveColor lagging-with-import", pill.reactiveColor(800, 300), IMPQ);
   eq("reactiveColor leading", pill.reactiveColor(-800, 300), EXPQ);
   eq("reactiveColor dead", pill.reactiveColor(10, 300), DIM);
+  // The edge palette must stay injective: the smoke reads direction
+  // and colour as separate fields, and a shared value would hide a
+  // swapped mapping.
+  eq("edge palette is injective", new Set([pill.COLORS.import, pill.COLORS.export, pill.COLORS.edgeRest]).size, 3);
   const opts = { valuesOn: true, catColor: "#abcdef", deadBand: 300 };
   const inv = { id: 12, name: "Battery Inverter 1", category: "inverter", subtype: "battery", hidden: false, health: "ok", provides_telemetry: true };
   const mInv = pill.pillModel(inv, { p: -19930, q: 1200, soc: null, dc: null }, opts);
@@ -458,7 +458,13 @@ const getEdges = () =>
     return topology.debugLiveEdges();
   });
 const hasValues = (ms) => ms.some((m) => m.hero);
-const hasChevron = (es) => es.some((e) => e.middleEnabled);
+const isLive = (e) => e.direction === "import" || e.direction === "export";
+const hasLive = (es) => es.some(isLive);
+// A rest edge is either never styled (null: the vis defaults) or
+// styled to the rest look — never a mix.
+const looksRest = (e) => (e.direction === null ? e.width === null && e.color === null : e.width === 1.5 && e.color === COLORS.edgeRest);
+// The canvas palette as the page resolved it from the CSS tokens.
+const COLORS = await page.evaluate(async () => (await import("/assets/pill.js")).COLORS);
 
 await page.click(DEMO_CARD);
 await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
@@ -498,7 +504,7 @@ await waitFor(() => undoPosts > 0, 5000).catch(() => {});
 check("e2e: Ctrl+Z posts the server's undo endpoint", undoPosts > 0, `${undoPosts} posts`);
 await page.unroute("**/api/mg/*/undo");
 
-// Values land on the next 1 Hz flush; chevrons ride the same flush
+// Values land on the next 1 Hz flush; edge flow rides the same flush
 // but need a power sample for the child first.
 const models = await waitFor(async () => {
   const ms = await getModels();
@@ -528,24 +534,67 @@ check(
 check("e2e: widths are content-derived (not all equal)", new Set(widthsA).size > 1, JSON.stringify(widthsA));
 check("e2e: widths inside [96, 200]", widthsA.every((w) => w >= 96 && w <= 200), JSON.stringify(widthsA));
 
-// ── e2e: flow chevrons ────────────────────────────────────────────
+// ── e2e: edge flow ────────────────────────────────────────────────
 const edges = await waitFor(async () => {
   const es = await getEdges();
-  return hasChevron(es) ? es : null;
+  return hasLive(es) ? es : null;
 });
-const withChevron = edges.filter((e) => e.middleEnabled);
-check("e2e: some edge has a flow chevron", withChevron.length > 0, JSON.stringify(edges));
+const liveEdges = edges.filter(isLive);
+check("e2e: some edge carries live flow", liveEdges.length > 0, JSON.stringify(edges));
 // berlin demo: the hidden consumer meter (id 100, under meter-2)
-// always consumes, so its chevron points away from the parent
-// (positive scaleFactor) regardless of PV sunlight.
-const consumer = await waitFor(async () => (await getEdges()).find((e) => e.id === "2-100" && e.middleEnabled));
-check("e2e: the consumer edge's chevron points at the child", consumer.scaleFactor > 0, JSON.stringify(consumer));
-check("e2e: chevron widths clamped", withChevron.every((e) => e.width >= 1.5 && e.width <= 6), JSON.stringify(withChevron));
-check("e2e: live edges keep the 0.6 end arrowhead", edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(edges));
+// always consumes, so its edge takes the import colour regardless
+// of PV sunlight.
+const consumer = await waitFor(async () => (await getEdges()).find((e) => e.id === "2-100" && isLive(e)));
+check("e2e: the consumer edge imports", consumer.direction === "import", JSON.stringify(consumer));
+check("e2e: the consumer edge is import-coloured", consumer.color === COLORS.import, JSON.stringify(consumer));
+// Magnitude is line width; direction is one of the two flat
+// colours (checked against the palette, not the direction field, so
+// the mapping itself is under test); the structural arrowhead at the
+// child end is the only arrow, live or not.
+check("e2e: live widths within [1.5, 6]", liveEdges.every((e) => e.width >= 1.5 && e.width <= 6), JSON.stringify(liveEdges));
+check("e2e: live edges take their direction's colour", liveEdges.every((e) => e.color === (e.direction === "import" ? COLORS.import : COLORS.export)), JSON.stringify(liveEdges));
+check("e2e: rest edges keep the rest width and grey", edges.filter((e) => !isLive(e)).every(looksRest), JSON.stringify(edges));
+check("e2e: every edge keeps the end arrowhead", edges.every((e) => e.toEnabled === true), JSON.stringify(edges));
+// The help copy is the user's only key to the colour mapping, so it
+// must be there and describe colours, not the chevrons it replaced.
+check("e2e: the values pill's tooltip describes the flow colours", await page.evaluate(() => {
+  const t = document.querySelector(".values-btn")?.title ?? "";
+  return /colou?r/i.test(t) && !/chevron/i.test(t);
+}));
+
+// ── e2e: a live edge goes dead ────────────────────────────────────
+// Setting the consumer meter to 0 W takes its edge under the dead
+// band: the next flush must paint it back to the rest look, not
+// leave the last colour and width standing. A numeric set-meter-power
+// replaces the demo's scripted load curve for good (clear-meter-power
+// would only return the childless meter to measuring 0 W), so the
+// block leaves the meter at the curve's 17.5 kW mean: live, and
+// steadier for the blocks below that read it.
+// The eval endpoint answers 200 to a failed Lisp eval too (ok:false),
+// so the body is what says the expression took.
+const evalMg = (expr) =>
+  page.evaluate(async (e) => {
+    const r = await fetch("/api/mg/2200/eval", { method: "POST", body: e });
+    return { status: r.status, ...(await r.json()) };
+  }, expr);
+const zeroed = await evalMg("(set-meter-power 100 0)");
+check("e2e: consumer meter set to 0 W", zeroed.status === 200 && zeroed.ok === true, JSON.stringify(zeroed));
+const deadConsumer = await waitFor(async () => {
+  const e = (await getEdges()).find((x) => x.id === "2-100");
+  return e && e.direction === "dead" ? e : null;
+}, 10000).catch(() => null);
+check("e2e: the zeroed edge is painted dead", deadConsumer !== null, JSON.stringify(deadConsumer));
+check("e2e: a dead edge returns to the rest width and grey", deadConsumer !== null && looksRest(deadConsumer), JSON.stringify(deadConsumer));
+const restored = await evalMg("(set-meter-power 100 17500.0)");
+check("e2e: consumer meter set back to its mean load", restored.status === 200 && restored.ok === true, JSON.stringify(restored));
+check(
+  "e2e: the restored edge goes live again",
+  Boolean(await waitFor(async () => (await getEdges()).find((x) => x.id === "2-100" && isLive(x)), 15000).catch(() => null)),
+);
 
 // ── e2e: a topology refresh keeps the overlay ─────────────────────
 // An accepted eval broadcasts topology_changed → apply() diffs the
-// DataSets. The live labels and chevrons must survive the diff.
+// DataSets. The live labels and edge flow must survive the diff.
 const getApplyCount = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
@@ -562,7 +611,7 @@ check("e2e: no-op eval accepted", evalRes === 200, `status ${evalRes}`);
 await waitFor(async () => (await getApplyCount()) > appliesBefore);
 const afterRefresh = { models: await getModels(), edges: await getEdges() };
 check("e2e: values survive a topology refresh", hasValues(afterRefresh.models), JSON.stringify(afterRefresh.models));
-check("e2e: chevrons survive a topology refresh", hasChevron(afterRefresh.edges), JSON.stringify(afterRefresh.edges));
+check("e2e: edge flow survives a topology refresh", hasLive(afterRefresh.edges), JSON.stringify(afterRefresh.edges));
 
 // ── e2e: zoom tiers ───────────────────────────────────────────────
 const lodAt = (s) =>
@@ -644,9 +693,9 @@ await waitFor(async () => {
   return e && Number.isFinite(e.p) && Math.abs(e.p) > 1000;
 }, 15000);
 // With the inverter charging, the battery (which reports only DC
-// power) must get a chevron on its edge from inverter 1001.
-const batteryEdge = await waitFor(async () => (await getEdges()).find((e) => e.id === "1001-1000" && e.middleEnabled), 15000).catch(() => null);
-check("e2e: the battery edge gets a chevron from DC power", Boolean(batteryEdge), JSON.stringify((await getEdges()).find((e) => e.id === "1001-1000")));
+// power) must go live on its edge from inverter 1001.
+const batteryEdge = await waitFor(async () => (await getEdges()).find((e) => e.id === "1001-1000" && isLive(e)), 15000).catch(() => null);
+check("e2e: the battery edge goes live from DC power", Boolean(batteryEdge), JSON.stringify((await getEdges()).find((e) => e.id === "1001-1000")));
 const readCard = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
@@ -1159,10 +1208,11 @@ check(
 );
 // The demo's hidden consumer meter (id 100, one of this meter's
 // children) drives ±500 W of per-tick random jitter plus a slow
-// 15-min sine (examples/berlin-demo.lisp) — the round trip can't
-// land on the exact pre-override reading, so this compares with a
-// generous threshold, same idiom as the boiler section's power-level
-// checks below.
+// 15-min sine (examples/berlin-demo.lisp; the edge-flow block above
+// pins it to a steady 17.5 kW, but the other children still move) —
+// the round trip can't land on the exact pre-override reading, so
+// this compares with a generous threshold, same idiom as the boiler
+// section's power-level checks below.
 const clearedP = await waitFor(async () => {
   const p = await evalNumber(`(component-active-power ${meterId})`);
   return Number.isFinite(p) && Math.abs(p - childrenP) < 2500 ? p : null;
@@ -1333,9 +1383,11 @@ check(
   valueRows.some(Boolean) && offHeights.every((h, i) => !valueRows[i] || h < onHeights[i]),
   `${JSON.stringify(onHeights)} → ${JSON.stringify(offHeights)}`,
 );
-check("e2e: toggle off clears chevrons", off.edges.every((e) => !e.middleEnabled));
-check("e2e: toggle off reverts edge color", off.edges.every((e) => e.color !== "#79b8ff"), JSON.stringify(off.edges));
-check("e2e: end arrowhead stays default size", off.edges.every((e) => e.toScale == null || e.toScale === 0.6), JSON.stringify(off.edges));
+// setValues(off) writes the rest look to every edge, so the fields
+// must be present, not merely unset.
+check("e2e: toggle off clears edge flow", off.edges.every((e) => e.direction === "dead"), JSON.stringify(off.edges));
+check("e2e: toggle off reverts edge color", off.edges.every((e) => e.color === COLORS.edgeRest), JSON.stringify(off.edges));
+check("e2e: toggle off reverts edge width", off.edges.every((e) => e.width === 1.5), JSON.stringify(off.edges));
 check("e2e: valuesOn() reports off", off.on === false);
 // Sampling continues with values off: the map keeps filling so the
 // hover card and the sparkline are complete when values come back.
@@ -1379,8 +1431,9 @@ const boundsEntryOff = await page.evaluate(async () => {
 check("e2e: live entry carries bounds and timestamp", boundsEntryOff && Number.isFinite(boundsEntryOff.ts) && Number.isFinite(boundsEntryOff.pLo) && Number.isFinite(boundsEntryOff.pHi), JSON.stringify(boundsEntryOff));
 // The hover card reads the live map, not the pill overlay, so it
 // must open and keep ticking with values off. Component 100 is the
-// always-consuming demo load: its power moves every second, so a
-// card that stopped re-rendering would repeat itself.
+// demo's always-consuming load (pinned to a steady 17.5 kW by the
+// edge-flow block above): its samples keep arriving every second,
+// which is what the freshness line below tracks.
 const cardOff = await hoverNodeCard(100);
 check("e2e: hover card opens with values off", /consumer/.test(cardOff.text) && /updated \d+ s ago/.test(cardOff.text), cardOff.text);
 // With values off flushLive returns before it touches anything, so

@@ -20,8 +20,8 @@ import { notify, setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./eval.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
-import { deadBandW, edgeFlow } from "./live.js";
-import { cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
+import { DEAD_FLOW, deadBandW, edgeFlow } from "./live.js";
+import { COLORS, cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
 import {
   mgPath,
   READ_ONLY_TITLE,
@@ -59,17 +59,21 @@ function colorFor(c) {
 }
 
 const LIVE_KEY = "macrocosim-topology-live";
-const EDGE_LIVE_COLOR = "#79b8ff";
+// Edge colour by flow direction: the pills' import blue and export
+// green, and the structural grey when nothing flows.
+const EDGE_FLOW_COLOR = { import: COLORS.import, export: COLORS.export, dead: COLORS.edgeRest };
 
-// The edge's look with no live flow on it — what buildVisData's
-// `arrows: "to"` plus the visOptions defaults render. A function so
-// every DataSet entry gets its own object.
+// The DataSet fields an edgeFlow() result renders as. `flow` is not
+// a vis option; it rides along on the DataSet item so the smoke-test
+// hook can read the direction back. A fresh object per call so
+// every DataSet entry gets its own.
+function edgeStyle({ direction, width }) {
+  return { width, color: { color: EDGE_FLOW_COLOR[direction], inherit: false }, flow: direction };
+}
+
+// The edge's look with no live flow on it.
 function edgeRestStyle() {
-  return {
-    width: 1.5,
-    arrows: { to: { enabled: true, scaleFactor: 0.6 }, middle: { enabled: false } },
-    color: { color: "#6b7280", inherit: false },
-  };
+  return edgeStyle(DEAD_FLOW);
 }
 
 // The alignment actions for a multi-node selection, one entry each.
@@ -525,25 +529,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         // carries their DC power instead.
         const childPower = child ? (child.p ?? child.dc) : null;
         const flow = edgeFlow(childPower, parentCount.get(e.to) || 1, maxAbsBoundW);
-        if (!flow.chevron) {
-          edgeUpdates.push({ id: e.id, ...edgeRestStyle() });
-          continue;
-        }
-        edgeUpdates.push({
-          id: e.id,
-          width: flow.width,
-          arrows: {
-            to: { enabled: true, scaleFactor: 0.6 },
-            middle: {
-              enabled: true,
-              type: "arrow",
-              // Negative flips the chevron toward the parent —
-              // physical flow for export/generation.
-              scaleFactor: (flow.towardParent ? -1 : 1) * flow.scale,
-            },
-          },
-          color: { color: EDGE_LIVE_COLOR, inherit: false },
-        });
+        edgeUpdates.push({ id: e.id, ...edgeStyle(flow) });
       }
     }
     liveDirty.clear();
@@ -732,8 +718,8 @@ export function createGraphCanvas(containerId, adapter = {}) {
       keyboard: { enabled: false },
     },
     edges: {
-      color: { color: "#6b7280", highlight: "#79b8ff", hover: "#b0b8c1" },
-      width: 1.5,
+      color: { color: EDGE_FLOW_COLOR.dead, highlight: COLORS.accent, hover: COLORS.hover },
+      width: DEAD_FLOW.width,
       smooth: { enabled: true, type: "cubicBezier", forceDirection: "horizontal", roundness: 0.4 },
       arrows: { to: { enabled: true, scaleFactor: 0.6 } },
     },
@@ -1048,11 +1034,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
       const staleEdges = edgesDS.getIds().filter((id) => !newEdgeIds.has(id));
       if (staleEdges.length) edgesDS.remove(staleEdges);
       // Existing edges whose child has live values keep their
-      // arrows/width/color (DataSet .update merges per field); ones
+      // width/colour (DataSet .update merges per field); ones
       // whose child has none — a microgrid switch just cleared the
       // map, or the child lost telemetry — drop back to the rest
-      // style so a colliding edge id can't carry a stale chevron
-      // over. New edges get the structural `arrows: "to"`.
+      // style so a colliding edge id can't carry stale flow over.
+      // New edges get the structural `arrows: "to"`.
       const edgeUpdates = edges.map((e) => {
         if (!edgesDS.get(e.id)) return e;
         const base = { id: e.id, from: e.from, to: e.to, ...(e.dashes ? { dashes: true } : {}) };
@@ -1554,20 +1540,24 @@ export function createGraphCanvas(containerId, adapter = {}) {
     debugNodeModels() {
       return nodesDS ? nodesDS.get().map((n) => n.pillModel) : [];
     },
-    /// Smoke-test hook: every edge's live flow chevron state.
+    /// Smoke-test hook: every edge's flow state and what it renders
+    /// as, as the DataSet holds them — null is "never styled", a
+    /// structural edge drawing at the vis defaults. (Filling the
+    /// defaults in here would let a rest-edge check pass against
+    /// this hook instead of against the canvas.)
     debugLiveEdges() {
       if (!edgesDS) return [];
       return edgesDS.get().map((e) => ({
         id: e.id,
-        width: e.width ?? 1.5,
-        middleEnabled: Boolean(e.arrows?.middle?.enabled),
-        scaleFactor: e.arrows?.middle?.enabled ? e.arrows.middle.scaleFactor : 0,
+        width: e.width ?? null,
+        direction: e.flow ?? null,
         color: e.color?.color ?? null,
-        toScale: e.arrows?.to?.scaleFactor ?? null,
+        // buildVisData's structural edges carry the string form.
+        toEnabled: typeof e.arrows === "string" ? e.arrows.includes("to") : (e.arrows?.to?.enabled ?? null),
       }));
     },
     /// The live-overlay toggle. Off drops every pill's value row
-    /// and strips the chevrons in one bulk update, then re-measures
+    /// and strips the edge flow in one bulk update, then re-measures
     /// the (now shorter) nodes.
     setValues(on) {
       liveEnabled = Boolean(on);
@@ -1588,9 +1578,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         localStorage.setItem(LIVE_KEY, "0");
         liveDirty.clear();
         if (edgesDS) {
-          edgesDS.update(
-            edgesDS.get().map((e) => ({ id: e.id, ...edgeRestStyle() })),
-          );
+          edgesDS.update(edgesDS.get().map((e) => ({ id: e.id, ...edgeRestStyle() })));
         }
       }
       if (!manualArrangement) {

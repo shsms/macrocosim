@@ -20,6 +20,7 @@ export const COLORS = {
   dim: cssToken("--flow-dim", "#5a626d"),
   exportDull: cssToken("--flow-export-dull", "#4f9a78"),
   importDull: cssToken("--flow-import-dull", "#5a87bd"),
+  edgeRest: cssToken("--edge-rest", "#6b7280"),
   surface: cssToken("--pill-surface", "#242a33"),
   border: cssToken("--pill-border", "#323a45"),
   fg: cssToken("--pill-fg", "#d5dbe3"),
