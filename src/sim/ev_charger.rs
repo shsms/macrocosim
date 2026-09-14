@@ -297,6 +297,10 @@ impl SimulatedComponent for EvCharger {
 
     fn telemetry(&self, site: &MicrogridSite) -> Telemetry {
         let grid = site.grid_state();
+        // Resolve the axis-derived bounds BEFORE taking the state
+        // lock: the state lock is never held across the axis's own
+        // locks, in either direction.
+        let bounds = self.effective_active_bounds();
         let s = self.state.lock();
         Telemetry {
             id: self.id,
@@ -310,7 +314,7 @@ impl SimulatedComponent for EvCharger {
             soc_pct: s.ev.as_ref().map(|ev| ev.soc_pct),
             per_phase_voltage_v: Some(grid.voltage_per_phase),
             frequency_hz: Some(grid.frequency_hz),
-            active_power_bounds: self.effective_active_bounds(),
+            active_power_bounds: bounds,
             component_state: Some(if s.draw_w > 0.0 { "charging" } else { "ready" }),
             cable_state: Some(if s.ev.is_some() {
                 "ev-charging-cable-locked-at-ev"
@@ -409,6 +413,7 @@ impl SimulatedComponent for EvCharger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::common::metrics::Bounds;
     use crate::sim::ev_presets::{EvOverrides, preset, test_car};
     use crate::sim::runtime::Health;
     use std::sync::Arc;
@@ -640,5 +645,265 @@ mod tests {
         });
         assert!(s.contains(":phases 1"), "{s}");
         assert!(s.contains(":idle 'full"), "{s}");
+    }
+
+    /// With `:resume-on-recovery` the fault still zeroes the draw,
+    /// but the armed command survives it and charging ramps back when
+    /// health returns — the way the solar inverter keeps its
+    /// curtailment, and unlike the default charger below.
+    /// Killing mutation: `snap_output(0.0)` → `trip()` in that branch.
+    #[test]
+    fn resume_on_recovery_keeps_the_command_through_the_fault() {
+        let (w, ev) = sited(EvChargerConfig {
+            resume_on_recovery: true,
+            ..instant()
+        });
+        ev.plug_ev(test_car("van", Some(30.0))).unwrap(); // 3 ph 32 A: takes the whole offer
+        ev.set_active_setpoint(22_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert!((ev.aggregate_power_w(&w) - 22_000.0).abs() < 100.0);
+
+        w.set_health(7, Health::Error).unwrap();
+        tick_n(&w, &ev, 3);
+        assert_eq!(ev.aggregate_power_w(&w), 0.0, "stays off while faulted");
+        assert_eq!(ev.ev_info().unwrap().state, EvDrawState::Tripped);
+
+        w.set_health(7, Health::Ok).unwrap();
+        tick_n(&w, &ev, 2);
+        let p = ev.aggregate_power_w(&w);
+        assert!(
+            (p - 22_000.0).abs() < 100.0,
+            "resumes the armed command, got {p}"
+        );
+    }
+
+    /// Standby is offline exactly like Error — the gate is "not Ok",
+    /// not "is Error" — and, without `:resume-on-recovery`, waking up
+    /// does not resurrect the pre-fault command: the charger waits for
+    /// the controller to re-dispatch.
+    /// Killing mutation: `!= Health::Ok` → `== Health::Error`.
+    #[test]
+    fn standby_trips_like_an_error_and_awaits_redispatch() {
+        let (w, ev) = sited(instant());
+        ev.plug_ev(test_car("van", Some(30.0))).unwrap();
+        ev.set_active_setpoint(22_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert!(ev.aggregate_power_w(&w) > 10_000.0);
+
+        w.set_health(7, Health::Standby).unwrap();
+        tick_n(&w, &ev, 1);
+        assert_eq!(ev.aggregate_power_w(&w), 0.0, "standby is offline too");
+        assert_eq!(ev.ev_info().unwrap().state, EvDrawState::Tripped);
+
+        w.set_health(7, Health::Ok).unwrap();
+        tick_n(&w, &ev, 3);
+        assert_eq!(
+            ev.aggregate_power_w(&w),
+            0.0,
+            "waking up awaits a re-dispatch",
+        );
+        ev.set_active_setpoint(22_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert!(
+            ev.aggregate_power_w(&w) > 10_000.0,
+            "a new command resumes charging",
+        );
+    }
+
+    /// An augmentation narrows what the charger OFFERS, and the car
+    /// draws within the narrowed offer — so a TTL narrowing reaches
+    /// the draw even though the car, not the axis, decides it. It
+    /// tightens the validation envelope in the same breath.
+    /// Killing mutation: drop the `try_augment_active_bounds`
+    /// override, so the trait default answers `Unsupported`.
+    #[test]
+    fn augmentation_narrows_the_offer_and_the_draw_follows() {
+        let (w, ev) = sited(instant());
+        ev.plug_ev(test_car("van", Some(30.0))).unwrap();
+        ev.set_active_setpoint(22_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert!((ev.aggregate_power_w(&w) - 22_000.0).abs() < 100.0);
+
+        ev.try_augment_active_bounds(
+            Utc::now(),
+            VecBounds(vec![Bounds {
+                lower: Some(0.0),
+                upper: Some(7_000.0),
+            }]),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        let eff = ev.effective_active_bounds().unwrap();
+        assert_eq!(eff.0[0].upper, Some(7_000.0), "the offer is narrowed");
+
+        // 7 kW over three phases is 10.1 A — above the 6 A floor, so
+        // the car tracks the narrowed offer down rather than pausing.
+        tick_n(&w, &ev, 2);
+        let p = ev.aggregate_power_w(&w);
+        assert!(
+            (p - 7_000.0).abs() < 50.0,
+            "draw follows the offer, got {p}"
+        );
+
+        // And the narrowing is the validation envelope too.
+        assert!(matches!(
+            ev.set_active_setpoint(10_000.0),
+            Err(SetpointError::OutOfBounds { .. })
+        ));
+    }
+
+    /// A band with no overlap with rated is refused rather than
+    /// stored: accepting it would compose an empty envelope and park
+    /// the charger at 0 W for the augmentation's whole lifetime. The
+    /// rejection changes nothing — rated and the live draw survive.
+    /// Killing mutation: swallow the axis's `Err` and return `Ok(())`.
+    #[test]
+    fn an_augmentation_disjoint_from_rated_is_rejected() {
+        let (w, ev) = sited(instant());
+        ev.plug_ev(test_car("van", Some(30.0))).unwrap();
+        ev.set_active_setpoint(22_000.0).unwrap();
+        assert!(matches!(
+            ev.try_augment_active_bounds(
+                Utc::now(),
+                VecBounds(vec![Bounds {
+                    lower: Some(30_000.0),
+                    upper: Some(40_000.0),
+                }]),
+                Duration::from_secs(60),
+            ),
+            Err(AugmentError::Disjoint(_))
+        ));
+        assert_eq!(
+            ev.effective_active_bounds().unwrap().0[0].upper,
+            Some(22_000.0),
+            "rated survives a rejected augmentation",
+        );
+        tick_n(&w, &ev, 2);
+        assert!(
+            (ev.aggregate_power_w(&w) - 22_000.0).abs() < 100.0,
+            "and the car still charges",
+        );
+    }
+
+    /// The charger is a single-axis (P-only) component, so the
+    /// timeout tracker must be told the Q axis is never augmented —
+    /// there is no reactive axis to narrow.
+    /// Killing mutation: `SetpointAxis::Reactive => false` → `true`.
+    #[test]
+    fn augmentation_active_reports_only_the_active_axis() {
+        use crate::timeout_tracker::SetpointAxis;
+        let (_w, ev) = sited(instant());
+        let now = Utc::now();
+        assert!(!ev.augmentation_active(SetpointAxis::Active, now));
+        assert!(!ev.augmentation_active(SetpointAxis::Reactive, now));
+
+        ev.try_augment_active_bounds(
+            now,
+            VecBounds(vec![Bounds {
+                lower: Some(0.0),
+                upper: Some(7_000.0),
+            }]),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        assert!(ev.augmentation_active(SetpointAxis::Active, now));
+        assert!(
+            !ev.augmentation_active(SetpointAxis::Reactive, now),
+            "the charger has no reactive axis to narrow",
+        );
+    }
+
+    /// A P-only AC component still advertises an EXPLICIT zero Q, so
+    /// the stream and the UI read "settled at 0" rather than "metric
+    /// missing". The plug-derived fields follow the car: `cable_state`
+    /// says whether anything is connected and `soc_pct` is the car's,
+    /// absent on an empty charger, which has no pack of its own.
+    /// Killing mutation: `reactive_power_var: Some(0.0)` → `None`.
+    #[test]
+    fn telemetry_advertises_zero_reactive_and_tracks_the_plug() {
+        let (w, ev) = sited(instant());
+        let t = ev.telemetry(&w);
+        assert_eq!(t.reactive_power_var, Some(0.0));
+        assert_eq!(t.cable_state, Some("ev-charging-cable-unplugged"));
+        assert_eq!(t.soc_pct, None, "an empty charger has no SoC to report");
+
+        ev.plug_ev(test_car("sedan", Some(30.0))).unwrap();
+        let t = ev.telemetry(&w);
+        assert_eq!(t.reactive_power_var, Some(0.0));
+        assert_eq!(t.cable_state, Some("ev-charging-cable-locked-at-ev"));
+        assert_eq!(t.soc_pct, Some(30.0), "the car's SoC, not the charger's");
+    }
+
+    /// `component_state` is the proto state code the charger reports:
+    /// "charging" exactly while power is flowing, "ready" otherwise —
+    /// including a charger whose car is plugged in but paused, which
+    /// is what distinguishes it from `cable_state`.
+    /// Killing mutation: a constant `Some("ready")` (or keying it off
+    /// `s.ev.is_some()` rather than `s.draw_w`).
+    #[test]
+    fn component_state_tracks_the_flow_not_the_plug() {
+        let (w, ev) = sited(instant());
+        assert_eq!(
+            ev.telemetry(&w).component_state,
+            Some("ready"),
+            "an empty charger is ready, not charging",
+        );
+
+        ev.plug_ev(test_car("van", Some(30.0))).unwrap();
+        tick_n(&w, &ev, 2);
+        assert_eq!(
+            ev.telemetry(&w).component_state,
+            Some("ready"),
+            "plugged but no command: paused, so still ready",
+        );
+
+        ev.set_active_setpoint(22_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert!(ev.aggregate_power_w(&w) > 0.0);
+        assert_eq!(ev.telemetry(&w).component_state, Some("charging"));
+
+        // Below the 6 A floor the car pauses, and the state goes back
+        // to ready with the cable still locked.
+        ev.set_active_setpoint(4_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        assert_eq!(ev.aggregate_power_w(&w), 0.0);
+        assert_eq!(ev.telemetry(&w).component_state, Some("ready"));
+        assert_eq!(
+            ev.telemetry(&w).cable_state,
+            Some("ev-charging-cable-locked-at-ev"),
+            "paused is not unplugged",
+        );
+    }
+
+    /// `:phases` is the charger's own wiring, and it enters the draw
+    /// twice: it divides the limit into a per-phase current, and it
+    /// caps how many of the car's phases can be used. A 22 kW rated
+    /// charger wired on one phase can only ever deliver ~7.4 kW, even
+    /// to a three-phase car and even commanded to its full rating.
+    /// Killing mutation: hardcode 3 for either `self.cfg.phases` use
+    /// in `tick`.
+    #[test]
+    fn a_one_phase_charger_delivers_one_phase() {
+        let (w, ev) = sited(EvChargerConfig {
+            phases: 1,
+            ..instant()
+        });
+        ev.plug_ev(test_car("van", Some(30.0))).unwrap(); // a 3 ph, 32 A car
+        // 7 360 W on one phase is 32 A — the car's cap, on the single
+        // phase the charger has.
+        ev.set_active_setpoint(7_360.0).unwrap();
+        tick_n(&w, &ev, 2);
+        let p = ev.aggregate_power_w(&w);
+        assert!((p - 7_360.0).abs() < 1.0, "one phase at 32 A, got {p}");
+
+        // Commanding the full 22 kW rating changes nothing: the offer
+        // is 95 A on the one phase, but the car takes only its 32 A.
+        ev.set_active_setpoint(22_000.0).unwrap();
+        tick_n(&w, &ev, 2);
+        let p = ev.aggregate_power_w(&w);
+        assert!(
+            (p - 7_360.0).abs() < 1.0,
+            "still one phase of 32 A, not 22 kW, got {p}"
+        );
     }
 }
