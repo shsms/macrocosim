@@ -135,7 +135,7 @@ binary can serve many at once. Lisp's only jobs are wiring topology
 (`(make-grid)`, `(make-meter)`, … inside the `:topology` lambda of
 `(make-microgrid …)`) and animating the environment (`(every …)`,
 `(run-with-timer …)`, `(set-meter-power)`, etc.) — every component's
-tick / ramp / SoC derate stays in Rust. Inverter and battery share
+tick / ramp / SoC stays in Rust. Inverter and battery share
 only an electrical coupling: the battery's BMS clamps DC ingress,
 the inverter publishes the measured aggregate, and a server-side
 gateway intersects bounds for setpoint validation.

@@ -9,7 +9,8 @@
 ;;
 ;; TEARDOWN POLICY: `(scenario-stop)` returns every driven knob — a
 ;; meter's power / reactive-power / power-factor override, a solar
-;; inverter's sunlight%, a boiler's demand — to its PRE-SCENARIO
+;; inverter's sunlight%, a boiler's demand, and a charger's plug
+;; state (`plug-ev` / `unplug-ev`) — to its PRE-SCENARIO
 ;; state, no matter what happened to that knob in between: the
 ;; scenario's own `drive` section, a `cue` re-driving it, or a manual
 ;; poke while the scenario was running. Simple and uniform — first
@@ -30,9 +31,12 @@
 ;;
 ;; What teardown does NOT undo: health, modes and other state a
 ;; scenario wrote directly — a cue's own `set-component-health`, an
-;; agent's setpoints, `set-battery-soc`, `set-boiler-pressure`.
-;; Only knobs with a snapshot (the five above) and the outage chain's
-;; own in-flight victim come back.
+;; agent's setpoints, `set-boiler-pressure`, and `set-battery-soc`
+;; on a BATTERY. Only the knobs with a snapshot (those listed above)
+;; and the outage chain's own in-flight victim come back. On an EV
+;; charger `set-battery-soc` writes the plugged car, so it takes the
+;; plug knob's snapshot like `plug-ev` / `unplug-ev` do and IS undone
+;; by teardown, in any order relative to the plug itself.
 ;;
 ;; Starting a scenario while another one is still running tears the
 ;; running one down FIRST — `scenario-start` itself does it, so it

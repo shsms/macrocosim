@@ -82,7 +82,8 @@ Constructors: `grid`, `meter`, `battery_inverter`, `solar_inverter`,
 `battery`, `ev_charger`, `chp`, `steam_boiler`. Kwargs mirror the plist keys
 (`snake_case` → `:kebab-case`): `rated=(lo, hi)` `Power` bounds, `capacity`
 an `Energy`, `initial_soc` / `sunlight` a `Percentage`; `mc.raw("(lambda () …)")`
-splices Lisp.
+splices Lisp. `ev_charger` takes no pack: `phases` and `idle` (`mc.EvIdle`)
+say what it offers, and `Site.plug_ev` plugs a car after launch.
 
 Typed throughout — no bare numbers or unit strings. Knobs take enums
 (`mc.Health`, `mc.CommandMode`, `mc.TelemetryMode`, scenario `mc.Metric`,
@@ -109,6 +110,20 @@ over the graph-derived formulas:
 site.active_power(3)      # Power | None       (component, gRPC)
 site.soc(4)               # Percentage | None  (battery SoC, gRPC)
 site.grid_power()         # Power | None       (/ pv_power() / consumer_power() / …)
+```
+
+`soc` is a battery's. A charger streams no SoC over gRPC — the pack
+belongs to the car, which is the simulator's business and not the
+API's — so read a plugged car's charge with `ev_info` below.
+
+**EV chargers** — plug state, outside gRPC: plug/unplug go through Lisp,
+`ev_info` reads a JSON route:
+
+```python
+site.plug_ev(1, mc.EvPreset.CITY, soc=40)  # None  (plug a preset car in)
+site.unplug_ev(1)         # bool               (False if already empty)
+site.ev_info(1)           # dict               ({"plugged": False} or the fields,
+                          #                      plus `presets` either way)
 ```
 
 **Energy** — the simulator integrates each power aggregate into a cumulative

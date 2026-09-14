@@ -64,6 +64,10 @@ exercises the simulator:
 | `(set-reactive-power ID VAR &OPTIONAL MS CLAMP)` | same for the reactive axis; CLAMP pulls into `reactive_setpoint_envelope` (own PF / kVA band ∩ children's Q bands ∩ live augmentations), falling back to the component's own band when no child reports one |
 | `(set-meter-reactive-power ID VAL)`    | drive a meter's `:reactive-power` (number / lambda / `'symbol`)  |
 | `(set-meter-power-factor ID PF &OPTIONAL LEADING)` | drive a meter's `:power-factor` (true cos φ in `(0, 1]`); non-nil LEADING negates the derived Q |
+| `(plug-ev ID PRESET &rest OVERRIDES)`  | plug a preset car (`'phev` `'city` `'sedan` `'van`) into a charger; overrides `:soc :target-soc :phases :max-current-a :capacity-kwh :taper-start :taper-floor` |
+| `(unplug-ev ID)`                       | unplug the car                                            |
+| `(ev-info ID)`                         | the car as a plist (`:preset :soc :state …`), or nil      |
+| `(ev-presets)`                         | the catalog as a list of plists (`:name :phases :max-current-a :capacity-kwh`) |
 
 Site weather is a singleton, not a per-component knob (see AGENTS.md),
 so it isn't in the table above — but `(pass-cloud …)` is the door a
@@ -89,11 +93,13 @@ Inside a running scenario the five knob setters — `set-meter-power`,
 `set-meter-reactive-power`, `set-meter-power-factor`,
 `set-solar-sunlight`, `set-boiler-demand`, plus the three clears —
 `clear-meter-power`, `clear-meter-reactive` and
-`clear-solar-sunlight` — are TRANSIENT: the knob's previous value is
+`clear-solar-sunlight` — and a charger's plug state — `plug-ev` and
+`unplug-ev`, which `set-battery-soc` on a charger writes through
+too — are TRANSIENT: the knob's previous value is
 captured the first time the run touches it, and `(scenario-stop)`
-puts it back. The other stimuli here are not: `set-battery-soc`,
-`set-boiler-pressure`, the health / mode setters and the setpoint
-doors all write permanently, inside a run or outside it. Outside a
+puts it back. The other stimuli here are not: `set-battery-soc` on
+a battery, `set-boiler-pressure`, the health / mode setters and the
+setpoint doors all write permanently, inside a run or outside it. Outside a
 scenario the knob setters are permanent too, as before. See
 [Teardown](#teardown).
 
@@ -149,8 +155,10 @@ explicit `(load …)` is needed:
   stops it.
 - **Restores every driven knob** — a meter's `:power` /
   `:reactive-power` / power factor, a solar inverter's
-  `:sunlight%`, a boiler's `:demand` go back to what they were the
-  moment before the run first touched them. First snapshot wins:
+  `:sunlight%`, a boiler's `:demand` and a charger's plugged car go
+  back to what they were the moment before the run first touched
+  them — a car the run plugged comes back out, one it unplugged
+  goes back in. First snapshot wins:
   it doesn't matter how often the run re-drove a knob, whether a
   cue re-drove it, or whether you poked it yourself mid-run — from
   the REPL, the UI, or `POST /api/component/:id/drive`, all of
@@ -159,13 +167,23 @@ explicit `(load …)` is needed:
 - Freezes elapsed time and every metric accumulator, and flushes +
   closes any CSV sinks.
 
-Those five knobs are the whole of it. State a scenario wrote by
+Those knobs are the whole of it. State a scenario wrote by
 any other means stays written: health flipped by a cue's own
 `(set-component-health …)`, an agent's setpoints, and the
-stimuli that have no snapshot on ANY door — `set-battery-soc` /
-`soc_pct` and `set-boiler-pressure` / `pressure_bar`. A run that
-teleports a battery to 10 % SoC leaves it at 10 %. Put such state
-back in the scenario itself if the next run depends on it.
+stimuli that have no snapshot on ANY door — `set-boiler-pressure`
+/ `pressure_bar`, and `set-battery-soc` / `soc_pct` on a battery.
+A run that teleports a battery to 10 % SoC leaves it at 10 %. Put
+such state back in the scenario itself if the next run depends on
+it.
+
+`set-battery-soc` / `soc_pct` on an EV charger is the exception,
+and it is not a special case so much as the same rule read
+correctly: on a charger that call writes the plugged CAR, so it
+takes the plug knob's snapshot exactly as `plug-ev` / `unplug-ev`
+do. A charger's teleported SoC is therefore undone by teardown
+like the plug itself, whatever order the run moved the SoC and
+pulled the plug in. A battery's is not — a battery has no plug
+knob to snapshot.
 
 Starting a scenario while another is still running stops the
 running one first — `(scenario-start …)` does that itself, so it

@@ -18,10 +18,14 @@ is wiring the topology + animating the environment.
     augmentations, `validate_active_setpoint` 0-W-park gate)
   - `ramp.rs` — `CommandDelay` + `Ramp`
   - `decay.rs` — `bounded_exp_decay` + `soc_protected_bounds`, plus
-    the SoC lifecycle helpers shared by battery/EV (`SocProtect`,
-    `sanitize_soc_pct`, `integrate_soc_pct`)
+    the SoC lifecycle helpers: `SocProtect` is the battery's alone
+    now, while `sanitize_soc_pct` and `integrate_soc_pct` are shared
+    with the connected car
   - `battery.rs`, `meter.rs`, `grid.rs`, `ev_charger.rs`,
     `inverter/{battery,solar}_inverter.rs`, `steam_boiler.rs`
+  - `ev_presets.rs` — the connected car: preset catalog, per-plug
+    overrides, taper, draw law; owned by the charger, never a site
+    component
   - `marker.rs` — no-physics categories (chp, wind turbine, power
     transformer, breaker); they classify the meters around them
   - `site_import.rs` — microgrid API site-export JSON → `(make-* …)` /
@@ -195,7 +199,7 @@ UI").
 ## Architectural rules
 
 - **Lisp wires + animates the environment, Rust does physics.** Every
-  component's tick / ramp / SoC derate is in Rust. Lisp's only verbs are
+  component's tick / ramp / SoC is in Rust. Lisp's only verbs are
   `(make-*)` to build the graph and `(every …)` / `(run-with-timer …)` to
   perturb grid state or flip runtime knobs over time.
 - **Inverter and battery couple only through the DC bus.** A real inverter
@@ -219,12 +223,15 @@ UI").
   from a `ReactiveCapability` (PF cap, kVA cap, both, or neither)
   evaluated at the OTHER axis's live P instead of a rated pair of its
   own. Both axes re-clamp their armed target to the live envelope every
-  tick, so a narrowing bound (a tightening augmentation, or the EV
-  charger's SoC derate feeding its axis as a dynamic band) actually
-  slews the output down rather than waiting for the next command; a
-  battery inverter still clips a narrowing SoC band by scaling the
-  published value (`dc_accept_ratio`), not by re-clamping the armed
-  target — todo.org d5b keeps that question open. `:reactive-pf-limit`
+  tick, so a narrowing bound (a tightening augmentation on any of
+  them) actually slews the output down rather than waiting for the
+  next command; a battery inverter still clips a narrowing SoC band
+  by scaling the published value (`dc_accept_ratio`), not by
+  re-clamping the armed target — todo.org d5b keeps that question
+  open. The EV charger's axis produces the *limit* it offers the
+  plugged car, not the draw — the car decides what it takes within
+  that (`src/sim/ev_presets.rs`), and the API sees only the charger.
+  `:reactive-pf-limit`
   sets `k` in `|Q| ≤ k × |P|` — a ratio of apparent quantities, not
   true power factor (cos φ). A meter's own
   reactive source is the real thing: mutually-exclusive `:reactive-power`
@@ -441,6 +448,39 @@ rebuild; a script that wants live defaults-editing can still
 3. Demonstrate via a new line in `examples/berlin-demo.lisp` and
    verify via macroctl.
 
+## EV chargers
+
+The charger and the car it charges are two different things
+(`src/sim/ev_charger.rs`, `src/sim/ev_presets.rs`). The charger is
+config: `(make-ev-charger …)` takes `:phases` (1 or 3 — its own
+wiring, which both divides the offered limit into a per-phase current
+and caps how many of the car's phases can be used) and `:idle`
+(`'paused`, the default, offers nothing with no command standing;
+`'full` offers the full rating). It has no pack of its own: the
+pack kwargs (`:capacity`, `:initial-soc`, `:soc-lower`,
+`:soc-upper`, `:soc-protect-margin`) are accepted with a warning
+and ignored, so older files still load, and the site import drops
+them from an export's charger.
+
+The car is runtime state, driven by `(plug-ev ID PRESET &rest
+overrides)` (`:soc`, `:target-soc`, `:phases`, `:max-current-a`,
+`:capacity-kwh`, `:taper-start`, `:taper-floor`), `(unplug-ev ID)`,
+`(ev-info ID)` — a plist, or `nil` for an empty charger or any
+component that takes no EV — and `(ev-presets)`, the catalog.
+`(set-battery-soc ID PCT)` on a charger moves the plugged car's SoC
+and errors when nothing is plugged, as does
+`POST /api/component/{id}/drive` with `soc_pct`. Plug state is a
+scenario knob (`KnobKind::Ev`): every write that changes the plug or
+the car snapshots it first, so a scenario's teardown puts the
+charger back the way it found it.
+
+Being runtime state, the plugged car is never written to the managed
+file — `EvCharger::constructor_kwargs` renders `:phases`, `:idle` and
+`:resume-on-recovery`, and nothing about the car — so a config that
+should start with a car plugged in says so with a `(plug-ev …)` in
+the file's hand-written script section, which is preserved verbatim
+and re-runs on every load.
+
 ## Testing an external bounds-driving app
 
 Macrocosim is used to test apps whose job is to push
@@ -473,7 +513,9 @@ GCP active-power limiter is the motivating case).
   output moves back to idle at that rate (a PV inverter's idle is its
   sunlight floor), without one it still gets there in one tick. The
   inverters' Q axes ramp at `:reactive-ramp-rate`, 2000 VAr/s unless
-  set.
+  set. A charger's car survives a trip; by default charging
+  resumes with the next command, and with `:resume-on-recovery t`
+  it ramps back on its own.
 - Only a component with a power axis on the requested side stores an
   augmentation — both inverters on P and Q, the EV charger and the
   steam boiler on P. Every other component or axis (grid, meter,
