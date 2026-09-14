@@ -21,8 +21,10 @@
 //!   `:rated-upper` (batteries prefer `METRIC_DC_POWER` — their
 //!   rated range is a DC quantity)
 //! - `metricConfigBounds[METRIC_BATTERY_CAPACITY]` → `:capacity` (Wh)
+//!   — batteries only
 //! - `metricConfigBounds[METRIC_BATTERY_SOC_PCT]` → `:soc-lower` /
-//!   `:soc-upper`
+//!   `:soc-upper` — batteries only; an EV charger's pack belongs to
+//!   the car plugged into it, so these are dropped there
 //! - `operationalMode` → `:operational-mode` (config; the simulator
 //!   derives the runtime knobs from it)
 //! - `categorySpecificInfo.battery.type` (chemistry) is dropped: the
@@ -308,8 +310,11 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
             rated_kwargs(c, &mut kwargs, &["DC_POWER", "AC_POWER_ACTIVE"]);
             "make-battery"
         }
+        // No `storage_kwargs`: the charger has no pack of its own —
+        // the car plugged into it does — so `%make-ev-charger`
+        // rejects `:capacity` / `:soc-lower` / `:soc-upper`, and an
+        // export carrying them would abort the import's whole form.
         "EV_CHARGER" => {
-            storage_kwargs(c, &mut kwargs);
             rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
             "make-ev-charger"
         }
@@ -693,6 +698,35 @@ mod tests {
         .unwrap();
         let forms = parse(file, None).unwrap().forms();
         assert!(forms.contains("(make-battery :id 1 :rated-lower -50000.0 :rated-upper 50000.0)"));
+    }
+
+    /// A charger has no pack of its own — the car it charges does —
+    /// so `%make-ev-charger` rejects `:capacity` / `:soc-lower` /
+    /// `:soc-upper`. An export whose charger carries the battery
+    /// bounds (exports do, for chargers that report an SoC) must
+    /// therefore drop them rather than emit a form that aborts the
+    /// import's whole `(progn …)`.
+    #[test]
+    fn import_drops_pack_bounds_from_ev_chargers() {
+        let file: ComponentsFile = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_EV_CHARGER",
+                 "metricConfigBounds": [
+                   {"metric": "METRIC_AC_POWER_ACTIVE", "configBounds": {"lower": 0, "upper": 22000}},
+                   {"metric": "METRIC_BATTERY_CAPACITY", "configBounds": {"upper": 40000}},
+                   {"metric": "METRIC_BATTERY_SOC_PCT", "configBounds": {"lower": 5, "upper": 95}}
+                 ]}
+            ]}"#,
+        )
+        .unwrap();
+        let forms = parse(file, None).unwrap().forms();
+        assert!(
+            forms.contains("(make-ev-charger :id 1 :rated-lower 0.0 :rated-upper 22000.0)"),
+            "{forms}"
+        );
+        assert!(!forms.contains(":capacity"), "{forms}");
+        assert!(!forms.contains(":soc-lower"), "{forms}");
+        assert!(!forms.contains(":soc-upper"), "{forms}");
     }
 
     /// The operational mode is a config parameter and stays one:
