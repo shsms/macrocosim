@@ -94,7 +94,8 @@ jobs:
         run: node tools/panel-dock-test.mjs
 
       # The clipboard paste's let* builder: the make-* each clone goes
-      # through, and the flags and reconnects a clone keeps.
+      # through, and children bound before the parents that push into
+      # them.
       - name: paste-forms tests
         run: node tools/paste-forms-test.mjs
 

@@ -56,7 +56,7 @@ is wiring the topology + animating the environment.
   `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
   `dialogs.js`, `editor.js`, … own one concern each;
   `paste-forms.js` the DOM-free let* builder the editor's paste
-  evals;
+  evals, binding children before the parents that push into them;
   `metrics-store.js` holds the derived-stream rings + the PF helpers
   and `metrics-panel.js` the floating charts panel that reads them;
   `chart-lib.js` the uPlot gate every chart builder asks first
@@ -291,7 +291,7 @@ node tools/live-test.mjs         # live.js edge flow: dead band, direction, widt
 node tools/weather-panel-test.mjs  # weather-panel.js cloud list vs curve
 node tools/panel-dock-test.mjs   # strip-model.js tile shares/order/size
 node tools/panel-geometry-test.mjs  # panel-geometry.js cascade slot pick
-node tools/paste-forms-test.mjs  # paste-forms.js clone let*
+node tools/paste-forms-test.mjs  # paste-forms.js clone let*, children first
 ```
 
 UI input convention: a numeric field that commits on Enter (inspector
