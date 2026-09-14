@@ -315,6 +315,8 @@ pub enum KnobKind {
     MeterReactive,
     Sunlight,
     BoilerDemand,
+    /// EV charger plug state (the connected car, or none).
+    Ev,
 }
 
 /// A captured knob value, ready to be written straight back into a
@@ -363,6 +365,10 @@ pub enum KnobSnapshot {
         source: Option<ReactiveSource>,
         constructed: Option<ConstructedReactive>,
     },
+    /// EV charger plug state: the car that was connected (a copy) or
+    /// `None` for an empty charger, so restore puts the exact car back
+    /// or unplugs whatever a scenario plugged.
+    Ev(Option<crate::sim::ev_presets::ConnectedEv>),
 }
 
 /// The single trait every simulated component implements.
@@ -586,6 +592,30 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     /// exist.
     fn takes_soc_pct(&self) -> bool {
         false
+    }
+
+    /// Whether this component is an EV charger a car can be plugged
+    /// into. The strict doors (`plug-ev`, the EV HTTP route) check it.
+    fn takes_ev(&self) -> bool {
+        false
+    }
+
+    /// Plug `ev` in. Errors when a car is already connected or the
+    /// component takes no EV.
+    fn plug_ev(&self, _ev: crate::sim::ev_presets::ConnectedEv) -> Result<(), String> {
+        Err("this component takes no EV".to_string())
+    }
+
+    /// Unplug the connected car. `false` when there was none (or the
+    /// component takes no EV).
+    fn unplug_ev(&self) -> bool {
+        false
+    }
+
+    /// The connected car and what the charger is doing with it, or
+    /// `None` for an empty charger / a non-charger.
+    fn ev_info(&self) -> Option<crate::sim::ev_presets::EvInfo> {
+        None
     }
 
     /// Steam boiler: overwrite the pressure state (bar). `false`

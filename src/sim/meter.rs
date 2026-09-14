@@ -388,7 +388,7 @@ impl SimulatedComponent for Meter {
                     constructed: *constructed,
                 })
             }
-            KnobKind::Sunlight | KnobKind::BoilerDemand => None,
+            KnobKind::Sunlight | KnobKind::BoilerDemand | KnobKind::Ev => None,
         }
     }
 

@@ -416,6 +416,13 @@ impl MicrogridSite {
                 };
                 self.note_knob_changed(id, "boiler-demand", value, expr, None);
             }
+            KnobKind::Ev => {
+                let (value, expr) = match component.ev_info() {
+                    Some(i) => (Some(i.ev.soc_pct), Some(i.ev.preset.to_string())),
+                    None => (None, None),
+                };
+                self.note_knob_changed(id, "ev", value, expr, None);
+            }
         }
     }
 
