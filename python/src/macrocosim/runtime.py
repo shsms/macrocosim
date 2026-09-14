@@ -27,7 +27,8 @@ from frequenz.quantities import Energy, Percentage, Power, ReactivePower
 
 from ._http import EvalResult, HttpClient, control_path
 from ._process import spawn_macrocosim, terminate, which_binary
-from .build import LaunchConfig
+from .build import LaunchConfig, plug_ev_form
+from .enums import EvPreset
 from .errors import EvalRejected
 
 __all__ = [
@@ -285,6 +286,60 @@ class Site:
     def eval(self, expr: str, mg_id: int | None = None) -> EvalResult:
         """Evaluate a raw Lisp form on the running interpreter."""
         return self._http.eval(expr, mg_id)
+
+    def _eval_ok(self, expr: str, mg_id: int | None = None) -> EvalResult:
+        """Eval and raise :class:`EvalRejected` on an interpreter rejection.
+
+        The one choke point for programmatic eval — rejections can never
+        silently no-op.
+        """
+        result = self.eval(expr, mg_id)
+        if not result.get("ok", True):
+            raise EvalRejected(f"eval of {expr!r} failed: {result.get('error')}")
+        return result
+
+    # --- EV chargers: plug state (Lisp-backed, read over HTTP) -----------
+
+    def plug_ev(
+        self,
+        component_id: int,
+        preset: EvPreset | str,
+        *,
+        soc: float | None = None,
+        target_soc: float | None = None,
+        phases: int | None = None,
+        max_current_a: float | None = None,
+        capacity: Energy | None = None,
+        taper_start: float | None = None,
+        taper_floor: float | None = None,
+        mg_id: int | None = None,
+    ) -> None:
+        """Plug a preset car into charger ``component_id``."""
+        self._eval_ok(
+            plug_ev_form(
+                component_id,
+                preset,
+                soc=soc,
+                target_soc=target_soc,
+                phases=phases,
+                max_current_a=max_current_a,
+                capacity=capacity,
+                taper_start=taper_start,
+                taper_floor=taper_floor,
+            ),
+            mg_id,
+        )
+
+    def unplug_ev(self, component_id: int, mg_id: int | None = None) -> bool:
+        """Unplug the car; False when the charger was already empty."""
+        result = self._eval_ok(f"(unplug-ev {component_id})", mg_id)
+        return result.get("value") == "t"
+
+    def ev_info(self, component_id: int, mg_id: int | None = None) -> dict[str, Any]:
+        """The car plugged into ``component_id``: ``{"plugged": False}`` or the
+        fields, plus ``presets`` (the catalog) either way."""
+        mg = self._resolve_mg(mg_id)
+        return self._http.get_json(f"/api/mg/{mg}/ev/{component_id}")
 
     def control_component(
         self,

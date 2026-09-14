@@ -683,6 +683,8 @@ def plug_ev_form(
     phases: int | None = None,
     max_current_a: float | None = None,
     capacity: Energy | None = None,
+    taper_start: float | None = None,
+    taper_floor: float | None = None,
 ) -> str:
     """Render the ``(plug-ev …)`` form that plugs a preset car into a charger.
 
@@ -691,6 +693,9 @@ def plug_ev_form(
     be a plain string, which is validated against :class:`EvPreset` here — an
     unknown name raises :class:`ValueError` before any eval leaves the client.
     ``capacity`` is the car's pack; the form carries it in kilowatt-hours.
+    ``taper_start`` is the SoC percentage the constant-current phase ends
+    at and ``taper_floor`` the fraction of full current the car still
+    draws at 100 % — the whole of the charging curve's shape.
     """
     parts = [f"(plug-ev {component_id} {to_lisp_atom(EvPreset(preset))}"]
     overrides: tuple[tuple[str, float | int | None], ...] = (
@@ -699,6 +704,8 @@ def plug_ev_form(
         ("phases", phases),
         ("max-current-a", max_current_a),
         ("capacity-kwh", None if capacity is None else capacity.as_kilowatt_hours()),
+        ("taper-start", taper_start),
+        ("taper-floor", taper_floor),
     )
     for key, value in overrides:
         if value is not None:

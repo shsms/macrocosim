@@ -39,7 +39,8 @@ from frequenz.quantities import Energy, Percentage, Power, Quantity, ReactivePow
 from .. import metrics as _M
 from .._http import EvalResult, control_path
 from .._process import spawn_macrocosim, terminate
-from ..build import RawLisp, to_lisp_atom
+from ..build import RawLisp, plug_ev_form, to_lisp_atom
+from ..enums import EvPreset
 from ..errors import EvalRejected
 from ..metrics import MetricSpec
 from ..runtime import MicrogridEndpoint
@@ -298,6 +299,51 @@ class Site:
         if not result.get("ok", True):
             raise EvalRejected(f"eval of {expr!r} failed: {result.get('error')}")
         return result
+
+    # --- EV chargers: plug state (Lisp-backed, read over HTTP) -----------
+
+    async def plug_ev(
+        self,
+        component_id: int,
+        preset: EvPreset | str,
+        *,
+        soc: float | None = None,
+        target_soc: float | None = None,
+        phases: int | None = None,
+        max_current_a: float | None = None,
+        capacity: Energy | None = None,
+        taper_start: float | None = None,
+        taper_floor: float | None = None,
+        mg_id: int | None = None,
+    ) -> None:
+        """Plug a preset car into charger ``component_id``."""
+        await self._eval_ok(
+            plug_ev_form(
+                component_id,
+                preset,
+                soc=soc,
+                target_soc=target_soc,
+                phases=phases,
+                max_current_a=max_current_a,
+                capacity=capacity,
+                taper_start=taper_start,
+                taper_floor=taper_floor,
+            ),
+            mg_id,
+        )
+
+    async def unplug_ev(self, component_id: int, mg_id: int | None = None) -> bool:
+        """Unplug the car; False when the charger was already empty."""
+        result = await self._eval_ok(f"(unplug-ev {component_id})", mg_id)
+        return result.get("value") == "t"
+
+    async def ev_info(
+        self, component_id: int, mg_id: int | None = None
+    ) -> dict[str, Any]:
+        """The car plugged into ``component_id``: ``{"plugged": False}`` or its
+        fields, plus ``presets`` (the catalog) either way."""
+        mg = self._resolve_mg(mg_id)
+        return await self._http.get_json(f"/api/mg/{mg}/ev/{component_id}")
 
     async def control_component(
         self,

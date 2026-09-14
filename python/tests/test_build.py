@@ -268,9 +268,12 @@ def test_plug_ev_form_renders_every_override() -> None:
         phases=1,
         max_current_a=16.0,
         capacity=Energy.from_kilowatt_hours(45.0),
+        taper_start=70.0,
+        taper_floor=0.2,
     ) == (
         "(plug-ev 6 'city :soc 20.0 :target-soc 80.0"
-        " :phases 1 :max-current-a 16.0 :capacity-kwh 45.0)"
+        " :phases 1 :max-current-a 16.0 :capacity-kwh 45.0"
+        " :taper-start 70.0 :taper-floor 0.2)"
     )
     # A bare preset emits no overrides at all, and the enum and its
     # string spelling render the same symbol.
