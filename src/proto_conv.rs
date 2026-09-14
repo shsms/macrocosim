@@ -273,7 +273,10 @@ pub fn telemetry_to_proto(
     {
         samples.push(simple_sample(now, Metric::BatteryCapacity, cap));
     }
+    // The car behind a charger is the simulator's business, not the
+    // API's: its SoC rides the internal telemetry only.
     if let Some(soc) = t.soc_pct
+        && cat != Category::EvCharger
         && allowed(filter, Metric::BatterySocPct)
     {
         let mut s = simple_sample(now, Metric::BatterySocPct, soc);
@@ -631,5 +634,72 @@ mod tests {
         );
         assert_eq!(q_sample.bounds[0].lower, Some(0.0));
         assert_eq!(q_sample.bounds[0].upper, Some(0.0));
+    }
+
+    fn ev_states(w: &MicrogridSite, ev: &EvCharger) -> Vec<i32> {
+        let t = ev.telemetry(w);
+        telemetry_to_proto(ev, &t, None, 0)
+            .telemetry
+            .unwrap()
+            .state_snapshots
+            .iter()
+            .flat_map(|s| s.states.clone())
+            .collect()
+    }
+
+    #[test]
+    fn empty_charger_streams_unplugged_and_ready() {
+        use crate::proto::common::microgrid::electrical_components::ElectricalComponentStateCode as C;
+        let w = MicrogridSite::new();
+        let ev = EvCharger::new(1, Duration::from_secs(1), EvChargerConfig::default());
+        let states = ev_states(&w, &ev);
+        assert!(states.contains(&(C::Ready as i32)), "{states:?}");
+        assert!(
+            states.contains(&(C::EvChargingCableUnplugged as i32)),
+            "{states:?}"
+        );
+    }
+
+    #[test]
+    fn charging_car_streams_locked_and_charging_but_no_soc() {
+        use crate::proto::common::microgrid::electrical_components::ElectricalComponentStateCode as C;
+        use crate::sim::{ev_charger::instant, ev_presets::test_car};
+        let w = MicrogridSite::new();
+        let ev = EvCharger::new(1, Duration::from_secs(1), instant());
+        ev.plug_ev(test_car("sedan", None)).unwrap();
+        ev.set_active_setpoint(22_000.0).unwrap();
+        for _ in 0..2 {
+            ev.tick(&w, chrono::Utc::now(), Duration::from_secs(1));
+        }
+        let states = ev_states(&w, &ev);
+        assert!(states.contains(&(C::Charging as i32)), "{states:?}");
+        assert!(
+            states.contains(&(C::EvChargingCableLockedAtEv as i32)),
+            "{states:?}"
+        );
+        let t = ev.telemetry(&w);
+        assert!(
+            t.soc_pct.is_some(),
+            "internal telemetry keeps the SoC for the UI"
+        );
+        let metrics: Vec<i32> = telemetry_to_proto(&ev, &t, None, 0)
+            .telemetry
+            .unwrap()
+            .metric_samples
+            .iter()
+            .map(|s| s.metric)
+            .collect();
+        assert!(
+            !metrics.contains(&(Metric::BatterySocPct as i32)),
+            "the API must not see the car: {metrics:?}"
+        );
+        assert!(
+            !metrics.contains(&(Metric::BatteryCapacity as i32)),
+            "the API must not see the car's pack either: {metrics:?}"
+        );
+        assert!(
+            metrics.contains(&(Metric::AcPowerActive as i32)),
+            "{metrics:?}"
+        );
     }
 }
