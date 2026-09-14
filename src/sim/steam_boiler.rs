@@ -15,6 +15,7 @@ use crate::sim::{
     bounds::VecBounds,
     component::{KnobKind, KnobSnapshot, ScalarReading},
     dynamic_scalar::DynamicScalar,
+    runtime::Health,
 };
 
 #[derive(Clone, Debug)]
@@ -193,7 +194,7 @@ impl SimulatedComponent for SteamBoiler {
         self.demand_source.read().refresh(ctx);
     }
 
-    fn tick(&self, _world: &MicrogridSite, now: DateTime<Utc>, dt: Duration) {
+    fn tick(&self, world: &MicrogridSite, now: DateTime<Utc>, dt: Duration) {
         let dt_s = dt.as_secs_f32();
         if dt_s <= 0.0 {
             return;
@@ -217,17 +218,30 @@ impl SimulatedComponent for SteamBoiler {
         };
 
         // 3. Step: allotment honored inside [0, need] ∩ rated ∩
-        //    augmentations; no command idles at 0 (gas holds).
-        let band = VecBounds::single(0.0, need_w);
-        let p = self.active.step(
-            now,
-            dt,
-            StepCtx {
-                other_axis: 0.0,
-                dynamic: Some(&band),
-                idle: IdleTarget::Value(0.0),
-            },
-        );
+        //    augmentations; no command idles at 0 (gas holds). A
+        //    faulted or standby boiler trips like the battery
+        //    inverter: no draw, command cleared, recovery awaits a
+        //    re-dispatch. The steam side keeps going — the fault is
+        //    on the electric heater, so the gas burner still holds
+        //    pressure and an above-target excess still decays — and
+        //    the reported bounds keep tracking `need` as on the
+        //    healthy path (the trip does not narrow them), as the
+        //    battery inverter's stay rated-derived while tripped.
+        let p = if world.runtime_of(self.id).health != Health::Ok {
+            self.active.trip();
+            0.0
+        } else {
+            let band = VecBounds::single(0.0, need_w);
+            self.active.step(
+                now,
+                dt,
+                StepCtx {
+                    other_axis: 0.0,
+                    dynamic: Some(&band),
+                    idle: IdleTarget::Value(0.0),
+                },
+            )
+        };
 
         // 4-5. Integrate, then let the implied gas burner floor the
         //      result at target (ceiling guards ramp overshoot).
@@ -459,7 +473,6 @@ mod tests {
             Duration::from_secs(1),
             SteamBoilerConfig {
                 command_delay: Duration::ZERO,
-                ramp_rate_w_per_s: f32::INFINITY,
                 ..cfg
             },
         )
@@ -835,5 +848,105 @@ mod tests {
             )))
         );
         assert_eq!(b.demand_reading().unwrap().value, 0.0);
+    }
+
+    /// Register `b` in a fresh site and hand back both, so a test can
+    /// drive the boiler's health through `MicrogridSite`.
+    fn sited(b: SteamBoiler) -> (MicrogridSite, std::sync::Arc<dyn SimulatedComponent>) {
+        let w = MicrogridSite::new();
+        w.register(b);
+        let b = w.get(700).unwrap();
+        (w, b)
+    }
+
+    /// A boiler that slews at 10 kW/s (with `boiler`'s zero command
+    /// delay), so a trip — one tick to zero — reads differently from
+    /// a reset, seven ticks down from the demand.
+    fn slewing_boiler() -> SteamBoiler {
+        boiler(SteamBoilerConfig {
+            ramp_rate_w_per_s: 10_000.0,
+            ..Default::default()
+        })
+    }
+
+    /// `n` one-second ticks.
+    fn tick_n(w: &MicrogridSite, b: &std::sync::Arc<dyn SimulatedComponent>, n: usize) {
+        for _ in 0..n {
+            b.tick(w, Utc::now(), dt());
+        }
+    }
+
+    /// An errored or standby boiler is electrically offline: zero
+    /// draw, the command gone, recovery waiting for a re-dispatch —
+    /// while the gas burner keeps pressure at target throughout.
+    #[test]
+    fn faulted_boiler_trips_and_awaits_redispatch() {
+        for health in [Health::Error, Health::Standby] {
+            let (w, b) = sited(slewing_boiler());
+            assert!(b.set_steam_demand_kg_h(100.0)); // 62_700 W equivalent
+            b.set_active_setpoint(200_000.0).unwrap();
+            tick_n(&w, &b, 7);
+            assert!(
+                (b.aggregate_power_w(&w) - 62_700.0).abs() < 1.0,
+                "healthy boiler displaces demand, got {}",
+                b.aggregate_power_w(&w),
+            );
+
+            w.set_health(700, health).unwrap();
+            tick_n(&w, &b, 1);
+            assert_eq!(
+                b.aggregate_power_w(&w),
+                0.0,
+                "a {health:?} boiler draws nothing"
+            );
+            assert_eq!(
+                b.telemetry(&w).pressure_bar,
+                Some(8.0),
+                "gas holds pressure through the fault",
+            );
+
+            w.set_health(700, Health::Ok).unwrap();
+            tick_n(&w, &b, 5);
+            assert_eq!(b.aggregate_power_w(&w), 0.0, "no command survives the trip");
+
+            b.set_active_setpoint(200_000.0).unwrap();
+            tick_n(&w, &b, 7);
+            assert!(
+                (b.aggregate_power_w(&w) - 62_700.0).abs() < 1.0,
+                "a new command resumes displacement, got {}",
+                b.aggregate_power_w(&w),
+            );
+        }
+    }
+
+    /// The steam side runs on through a fault: an above-target excess
+    /// still decays at the demand rate with the heater offline, and
+    /// the reported envelope keeps tracking need.
+    #[test]
+    fn faulted_boiler_keeps_integrating_pressure() {
+        let (w, b) = sited(boiler(SteamBoilerConfig {
+            initial_bar: Some(9.0),
+            ..Default::default()
+        }));
+        assert!(b.set_steam_demand_kg_h(100.0)); // 62_700 W = 17.4 Wh/s
+        w.set_health(700, Health::Error).unwrap();
+        tick_n(&w, &b, 10);
+        let bar = b.telemetry(&w).pressure_bar.unwrap();
+        // 10 s × 62_700 W / 3600 / 10_000 Wh/bar ≈ 0.017 bar off.
+        assert!(
+            bar < 8.99 && bar > 8.9,
+            "excess decays while tripped, got {bar}"
+        );
+        assert_eq!(b.aggregate_power_w(&w), 0.0, "still no draw");
+        // Back at target the boiler would take demand: that is what
+        // it reports even while offline.
+        assert!(b.set_pressure_bar(8.0));
+        tick_n(&w, &b, 1);
+        let eff = b.effective_active_bounds().unwrap();
+        assert_eq!(
+            eff.0[0].upper,
+            Some(62_700.0),
+            "bounds keep tracking need while tripped",
+        );
     }
 }

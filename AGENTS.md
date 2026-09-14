@@ -462,7 +462,9 @@ GCP active-power limiter is the motivating case).
   re-dispatch on recovery; a PV inverter resumes from sunlight; an EV
   charger trips like the battery inverter by default, and
   `:resume-on-recovery t` makes it keep its armed command through the
-  fault and ramp back to it on recovery instead.
+  fault and ramp back to it on recovery instead; a steam boiler trips
+  like the battery inverter too, while its gas burner keeps holding
+  pressure at target.
 - Only a component with a power axis on the requested side stores an
   augmentation — both inverters on P and Q, the EV charger and the
   steam boiler on P. Every other component or axis (grid, meter,
