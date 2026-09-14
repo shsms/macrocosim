@@ -1852,8 +1852,12 @@ two follow-ups after live use — the module-load TDZ boot fix
 13px, mode/telemetry/commands back to dropdowns). Design mocks
 updated to match.
 
-** TODO [#A] Formula explorer as an overlay on the topology canvas :ux:design:
+** DONE [#A] Formula explorer as an overlay on the topology canvas :ux:design:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-14 Mo 19:35] \\
+  Landed 2026-08-27 as the formula floating panel on the single
+  canvas (8c466ea retired the Formulas-subview prose, be4b124 dropped
+  the Dashboard subview). Marked in hindsight on 2026-09-14.
 - State "TODO"       from              [2026-08-25 Di 12:14]
 :END:
 
@@ -2152,8 +2156,9 @@ the script's own directory. Two constructors, two defaults; decide
 which is right and align the other (plus the help text).
 
 * Review backlog — 2026-09-06
-** TODO SteamBoiler has no health gate and snaps on TTL expiry :rust:fidelity:
+** DONE SteamBoiler has no health gate and snaps on TTL expiry :rust:fidelity:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-14 Mo 19:41]
 - State "TODO"       from              [2026-09-06 So 01:14]
 :END:
 
@@ -2162,6 +2167,11 @@ ignores =:health= (an errored boiler keeps drawing) and whose
 =reset_setpoint= snaps to zero instead of slewing. The trait doc for
 =reset_setpoint= ("snaps back to the idle value") now describes only
 it. Give it the inverter-style trip and the slewing reset.
+
+Fixed 2026-09-14: tick trips the axis (battery-inverter style, command
+cleared) on any non-Ok health while the gas side keeps holding
+pressure; reset_setpoint slews via PowerAxis::reset(0.0). Trait doc on
+reset_setpoint now says the ramp is retargeted, never snapped.
 
 ** TODO macroctl --assert exits 0 when a scenario ran no check :api:scenarios:
 :LOGBOOK:
@@ -2209,8 +2219,9 @@ an sr-only count. Also: five JS-generated buttons (dialogs.js:250,
 app.js:280-281, editor.js:213, inspect.js:398) have no =type=; biome
 cannot see them; none sits in a form.
 
-** TODO Pasted components register in selection order        :ui:consistency:
+** DONE Pasted components register in selection order        :ui:consistency:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-09-14 Mo 19:41]
 - State "TODO"       from              [2026-09-06 So 07:18]
 :END:
 
@@ -2218,3 +2229,46 @@ cannot see them; none sits in a form.
 m2) …)= in topology selection order, so a pasted inverter can register
 before its battery — the tick-order bug 865a66a fixed for imports.
 Apply the same child-first sort to the pasted bindings.
+
+Fixed 2026-09-14: the let* builder moved to ui-assets/paste-forms.js
+(DOM-free) with a post-order childrenFirst walk mirroring
+site_import.rs; tools/paste-forms-test.mjs pins the order and runs in
+CI.
+
+** TODO Scheduler should own the children-first tick order :design:consistency:
+:LOGBOOK:
+- State "TODO"       from              [2026-09-14 Mo 19:55]
+:END:
+
+Registration order is tick order, and every door that emits make-*
+forms owes the scheduler children first: authored Lisp gets it from
+:successors nesting, imports sort in site_import.rs, and the paste
+sorts again in ui-assets/paste-forms.js — two copies of the same
+walk in two languages. The root-cause fix is for MicrogridSite's
+tick loop to derive a cached children-first order from connections
+(registration order as tie-break, invalidated by bump_structural),
+so no door has to sort. Same corner: the four tick-time health gates
+spell world.runtime_of(id).health != Ok while integrate_energy tests
+== Error, so an Error component re-seeds its energy cursor while a
+Standby one integrates straight through the offline span — 0 W for
+the four gated components, but a Standby meter or grid still
+accumulates. A MicrogridSite::is_offline helper would name the rule
+once.
+
+** TODO A failed structural eval keeps the components it already made :lisp:concurrency:reload:
+:LOGBOOK:
+- State "TODO"       from              [2026-09-14 Mo 20:10]
+:END:
+
+=(let* ((m1 (make-meter))) (connect m1 m9))= aborts at the void
+=m9=, but the meter =m1= made before it stays registered: tulisp
+does not roll back a form's side effects, and =overrides.rs= only
+skips =persist_changed= on =Err= while still bumping the version. The
+orphan is live but not in the managed file — until the next
+successful structural edit re-renders the file and bakes it in.
+Seen on 2026-09-14 by POSTing that form to =/api/mg/2200/eval= on the
+Berlin demo: 12 components before, 13 after, both ids in the file
+after one more =(make-meter)=. Options: snapshot the site before a
+structural eval and restore on =Err=, or render the managed file from
+the post-eval site only when the whole form succeeded and reload it
+otherwise.
