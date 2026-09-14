@@ -20,7 +20,8 @@ use crate::sim::{
     MicrogridSite, OperationalMode, ReactiveSource, SolarInverter, SteamBoiler,
     battery::BatteryConfig,
     dynamic_scalar::DynamicScalar,
-    ev_charger::EvChargerConfig,
+    ev_charger::{EvChargerConfig, EvIdle},
+    ev_presets::{EvPreset, preset},
     inverter::battery_inverter::BatteryInverterConfig,
     inverter::solar_inverter::SolarInverterConfig,
     runtime::{CommandMode, Health, TelemetryMode},
@@ -217,6 +218,11 @@ AsPlist! {
         soc_lower<":soc-lower">: Option<f64> {= None},
         soc_upper<":soc-upper">: Option<f64> {= None},
         soc_protect_margin<":soc-protect-margin">: Option<f64> {= None},
+        /// 1 or 3: the phases the charger is wired on.
+        phases<":phases">: Option<i64> {= None},
+        /// What the charger offers with no command standing: `'paused`
+        /// (nothing, the default) or `'full` (its whole rating).
+        idle<":idle">: Option<EvIdle> {= None},
         /// Keep the armed command through a health fault and ramp back
         /// on recovery; off (the default), the fault clears the command
         /// and recovery waits for a new one.
@@ -638,16 +644,31 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
                 let one = retired.len() == 1;
                 log::warn!(
                     "make-ev-charger {id}: {} {} ignored — the pack belongs to the \
-                     plugged car (`:ev` / `plug-ev`); drop {} from the config",
+                     plugged car (`plug-ev`); drop {} from the config",
                     retired.join(", "),
                     if one { "is" } else { "are" },
                     if one { "it" } else { "them" },
                 );
             }
             cfg.resume_on_recovery = a.resume_on_recovery.unwrap_or(false);
+            if let Some(v) = a.phases {
+                if v != 1 && v != 3 {
+                    return Err(Error::invalid_argument(format!(
+                        ":phases must be 1 or 3, got {v}"
+                    )));
+                }
+                cfg.phases = v as u8;
+            }
+            if let Some(v) = a.idle {
+                cfg.idle = v;
+            }
+            // The charger is registered empty: the car it charges is
+            // runtime state, plugged by `(plug-ev …)` in the script
+            // section, never carried by the constructor.
+            let charger = EvCharger::new(id, interval, cfg);
             let h = register_with_modes(
                 &w,
-                EvCharger::new(id, interval, cfg),
+                charger,
                 a.operational_mode,
                 a.health,
                 a.telemetry_mode,
@@ -846,6 +867,20 @@ fn checked_ramp_rate(kw: &str, v: f64) -> Result<f32, Error> {
         )));
     }
     Ok(v as f32)
+}
+
+/// Resolve a car off the EV catalog from a `'symbol` kwarg — the shape
+/// `(plug-ev …)` takes. `label` names the caller so the error says
+/// which one complained.
+pub(crate) fn preset_from_lisp(raw: &LispValue, label: &str) -> Result<&'static EvPreset, Error> {
+    let name = raw.as_inner().as_symbol().map_err(|_| {
+        Error::type_mismatch(format!(
+            "{label}: expected a preset symbol, got {}",
+            raw.as_inner()
+        ))
+    })?;
+    preset(&name)
+        .ok_or_else(|| Error::invalid_argument(format!("{label}: unknown preset '{name}'")))
 }
 
 /// Build a meter's `ReactiveSource` from its `:reactive-power` /
@@ -1549,5 +1584,39 @@ mod tests {
         let site = run("(%make-steam-boiler :id 43 :demand (lambda () 25.0))");
         let b = site.get(43).unwrap();
         assert!(b.has_unrenderable_source());
+    }
+
+    /// `:phases` and `:idle` shape the charger's config and each
+    /// rejects a value it can't mean; a pack kwarg the config no
+    /// longer owns is taken, warned about and ignored, so a file the
+    /// previous binary wrote loads; and the car itself is not a
+    /// constructor kwarg at all — `:ev` is an unknown key.
+    #[test]
+    fn make_ev_charger_ignores_the_pack_kwargs_and_rejects_bad_phases_and_idle() {
+        use super::super::test_support::config_with;
+        let (cfg, _dir) = config_with("nil");
+        assert!(
+            cfg.eval("(%make-ev-charger :id 9 :phases 2)").is_err(),
+            "a charger has 1 or 3 phases"
+        );
+        assert!(
+            cfg.eval("(%make-ev-charger :id 10 :idle 'sometimes)")
+                .is_err(),
+            "idle is paused or full"
+        );
+        cfg.eval("(%make-ev-charger :id 11 :capacity 30000)")
+            .expect("a retired pack kwarg is ignored, not a load failure");
+        let charger = cfg.site().get(11).expect("the charger was still built");
+        assert!(
+            charger.ev_info().is_none(),
+            ":capacity buys no pack — the charger is empty"
+        );
+
+        // The car is runtime state: a charger takes no preset at
+        // construction, so `:ev` is not a key the primitive knows.
+        assert!(
+            cfg.eval("(%make-ev-charger :id 12 :ev 'sedan)").is_err(),
+            "the plugged car is not a constructor kwarg"
+        );
     }
 }

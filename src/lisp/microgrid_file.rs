@@ -817,7 +817,7 @@ mod tests {
                             :reactive-pf-limit 0)
     (%make-battery :id 5 :capacity 50000.0 :initial-soc 20.0)
     (%make-solar-inverter :id 6 :sunlight% 40.0)
-    (%make-ev-charger :id 7 :resume-on-recovery t)
+    (%make-ev-charger :id 7 :resume-on-recovery t :phases 1 :idle 'full)
     (%make-chp :id 8 :name "chp")
     (%make-meter :id 9 :operational-mode 'inactive)
     (%make-meter :id 10 :power 2000.0 :reactive-power 500.0)
@@ -898,6 +898,19 @@ mod tests {
                 .contains(&(":resume-on-recovery", "t".to_string())),
             ":resume-on-recovery must survive render → reload, got {:?}",
             ev2.constructor_kwargs(),
+        );
+        let kw = ev2.constructor_kwargs();
+        assert!(
+            kw.contains(&(":phases", "1".to_string())),
+            ":phases must survive render → reload, got {kw:?}"
+        );
+        assert!(
+            kw.contains(&(":idle", "'full".to_string())),
+            ":idle must survive render → reload, got {kw:?}"
+        );
+        assert!(
+            ev2.ev_info().is_none(),
+            "a plugged car is runtime state, never rendered"
         );
         // …and the reloaded PV inverter is really following the sky
         // again, not sitting on a constant the render invented. Same
