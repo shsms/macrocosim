@@ -8,6 +8,7 @@ pub mod dispatch;
 pub(crate) mod dynamic_scalar;
 pub mod energy;
 pub mod ev_charger;
+pub mod ev_presets;
 pub mod events;
 pub mod frequency;
 pub mod graph_adapter;
