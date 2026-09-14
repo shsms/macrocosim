@@ -8,7 +8,7 @@ mod common;
 use std::time::Duration;
 
 use chrono::DateTime;
-use common::TestServer;
+use common::{TestServer, eval_or_panic};
 use serde_json::Value;
 
 const TINY_TOPOLOGY: &str = r#"
@@ -18,6 +18,11 @@ const TINY_TOPOLOGY: &str = r#"
                                :successors
                                (list (%make-battery :id 3)))))
 "#;
+
+/// A grid → meter → EV charger the two EV tests both drive: id 6 is
+/// the charger, id 2 the meter that takes no car.
+const EV_TOPOLOGY: &str = "(%make-grid-connection-point :id 1) (%make-meter :id 2) \
+                           (%make-ev-charger :id 6) (connect 1 2) (connect 2 6)";
 
 async fn json(client: &reqwest::Client, url: String) -> Value {
     client
@@ -901,4 +906,37 @@ async fn a_meter_power_override_keeps_the_aggregate_history() {
         after >= before,
         "grid_power history restarted across the override: {before} -> {after}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ev_route_reports_plug_state() {
+    let s = TestServer::start(EV_TOPOLOGY).await;
+    let client = reqwest::Client::new();
+    let base = format!("{}/api/mg/2200", s.ui_url);
+
+    let empty = json(&client, format!("{base}/ev/6")).await;
+    assert_eq!(empty["plugged"], false, "{empty}");
+    // The catalog rides along even on an empty charger, so the
+    // inspector's dropdown never hardcodes it.
+    assert!(
+        empty["presets"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::from("city")),
+        "{empty}"
+    );
+
+    eval_or_panic(&client, &s, "(plug-ev 6 'city :soc 25)").await;
+
+    let plugged = json(&client, format!("{base}/ev/6")).await;
+    assert_eq!(plugged["plugged"], true, "{plugged}");
+    assert_eq!(plugged["preset"], "city");
+    assert_eq!(plugged["phases"], 1);
+    assert!((plugged["soc_pct"].as_f64().unwrap() - 25.0).abs() < 0.01);
+    assert!(plugged["state"].is_string());
+
+    let not_charger = client.get(format!("{base}/ev/2")).send().await.unwrap();
+    assert_eq!(not_charger.status(), 400);
+    let missing = client.get(format!("{base}/ev/99")).send().await.unwrap();
+    assert_eq!(missing.status(), 404);
 }

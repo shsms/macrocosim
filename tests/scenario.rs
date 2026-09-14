@@ -8,7 +8,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::TestServer;
+use common::{TestServer, eval_or_panic};
 use serde_json::Value;
 
 const TOPOLOGY: &str = r#"
@@ -68,21 +68,6 @@ async fn wait_for_peak(client: &reqwest::Client, s: &TestServer, want: f64, tol:
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-}
-
-async fn eval_or_panic(client: &reqwest::Client, s: &TestServer, body: &str) {
-    let r = client
-        .post(format!("{}/api/eval", s.ui_url))
-        .body(body.to_string())
-        .send()
-        .await
-        .unwrap();
-    let status = r.status();
-    let json: Value = r.json().await.unwrap();
-    assert!(
-        status.is_success() && json["ok"] == true,
-        "eval {body} failed: {status} {json}",
-    );
 }
 
 /// `(set-meter-power id (lambda () N))` round-trips through the

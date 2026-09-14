@@ -175,6 +175,26 @@ impl Drop for TestServer {
     }
 }
 
+/// POST a Lisp body to `/api/eval` and fail the test unless the
+/// server answers `{"ok": true}`. The shared spelling of "drive the
+/// sim the way the dashboard's REPL does" every integration test that
+/// needs a live eval uses.
+#[allow(dead_code)]
+pub async fn eval_or_panic(client: &reqwest::Client, s: &TestServer, body: &str) {
+    let r = client
+        .post(format!("{}/api/eval", s.ui_url))
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap();
+    let status = r.status();
+    let json: serde_json::Value = r.json().await.unwrap();
+    assert!(
+        status.is_success() && json["ok"] == true,
+        "eval {body} failed: {status} {json}",
+    );
+}
+
 /// Wrap a test body in `(make-microgrid …)` if the body doesn't
 /// already register one. Tests that care about the microgrid's id
 /// supply their own `(make-microgrid …)` form; everything else gets

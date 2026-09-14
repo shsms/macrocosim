@@ -61,6 +61,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
             dispatch_create_for_mg, dispatch_delete_for_mg, dispatch_set_active_for_mg,
             dispatches_for_mg,
         },
+        ev::ev_for_mg,
         eval::{eval, eval_for_mg, format},
         formula::formula_for_mg,
         history::{history, history_for_mg, setpoints, setpoints_for_mg},
@@ -139,6 +140,7 @@ fn router(config: Config, microgrid: SharedMicrogrid, loopbacks: MicrogridLoopba
         .route("/api/mg/{mg_id}/history", get(history_for_mg))
         .route("/api/mg/{mg_id}/setpoints", get(setpoints_for_mg))
         .route("/api/mg/{mg_id}/component", get(component_for_mg))
+        .route("/api/mg/{mg_id}/ev/{id}", get(ev_for_mg))
         .route(
             "/api/mg/{mg_id}/microgrid/status",
             get(microgrid_status_for_mg),
