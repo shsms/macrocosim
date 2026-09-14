@@ -199,14 +199,24 @@ AsPlist! {
         interval: Option<i64> {= None},
         rated_lower<":rated-lower">: Option<f64> {= None},
         rated_upper<":rated-upper">: Option<f64> {= None},
+        command_delay_ms<":command-delay-ms">: Option<i64> {= None},
+        ramp_rate<":ramp-rate">: Option<f64> {= None},
+        stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
+        // The pack kwargs a charger used to own. The pack is the car's
+        // now, so these are taken and ignored (with a warning) rather
+        // than rejected: a managed file, a snapshot, or an
+        // `enterprise.lisp` whose persisted `ev-charger-defaults` still
+        // carries `:soc-protect-margin` was written by the previous
+        // binary and must still load — the same courtesy
+        // `load-overrides` in sim/common.lisp pays a config that
+        // predates managed files. Rejecting them would fail the whole
+        // microgrid, and in the enterprise case every charger in the
+        // process.
+        capacity_wh<":capacity">: Option<f64> {= None},
         initial_soc<":initial-soc">: Option<f64> {= None},
         soc_lower<":soc-lower">: Option<f64> {= None},
         soc_upper<":soc-upper">: Option<f64> {= None},
         soc_protect_margin<":soc-protect-margin">: Option<f64> {= None},
-        capacity_wh<":capacity">: Option<f64> {= None},
-        command_delay_ms<":command-delay-ms">: Option<i64> {= None},
-        ramp_rate<":ramp-rate">: Option<f64> {= None},
-        stream_jitter_pct<":stream-jitter-pct">: Option<f64> {= None},
         /// Keep the armed command through a health fault and ramp back
         /// on recovery; off (the default), the fault clears the command
         /// and recovery waits for a new one.
@@ -601,21 +611,6 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             if let Some(v) = a.rated_upper {
                 cfg.rated_upper_w = v as f32;
             }
-            if let Some(v) = a.initial_soc {
-                cfg.initial_soc_pct = v as f32;
-            }
-            if let Some(v) = a.soc_lower {
-                cfg.soc_lower_pct = v as f32;
-            }
-            if let Some(v) = a.soc_upper {
-                cfg.soc_upper_pct = v as f32;
-            }
-            if let Some(v) = a.soc_protect_margin {
-                cfg.soc_protect_margin_pct = v as f32;
-            }
-            if let Some(v) = a.capacity_wh {
-                cfg.capacity_wh = v as f32;
-            }
             if let Some(v) = a.command_delay_ms {
                 cfg.command_delay = Duration::from_millis(v.max(0) as u64);
             }
@@ -624,6 +619,30 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             }
             if let Some(v) = a.stream_jitter_pct {
                 cfg.stream_jitter_pct = v as f32;
+            }
+            // The retired pack kwargs: accepted so an older file still
+            // loads, ignored because the charger has no pack, and named
+            // once per charger so the config gets cleaned up eventually.
+            let retired: Vec<&str> = [
+                (":capacity", a.capacity_wh.is_some()),
+                (":initial-soc", a.initial_soc.is_some()),
+                (":soc-lower", a.soc_lower.is_some()),
+                (":soc-upper", a.soc_upper.is_some()),
+                (":soc-protect-margin", a.soc_protect_margin.is_some()),
+            ]
+            .iter()
+            .filter(|(_, present)| *present)
+            .map(|(name, _)| *name)
+            .collect();
+            if !retired.is_empty() {
+                let one = retired.len() == 1;
+                log::warn!(
+                    "make-ev-charger {id}: {} {} ignored — the pack belongs to the \
+                     plugged car (`:ev` / `plug-ev`); drop {} from the config",
+                    retired.join(", "),
+                    if one { "is" } else { "are" },
+                    if one { "it" } else { "them" },
+                );
             }
             cfg.resume_on_recovery = a.resume_on_recovery.unwrap_or(false);
             let h = register_with_modes(

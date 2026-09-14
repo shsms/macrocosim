@@ -1518,14 +1518,15 @@ mod tests {
         use crate::sim::{
             Battery, EvCharger, Meter,
             battery::BatteryConfig,
-            ev_charger::EvChargerConfig,
+            ev_charger::instant,
+            ev_presets::test_car,
             inverter::{BatteryInverter, SolarInverter},
         };
 
         let w = MicrogridSite::new();
         let sec = Duration::from_secs(1);
         w.register(Battery::new(1, sec, BatteryConfig::default()));
-        w.register(EvCharger::new(2, sec, EvChargerConfig::default()));
+        w.register(EvCharger::new(2, sec, instant()));
         w.register(BatteryInverter::new(
             3,
             sec,
@@ -1539,9 +1540,12 @@ mod tests {
         w.connect(5, 4);
 
         // Drive nonzero flows: command the battery inverter and EV,
-        // let the PV free-run from default sunlight, then tick.
+        // let the PV free-run from default sunlight, then tick. The
+        // charger only draws with a car plugged in, and only above the
+        // 6 A per-phase floor — 11 kW on three phases is 16 A.
         w.get(3).unwrap().set_active_setpoint(5_000.0).unwrap();
-        w.get(2).unwrap().set_active_setpoint(3_000.0).unwrap();
+        w.get(2).unwrap().plug_ev(test_car("van", None)).unwrap();
+        w.get(2).unwrap().set_active_setpoint(11_000.0).unwrap();
         let mut now = Utc::now();
         for _ in 0..30 {
             now += chrono::Duration::milliseconds(100);

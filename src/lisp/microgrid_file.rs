@@ -912,4 +912,66 @@ mod tests {
         // Rendering the reloaded site is byte-stable.
         assert_eq!(block, render_block(&e2.def, &e2.site));
     }
+
+    /// A managed file (or snapshot, or `enterprise.lisp`) the previous
+    /// binary wrote spells its charger with the pack kwargs the
+    /// charger used to own. It must still load — the whole microgrid
+    /// rides on that one form — and render back out without them.
+    #[test]
+    fn a_pre_branch_charger_form_still_loads_and_renders() {
+        use super::super::test_support::config_with;
+        let body = r#"
+(make-microgrid :id 2206 :name "old" :grpc-port 8816
+  :topology
+  (lambda ()
+    (%make-meter :id 1)
+    (%make-ev-charger :id 2 :rated-lower 0.0 :rated-upper 22000.0
+                      :initial-soc 92.0 :soc-lower 0.0 :soc-upper 100.0
+                      :soc-protect-margin 10.0 :capacity 30000.0
+                      :command-delay-ms 500 :ramp-rate 3000.0
+                      :stream-jitter-pct 10.0)
+    (connect 1 2)))
+"#;
+        let (cfg, _dir) = config_with(body);
+        let (def, site) = {
+            let reg = cfg.microgrids();
+            let r = reg.lock();
+            let e = r.get(&2206).expect("the old form registers the microgrid");
+            (e.def.clone(), e.site.clone())
+        };
+        let ev = site.get(2).expect("the charger was built");
+        assert!(
+            ev.ev_info().is_none(),
+            "the pack kwargs buy no car: the charger starts empty"
+        );
+        // The kwargs that DID survive are still honoured, so the
+        // ignore is surgical rather than a swallowed form.
+        let kw = ev.constructor_kwargs();
+        assert!(
+            kw.contains(&(":rated-upper", "22000.0".to_string())),
+            "{kw:?}"
+        );
+        // And what comes back out carries none of the retired names,
+        // so one load-and-save cleans the file up.
+        let block = render_block(&def, &site);
+        for retired in [
+            ":capacity",
+            ":initial-soc",
+            ":soc-lower",
+            ":soc-upper",
+            ":soc-protect-margin",
+        ] {
+            assert!(
+                !block.contains(retired),
+                "{retired} must not be rendered back out:\n{block}"
+            );
+        }
+        let (cfg2, _dir2) = config_with(&block);
+        let reg2 = cfg2.microgrids();
+        let r2 = reg2.lock();
+        assert!(
+            r2.get(&2206).is_some(),
+            "the rendered block re-registers the microgrid"
+        );
+    }
 }

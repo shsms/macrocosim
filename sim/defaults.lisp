@@ -52,8 +52,7 @@
         :stream-jitter-pct  5.0))
 
 (setq ev-charger-defaults
-      '(:soc-protect-margin 10.0
-        :command-delay-ms    500
+      '(:command-delay-ms    500
         :ramp-rate           3000.0
         :stream-jitter-pct   10.0))
 

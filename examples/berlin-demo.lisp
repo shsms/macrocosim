@@ -7,7 +7,7 @@
     (%make-meter :id 1002 :interval 200 :stream-jitter-pct 4.0)
     (%make-solar-inverter :id 200 :rated-lower -30000.0 :rated-upper 0.0 :command-delay-ms 0 :ramp-rate 2000.0 :stream-jitter-pct 5.0 :reactive-pf-limit 0.35 :reactive-apparent-va 0 :reactive-command-delay-ms 100 :reactive-ramp-rate 2000.0 :sunlight% 100.0)
     (%make-meter :id 1003 :interval 200 :stream-jitter-pct 4.0)
-    (%make-ev-charger :id 1004 :rated-lower 0.0 :rated-upper 22000.0 :initial-soc 92.0 :soc-lower 0.0 :soc-upper 100.0 :soc-protect-margin 10.0 :capacity 30000.0 :command-delay-ms 500 :ramp-rate 3000.0 :stream-jitter-pct 10.0)
+    (%make-ev-charger :id 1004 :rated-lower 0.0 :rated-upper 22000.0 :command-delay-ms 500 :ramp-rate 3000.0 :stream-jitter-pct 10.0)
     (%make-meter :id 1005 :interval 200 :stream-jitter-pct 4.0)
     (%make-chp :id 1006)
     (%make-meter :id 1007 :interval 200 :power -2000.0 :stream-jitter-pct 4.0)
