@@ -325,7 +325,7 @@ impl SimulatedComponent for SteamBoiler {
     }
 
     fn reset_setpoint(&self) {
-        self.active.trip();
+        self.active.reset(0.0);
     }
 
     fn active_power_w(&self, _site: &MicrogridSite) -> Option<f32> {
@@ -948,5 +948,22 @@ mod tests {
             Some(62_700.0),
             "bounds keep tracking need while tripped",
         );
+    }
+
+    /// TTL expiry slews the draw down at the ramp rate instead of
+    /// snapping to zero in one tick, as the inverters and the EV
+    /// charger do.
+    #[test]
+    fn ttl_expiry_slews_down() {
+        let (w, b) = sited(slewing_boiler());
+        b.set_steam_demand_kg_h(100.0); // 62_700 W equivalent
+        b.set_active_setpoint(200_000.0).unwrap();
+        tick_n(&w, &b, 7);
+        assert!((b.aggregate_power_w(&w) - 62_700.0).abs() < 1.0);
+
+        b.reset_setpoint();
+        tick_n(&w, &b, 1);
+        let p = b.aggregate_power_w(&w);
+        assert!(p > 50_000.0 && p < 62_700.0, "one tick of slew, got {p}");
     }
 }

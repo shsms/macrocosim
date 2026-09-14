@@ -477,9 +477,12 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
         Err(SetpointError::Unsupported)
     }
 
-    /// Clear any pending / armed setpoint — BOTH axes — and snap back
-    /// to the component's idle value (0 for inverters, sunlight-driven
-    /// power for solar). The full fail-safe reset.
+    /// Clear any pending / armed setpoint — BOTH axes — and ramp the
+    /// output back to the component's idle value (0 for inverters,
+    /// sunlight-driven power for solar). The ramp is retargeted at
+    /// the axis's ramp rate, not snapped; what telemetry shows
+    /// meanwhile is the implementation's call (see `PowerAxis::reset`).
+    /// The full fail-safe reset.
     fn reset_setpoint(&self) {}
 
     /// Clear one power axis's setpoint, leaving the other running.

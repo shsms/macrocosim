@@ -464,7 +464,12 @@ GCP active-power limiter is the motivating case).
   `:resume-on-recovery t` makes it keep its armed command through the
   fault and ramp back to it on recovery instead; a steam boiler trips
   like the battery inverter too, while its gas burner keeps holding
-  pressure at target.
+  pressure at target. A setpoint TTL expiring on any of them retargets
+  the active ramp instead of snapping it: with a `:ramp-rate` the P
+  output moves back to idle at that rate (a PV inverter's idle is its
+  sunlight floor), without one it still gets there in one tick. The
+  inverters' Q axes ramp at `:reactive-ramp-rate`, 2000 VAr/s unless
+  set.
 - Only a component with a power axis on the requested side stores an
   augmentation — both inverters on P and Q, the EV charger and the
   steam boiler on P. Every other component or axis (grid, meter,
