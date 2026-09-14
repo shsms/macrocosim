@@ -940,3 +940,93 @@ async fn ev_route_reports_plug_state() {
     let missing = client.get(format!("{base}/ev/99")).send().await.unwrap();
     assert_eq!(missing.status(), 404);
 }
+
+/// `soc_pct` on a charger drives the plugged CAR's SoC, so an empty
+/// charger is a rejection — and one that says what is actually
+/// missing rather than "not a battery", which is true of every
+/// charger, plugged or not.
+#[tokio::test(flavor = "multi_thread")]
+async fn drive_soc_on_an_empty_charger_names_the_missing_ev() {
+    let s = TestServer::start(EV_TOPOLOGY).await;
+    let client = reqwest::Client::new();
+    let base = format!("{}/api/mg/2200", s.ui_url);
+
+    let resp = client
+        .post(format!("{}/api/component/6/drive", s.ui_url))
+        .json(&serde_json::json!({"soc_pct": 50.0}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "charger 6 has no EV plugged in", "{body}");
+
+    // A component with no pack at all still gets the old message.
+    let resp = client
+        .post(format!("{}/api/component/2/drive", s.ui_url))
+        .json(&serde_json::json!({"soc_pct": 50.0}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["error"], "component 2 does not take soc_pct (not a battery)",
+        "{body}"
+    );
+
+    // With a car plugged in the same request lands on the car.
+    eval_or_panic(&client, &s, "(plug-ev 6 'city :soc 25)").await;
+    client
+        .post(format!("{}/api/component/6/drive", s.ui_url))
+        .json(&serde_json::json!({"soc_pct": 50.0}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let plugged = json(&client, format!("{base}/ev/6")).await;
+    assert!(
+        (plugged["soc_pct"].as_f64().unwrap() - 50.0).abs() < 0.01,
+        "{plugged}"
+    );
+}
+
+/// …and because that request writes the CAR, it takes the plug knob's
+/// snapshot first, exactly as `set-battery-soc` does in Lisp: a
+/// scenario that teleports a charger's SoC has that undone by its own
+/// teardown, along with the plug itself. (A battery's SoC still has no
+/// snapshot on any door — see scenarios/README.md.)
+#[tokio::test(flavor = "multi_thread")]
+async fn drive_soc_on_a_charger_is_undone_by_scenario_teardown() {
+    let s = TestServer::start(EV_TOPOLOGY).await;
+    let client = reqwest::Client::new();
+    let base = format!("{}/api/mg/2200", s.ui_url);
+
+    eval_or_panic(&client, &s, "(plug-ev 6 'city :soc 25)").await;
+    eval_or_panic(&client, &s, "(scenario-start \"ev\")").await;
+    client
+        .post(format!("{}/api/component/6/drive", s.ui_url))
+        .json(&serde_json::json!({"soc_pct": 60.0}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let mid = json(&client, format!("{base}/ev/6")).await;
+    assert!(
+        (mid["soc_pct"].as_f64().unwrap() - 60.0).abs() < 0.5,
+        "{mid}"
+    );
+
+    eval_or_panic(&client, &s, "(scenario-stop)").await;
+    let after = json(&client, format!("{base}/ev/6")).await;
+    assert_eq!(
+        after["plugged"], true,
+        "the car the run found is back: {after}"
+    );
+    assert!(
+        (after["soc_pct"].as_f64().unwrap() - 25.0).abs() < 0.5,
+        "teardown must put the car back at the SoC it found: {after}"
+    );
+}

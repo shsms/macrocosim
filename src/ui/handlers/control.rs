@@ -209,9 +209,15 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         ));
     }
     if req.soc_pct.is_some() && !component.takes_soc_pct() {
+        // A charger takes soc_pct exactly while a car is plugged in —
+        // the SoC is the car's.
         return Err(reject(
             StatusCode::BAD_REQUEST,
-            format!("component {id} does not take soc_pct (not a battery)"),
+            if component.takes_ev() {
+                format!("charger {id} has no EV plugged in")
+            } else {
+                format!("component {id} does not take soc_pct (not a battery)")
+            },
         ));
     }
     // reactive_var and power_factor are both Q stimuli, gated by the
@@ -453,8 +459,23 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> ControlResu
         }
     }
     if let Some(pct) = req.soc_pct {
-        let applied = component.set_soc_pct(pct as f32);
-        debug_assert!(applied, "takes_soc_pct disagrees with setter");
+        // On a charger this writes the CAR, so it takes the plug
+        // knob's snapshot, exactly as `set-battery-soc` in Lisp does
+        // (src/lisp/defuns/load_drivers.rs) — teardown then puts the
+        // car back as it was however a run ordered its SoC writes and
+        // its plugs. A battery's SoC still has no snapshot on any door.
+        if component.takes_ev() {
+            site.scenario_snapshot_knob(id, KnobKind::Ev);
+        }
+        // Not a debug_assert like the other setters: an unplug landing
+        // between the pre-gate above and here is a real race, not a
+        // predicate/setter disagreement.
+        if !component.set_soc_pct(pct as f32) {
+            return Err(reject(
+                StatusCode::CONFLICT,
+                format!("charger {id} has no EV plugged in"),
+            ));
+        }
     }
     if let Some(vars) = req.reactive_var {
         site.scenario_snapshot_knob(id, KnobKind::MeterReactive);

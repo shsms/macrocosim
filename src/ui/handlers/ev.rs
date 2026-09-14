@@ -2,6 +2,11 @@
 //! car plugged into a charger, for the inspector's EV card and the
 //! Python client. Not the gRPC API: that sees only the charger.
 //!
+//! The JSON keys are the snake_case twins of `ev-info`'s plist keys,
+//! plus `plugged`; three of the twins do not line up: `capacity_wh`
+//! for `:capacity-kwh` (in watt-hours), `soc_pct` for `:soc`,
+//! `target_soc_pct` for `:target-soc`.
+//!
 //! `presets` — the catalog — rides along whether or not a car is
 //! plugged in, so the inspector builds its dropdown from the server's
 //! list instead of a copy of it.
