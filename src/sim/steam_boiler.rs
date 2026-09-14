@@ -253,6 +253,7 @@ impl SimulatedComponent for SteamBoiler {
             per_phase_voltage_v: Some(grid.voltage_per_phase),
             frequency_hz: Some(grid.frequency_hz),
             active_power_bounds: self.effective_active_bounds(),
+            component_state: Some(crate::sim::component::power_state(p)),
             ..Default::default()
         }
     }
