@@ -117,6 +117,14 @@
                        (* 12500.0 (sin (* 6.2831853 (/ (window-elapsed 900.0) 900.0))))
                        (- (random 1000) 500))))
 
+;; A car on the EV charger (id 1004). The plug is runtime state, not
+;; structure, so it can't live in the generated block above — that
+;; block is rewritten from live state and never renders `:ev`. Here it
+;; re-runs on every load, and the demo's charger always has a car to
+;; show an SoC for. `:idle` is paused, so it draws nothing until
+;; something commands the charger.
+(plug-ev 1004 'sedan :soc 35)
+
 ;; -----------------------------------------------------------------------------
 ;; Scenarios — appear in the Scenarios mode dropdown; run one with
 ;; (scenario-run "<name>") or from the UI. All address the pinned

@@ -417,11 +417,10 @@ impl MicrogridSite {
                 self.note_knob_changed(id, "boiler-demand", value, expr, None);
             }
             KnobKind::Ev => {
-                let (value, expr) = match component.ev_info() {
-                    Some(i) => (Some(i.ev.soc_pct), Some(i.ev.preset.to_string())),
-                    None => (None, None),
-                };
-                self.note_knob_changed(id, "ev", value, expr, None);
+                // Value only: `expr` carries printed Lisp source, and a
+                // restored car's preset name is not that.
+                let value = component.ev_info().map(|i| i.ev.soc_pct);
+                self.note_knob_changed(id, "ev", value, None, None);
             }
         }
     }

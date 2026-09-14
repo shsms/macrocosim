@@ -110,8 +110,9 @@ pub enum SiteEvent {
         id: u64,
         ts_ms: i64,
         /// One of: "meter-power" / "meter-reactive-power" /
-        /// "meter-power-factor" / "solar-sunlight" /
-        /// "reactive-pf-limit" / "reactive-apparent-va".
+        /// "meter-power-factor" / "solar-sunlight" / "boiler-demand" /
+        /// "boiler-pressure" / "ev" / "reactive-pf-limit" /
+        /// "reactive-apparent-va".
         knob: &'static str,
         /// New value; None when the knob was cleared (pf-limit /
         /// apparent-va accept clearing).

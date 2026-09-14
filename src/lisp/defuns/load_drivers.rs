@@ -7,11 +7,34 @@
 //! Q twins: `(set-meter-reactive-power)` (same number / lambda /
 //! symbol dispatch as `set-meter-power`) and `(set-meter-power-factor)`
 //! (hold Q at a power factor that tracks the meter's own live P).
+//! Plus the EV-charger doors: `(plug-ev)` / `(%plug-ev)`,
+//! `(unplug-ev)`, `(ev-info)` and `(ev-presets)` — plug state is a
+//! scenario knob, so a run that plugs or unplugs a car is undone by
+//! `(scenario-stop)`.
 
-use tulisp::{Error, TulispContext, TulispObject};
+use tulisp::{AsPlist, Error, Plist, TulispContext, TulispObject};
 
+use crate::lisp::make::preset_from_lisp;
+use crate::lisp::value::LispValue;
 use crate::sim::component::KnobKind;
+use crate::sim::ev_presets::{ConnectedEv, EvOverrides, PRESETS};
 use crate::sim::microgrids::SharedSiteRouter;
+
+// `%plug-ev`'s kwargs: the charger to plug into, the catalog car,
+// and the per-plug overrides on top of that car's preset values.
+AsPlist! {
+    pub struct PlugEvArgs {
+        id: Option<i64> {= None},
+        preset: Option<LispValue> {= None},
+        soc: Option<f64> {= None},
+        target_soc<":target-soc">: Option<f64> {= None},
+        phases: Option<i64> {= None},
+        max_current_a<":max-current-a">: Option<f64> {= None},
+        capacity_kwh<":capacity-kwh">: Option<f64> {= None},
+        taper_start<":taper-start">: Option<f64> {= None},
+        taper_floor<":taper-floor">: Option<f64> {= None},
+    }
+}
 
 pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // Drive a meter's `:power` slot from Lisp. Accepts a number, a
@@ -220,6 +243,24 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "set-battery-soc: component {id} not found"
                 )));
             };
+            // A charger's SoC is the plugged car's; with no car there
+            // is nothing to move, and silently doing nothing would
+            // hide a scenario's ordering bug.
+            if c.takes_ev() && !c.takes_soc_pct() {
+                return Err(Error::invalid_argument(format!(
+                    "set-battery-soc: charger {id} has no EV plugged in"
+                )));
+            }
+            // Past that guard a charger has a car, and on a charger
+            // this IS a write to the car — so it takes the plug knob's
+            // snapshot, like `plug-ev` and `unplug-ev` do. The `Ev`
+            // baseline holds the whole car, SoC included, so teardown
+            // puts it back exactly as it was whatever order a run did
+            // its plugging and its SoC writes in. A battery keeps the
+            // old contract: its SoC has no snapshot on any door.
+            if c.takes_ev() {
+                w.scenario_snapshot_knob(id as u64, KnobKind::Ev);
+            }
             let _ = c.set_soc_pct(pct as f32);
             Ok(true)
         },
@@ -363,7 +404,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // Steam boiler pressure override — numeric only (unlike demand,
     // pressure has no dynamic-source door on the trait). Gated on
     // takes_pressure_bar() for the same reason as set-boiler-demand.
-    let r = router;
+    let r = router.clone();
     ctx.defun(
         "set-boiler-pressure",
         move |id: i64, bar: f64| -> Result<bool, Error> {
@@ -381,6 +422,177 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             let _ = c.set_pressure_bar(bar as f32);
             w.note_knob_changed(id as u64, "boiler-pressure", Some(bar as f32), None, None);
             Ok(true)
+        },
+    );
+
+    // Plug a preset car into a charger. The Lisp-facing `plug-ev` in
+    // sim/common.lisp spreads (plug-ev ID PRESET &rest OVERRIDES) into
+    // this plist form, the same two-layer shape as make-*.
+    let r = router.clone();
+    ctx.defun(
+        "%plug-ev",
+        move |args: Plist<PlugEvArgs>| -> Result<bool, Error> {
+            let a = args.into_inner();
+            let w = r.site();
+            let id = a
+                .id
+                .ok_or_else(|| Error::invalid_argument("plug-ev: :id is required".to_string()))?
+                as u64;
+            let Some(c) = w.get(id) else {
+                return Err(Error::invalid_argument(format!(
+                    "plug-ev: component {id} not found"
+                )));
+            };
+            if !c.takes_ev() {
+                return Err(Error::invalid_argument(format!(
+                    "plug-ev: component {id} is not an EV charger"
+                )));
+            }
+            // Rejected BEFORE the snapshot below, not by `plug_ev`'s own
+            // guard afterwards: an `Ev` baseline holds a live clone of
+            // the car, so seeding one from a refused plug would make
+            // `(scenario-stop)` rewind that car's SoC and accumulated
+            // energy to the instant of a call that changed nothing.
+            if c.ev_info().is_some() {
+                return Err(Error::invalid_argument(format!(
+                    "plug-ev: component {id}: an EV is already plugged in"
+                )));
+            }
+            let raw = a.preset.as_ref().ok_or_else(|| {
+                Error::invalid_argument(format!(
+                    "plug-ev: component {id}: a preset symbol is required"
+                ))
+            })?;
+            let p = preset_from_lisp(raw, &format!("plug-ev: component {id}"))?;
+            // Guarded here rather than left to `ConnectedEv::new`: the
+            // cast below is what would go wrong, and an i64 outside
+            // 1..=3 truncates into a plausible-looking u8.
+            let phases = match a.phases {
+                None => None,
+                Some(v) if (1..=3).contains(&v) => Some(v as u8),
+                Some(v) => {
+                    return Err(Error::invalid_argument(format!(
+                        "plug-ev: component {id}: phases must be 1, 2 or 3 (got {v})"
+                    )));
+                }
+            };
+            let o = EvOverrides {
+                soc_pct: a.soc.map(|v| v as f32),
+                target_soc_pct: a.target_soc.map(|v| v as f32),
+                phases,
+                max_current_a: a.max_current_a.map(|v| v as f32),
+                capacity_wh: a.capacity_kwh.map(|v| (v * 1000.0) as f32),
+                taper_start_pct: a.taper_start.map(|v| v as f32),
+                taper_floor: a.taper_floor.map(|v| v as f32),
+            };
+            // The car is built and validated in full BEFORE the
+            // snapshot and the write: a rejected override leaves the
+            // charger exactly as it was.
+            let ev = ConnectedEv::new(p, &o, chrono::Utc::now())
+                .map_err(|e| Error::invalid_argument(format!("plug-ev: component {id}: {e}")))?;
+            let soc = ev.soc_pct;
+            w.scenario_snapshot_knob(id, KnobKind::Ev);
+            c.plug_ev(ev)
+                .map_err(|e| Error::invalid_argument(format!("plug-ev: component {id}: {e}")))?;
+            // `expr` is for printed Lisp source a write installed;
+            // the preset name is not that, so it stays out of it.
+            w.note_knob_changed(id, "ev", Some(soc), None, None);
+            Ok(true)
+        },
+    );
+
+    let r = router.clone();
+    ctx.defun("unplug-ev", move |id: i64| -> Result<bool, Error> {
+        let w = r.site();
+        let Some(c) = w.get(id as u64) else {
+            return Err(Error::invalid_argument(format!(
+                "unplug-ev: component {id} not found"
+            )));
+        };
+        if !c.takes_ev() {
+            return Err(Error::invalid_argument(format!(
+                "unplug-ev: component {id} is not an EV charger"
+            )));
+        }
+        // Only when there is a car to take away: this suppresses a
+        // teardown restore (and its `knob_changed`) on a charger the
+        // run never displaced. It does NOT protect a car an operator
+        // plugs mid-scenario — `plug-ev` snapshots `Ev(None)` itself,
+        // and teardown then unplugs it by design, per the transient-
+        // knob contract.
+        if c.ev_info().is_some() {
+            w.scenario_snapshot_knob(id as u64, KnobKind::Ev);
+        }
+        let had = c.unplug_ev();
+        if had {
+            w.note_knob_changed(id as u64, "ev", None, None, None);
+        }
+        Ok(had)
+    });
+
+    // The simulator's private view of the car: a plist, or nil for an
+    // empty charger or a component that takes no EV.
+    let r = router;
+    ctx.defun(
+        "ev-info",
+        move |ctx: &mut TulispContext, id: i64| -> Result<TulispObject, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "ev-info: component {id} not found"
+                )));
+            };
+            let Some(info) = c.ev_info() else {
+                return Ok(TulispObject::nil());
+            };
+            let ev = info.ev;
+            Ok(vec![
+                ctx.intern(":preset"),
+                ctx.intern(ev.preset),
+                ctx.intern(":soc"),
+                (ev.soc_pct as f64).into(),
+                ctx.intern(":target-soc"),
+                (ev.target_soc_pct as f64).into(),
+                ctx.intern(":phases"),
+                (ev.phases as i64).into(),
+                ctx.intern(":max-current-a"),
+                (ev.max_current_a as f64).into(),
+                ctx.intern(":capacity-kwh"),
+                (ev.capacity_wh as f64 / 1000.0).into(),
+                ctx.intern(":energy-wh"),
+                (ev.energy_wh as f64).into(),
+                ctx.intern(":plugged-at"),
+                ev.plugged_at.to_rfc3339().into(),
+                ctx.intern(":state"),
+                ctx.intern(info.state.as_str()),
+            ]
+            .into_iter()
+            .collect())
+        },
+    );
+
+    // The catalog `plug-ev` names, so a scenario author (or the UI)
+    // can list what is on offer without reading the Rust source.
+    ctx.defun(
+        "ev-presets",
+        move |ctx: &mut TulispContext| -> Result<TulispObject, Error> {
+            Ok(PRESETS
+                .iter()
+                .map(|p| {
+                    vec![
+                        ctx.intern(":name"),
+                        ctx.intern(p.name),
+                        ctx.intern(":phases"),
+                        (p.phases as i64).into(),
+                        ctx.intern(":max-current-a"),
+                        (p.max_current_a as f64).into(),
+                        ctx.intern(":capacity-kwh"),
+                        (p.capacity_wh as f64 / 1000.0).into(),
+                    ]
+                    .into_iter()
+                    .collect::<TulispObject>()
+                })
+                .collect())
         },
     );
 }
@@ -1338,5 +1550,201 @@ mod tests {
         cfg.eval("(scenario-stop)").unwrap();
         assert_eq!(b.demand_reading().unwrap().value, 40.0);
         assert!(!b.has_unrenderable_source());
+    }
+
+    /// `(plug-ev ID PRESET …)` spreads its overrides into `%plug-ev`,
+    /// the car lands on the charger, `(ev-info ID)` prints it as a
+    /// plist, and `(unplug-ev ID)` takes it back off.
+    #[test]
+    fn plug_ev_plugs_a_preset_with_overrides_and_unplug_clears_it() {
+        let (cfg, _dir) = config_with("(%make-ev-charger :id 7)");
+        let ev = cfg.site().get(7).unwrap();
+        cfg.eval("(plug-ev 7 'sedan :soc 30 :phases 2 :target-soc 80)")
+            .unwrap();
+        let info = ev.ev_info().expect("plugged");
+        assert_eq!(
+            (
+                info.ev.preset,
+                info.ev.soc_pct,
+                info.ev.phases,
+                info.ev.target_soc_pct
+            ),
+            ("sedan", 30.0, 2, 80.0)
+        );
+        let printed = cfg.eval("(ev-info 7)").unwrap();
+        assert!(
+            printed.contains(":preset") && printed.contains("sedan") && printed.contains(":soc"),
+            "{printed}"
+        );
+        cfg.eval("(unplug-ev 7)").unwrap();
+        assert!(ev.ev_info().is_none());
+        assert_eq!(cfg.eval("(ev-info 7)").unwrap(), "nil");
+    }
+
+    /// Every rejection names the component and the reason; a
+    /// non-charger's `set-battery-soc` stays lenient.
+    #[test]
+    fn plug_ev_error_cases_name_the_reason() {
+        let (cfg, _dir) = config_with("(%make-ev-charger :id 7) (%make-meter :id 8)");
+        let err = |src: &str| cfg.eval(src).unwrap_err().to_string();
+        assert!(err("(plug-ev 99 'sedan)").contains("not found"));
+        assert!(err("(plug-ev 8 'sedan)").contains("not an EV charger"));
+        assert!(err("(plug-ev 7 'unicorn)").contains("unknown preset"));
+        assert!(err("(plug-ev 7 'sedan :phases 5)").contains("phases"));
+        let soc_err = err("(plug-ev 7 'sedan :soc 120)");
+        assert!(soc_err.contains("soc"), "{soc_err}");
+        // Every reason names the component it was about, so a
+        // scenario log says WHICH charger refused the plug.
+        assert!(soc_err.contains("component 7"), "{soc_err}");
+        assert!(err("(plug-ev 7 'sedan :target-soc 120)").contains("target-soc"));
+        // `ev-info` is a query, not a write: "is there a car?" is
+        // answered nil for a meter as much as for an empty charger.
+        // Only a missing id is an error.
+        assert_eq!(cfg.eval("(ev-info 8)").unwrap(), "nil");
+        assert!(err("(ev-info 99)").contains("not found"));
+        assert_eq!(
+            cfg.eval("(unplug-ev 7)").unwrap(),
+            "nil",
+            "unplugging an empty charger is a no-op, not an error"
+        );
+        cfg.eval("(plug-ev 7 'sedan)").unwrap();
+        assert!(err("(plug-ev 7 'van)").contains("already plugged"));
+        assert!(
+            cfg.eval("(set-battery-soc 8 50)").is_ok(),
+            "non-chargers stay lenient"
+        );
+    }
+
+    /// A refused plug must not seed the scenario's plug baseline:
+    /// an `Ev` snapshot holds the whole car, so a baseline taken
+    /// during a rejected call would make teardown rewind the SoC and
+    /// energy the car accumulated before that call.
+    #[test]
+    fn a_refused_plug_does_not_seed_the_scenario_baseline() {
+        let (cfg, _dir) = config_with("(%make-ev-charger :id 7)");
+        let ev = cfg.site().get(7).unwrap();
+        cfg.eval("(plug-ev 7 'van)").unwrap();
+        cfg.eval("(scenario-start \"ev\")").unwrap();
+        // Rejected: the charger is occupied.
+        assert!(cfg.eval("(plug-ev 7 'sedan)").is_err());
+        // Move the car through the trait setter rather than
+        // `set-battery-soc`: every Lisp/HTTP door onto a charger's SoC
+        // now takes the plug snapshot itself, so a door here would
+        // seed the very baseline this test is trying to prove absent.
+        assert!(ev.set_soc_pct(77.0));
+        cfg.eval("(scenario-stop)").unwrap();
+        let info = ev.ev_info().expect("the van is still plugged in");
+        assert_eq!(info.ev.preset, "van");
+        assert_eq!(
+            info.ev.soc_pct, 77.0,
+            "teardown must not rewind a car the scenario never plugged"
+        );
+    }
+
+    /// `set-battery-soc` on a charger moves the plugged car's SoC,
+    /// and says so when there is no car to move.
+    #[test]
+    fn set_battery_soc_on_a_charger_needs_a_car() {
+        let (cfg, _dir) = config_with("(%make-ev-charger :id 7)");
+        assert!(
+            cfg.eval("(set-battery-soc 7 50)")
+                .unwrap_err()
+                .to_string()
+                .contains("no EV")
+        );
+        cfg.eval("(plug-ev 7 'sedan)").unwrap();
+        cfg.eval("(set-battery-soc 7 50)").unwrap();
+        assert_eq!(
+            cfg.site().get(7).unwrap().ev_info().unwrap().ev.soc_pct,
+            50.0
+        );
+    }
+
+    /// Plug state is a scenario knob: teardown undoes both
+    /// directions — a car a scenario plugged comes back out, a car it
+    /// unplugged goes back in.
+    #[test]
+    fn scenario_stop_unplugs_what_a_scenario_plugged_and_replugs_what_it_unplugged() {
+        let (cfg, _dir) = config_with("(%make-ev-charger :id 7) (%make-ev-charger :id 8)");
+        let site = cfg.site();
+        cfg.eval("(plug-ev 8 'van)").unwrap();
+        cfg.eval("(scenario-start \"ev\")").unwrap();
+        cfg.eval("(plug-ev 7 'sedan)").unwrap();
+        cfg.eval("(unplug-ev 8)").unwrap();
+        assert!(site.get(7).unwrap().ev_info().is_some());
+        assert!(site.get(8).unwrap().ev_info().is_none());
+        cfg.eval("(scenario-stop)").unwrap();
+        assert!(site.get(7).unwrap().ev_info().is_none(), "teardown unplugs");
+        assert_eq!(
+            site.get(8).unwrap().ev_info().unwrap().ev.preset,
+            "van",
+            "teardown replugs"
+        );
+    }
+
+    /// `set-battery-soc` on a charger is a write to the CAR, so it
+    /// takes the plug knob's snapshot like `plug-ev` / `unplug-ev` do
+    /// — and teardown therefore puts the car back exactly as it was
+    /// whatever order the run moved the SoC and pulled the plug in.
+    #[test]
+    fn scenario_stop_undoes_a_chargers_set_battery_soc() {
+        let (cfg, _dir) = config_with("(%make-ev-charger :id 7)");
+        let site = cfg.site();
+        cfg.eval("(plug-ev 7 'van :soc 40)").unwrap();
+        cfg.eval("(scenario-start \"ev\")").unwrap();
+        cfg.eval("(set-battery-soc 7 10)").unwrap();
+        // The unplug's own snapshot comes second, so only the SoC
+        // write's baseline can carry the van's pre-scenario 40 %.
+        cfg.eval("(unplug-ev 7)").unwrap();
+        cfg.eval("(scenario-stop)").unwrap();
+        let info = site.get(7).unwrap().ev_info().expect("the van is back");
+        assert_eq!(
+            (info.ev.preset, info.ev.soc_pct),
+            ("van", 40.0),
+            "teardown restores the car the run found, at the SoC it found it at"
+        );
+    }
+
+    /// An unplug that takes nothing away must not claim the plug
+    /// knob's baseline: seeding `Ev(None)` on an empty charger would
+    /// have teardown "restore" an emptiness the scenario never
+    /// displaced, and announce it with a knob event nobody asked for.
+    #[test]
+    fn unplug_ev_on_an_empty_charger_does_not_seed_the_scenario_baseline() {
+        let (cfg, _dir) = config_with("(%make-ev-charger :id 7)");
+        let site = cfg.site();
+        let mut rx = site.subscribe_events();
+        cfg.eval("(scenario-start \"ev\")").unwrap();
+        assert_eq!(
+            cfg.eval("(unplug-ev 7)").unwrap(),
+            "nil",
+            "there was no car to take away"
+        );
+        cfg.eval("(scenario-stop)").unwrap();
+        let mut seen = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            seen.push(ev);
+        }
+        assert!(
+            !seen.iter().any(|ev| matches!(
+                ev,
+                SiteEvent::KnobChanged {
+                    id: 7,
+                    knob: "ev",
+                    ..
+                }
+            )),
+            "teardown restored a plug knob the scenario never displaced; saw: {seen:?}"
+        );
+    }
+
+    /// `(ev-presets)` prints the whole catalog, one plist per car.
+    #[test]
+    fn ev_presets_lists_the_catalog() {
+        let (cfg, _dir) = config_with("nil");
+        let printed = cfg.eval("(ev-presets)").unwrap();
+        for name in ["phev", "city", "sedan", "van"] {
+            assert!(printed.contains(name), "{printed}");
+        }
     }
 }
