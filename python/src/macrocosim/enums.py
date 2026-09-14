@@ -41,6 +41,22 @@ class CommandMode(StrEnum):
     OVER_BOUND = "over-bound"
 
 
+class EvIdle(StrEnum):
+    """What a charger offers with no command standing."""
+
+    PAUSED = "paused"
+    FULL = "full"
+
+
+class EvPreset(StrEnum):
+    """The built-in cars a charger can be plugged with."""
+
+    PHEV = "phev"
+    CITY = "city"
+    SEDAN = "sedan"
+    VAN = "van"
+
+
 class Metric(StrEnum):
     """A metric a scenario ``(check …)`` can assert on."""
 

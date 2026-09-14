@@ -34,7 +34,7 @@ from frequenz.quantities import (
     Voltage,
 )
 
-from .enums import CommandMode, Health, TelemetryMode
+from .enums import CommandMode, EvIdle, EvPreset, Health, TelemetryMode
 from .metrics import ACTIVE_POWER, REACTIVE_POWER, SOC, STORED_ENERGY
 from .signals import DrivenSignal, SettingSignal, Signal
 
@@ -617,11 +617,8 @@ def ev_charger(
     id: int | None = None,
     name: str | None = None,
     rated: tuple[Power, Power] | None = None,
-    capacity: Energy | None = None,
-    initial_soc: Percentage | None = None,
-    soc_lower: Percentage | None = None,
-    soc_upper: Percentage | None = None,
-    soc_protect_margin: Percentage | None = None,
+    phases: int | None = None,
+    idle: EvIdle | None = None,
     interval: timedelta | None = None,
     command_delay: timedelta | None = None,
     ramp_rate: float | None = None,
@@ -632,22 +629,38 @@ def ev_charger(
     command_mode: CommandMode | None = None,
     **extra: Value,
 ) -> Component:
-    """An EV charger (leaf). Battery-like: the connected car's pack has a
-    ``capacity``, an ``initial_soc``, and an SoC operating band.
+    """An EV charger (leaf). Starts empty; ``Site.plug_ev`` plugs a car
+    into it, which is runtime state and not part of the build.
 
-    A charger whose health goes to ``error`` or ``standby`` trips to zero
-    and waits for a new setpoint. Pass ``resume_on_recovery=True`` for a
-    charger that keeps its armed command through the fault and ramps back
-    to it on recovery.
+    ``phases`` is 1 or 3. ``idle`` says what the charger offers with no
+    command standing: ``EvIdle.PAUSED`` (nothing, the default) or
+    ``EvIdle.FULL`` (its whole rating). A charger whose health goes to
+    ``error`` or ``standby`` trips to zero and waits for a new setpoint;
+    ``resume_on_recovery=True`` keeps the armed command through the fault.
+
+    The charger has no pack of its own, so the pack kwargs it used to
+    take raise :class:`TypeError` here rather than reaching the server
+    (which accepts and ignores them, for the sake of files an older
+    binary wrote). Give the car its pack instead, with
+    ``Site.plug_ev(..., capacity=...)``.
     """
+    for retired in (
+        "capacity",
+        "initial_soc",
+        "soc_lower",
+        "soc_upper",
+        "soc_protect_margin",
+    ):
+        if retired in extra:
+            raise TypeError(
+                f"ev_charger no longer takes {retired} — the pack belongs to"
+                " the car; use Site.plug_ev"
+            )
     args = {
         "id": id,
         "name": name,
-        "capacity": capacity,
-        "initial_soc": initial_soc,
-        "soc_lower": soc_lower,
-        "soc_upper": soc_upper,
-        "soc_protect_margin": soc_protect_margin,
+        "phases": phases,
+        "idle": idle,
         "interval": _ms(interval),
         "command_delay_ms": _ms(command_delay),
         "ramp_rate": ramp_rate,
@@ -659,6 +672,38 @@ def ev_charger(
         **extra,
     }
     return _component("make-ev-charger", args, rated=rated, cls=Component)
+
+
+def plug_ev_form(
+    component_id: int,
+    preset: EvPreset | str,
+    *,
+    soc: float | None = None,
+    target_soc: float | None = None,
+    phases: int | None = None,
+    max_current_a: float | None = None,
+    capacity: Energy | None = None,
+) -> str:
+    """Render the ``(plug-ev …)`` form that plugs a preset car into a charger.
+
+    The one spelling of the form: both the sync and the async ``Site.plug_ev``
+    emit through it, so the two clients can never drift apart. ``preset`` may
+    be a plain string, which is validated against :class:`EvPreset` here — an
+    unknown name raises :class:`ValueError` before any eval leaves the client.
+    ``capacity`` is the car's pack; the form carries it in kilowatt-hours.
+    """
+    parts = [f"(plug-ev {component_id} {to_lisp_atom(EvPreset(preset))}"]
+    overrides: tuple[tuple[str, float | int | None], ...] = (
+        ("soc", soc),
+        ("target-soc", target_soc),
+        ("phases", phases),
+        ("max-current-a", max_current_a),
+        ("capacity-kwh", None if capacity is None else capacity.as_kilowatt_hours()),
+    )
+    for key, value in overrides:
+        if value is not None:
+            parts.append(f":{key} {to_lisp_atom(value)}")
+    return " ".join(parts) + ")"
 
 
 def chp(

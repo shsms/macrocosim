@@ -32,7 +32,15 @@ from .build import (
     steam_boiler,
     to_lisp_atom,
 )
-from .enums import CommandMode, Health, Metric, Schedule, TelemetryMode
+from .enums import (
+    CommandMode,
+    EvIdle,
+    EvPreset,
+    Health,
+    Metric,
+    Schedule,
+    TelemetryMode,
+)
 from .errors import (
     ControlRejected,
     EvalRejected,
@@ -98,6 +106,8 @@ __all__ = [
     "LispRenderable",
     # typed knobs
     "Health",
+    "EvIdle",
+    "EvPreset",
     "TelemetryMode",
     "CommandMode",
     "Metric",

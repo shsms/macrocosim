@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from datetime import time, timedelta
 
+import pytest
 from frequenz.quantities import (
     ApparentPower,
     Current,
@@ -16,7 +17,15 @@ from frequenz.quantities import (
 )
 
 import macrocosim as mc
-from macrocosim.build import Microgrid, battery, battery_inverter, grid, meter, raw
+from macrocosim.build import (
+    Microgrid,
+    battery,
+    battery_inverter,
+    grid,
+    meter,
+    plug_ev_form,
+    raw,
+)
 
 
 def test_nested_successors_emit_make_forms() -> None:
@@ -196,19 +205,33 @@ def test_builders_cover_every_server_arg() -> None:
 
     ev = mc.ev_charger(
         id=6,
-        capacity=Energy.from_kilowatt_hours(75),
-        initial_soc=Percentage.from_percent(30),
+        phases=1,
+        idle=mc.EvIdle.FULL,
         command_delay=timedelta(milliseconds=200),
         ramp_rate=500.0,
     ).to_lisp()
-    assert ":capacity 75000.0" in ev
-    assert ":initial-soc 30.0" in ev
+    assert ":phases 1" in ev
+    assert ":idle 'full" in ev
     assert ":command-delay-ms 200" in ev
+    assert ":capacity" not in ev, "the pack belongs to the car now"
     # Off by default: the charger trips and awaits a re-dispatch, so the
     # flag renders nothing at all rather than an explicit nil.
     assert ":resume-on-recovery" not in ev
     ev_resume = mc.ev_charger(id=6, resume_on_recovery=True).to_lisp()
     assert ":resume-on-recovery t" in ev_resume
+
+    # The pack kwargs a charger used to take are refused by name here
+    # rather than passed through **extra: the server takes them only to
+    # warn and ignore them, which a Python caller would never see.
+    for retired in (
+        "capacity",
+        "initial_soc",
+        "soc_lower",
+        "soc_upper",
+        "soc_protect_margin",
+    ):
+        with pytest.raises(TypeError, match="the pack belongs to the car"):
+            mc.ev_charger(id=6, **{retired: 1.0})
 
     import inspect
 
@@ -234,3 +257,24 @@ def test_steam_boiler_renders_rated_and_physics_kwargs() -> None:
     assert ":target-bar 6.0" in text
     assert ":max-bar 9.0" in text
     assert ":demand 40.0" in text
+
+
+def test_plug_ev_form_renders_every_override() -> None:
+    assert plug_ev_form(
+        6,
+        "city",
+        soc=20.0,
+        target_soc=80.0,
+        phases=1,
+        max_current_a=16.0,
+        capacity=Energy.from_kilowatt_hours(45.0),
+    ) == (
+        "(plug-ev 6 'city :soc 20.0 :target-soc 80.0"
+        " :phases 1 :max-current-a 16.0 :capacity-kwh 45.0)"
+    )
+    # A bare preset emits no overrides at all, and the enum and its
+    # string spelling render the same symbol.
+    assert plug_ev_form(6, mc.EvPreset.CITY) == "(plug-ev 6 'city)"
+    assert plug_ev_form(6, "city") == "(plug-ev 6 'city)"
+    with pytest.raises(ValueError):
+        plug_ev_form(6, "unicorn")
