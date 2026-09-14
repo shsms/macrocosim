@@ -91,6 +91,7 @@ const unit = await page.evaluate(async () => {
   eq("battery without dc shows dash hero", mBatSocOnly.hero, { text: "—", color: DIM });
   const ev = { id: 7, name: "ev-7", category: "ev-charger", subtype: null, hidden: false, health: "ok", provides_telemetry: true };
   eq("ev aux is soc", pill.pillModel(ev, { p: 3000, q: 7, soc: 40, dc: null }, opts).aux, { kind: "soc", pct: 40, text: "40%" });
+  eq("ev aux says no EV when the soc is missing", pill.pillModel(ev, { p: 0, q: 0, soc: null, dc: null }, opts).aux, { kind: "text", text: "no EV" });
   const meter = { id: 2, name: "meter-2", category: "meter", subtype: null, hidden: true, health: "ok", provides_telemetry: true };
   const mMeter = pill.pillModel(meter, { p: 500, q: null, soc: null, dc: null }, opts);
   eq("meter p only", mMeter.aux, null);
@@ -200,6 +201,12 @@ const unit = await page.evaluate(async () => {
   eq("battery card dc", batCard.dc.text, "-3.00 kW");
   eq("battery card no ac power section", batCard.power, null);
   eq("battery card no pf", batCard.pf, null);
+  // The card's half of the pill's "no EV" story: a charger with no
+  // SoC in its sample has no car, and says so in a row of its own.
+  const evCardEmpty = hc.hoverCardModel({ component: ev, live: { ...liveInv, p: 0, q: 0, soc: null, dc: null }, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
+  eq("ev card says no EV when the soc is missing", evCardEmpty.noEv, { text: "no EV plugged in" });
+  const evCardPlugged = hc.hoverCardModel({ component: ev, live: { ...liveInv, p: 3000, q: 0, soc: 40, dc: null }, parents: [], children: [], lastCommand: null, nowMs: now, deadBand: 300 });
+  eq("ev card drops the no-EV row once a car is plugged", evCardPlugged.noEv, null);
   eq("rejected command", hc.hoverCardModel({ component: inv, live: liveInv, parents: [], children: [], lastCommand: { kind: "power", value: "5", ts: now - 1000, accepted: false, reason: "out of bounds" }, nowMs: now, deadBand: 300 }).lastCommand.text, "power 5.0 W · 1 s ago · rejected: out of bounds");
   const cmdText = (lastCommand) => hc.hoverCardModel({ component: inv, live: liveInv, parents: [], children: [], lastCommand, nowMs: now, deadBand: 300 }).lastCommand.text;
   eq("reactive command scales in VAr", cmdText({ kind: "reactive_power", value: "1200", ts: now - 1000, accepted: true, reason: "" }), "reactive power 1.20 kVAr · 1 s ago · accepted");

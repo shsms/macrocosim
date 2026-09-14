@@ -430,6 +430,11 @@ export function openWebSocket(onTopologyChanged) {
         inspectorLive.applySetpoint(ev);
       } else if (ev.kind === "knob_changed") {
         inspectorLive.applyKnob(ev);
+        // Some knobs also move the canvas — the plug knob is the only
+        // signal an unplug gives the live overlay, since an empty
+        // charger stops sending soc_pct rather than sending a null
+        // one. topology ignores the tokens it does not draw.
+        topology.applyKnob(ev);
       } else if (ev.kind === "log") {
         appendLog(ev);
       } else if (ev.kind === "config_error") {

@@ -86,6 +86,11 @@ function socAux(soc) {
   return { kind: "soc", pct, text: `${pct}%` };
 }
 
+// An empty charger's aux slot: a charger's SoC is its car's, so with
+// nothing plugged in there is no gauge to draw. Frozen and shared —
+// every empty charger on the canvas shows the same readout.
+const NO_EV_AUX = Object.freeze({ kind: "text", text: "no EV" });
+
 // Text-only readout, no gauge — a boiler's pressure isn't a 0–100%
 // quantity like SoC, so it just prints the bar value.
 function pressureAux(pressure) {
@@ -101,8 +106,10 @@ export function pillModel(c, live, { valuesOn, catColor, deadBand }) {
   let power = null;
   if (valuesOn && live) {
     power = c.category === "battery" ? live.dc : live.p;
-    if (c.category === "battery" || c.category === "ev-charger") {
+    if (c.category === "battery") {
       aux = socAux(live.soc);
+    } else if (c.category === "ev-charger") {
+      aux = socAux(live.soc) ?? NO_EV_AUX;
     } else if (c.category === "steam-boiler") {
       aux = pressureAux(live.pressure);
     } else if (finite(live.q)) {

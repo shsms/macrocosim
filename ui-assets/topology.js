@@ -59,6 +59,10 @@ function colorFor(c) {
 }
 
 const LIVE_KEY = "macrocosim-topology-live";
+// The `knob_changed` tokens the canvas overlay draws, each mapped to
+// the live-entry field its value lands in. A token that is not here
+// is the inspector's business alone and `applyKnob` drops it.
+const KNOB_LIVE_FIELD = new Map([["ev", "soc"]]);
 // Edge colour by flow direction: the pills' import blue and export
 // green, and the structural grey when nothing flows.
 const EDGE_FLOW_COLOR = { import: COLORS.import, export: COLORS.export, dead: COLORS.edgeRest };
@@ -1483,6 +1487,25 @@ export function createGraphCanvas(containerId, adapter = {}) {
         if (e.hist.length > 60) e.hist.splice(0, e.hist.length - 60);
       }
       if (!drawn) return;
+      liveDirty.add(ev.id);
+      armLiveFlush();
+    },
+    /// WS `knob_changed`: a knob whose value the canvas overlay draws
+    /// lands in the live entry, every other token is the inspector's
+    /// alone. The "ev" token is here because the overlay cannot learn
+    /// an unplug from the sample stream — an empty charger simply
+    /// stops emitting `soc_pct`, so the pill and the hover card would
+    /// keep showing the departed car's last SoC forever. `ts` is left
+    /// alone: this is a control event, not a fresh telemetry sample,
+    /// and the hover card's freshness line must keep measuring the
+    /// stream.
+    applyKnob(ev) {
+      const field = KNOB_LIVE_FIELD.get(ev.knob);
+      if (!field) return;
+      const mg = readSelectedMg();
+      if (mg == null || (ev.mg_id != null && ev.mg_id !== mg)) return;
+      syncLiveMg();
+      liveEntry(ev.id)[field] = Number.isFinite(ev.value) ? ev.value : null;
       liveDirty.add(ev.id);
       armLiveFlush();
     },
