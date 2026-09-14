@@ -2049,6 +2049,39 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   margin: 0.75rem 0 0.4rem;
 }
 
+/* The EV card's SoC gauge: a fill to the car's SoC with a tick at
+   its target, sitting inline ahead of the numbers that spell both
+   out. Same track colour as every other inspector rule. */
+.ev-soc-bar {
+  position: relative;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  display: inline-block;
+  width: 120px;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.ev-soc-fill { height: 100%; background: var(--cat-ev-charger); border-radius: 4px; }
+.ev-soc-target { position: absolute; top: -2px; width: 2px; height: 12px; background: currentColor; }
+
+/* Standalone commit button — the EV card's Plug in / Unplug. The
+   inspector's other buttons are .link-btn glyphs or segmented rows,
+   neither of which fits an action with a word on it; this borrows
+   .pal-btn's shape, the panel shell's other standalone button.
+   Scoped to #inspect like every other inspector rule in this file:
+   `btn` is a generic enough name to collide outside the panel. */
+#inspect .btn {
+  font-size: 14px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  cursor: pointer;
+}
+#inspect .btn:hover { border-color: var(--accent); }
+
 /* Per-axis block in the Power card: a big live readout headlines
    each envelope bar. */
 #inspect .env-axis { margin: 0.5rem 0 0.75rem; }

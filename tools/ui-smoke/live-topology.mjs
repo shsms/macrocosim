@@ -1241,6 +1241,112 @@ await page.evaluate(async () => {
   topology.select([]);
 });
 
+// ── EV charger: plug, charge, unplug through the inspector ─────────
+// The demo's script plugs a sedan into the charger at boot, so the
+// card opens on a car; :idle is paused, so nothing flows until the
+// set-active-power command below.
+//
+// Every waitFor here polls for the very thing the check that follows
+// asserts, so a timeout would abort the whole run with a stack trace
+// instead of reporting which UI step stopped working. `.catch` turns
+// each one back into a FAIL line — the same idiom the panel-cache and
+// REPL sections use.
+const chargerId = 1004; // the Berlin demo's charger
+await page.evaluate(async (id) => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([id]);
+}, chargerId);
+const evCard = await waitFor(() => page.evaluate(() => (document.getElementById("card-ev") ? true : null))).catch(
+  () => null,
+);
+check("e2e: the charger's inspector has an EV card", evCard === true);
+if (!(await page.evaluate(() => document.getElementById("card-ev")?.classList.contains("open")))) {
+  await page.click("#card-ev [data-fold-toggle]");
+}
+const evText = () =>
+  page.evaluate(() => document.querySelector("#card-ev .fold-body")?.textContent ?? "");
+// The car the demo file plugged, read back through the inspector.
+const bootText = await waitFor(async () => {
+  const t = await evText();
+  return /sedan/.test(t) ? t : null;
+}).catch(() => null);
+check("e2e: the demo's charger opens on the car its script plugged", /sedan/.test(bootText ?? ""), bootText);
+await page.click("#ev-unplug");
+const emptyText = await waitFor(async () => {
+  const t = await evText();
+  return /no EV/i.test(t) ? t : null;
+}).catch(() => null);
+check("e2e: an unplugged charger says so", /no EV/i.test(emptyText ?? ""), emptyText);
+await page.selectOption("#ev-preset", "city");
+await page.fill("#ev-soc", "20");
+await page.click("#ev-plug");
+const pluggedText = await waitFor(async () => {
+  const t = await evText();
+  // Not /city/ alone: the empty card's own preset dropdown spells out
+  // every preset name, so that matches before the plug has landed.
+  return !/no EV/i.test(t) && /city/.test(t) ? t : null;
+}).catch(() => null);
+check("e2e: plugging a city car shows it in the card", /city/.test(pluggedText ?? "") && /1 phase/.test(pluggedText ?? ""), pluggedText);
+const evOk = await (async () => {
+  const r = await fetch(`${BASE}/api/mg/2200/eval`, {
+    method: "POST",
+    body: `(set-active-power ${chargerId} 22000 60000)`,
+    signal: AbortSignal.timeout(5000),
+  });
+  return (await r.json()).ok;
+})();
+check("e2e: a 22 kW command is accepted on the charger", evOk === true, String(evOk));
+// A city car is 1-phase/32 A — 230 V × 32 A ≈ 7.36 kW — so the draw
+// lands well under the 22 kW asked for however generous the command.
+const drawW = await waitFor(async () => {
+  const p = await evalNumber(`(component-active-power ${chargerId})`);
+  return p > 7000 ? p : null;
+}, 20000).catch(() => null);
+check("e2e: the 1-phase car tops out near 7.4 kW", drawW != null && drawW > 7000 && drawW < 7500, String(drawW));
+const chargingText = await waitFor(async () => {
+  const t = await evText();
+  return /charging/.test(t) ? t : null;
+}).catch(() => null);
+check("e2e: the card reports charging", /charging/.test(chargingText ?? ""), chargingText);
+// The pill's aux slot is the canvas half of the same story: the car's
+// SoC while one is plugged, "no EV" when the charger is empty. The
+// unplug can only reach it through the WS `knob_changed` event — an
+// empty charger stops emitting soc_pct rather than emitting a null
+// one — so these two checks are the guard on that wiring.
+const chargerAux = () =>
+  page.evaluate(async (id) => {
+    const { topology } = await import("/assets/topology.js");
+    return topology.debugNodeModels().find((m) => m && m.id === id)?.aux ?? null;
+  }, chargerId);
+const pluggedAux = await waitFor(async () => {
+  const a = await chargerAux();
+  return a && a.kind === "soc" ? a : null;
+}).catch(() => null);
+check(
+  "e2e: the charger pill shows the car's SoC",
+  /^\d+%$/.test(pluggedAux?.text ?? ""),
+  JSON.stringify(pluggedAux),
+);
+await page.click("#ev-unplug");
+const unpluggedText = await waitFor(async () => {
+  const t = await evText();
+  return /no EV/i.test(t) ? t : null;
+}).catch(() => null);
+check("e2e: unplugging empties the card", /no EV/i.test(unpluggedText ?? ""), unpluggedText);
+const unpluggedAux = await waitFor(async () => {
+  const a = await chargerAux();
+  return a && a.kind === "text" ? a : null;
+}).catch(() => null);
+check(
+  "e2e: unplugging returns the pill to \"no EV\"",
+  unpluggedAux?.text === "no EV",
+  JSON.stringify(unpluggedAux),
+);
+await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([]);
+});
+
 // ── e2e: the steam boiler end to end ───────────────────────────────
 // A controllable gas/electric hybrid: :demand (kg/h) is the base
 // load, an active-power setpoint allots how much of it is actually

@@ -24,10 +24,11 @@ import { topology } from "./topology.js";
 // run the panel's teardown WITHOUT touching showGen, so a late result
 // would otherwise pass the unchanged gen check and install a uPlot,
 // a live metricsStore subscription, or a TTL timer that nothing is
-// registered to ever clear. Two live in this file: one for the
+// registered to ever clear. Three live in this file: one for the
 // deferred chart builds, one for the /api/component snapshot fetches
-// (which also keep a sequence so two in-flight fetches for the same
-// open node resolve in start order).
+// and one for the EV card's poll (the latter two also keep a sequence
+// so two in-flight fetches for the same open node resolve in start
+// order).
 function aliveToken() {
   let alive = 0;
   return {
@@ -40,6 +41,7 @@ function aliveToken() {
 }
 const chartsAlive = aliveToken();
 const snapshotAlive = aliveToken();
+const evAlive = aliveToken();
 
 // Per-component history metrics, keyed by category. No `grid` entry:
 // the sim's Grid publishes no per-component telemetry by design, so
@@ -49,7 +51,7 @@ const CHARTS_BY_CATEGORY = {
   meter: ["active_power_w", "reactive_power_var"],
   inverter: ["active_power_w", "reactive_power_var"],
   battery: ["soc_pct", "dc_power_w"],
-  "ev-charger": ["soc_pct", "dc_power_w"],
+  "ev-charger": ["soc_pct", "active_power_w"],
   chp: ["active_power_w"],
   "steam-boiler": ["pressure_bar", "active_power_w"],
 };
@@ -356,7 +358,7 @@ export function setupInspectorChips() {
 // on any failure. Power starts open — the P/Q readouts are the
 // panel's headline — the other cards start folded.
 const CARD_KEY_PREFIX = "mc-inspector-card-";
-const CARD_DEFAULT_OPEN = { component: false, power: true, charts: false, setpoints: false };
+const CARD_DEFAULT_OPEN = { component: false, ev: true, power: true, charts: false, setpoints: false };
 function loadCardOpen(name) {
   try {
     const v = localStorage.getItem(CARD_KEY_PREFIX + name);
@@ -372,6 +374,128 @@ function saveCardOpen(name, open) {
     // Storage unavailable — the fold still works for this session,
     // it just won't remember next time.
   }
+}
+
+// ── EV card ────────────────────────────────────────────────────────
+//
+// The charger's own telemetry deliberately says nothing about the car
+// in it, so this card reads the simulator's private view over
+// /api/mg/{mg}/ev/{id} instead and writes back through plug-ev /
+// unplug-ev — the same eval path every other inspector control uses.
+// The preset catalog is the server's (`presets`, sent plugged or not),
+// never a copy of it here: a car added to the catalog shows up in this
+// dropdown without a UI change.
+
+function evBodyHtml(info) {
+  if (!info.plugged) {
+    const options = info.presets.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("");
+    return `
+      <p>no EV plugged in</p>
+      <dl>
+        <dt>preset</dt><dd><select id="ev-preset">${options}</select></dd>
+        <dt>initial SoC (%)</dt><dd><input id="ev-soc" type="number" step="any" min="0" max="100" placeholder="preset default" /></dd>
+        <dt>target SoC (%)</dt><dd><input id="ev-target" type="number" step="any" min="0" max="100" placeholder="100" /></dd>
+      </dl>
+      <button type="button" id="ev-plug" class="btn">Plug in</button>`;
+  }
+  const pct = Math.round(info.soc_pct);
+  const mins = Math.max(0, Math.round((Date.now() - Date.parse(info.plugged_at)) / 60000));
+  return `
+    <dl>
+      <dt>car</dt><dd>${escapeHtml(info.preset)} · ${info.phases} phase${info.phases > 1 ? "s" : ""} · ${info.max_current_a} A</dd>
+      <dt>SoC</dt><dd><div class="ev-soc-bar"><div class="ev-soc-fill" style="width:${pct}%"></div><div class="ev-soc-target" style="left:${Math.round(info.target_soc_pct)}%"></div></div> ${pct}% of ${formatScaled(info.capacity_wh, "Wh")}, target ${Math.round(info.target_soc_pct)}%</dd>
+      <dt>session</dt><dd>${formatScaled(info.energy_wh, "Wh")} in ${mins} min</dd>
+      <dt>state</dt><dd>${escapeHtml(info.state)}</dd>
+    </dl>
+    <button type="button" id="ev-unplug" class="btn">Unplug</button>`;
+}
+
+// Call when starting an EV-card fetch; pass the token to evFetchStale
+// once it settles. Same shape as beginSnapshotFetch/snapshotFetchStale:
+// these run fire-and-forget off a 2 s interval and off the two click
+// handlers, so a slow response must not paint over a newer one that
+// already landed, and a teardown in between must disown it outright.
+let evSeq = 0;
+function beginEvFetch() {
+  return { alive: evAlive.capture(), seq: ++evSeq };
+}
+function evFetchStale(token) {
+  return evAlive.stale(token.alive) || token.seq !== evSeq;
+}
+
+// Fill the EV card from the sim's private view of the car. Re-run
+// after every plug/unplug and on a timer while the card is open, so
+// the SoC and session lines move. No generation parameter: every
+// teardown path (panel close, panel re-render, a new selection) runs
+// stopEvTimer, which bumps evAlive — and the body element is re-read
+// after the await, so a paint into a detached card is impossible.
+async function refreshEvCard(id) {
+  // A folded card is not worth a poll: nothing behind it is visible,
+  // and the fold's own toggle refreshes it the moment it opens.
+  if (!document.getElementById("card-ev")?.classList.contains("open")) return;
+  if (!document.getElementById("ev-body")) return;
+  const token = beginEvFetch();
+  let info;
+  try {
+    const res = await fetch(`${mgPath("ev")}/${id}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    info = await res.json();
+  } catch (err) {
+    if (evFetchStale(token)) return;
+    const body = document.getElementById("ev-body");
+    if (!body) return;
+    body.textContent = `EV view unavailable: ${err.message}`;
+    // `evHtml` is only ever what is on screen — leaving the last good
+    // body in it here would make the memo below swallow the repaint
+    // that recovers from this error.
+    evHtml = "";
+    return;
+  }
+  // Re-read the element rather than trusting one captured before the
+  // await: a re-render during the fetch would leave that one detached.
+  const body = evFetchStale(token) ? null : document.getElementById("ev-body");
+  if (!body) return;
+  body.classList.remove("hint");
+  // An identical repaint is skipped, not re-applied. What this saves
+  // is the UNPLUGGED form: innerHTML would reset it every two seconds,
+  // throwing away a half-typed SoC or a picked preset under the user's
+  // hands. A charging car's body changes text every poll, so it repaints
+  // regardless — it holds nothing the user is typing into.
+  const html = evBodyHtml(info);
+  if (html === evHtml) return;
+  evHtml = html;
+  body.innerHTML = html;
+  // The inputs commit through this button, not on Enter or a wheel,
+  // so the numeric fields need none of the knob rows' spinner/wheel
+  // handling (see AGENTS.md's UI input convention).
+  document.getElementById("ev-plug")?.addEventListener("click", async () => {
+    const preset = document.getElementById("ev-preset").value;
+    const soc = document.getElementById("ev-soc").value.trim();
+    const target = document.getElementById("ev-target").value.trim();
+    const args = `${soc ? ` :soc ${soc}` : ""}${target ? ` :target-soc ${target}` : ""}`;
+    const res = await evalQuoted(`(plug-ev ${id} '${preset}${args})`, "Plug in failed");
+    if (res.ok) refreshEvCard(id);
+  });
+  document.getElementById("ev-unplug")?.addEventListener("click", async () => {
+    const res = await evalQuoted(`(unplug-ev ${id})`, "Unplug failed");
+    if (res.ok) refreshEvCard(id);
+  });
+}
+
+// One timer for the one selected charger, cleared by the node panel's
+// teardown and by the next render. `evHtml` is the last body painted
+// — and nothing else, so the repaint memo never skips a body that
+// isn't already on screen — cleared alongside the timer so the next
+// charger's first refresh always paints over its "loading…"
+// placeholder. The evAlive bump is what disowns a fetch still parked
+// on its await (see aliveToken).
+let evTimer = null;
+let evHtml = "";
+function stopEvTimer() {
+  if (evTimer) clearInterval(evTimer);
+  evTimer = null;
+  evHtml = "";
+  evAlive.bump();
 }
 
 function renderInspect(d, parentIds, childIds) {
@@ -487,6 +611,13 @@ function renderInspect(d, parentIds, childIds) {
         <p class="hint" id="knob-readback-hint" hidden></p>
       </div>
     </div>
+
+    ${d.category === "ev-charger" ? `
+    <div class="insp-card fold" id="card-ev" data-card="ev">
+      <h3 class="fold-toggle" data-fold-toggle>EV<span class="fold-summary"><span class="fold-chevron">▾</span></span></h3>
+      <div class="fold-body"><div id="ev-body" class="hint">loading…</div></div>
+    </div>
+    ` : ""}
 
     <div class="insp-card fold" id="card-power" data-card="power">
       <h3 class="fold-toggle" data-fold-toggle>Power<span class="fold-summary"><span class="fold-chevron">▾</span></span></h3>
@@ -623,15 +754,17 @@ function renderInspect(d, parentIds, childIds) {
     btn.addEventListener("click", () => evalQuoted(`(${btn.dataset.clear} ${d.id})`));
   }
 
-  // Component, Power, and Setpoints cards: persisted per-card fold
-  // state, no async work behind any of them (the setpoint list is
-  // rendered — and keeps accumulating WS events — whether or not its
+  // Component, EV, Power, and Setpoints cards: persisted per-card fold
+  // state. Only the EV card does work behind its fold — its poll skips
+  // a folded card, so unfolding asks for one refresh (the setpoint list
+  // is rendered, and keeps accumulating WS events, whether or not its
   // card is open). The Charts card (persisted too, but with a
   // first-unfold chart build) is wired by renderNode below — it
   // needs the render's generation guard, which only renderNode has.
-  // A grid selection renders none of these three, so the lookup is
-  // allowed to come back empty rather than being asserted.
-  for (const name of ["component", "power", "setpoints"]) {
+  // A grid selection renders none of these, and the EV card only
+  // exists on a charger, so the lookup is allowed to come back empty
+  // rather than being asserted.
+  for (const name of ["component", "ev", "power", "setpoints"]) {
     const card = document.getElementById(`card-${name}`);
     if (!card) continue;
     card.classList.toggle("open", loadCardOpen(name));
@@ -639,6 +772,9 @@ function renderInspect(d, parentIds, childIds) {
       const open = !card.classList.contains("open");
       card.classList.toggle("open", open);
       saveCardOpen(name, open);
+      // The EV poll skips a folded card, so unfolding has to ask for
+      // the one refresh that fills it (the timer takes over from there).
+      if (open && name === "ev") refreshEvCard(d.id);
     });
   }
 
@@ -1140,6 +1276,7 @@ export function showComponent(d) {
     liveCharts.clear();
     clearGridChart();
     stopTtlTimer();
+    stopEvTimer();
   });
 }
 
@@ -1151,6 +1288,12 @@ async function renderNode(d, gen) {
   const parentIds = topology.parentsOf(d.id);
   const childIds = topology.childrenOf(d.id);
   renderInspect(d, parentIds, childIds);
+
+  stopEvTimer();
+  if (d.category === "ev-charger") {
+    refreshEvCard(d.id);
+    evTimer = setInterval(() => refreshEvCard(d.id), 2000);
+  }
 
   // Charts card: history fetch + live-chart wiring are deferred to
   // first unfold (folded by default; open state persists across
