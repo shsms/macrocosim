@@ -55,6 +55,8 @@ is wiring the topology + animating the environment.
   entry; `topology.js`, `live.js`, `metrics-store.js`,
   `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
   `dialogs.js`, `editor.js`, … own one concern each;
+  `paste-forms.js` the DOM-free let* builder the editor's paste
+  evals;
   `metrics-store.js` holds the derived-stream rings + the PF helpers
   and `metrics-panel.js` the floating charts panel that reads them;
   `chart-lib.js` the uPlot gate every chart builder asks first
@@ -276,7 +278,7 @@ spell out `@biomejs/biome`. `check` also runs the organizeImports
 assist, not just the linter, so an unsorted import or export
 specifier list fails as an error. `noDescendingSpecificity` is turned
 off for `style.css` in biome.json's `overrides` block, until its
-rules are reordered with a browser to check. Plus six node-only gates
+rules are reordered with a browser to check. Plus the node-only gates
 that need neither a browser nor a running server:
 
 ```sh
@@ -285,9 +287,11 @@ node tools/boot-smoke.mjs        # imports app.js under a DOM shim:
                                  # breakage a curl-200 can't see
 node tools/formula-ast-test.mjs  # formula-ast.js parser + renderer
 node tools/metrics-store-test.mjs  # metrics-store.js ring/PF/format
+node tools/live-test.mjs         # live.js edge flow: dead band, direction, width
 node tools/weather-panel-test.mjs  # weather-panel.js cloud list vs curve
 node tools/panel-dock-test.mjs   # strip-model.js tile shares/order/size
 node tools/panel-geometry-test.mjs  # panel-geometry.js cascade slot pick
+node tools/paste-forms-test.mjs  # paste-forms.js clone let*
 ```
 
 UI input convention: a numeric field that commits on Enter (inspector

@@ -93,6 +93,11 @@ jobs:
       - name: panel-dock tests
         run: node tools/panel-dock-test.mjs
 
+      # The clipboard paste's let* builder: the make-* each clone goes
+      # through, and the flags and reconnects a clone keeps.
+      - name: paste-forms tests
+        run: node tools/paste-forms-test.mjs
+
       # Executes the whole ES-module import graph under a DOM shim —
       # catches a TDZ / class-ordering error or a renamed export that
       # serving the file happily would not.

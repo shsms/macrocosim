@@ -6,6 +6,7 @@
 import { escapeHtml, notify } from "./app.js";
 import { evalQuoted } from "./eval.js";
 import { OPERATIONAL_MODES, showComponent } from "./inspect.js";
+import { makeFnFor, pasteSource } from "./paste-forms.js";
 import { READ_ONLY_TITLE, readSelectedMg, structureEditable } from "./routing.js";
 import { ALIGN_MODES, topology } from "./topology.js";
 
@@ -17,23 +18,6 @@ function editable() {
   if (structureEditable()) return true;
   notify(READ_ONLY_TITLE);
   return false;
-}
-
-function makeFnFor(c) {
-  if (c.category === "inverter") {
-    return c.subtype === "solar" ? "make-solar-inverter" : "make-battery-inverter";
-  }
-  return {
-    grid: "make-grid-connection-point",
-    meter: "make-meter",
-    battery: "make-battery",
-    "ev-charger": "make-ev-charger",
-    chp: "make-chp",
-    "wind-turbine": "make-wind-turbine",
-    "steam-boiler": "make-steam-boiler",
-    "power-transformer": "make-power-transformer",
-    breaker: "make-breaker",
-  }[c.category] ?? null;
 }
 
 // Editor-style clipboard for copy / paste of node subgraphs. Holds a
@@ -118,43 +102,15 @@ export function copySelection() {
   return true;
 }
 
-// Paste the clipboard subgraph as a fresh set of components + edges
-// via one let*-bound eval. Matches duplicate's old behavior — uses
-// the public make-* wrappers so per-category defaults apply, threads
-// component-id to wire reconnects atomically. One undo step.
+// Paste the clipboard subgraph as one eval (one undo step); the
+// form comes from paste-forms.js.
 export async function pasteClipboard() {
   if (!editable()) return;
   if (clipboard.isEmpty()) {
     notify("Clipboard is empty — copy something first.");
     return;
   }
-  const snap = clipboard.get();
-  const bindings = snap.components
-    .map((c) => {
-      const flags = [];
-      // `:hidden t` is accepted by make-meter alone, and the make-*
-      // plists reject unknown keys outright — so emitting it at any
-      // other constructor would be a Lisp error, not a no-op. Safe
-      // unconditionally because a meter is the only component that
-      // can report hidden, so `c.hidden` already implies one. Emitted
-      // when set so the snapshot round-trips: sticky for cut+paste
-      // and cross-mg copy+paste.
-      if (c.hidden) flags.push(":hidden t");
-      // The operational mode is config, so a clone keeps it.
-      if (c.operational_mode && c.operational_mode !== "unspecified") {
-        flags.push(`:operational-mode '${c.operational_mode}`);
-      }
-      const args = flags.length ? ` ${flags.join(" ")}` : "";
-      return `(m${c.id} (${makeFnFor(c)}${args}))`;
-    })
-    .join(" ");
-  const reconnects = snap.edges
-    .map(([from, to]) => `(connect m${from} m${to})`)
-    .join(" ");
-  const src = reconnects
-    ? `(let* (${bindings}) ${reconnects})`
-    : `(let* (${bindings}) t)`;
-  await evalQuoted(src, "Paste failed");
+  await evalQuoted(pasteSource(clipboard.get()), "Paste failed");
 }
 
 export async function deleteSelection() {
