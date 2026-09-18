@@ -3,7 +3,7 @@
 // — every action stays in the inspector.
 
 import { formatScaled } from "./live.js";
-import { powerColor, reactiveColor } from "./pill.js";
+import { frequencyReadout, powerColor, reactiveColor } from "./pill.js";
 
 const finite = (v) => v != null && Number.isFinite(v);
 
@@ -64,6 +64,8 @@ export function hoverCardModel({ component: c, live, parents, children, lastComm
   const noEv = hasLive && c.category === "ev-charger" && !finite(live.soc) ? { text: "no EV plugged in" } : null;
   const showPressure = c.category === "steam-boiler";
   const pressure = hasLive && showPressure && finite(live.pressure) ? { text: `${live.pressure.toFixed(1)} bar` } : null;
+  const readout = hasLive && c.category === "grid" ? frequencyReadout(live.hz) : null;
+  const frequency = readout ? { label: "Frequency", ...readout } : null;
   const energy = hasLive && finite(live.energy) ? { text: `${formatScaled(live.energy, "Wh")} since start` } : null;
   let freshness;
   if (!hasLive || !finite(live.ts)) freshness = { text: "no data yet", stale: true };
@@ -99,6 +101,7 @@ export function hoverCardModel({ component: c, live, parents, children, lastComm
     soc,
     noEv,
     pressure,
+    frequency,
     dc: hasLive && battery ? powerSection("DC power", live.dc, null, null, deadBand) : null,
     spark: hasLive ? live.hist.slice() : [],
     lastCommand: command,
@@ -163,7 +166,7 @@ function render(m) {
     <div class="hc-id">${esc(m.idLine)}</div>
     ${sparkSvg(m.spark)}
     ${envelopeBar(m.power)}${envelopeBar(m.dc)}
-    ${envelopeBar(m.reactive, "VAr")}
+    ${envelopeBar(m.reactive, "VAr")}${envelopeBar(m.frequency)}
     ${m.pf ? `<div class="hc-row hc-pf">${esc(m.pf.text)}</div>` : ""}
     ${soc}
     ${noEv}

@@ -422,6 +422,7 @@ export function openWebSocket(onTopologyChanged) {
         inspectorLive.applySample(ev);
       } else if (ev.kind === "microgrid_sample") {
         metricsStore.applySample(ev);
+        topology.applyMicrogridSample(ev);
       } else if (ev.kind === "topology_changed") {
         onTopologyChanged(ev.version);
       } else if (ev.kind === "setpoint") {

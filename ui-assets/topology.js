@@ -20,7 +20,7 @@ import { notify, setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./eval.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
-import { DEAD_FLOW, deadBandW, edgeFlow } from "./live.js";
+import { blankLiveEntry, DEAD_FLOW, deadBandW, edgeFlow } from "./live.js";
 import { COLORS, cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
 import {
   mgPath,
@@ -487,7 +487,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
   function liveEntry(id) {
     let e = liveValues.get(id);
     if (!e) {
-      e = { p: null, q: null, soc: null, dc: null, energy: null, pressure: null, pLo: null, pHi: null, qLo: null, qHi: null, ts: null, hist: [] };
+      e = blankLiveEntry();
       liveValues.set(id, e);
     }
     return e;
@@ -1488,6 +1488,28 @@ export function createGraphCanvas(containerId, adapter = {}) {
       }
       if (!drawn) return;
       liveDirty.add(ev.id);
+      armLiveFlush();
+    },
+    /// Live-overlay feed: one site-level WS sample. The grid samples
+    /// no power of its own, so its pill reads the site's
+    /// `grid_frequency` stream — the source its inspector chart uses
+    /// too — landing on every grid node. A null value (the formula
+    /// has no reading) blanks the pill without touching the stamp,
+    /// so the hover card's age keeps measuring real samples.
+    applyMicrogridSample(ev) {
+      if (ev.stream !== "grid_frequency") return;
+      const mg = readSelectedMg();
+      if (mg == null || (ev.mg_id != null && ev.mg_id !== mg)) return;
+      syncLiveMg();
+      const hz = Number.isFinite(ev.value) ? ev.value : null;
+      const ts = ev.ts_ms ?? Date.now();
+      for (const c of componentById.values()) {
+        if (c.category !== "grid") continue;
+        const g = liveEntry(c.id);
+        g.hz = hz;
+        if (hz != null) g.ts = ts;
+        liveDirty.add(c.id);
+      }
       armLiveFlush();
     },
     /// WS `knob_changed`: a knob whose value the canvas overlay draws

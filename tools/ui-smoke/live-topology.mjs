@@ -527,6 +527,19 @@ check("e2e: some node shows a power hero", models.some((m) => m.hero && /-?\d+(\
 check("e2e: battery shows DC power hero and SoC aux", models.some((m) => /^bat-\d+$/.test(m.fullName) && m.hero && m.aux?.kind === "soc"), JSON.stringify(models));
 check("e2e: inverter shows reactive aux", models.some((m) => /^inv-/.test(m.fullName) && m.aux?.kind === "reactive" && /VAr/.test(m.aux.text)), JSON.stringify(models));
 check("e2e: every node carries its #id", models.every((m) => m.idText === `#${m.id}`), JSON.stringify(models));
+// The grid node (id 1) reads the site's grid_frequency stream, one
+// frame a second; the grid component samples no power of its own.
+const gridEntry = await waitFor(async () => {
+  const e = await page.evaluate(async () => (await import("/assets/topology.js")).topology.debugLiveEntry(1));
+  return e && Number.isFinite(e.hz) ? e : null;
+}, 15000);
+check("e2e: the grid node's live entry carries the site frequency", Math.abs(gridEntry.hz - 50) < 1, JSON.stringify(gridEntry));
+const gridHero = (m) => m?.id === 1 && /^\d+\.\d\d Hz$/.test(m.hero?.text ?? "");
+const gridModels = await waitFor(async () => {
+  const ms = await getModels();
+  return ms.some(gridHero) ? ms : null;
+}, 5000).catch(() => getModels());
+check("e2e: the grid pill's hero is the frequency", gridModels.some(gridHero), JSON.stringify(gridModels));
 const nodeWidths = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
@@ -731,12 +744,16 @@ async function hoverNodeCard(id, ms = 10000) {
       await page.mouse.move(r.x + r.width / 2, r.y + r.height / 2 - 2);
       await page.mouse.move(r.x + r.width / 2, r.y + r.height / 2);
     }
+    // The card must be this node's: a card still open from the last
+    // hovered node reads as visible before the hover switches.
     const s = await readCard();
-    if (s?.visible) return s;
-    if (Date.now() > deadline) throw new Error(`hoverNodeCard(${id}): the card never opened`);
+    if (s?.visible && new RegExp(`#${id}\\b`).test(s.text)) return s;
+    if (Date.now() > deadline) throw new Error(`hoverNodeCard(${id}): the card never opened on this node`);
     await new Promise((again) => setTimeout(again, 400));
   }
 }
+const gridCard = await hoverNodeCard(1); // grid-1
+check("e2e: the grid's hover card carries the frequency", /Frequency/.test(gridCard.text) && /\d+\.\d\d Hz/.test(gridCard.text), gridCard.text);
 const cardState = await hoverNodeCard(1001); // inv-bat-1001
 check("e2e: hover card names the component", /inv-bat-1001/.test(cardState.text) && /#1001/.test(cardState.text), cardState.text);
 // The qualifier is only printed when |Q| clears the dead band, and
