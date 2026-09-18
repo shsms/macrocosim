@@ -69,6 +69,24 @@ export function reactiveColor(value, deadBand) {
   return value < 0 ? COLORS.exportDull : COLORS.importDull;
 }
 
+// Grid frequency by its distance from the 50 Hz nominal: plain text
+// under 0.1 Hz away, the standby amber from 0.1 Hz, bad from 0.2 Hz.
+// The bands are the ones a control room alarms on, not the sim's own
+// noise floor.
+const NOMINAL_HZ = 50;
+export function frequencyColor(hz) {
+  if (!finite(hz)) return COLORS.dim;
+  const dev = Math.abs(hz - NOMINAL_HZ);
+  if (dev >= 0.2) return COLORS.bad;
+  if (dev >= 0.1) return COLORS.standby;
+  return COLORS.fg;
+}
+
+// The frequency readout with its colour, or null before a sample.
+export function frequencyReadout(hz) {
+  return finite(hz) ? { text: `${hz.toFixed(2)} Hz`, color: frequencyColor(hz) } : null;
+}
+
 // Long names get shortened on the pill; the full name lives in the
 // hover card / tooltip.
 export function shortName(name) {
@@ -98,25 +116,29 @@ function pressureAux(pressure) {
   return { kind: "text", text: `${pressure.toFixed(1)} bar` };
 }
 
-// component: an /api/topology component; live: { p, q, soc, dc } or
-// null; options: { valuesOn, catColor, deadBand }.
+// component: an /api/topology component; live: { p, q, soc, dc, hz }
+// or null; options: { valuesOn, catColor, deadBand }.
 export function pillModel(c, live, { valuesOn, catColor, deadBand }) {
   let hero = null;
   let aux = null;
   let power = null;
   if (valuesOn && live) {
-    power = c.category === "battery" ? live.dc : live.p;
-    if (c.category === "battery") {
-      aux = socAux(live.soc);
-    } else if (c.category === "ev-charger") {
-      aux = socAux(live.soc) ?? NO_EV_AUX;
-    } else if (c.category === "steam-boiler") {
-      aux = pressureAux(live.pressure);
-    } else if (finite(live.q)) {
-      aux = { kind: "reactive", text: formatScaled(live.q, "VAr"), color: reactiveColor(live.q, deadBand) };
+    if (c.category === "grid") {
+      hero = frequencyReadout(live.hz);
+    } else {
+      power = c.category === "battery" ? live.dc : live.p;
+      if (c.category === "battery") {
+        aux = socAux(live.soc);
+      } else if (c.category === "ev-charger") {
+        aux = socAux(live.soc) ?? NO_EV_AUX;
+      } else if (c.category === "steam-boiler") {
+        aux = pressureAux(live.pressure);
+      } else if (finite(live.q)) {
+        aux = { kind: "reactive", text: formatScaled(live.q, "VAr"), color: reactiveColor(live.q, deadBand) };
+      }
+      if (finite(power)) hero = { text: formatScaled(power, "W"), color: powerColor(power, deadBand) };
+      else if (aux) hero = { text: "—", color: COLORS.dim };
     }
-    if (finite(power)) hero = { text: formatScaled(power, "W"), color: powerColor(power, deadBand) };
-    else if (aux) hero = { text: "—", color: COLORS.dim };
   }
   const heroValue = finite(power) ? power : null;
   return {

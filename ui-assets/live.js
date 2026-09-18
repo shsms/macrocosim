@@ -13,6 +13,13 @@ export function formatScaled(value, unit) {
   return `${value.toFixed(1)} ${unit}`;
 }
 
+// A component's live-overlay entry before any sample: one slot per
+// metric the pill or the hover card reads, the sample stamp, and the
+// 60 s power history behind the hover sparkline.
+export function blankLiveEntry() {
+  return { p: null, q: null, soc: null, dc: null, energy: null, pressure: null, hz: null, pLo: null, pHi: null, qLo: null, qHi: null, ts: null, hist: [] };
+}
+
 // The "nothing is flowing" threshold shared by the edge flow and the
 // pill colours: 1 % of the site's largest rated bound, never under
 // 50 W. Falls back to a 10 kW site when nothing is rated.
