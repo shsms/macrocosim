@@ -267,7 +267,9 @@ export function setupContextMenu() {
   });
 }
 
-// The component palette: one button per category, click to add.
+// The component palette: one button per variant, click to add. A
+// button's `data-make` is the inside of the make form it evals — the
+// make-* head plus any keyword args (`make-meter :hidden t`).
 export function setupAddForm() {
   document.getElementById("palette").addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".pal-btn");

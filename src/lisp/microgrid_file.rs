@@ -298,7 +298,9 @@ fn remap_in_block(block: &str, next_id: &mut impl FnMut() -> u64) -> Result<Stri
 /// `%make-<name>` defun per entry here, and `sim/defaults.lisp` the
 /// matching `make-<name>` wrapper. Adding a component type means
 /// adding it here too, or a copy of a microgrid using it will keep
-/// the original's ids for those components.
+/// the original's ids for those components. The palette test in
+/// `make.rs` reads it as well: every entry needs an Add-component
+/// button in `ui-assets/index.html`.
 ///
 /// The list is CLOSED on purpose. A prefix test (`starts_with
 /// "make-"`) would also match a user-defined helper — nothing stops
@@ -307,7 +309,7 @@ fn remap_in_block(block: &str, next_id: &mut impl FnMut() -> u64) -> Result<Stri
 /// it means, would corrupt the copy. Worse, counting the helper as a
 /// declaration would let a genuinely undeclared `connect` endpoint
 /// resolve, turning a loud error into a silently mis-wired copy.
-const COMPONENT_MAKE_FNS: &[&str] = &[
+pub(super) const COMPONENT_MAKE_FNS: &[&str] = &[
     "grid-connection-point",
     "meter",
     "battery",

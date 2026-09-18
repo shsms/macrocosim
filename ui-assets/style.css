@@ -2693,7 +2693,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   outline: 1px solid rgba(121, 184, 255, 0.35);
 }
 
-/* Component palette in the ＋ Add panel: one button per category,
+/* Component palette in the ＋ Add panel: one button per variant,
    with a color dot matching the node color on the canvas. */
 #palette {
   display: flex;
@@ -2720,6 +2720,13 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   background: var(--dot, var(--muted));
 }
 .pal-btn:hover { border-color: var(--dot, var(--accent)); }
+/* The hidden-meter button: a hollow dashed dot, the same cue the
+   hidden node's dashed outline uses on the canvas. */
+.pal-btn-hidden-meter::before {
+  background: transparent;
+  border: 1.5px dashed var(--dot, var(--muted));
+  box-sizing: border-box;
+}
 
 /* Node hover card (topology canvas). Read-only and inert to the
    pointer: moving the mouse onto it must not blur the node. */

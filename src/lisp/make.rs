@@ -1562,6 +1562,45 @@ mod tests {
         assert!(format!("{err:?}").contains("streams no telemetry"));
     }
 
+    /// The UI wraps a palette button's `data-make` in parens and posts
+    /// it to the eval endpoint, so a typo in the attribute only shows
+    /// up on click.
+    #[test]
+    fn every_palette_form_makes_a_component() {
+        let html = include_str!("../../ui-assets/index.html");
+        let (_, rest) = html
+            .split_once("<div id=\"palette\">")
+            .expect("index.html has the palette");
+        let (palette, _) = rest
+            .split_once("</div>")
+            .expect("the palette div is closed");
+        assert!(
+            !palette.contains("<div"),
+            "a nested div truncates the scrape"
+        );
+        let forms: Vec<&str> = palette
+            .split("data-make=\"")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap())
+            .collect();
+        let (site, mut ctx) = run_with_ctx("");
+        for form in &forms {
+            ctx.eval_string(&format!("({form})"))
+                .unwrap_or_else(|e| panic!("{form}: {}", e.format(&ctx)));
+        }
+        for name in crate::lisp::microgrid_file::COMPONENT_MAKE_FNS {
+            let head = format!("make-{name}");
+            assert!(
+                forms.iter().any(|f| f.split(' ').next().unwrap() == head),
+                "no palette button for {head}"
+            );
+        }
+        let made = site.components();
+        assert_eq!(made.len(), forms.len());
+        let hidden = made.iter().filter(|c| c.is_hidden()).count();
+        assert_eq!(hidden, 1, "the hidden-meter button alone sets :hidden");
+    }
+
     /// The boiler constructor takes physics kwargs, keeps every marker
     /// kwarg valid (bare :id forms in existing worlds must load), and a
     /// dynamic :demand installs a source instead of a constant.
