@@ -96,22 +96,12 @@ is wiring the topology + animating the environment.
     `set-reactive-power` on inverters and `set-meter-reactive-power`
     / `set-meter-power-factor` (with a `leading` checkbox) on meters.
 - `tools/ui-smoke/` — Playwright smoke scripts against a live server
-  (`MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`).
-  The `ui-e2e` job in `.github/workflows/ci.yml` runs the e2e half on
-  pushes to main and PRs targeting main; it's also runnable by hand
-  the same way. The e2e half drives the Berlin demo (microgrid 2200)
-  and expects it in the state dir's `microgrids/`, so run it from a
-  scratch state dir:
-
-  ```sh
-  SD=$(mktemp -d); mkdir "$SD/microgrids"
-  cp examples/berlin-demo.lisp "$SD/microgrids/2200.lisp"
-  ./target/debug/macrocosim --state-dir "$SD" --ephemeral-ports \
-      --emit-endpoints="$SD/endpoints.json" "$SD/microgrids/2200.lisp" &
-  until [ -f "$SD/endpoints.json" ]; do sleep 0.2; done
-  MACROCOSIM_UI=http://$(jq -r .ui "$SD/endpoints.json") \
-      node tools/ui-smoke/live-topology.mjs
-  ```
+  (`MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`
+  points it at a server you already run). The e2e half drives the
+  Berlin demo (microgrid 2200) from a scratch state dir; `make ui-e2e`
+  boots one and runs it, and the `ui-e2e` job in
+  `.github/workflows/ci.yml` does the same on pushes to main and PRs
+  targeting main.
 - `src/server.rs` — `Microgrid` gRPC service
 - `src/assets_server.rs` — `PlatformAssets` gRPC service (shared port)
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
@@ -278,28 +268,18 @@ cargo run --bin macroctl -- stream 1001 --samples 5
 cargo run --bin macroctl -- set-power 1001 5000
 ```
 
-`ui-assets/` changes: `npx @biomejs/biome check ui-assets` (config in
-`biome.json`) — `npx biome` alone resolves to an unrelated no-op
-package on the npm registry, not this project's linter, so always
-spell out `@biomejs/biome`. `check` also runs the organizeImports
-assist, not just the linter, so an unsorted import or export
-specifier list fails as an error. `noDescendingSpecificity` is turned
-off for `style.css` in biome.json's `overrides` block, until its
-rules are reordered with a browser to check. Plus the node-only gates
-that need neither a browser nor a running server:
-
-```sh
-node tools/boot-smoke.mjs        # imports app.js under a DOM shim:
-                                 # catches TDZ / cycle / bad-export
-                                 # breakage a curl-200 can't see
-node tools/formula-ast-test.mjs  # formula-ast.js parser + renderer
-node tools/metrics-store-test.mjs  # metrics-store.js ring/PF/format
-node tools/live-test.mjs         # live.js edge flow: dead band, direction, width
-node tools/weather-panel-test.mjs  # weather-panel.js cloud list vs curve
-node tools/panel-dock-test.mjs   # strip-model.js tile shares/order/size
-node tools/panel-geometry-test.mjs  # panel-geometry.js cascade slot pick
-node tools/paste-forms-test.mjs  # paste-forms.js clone let*, children first
-```
+`ui-assets/` changes: `make ui-test` runs biome over `ui-assets`
+(config in `biome.json`; `check` also runs the organizeImports assist,
+so an unsorted import or export specifier list fails as an error, and
+`noDescendingSpecificity` is off for `style.css` in the `overrides`
+block until its rules are reordered with a browser to check), then
+every `tools/*-test.mjs` plus `boot-smoke.mjs`,
+which imports app.js under a DOM shim and catches TDZ / cycle /
+bad-export breakage a curl-200 can't see. `make ui-e2e` runs the
+Playwright smoke in `tools/ui-smoke/` against a scratch server on
+OS-chosen ports, the way CI does; `make ui-e2e-deps` installs its one
+dependency, Playwright with a matching Chromium, into the gitignored
+`node_modules`.
 
 UI input convention: a numeric field that commits on Enter (inspector
 knobs, weather config fields) must hide the browser's native spinner

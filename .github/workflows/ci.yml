@@ -47,63 +47,21 @@ jobs:
 
   # Check the whole ui-assets/ directory (HTML, CSS, and hand-written
   # JS), then run the node gates over it. Vendored libs elsewhere in
-  # the repo are untouched because `check` is scoped to the ui-assets
-  # path argument below. `check` also runs the organizeImports assist,
-  # not just the linter, so an unsorted import/export specifier list
-  # fails as an error too.
-  ui-lint:
+  # the repo are untouched because the Makefile scopes `check` to the
+  # ui-assets path. `check` also runs the organizeImports assist, not
+  # just the linter, so an unsorted import/export specifier list fails
+  # as an error too.
+  ui-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: biome check
-        # Pinned to the same version as biome.json's $schema.
-        run: npx --yes @biomejs/biome@2.4.14 check ui-assets
-
-      # Parser/renderer round-trip against the crate's own rendering,
-      # plus the subtraction-parity tinting the panel reads back.
-      - name: formula-ast tests
-        run: node tools/formula-ast-test.mjs
-
-      # Ring push/read windowing, PF derivation, and display
-      # formatting for the metrics panel's DOM-free sample store.
-      - name: metrics-store tests
-        run: node tools/metrics-store-test.mjs
-
-      # The live overlay's edge flow: the direction and width an
-      # edge gets from its child's power.
-      - name: live tests
-        run: node tools/live-test.mjs
-
-      # The weather panel's split contract: the cloud LIST drops what
-      # the sky is already past (filtered against the server's stamp,
-      # not the browser's clock), while the day CURVE keeps drawing it.
-      - name: weather-panel tests
-        run: node tools/weather-panel-test.mjs
-
-      # Where an unplaced floating card cascades to: the first free
-      # slot, read from the open cards' positions.
-      - name: panel-geometry tests
-        run: node tools/panel-geometry-test.mjs
-
-      # The dock strips' pure model: how tiles share a strip, what
-      # order survives a tile leaving, and the size clamp.
-      - name: panel-dock tests
-        run: node tools/panel-dock-test.mjs
-
-      # The clipboard paste's let* builder: the make-* each clone goes
-      # through, and children bound before the parents that push into
-      # them.
-      - name: paste-forms tests
-        run: node tools/paste-forms-test.mjs
-
-      # Executes the whole ES-module import graph under a DOM shim —
-      # catches a TDZ / class-ordering error or a renamed export that
-      # serving the file happily would not.
-      - name: boot smoke
-        run: node tools/boot-smoke.mjs
+      # Biome (pinned to biome.json's $schema version) plus every
+      # node-only gate, in the order the Makefile lists them.
+      - name: ui-test
+        run: make ui-test
 
   # Lint, format-check, and type-check the Python client under python/.
   # Dev tools + dependencies only: `--no-install-project` skips building
@@ -197,11 +155,11 @@ jobs:
         run: uv run --no-sync pytest -q
 
   # Live browser smoke: boots the binary against a scratch Berlin-demo
-  # microgrid (same recipe AGENTS.md documents for running
-  # tools/ui-smoke/live-topology.mjs by hand) and drives the real SPA
-  # with Playwright/Chromium — inspector knobs, dialogs, the metrics
-  # panel, hover cards, the steam-boiler round trip end to end.
-  # `ui-lint`'s DOM-shim boot smoke misses regressions here since
+  # microgrid (`make ui-e2e`, the same target AGENTS.md gives for
+  # running tools/ui-smoke/live-topology.mjs by hand) and drives the
+  # real SPA with Playwright/Chromium — inspector knobs, dialogs, the
+  # metrics panel, hover cards, the steam-boiler round trip end to end.
+  # `ui-test`'s DOM-shim boot smoke misses regressions here since
   # it never drives a browser against a live server.
   ui-e2e:
     runs-on: ubuntu-latest
@@ -226,62 +184,33 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
-      - name: Build macrocosim binary
-        run: cargo build --bin macrocosim
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      # Cache the downloaded Chromium build, keyed on the pin below —
-      # bump the key alongside the version whenever it moves.
+      # Cache the downloaded Chromium build, keyed on the Makefile that
+      # pins the Playwright version: a bumped pin misses the exact key
+      # and restores the previous build, which the reinstall supersedes.
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-1.62.1
+          key: ${{ runner.os }}-playwright-${{ hashFiles('Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       # No package.json in this repo — tools/ui-smoke's only dependency
-      # is the playwright package itself, so it's installed loose,
-      # pinned to the version node_modules carries locally (1.62.1)
-      # rather than a lockfile.
+      # is the playwright package itself, installed loose into the
+      # gitignored node_modules at the version the Makefile pins. The
+      # runner also needs Chromium's OS libraries, which the Makefile
+      # leaves to the OS.
       - name: Install Playwright + Chromium
         run: |
-          npm install --no-save playwright@1.62.1
-          npx playwright install --with-deps chromium
+          make ui-e2e-deps
+          npx playwright install-deps chromium
 
-      # Same scratch state-dir recipe AGENTS.md gives for the live
-      # smoke: seed microgrids/2200.lisp from the Berlin demo, boot
-      # ephemeral, and read the UI port back out of --emit-endpoints'
-      # JSON. Bounded, unlike AGENTS.md's unbounded `until`, so a
-      # boot failure fails the job instead of hanging it.
-      - name: Boot a scratch server
-        run: |
-          SD=$(mktemp -d)
-          mkdir "$SD/microgrids"
-          cp examples/berlin-demo.lisp "$SD/microgrids/2200.lisp"
-          ./target/debug/macrocosim --state-dir "$SD" --ephemeral-ports \
-              --emit-endpoints="$SD/endpoints.json" "$SD/microgrids/2200.lisp" \
-              > /tmp/mc-e2e.log 2>&1 &
-          echo $! > /tmp/mc-e2e.pid
-          for _ in {1..30}; do
-            [ -f "$SD/endpoints.json" ] && break
-            sleep 1
-          done
-          if [ ! -f "$SD/endpoints.json" ]; then
-            echo "server failed to emit endpoints"
-            cat /tmp/mc-e2e.log
-            exit 1
-          fi
-          echo "MACROCOSIM_UI=http://$(jq -r .ui "$SD/endpoints.json")" >> "$GITHUB_ENV"
-
+      # Builds the binary, boots a scratch server on OS-chosen ports,
+      # runs the smoke, prints the server log on failure, and kills
+      # the server — the Makefile owns the recipe.
       - name: Live topology smoke
-        run: node tools/ui-smoke/live-topology.mjs
-
-      - name: Server log (on failure)
-        if: failure()
-        run: cat /tmp/mc-e2e.log 2>/dev/null || true
-
-      - name: Kill the server
-        if: always()
-        run: kill "$(cat /tmp/mc-e2e.pid 2>/dev/null)" 2>/dev/null || true
+        run: make ui-e2e
