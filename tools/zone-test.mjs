@@ -1,5 +1,5 @@
-// The display zone's formatters, in the sim zone and in UTC, across a DST
-// change.
+// The display zone's formatters and wall-time conversions, in the sim zone and
+// in UTC, across a DST change.
 // Run: node tools/zone-test.mjs   (exits non-zero on failure)
 import assert from "node:assert/strict";
 import * as zone from "../ui-assets/zone.js";
@@ -31,6 +31,22 @@ assert.equal(zone.timeHtml("soon", "hms"), "—");
 const axis = zone.tzDate(summer / 1000);
 assert.deepEqual([axis.getHours(), axis.getMinutes(), axis.getSeconds()], [14, 34, 56]);
 
+// Wall time -> UTC in the sim zone.
+assert.equal(zone.wallToUtcMs("2026-07-01T14:34"), Date.UTC(2026, 6, 1, 12, 34));
+assert.equal(zone.wallToUtcMs("2026-01-01T13:00"), Date.UTC(2026, 0, 1, 12, 0));
+// Spring forward (29 Mar 2026, 02:00 -> 03:00): 02:30 does not exist and maps
+// forward to 03:30 CEST, i.e. 01:30 UTC.
+assert.equal(zone.wallToUtcMs("2026-03-29T02:30"), Date.UTC(2026, 2, 29, 1, 30));
+// Fall back (25 Oct 2026, 03:00 -> 02:00): 02:30 happens twice and reads as
+// the first, 02:30 CEST, i.e. 00:30 UTC.
+assert.equal(zone.wallToUtcMs("2026-10-25T02:30"), Date.UTC(2026, 9, 25, 0, 30));
+assert.equal(zone.wallToUtcMs("not a time"), null);
+
+// Midnight of the zone's day; on the spring-forward day the day starts at 23:00
+// UTC the evening before.
+assert.equal(zone.zonedDayStartMs(Date.UTC(2026, 2, 29, 12)), Date.UTC(2026, 2, 28, 23));
+assert.equal(zone.zonedDayStartMs(summer), Date.UTC(2026, 5, 30, 22));
+
 // UTC mode: the same instants, in UTC; listeners hear the flip.
 let heard = 0;
 const off = zone.onChange(() => heard++);
@@ -40,6 +56,8 @@ assert.equal(zone.tz(), "UTC");
 assert.equal(zone.label(), "UTC");
 assert.equal(zone.fmtTime(summer), "12:34:56");
 assert.equal(zone.tzDate(summer / 1000).getHours(), 12);
+assert.equal(zone.wallToUtcMs("2026-07-01T12:34"), Date.UTC(2026, 6, 1, 12, 34));
+assert.equal(zone.zonedDayStartMs(summer), Date.UTC(2026, 6, 1));
 off();
 zone.setUtc(false);
 assert.equal(heard, 1, "an unsubscribed listener is not called");
@@ -60,11 +78,29 @@ assert.equal(text(summer, "hm"), "08:34");
 assert.equal(zone.label(summer), "EDT");
 assert.equal(zone.label(winter), "EST");
 
+// West of UTC the skipped hour also moves forward: 02:30 on New York's
+// spring-forward day (8 Mar 2026) is 03:30 EDT, 07:30 UTC.
+assert.equal(zone.wallToUtcMs("2026-03-08T02:30"), Date.UTC(2026, 2, 8, 7, 30));
+// An ordinary time just after that change is read at the new offset.
+assert.equal(zone.wallToUtcMs("2026-03-08T04:30"), Date.UTC(2026, 2, 8, 8, 30));
+// A repeated (fall-back) wall time takes its first occurrence: 01:30 EDT on
+// 1 Nov 2026.
+assert.equal(zone.wallToUtcMs("2026-11-01T01:30"), Date.UTC(2026, 10, 1, 5, 30));
+// Santiago skips its own midnight (6 Sep 2026, 00:00 -> 01:00 -03), so that
+// day starts at 01:00 local, 04:00 UTC.
+zone.setSimZone("America/Santiago");
+assert.equal(zone.zonedDayStartMs(Date.UTC(2026, 8, 6, 12)), Date.UTC(2026, 8, 6, 4));
+
 // A zone the server knows but this Intl does not falls back to UTC instead of
-// throwing out of every formatter.
+// throwing out of every formatter, whether set directly or read by init.
 zone.setSimZone("Not/A_Zone");
 assert.equal(zone.tz(), "UTC");
 assert.equal(zone.fmtTime(summer), "12:34:56");
+globalThis.fetch = async () => new Response(JSON.stringify({ tz: "Not/A_Zone" }));
+zone.setSimZone("Europe/Berlin");
+await zone.init();
+assert.equal(zone.tz(), "UTC");
+delete globalThis.fetch;
 zone.setSimZone("Europe/Berlin");
 
 console.log("zone-test: all assertions passed");

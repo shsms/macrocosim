@@ -141,3 +141,34 @@ export function tzDate(ts) {
   const p = wallParts(ts * 1000);
   return new Date(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
 }
+
+// How far the display zone is ahead of UTC at instant `ms`, in milliseconds.
+function offsetMs(ms) {
+  const p = wallParts(ms);
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - ms;
+}
+
+// The instant whose wall time in the display zone is `naive`, a wall time
+// written as if it were UTC. The zone's offsets a day before and a day after
+// give the candidates; a wall time it repeats (fall-back) takes its first
+// occurrence, and one it skips (spring-forward) moves forward by the size of
+// the gap.
+function fromWall(naive) {
+  const before = naive - offsetMs(naive - 86400000);
+  const after = naive - offsetMs(naive + 86400000);
+  const fits = [before, after].filter((t) => t + offsetMs(t) === naive);
+  return fits.length ? Math.min(...fits) : before;
+}
+
+// A `datetime-local` value read as a wall time in the display zone, or null
+// when it is not one.
+export function wallToUtcMs(text) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(text));
+  return m ? fromWall(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])) : null;
+}
+
+// Midnight, in the display zone, of the day instant `ms` falls in.
+export function zonedDayStartMs(ms) {
+  const p = wallParts(ms);
+  return fromWall(Date.UTC(p.year, p.month - 1, p.day));
+}
