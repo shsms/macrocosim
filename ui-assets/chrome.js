@@ -2,106 +2,30 @@
 // and the always-on pulse bar.
 
 import { mgFetch, setupDensityToggle } from "./routing.js";
+import * as zone from "./zone.js";
 
-// ─── Clock + TZ toggle ─────────────────────────────────────────────────────
+// ─── Clock + zone chip ─────────────────────────────────────────────────────
 //
-// macrocosim's physics + gRPC boundary speak UTC. The UI displays
-// timestamps in either UTC or the IANA zone the operator set via
-// (set-timezone …) — defaulting to "Europe/Berlin" matching the
-// configured demo target. clockState pulls the zone name once at
-// boot via /api/clock; the TZ chip in the pulse bar flips between
-// the local-zone short label (CET / CEST / EST / etc., picked via
-// Intl) and "UTC". Persists in localStorage.
-const TZ_PREF_KEY = "macrocosim-tz";
-export const clockState = (() => {
-  let simTz = "Europe/Berlin";
-  let simLabel = "local";
-  let mode = "local"; // "local" or "utc"
-  function probeShortLabel(tz) {
-    // Try `short` (CEST / EST) and `shortGeneric` (CET / EST) in
-    // sequence, preferring a compact 3-4-char abbreviation. Some
-    // browser/CLDR combinations return offset notation ("GMT+2")
-    // or wordy generics ("Germany Time"); both are uglier than
-    // the IANA city segment for chip display, so fall back to
-    // that whenever the probe is offset-y or multi-word.
-    for (const kind of ["short", "shortGeneric"]) {
-      try {
-        const parts = new Intl.DateTimeFormat("en-US", {
-          timeZone: tz,
-          timeZoneName: kind,
-        }).formatToParts(new Date());
-        const tag = parts.find((p) => p.type === "timeZoneName");
-        if (tag && !/^GMT[+-]/i.test(tag.value) && !/\s/.test(tag.value)) {
-          return tag.value;
-        }
-      } catch (_) {
-        /* try next */
-      }
-    }
-    const seg = tz.split("/").pop();
-    return seg ? seg.replace(/_/g, " ") : tz;
-  }
-  function timeZoneInUse() {
-    return mode === "utc" ? "UTC" : simTz;
-  }
-  function updateChip() {
-    const chip = document.getElementById("tz-toggle");
-    if (!chip) return;
-    chip.textContent = mode === "utc" ? "UTC" : simLabel.toLowerCase();
-    chip.classList.toggle("active", mode === "utc");
-  }
-  function applyMode(next) {
-    mode = next === "utc" ? "utc" : "local";
-    updateChip();
-  }
-  return {
-    async init() {
-      try {
-        const res = await fetch("/api/clock");
-        if (res.ok) {
-          const j = await res.json();
-          if (j.tz) simTz = j.tz;
-        }
-      } catch (_) {
-        // Keep the default; the chip label will show "local" + the
-        // browser's local zone short. Not ideal but harmless.
-      }
-      simLabel = probeShortLabel(simTz);
-      applyMode(localStorage.getItem(TZ_PREF_KEY) || "local");
-      const chip = document.getElementById("tz-toggle");
-      if (chip) {
-        chip.addEventListener("click", () => {
-          const next = mode === "utc" ? "local" : "utc";
-          localStorage.setItem(TZ_PREF_KEY, next);
-          applyMode(next);
-          renderClockNow();
-        });
-      }
-    },
-    formatNow() {
-      const d = new Date();
-      try {
-        return d.toLocaleTimeString("en-GB", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: false,
-          timeZone: timeZoneInUse(),
-        });
-      } catch (_) {
-        return d.toTimeString().slice(0, 8);
-      }
-    },
-    tzInUse() {
-      return timeZoneInUse();
-    },
+// The chip switches every displayed time between the sim zone and UTC
+// (zone.js); the clock shows the time now in the zone in use.
+export function setupZoneChip() {
+  const chip = document.getElementById("tz-toggle");
+  if (!chip) return;
+  const paint = () => {
+    chip.textContent = zone.isUtc() ? "UTC" : zone.label().toLowerCase();
+    chip.classList.toggle("active", zone.isUtc());
+    renderClock();
   };
-})();
-
-function renderClockNow() {
-  const el = document.getElementById("pulse-clock");
-  if (el) el.textContent = clockState.formatNow();
+  chip.addEventListener("click", () => zone.chooseUtc(!zone.isUtc()));
+  zone.onChange(paint);
+  paint();
 }
+
+function renderClock() {
+  const el = document.getElementById("pulse-clock");
+  if (el) el.textContent = zone.fmtTime(Date.now());
+}
+
 // ─── Pulse bar ─────────────────────────────────────────────────────────────
 //
 // Always-on system pulse strip. The live sources:
@@ -217,11 +141,6 @@ export const pulseBar = (() => {
       el.textContent = "✗ unreachable";
       el.className = "pulse-pill bad";
     }
-  }
-  function renderClock() {
-    const el = document.getElementById("pulse-clock");
-    if (!el) return;
-    el.textContent = clockState.formatNow();
   }
   return {
     setup() {

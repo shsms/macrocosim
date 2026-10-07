@@ -5,7 +5,7 @@
 // /api/eval mutation path so anything done in the UI is also
 // scriptable from outside.
 
-import { clockState, pulseBar } from "./chrome.js";
+import { pulseBar, setupZoneChip } from "./chrome.js";
 import {
   setupDefaultsToggle,
   setupHelpButton,
@@ -48,6 +48,7 @@ import {
 import { closePanel, closeTopPanel, isPanelOpen, makeSidePanelToggle, openPanel } from "./side-panel.js";
 import { topology } from "./topology.js";
 import { setupWeatherPanel } from "./weather-panel.js";
+import * as zone from "./zone.js";
 
 // Re-export the routing helpers that other modules still pull
 // via `./app.js` so consumers (panels / chrome / the metrics and
@@ -216,22 +217,6 @@ export const dispatchesPanel = (() => {
   // create form + row-button handlers (which are wired once in setup).
   let currentMg = null;
 
-  function fmtTs(ts) {
-    if (ts == null) return "—";
-    try {
-      return new Date(ts).toLocaleString("en-GB", {
-        year: "numeric",
-        month: "short",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-        timeZone: clockState.tzInUse(),
-      });
-    } catch (_) {
-      return new Date(ts).toISOString();
-    }
-  }
 
   function fmtDuration(s) {
     if (s == null) return "indefinite";
@@ -269,7 +254,7 @@ export const dispatchesPanel = (() => {
       <td class="disp-id">#${d.id}</td>
       <td>${escapeHtml(d.type)}</td>
       <td>${status}${dry}</td>
-      <td>${escapeHtml(fmtTs(d.start))}</td>
+      <td>${zone.timeHtml(d.start, "datetime")}</td>
       <td>${escapeHtml(fmtDuration(d.duration_s))}</td>
       <td>${escapeHtml(d.target)}</td>
       <td>${escapeHtml(d.recurrence || "once")}</td>
@@ -539,7 +524,8 @@ async function init() {
   setupWeatherPanel();
   scenariosPanel.setup();
   dispatchesPanel.setup();
-  await clockState.init();
+  await zone.init();
+  setupZoneChip();
   pulseBar.setup();
   await refreshTopology();
   // WS push: refresh the topology (so the canvas reflects the

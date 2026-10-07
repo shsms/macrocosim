@@ -23,6 +23,16 @@ async function waitFor(fn, ms = 10000, every = 200) {
   }
 }
 
+// Runs `fn` with the zone chip switched to UTC, then switches it back.
+async function inUtc(fn) {
+  await page.click("#tz-toggle");
+  try {
+    return await fn();
+  } finally {
+    await page.click("#tz-toggle");
+  }
+}
+
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
 // A headless Chromium with no locale of its own inherits the host's
 // POSIX one and reports it as "en-US@posix" — not a BCP 47 tag, so
@@ -2730,6 +2740,24 @@ const compactPulse = await pulseHeight();
 await page.click("#density-toggle");
 check("e2e: compact density shrinks the pulse bar", compactPulse < roomyPulse, JSON.stringify({ roomyPulse, compactPulse }));
 check("e2e: the density chip turns compact off again", (await pulseHeight()) === roomyPulse);
+
+// ── e2e: the zone chip ─────────────────────────────────────────────
+// The demo runs in Europe/Berlin, never UTC+0, so the clock's hour moves when
+// the chip switches to UTC, and comes back.
+const clockHour = async () => ((await page.textContent("#pulse-clock")) || "").slice(0, 2);
+const simChip = (await page.textContent("#tz-toggle")) || "";
+const simHour = await clockHour();
+const [utcChip, utcHour] = await inUtc(async () => [(await page.textContent("#tz-toggle")) || "", await clockHour()]);
+check("e2e: the zone chip switches to UTC", utcChip === "UTC" && simChip !== "UTC", JSON.stringify({ simChip, utcChip }));
+check("e2e: the clock follows the zone chip", /^\d\d$/.test(simHour) && simHour !== utcHour, JSON.stringify({ simHour, utcHour }));
+// In sim mode the clock shows the demo's Europe/Berlin, not the browser's
+// own New York (CONTEXT). The hour was read before the UTC round trip above,
+// so near an hour boundary it may be the hour of a few seconds ago.
+const berlinHours = [0, 5000].map((ago) =>
+  new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hourCycle: "h23", timeZone: "Europe/Berlin" }).format(Date.now() - ago),
+);
+check("e2e: in sim mode the clock shows the sim zone", berlinHours.includes(simHour), JSON.stringify({ simHour, berlinHours }));
+check("e2e: the zone chip switches back", (await page.textContent("#tz-toggle")) === simChip);
 
 // ── e2e: hidden always hides ───────────────────────────────────────
 // Every element carrying `hidden` is actually hidden: a class's own
