@@ -95,17 +95,19 @@ pub fn new_registry() -> SharedMicrogrids {
     Arc::new(Mutex::new(BTreeMap::new()))
 }
 
-/// JSON-serialisable snapshot used by `GET /api/microgrids`. Drops
-/// the `MicrogridSite` handle (not serialisable) and folds in a
-/// component_count derived from the underlying site so the UI's
-/// card grid can render counts without a second round-trip.
+/// JSON-serialisable snapshot used by `GET /api/microgrids`. Drops the
+/// `MicrogridSite` handle (not serialisable) and folds in the site's component
+/// counts so the UI's card grid can render them without a second round-trip.
 #[derive(Clone, Debug, Serialize)]
 pub struct MicrogridView {
     pub id: u64,
     pub name: String,
     pub grpc_port: u16,
     pub tso: Option<String>,
+    /// Every registered component, hidden ones included.
     pub component_count: usize,
+    /// How many of those are hidden.
+    pub hidden_component_count: usize,
     /// Mirrors [`MicrogridEntry::managed`].
     pub managed: bool,
     /// Mirrors [`MicrogridEntry::source`], rendered for display
@@ -123,6 +125,7 @@ impl From<&MicrogridEntry> for MicrogridView {
             grpc_port: e.def.grpc_port,
             tso: e.def.tso.clone(),
             component_count: e.site.component_count(),
+            hidden_component_count: e.site.hidden_component_count(),
             managed: e.managed,
             source: e.source.as_ref().map(|p| p.display().to_string()),
             unsaved: e.unsaved,

@@ -808,6 +808,16 @@ impl MicrogridSite {
         self.inner.components.read().len()
     }
 
+    /// Number of registered components marked hidden.
+    pub fn hidden_component_count(&self) -> usize {
+        self.inner
+            .components
+            .read()
+            .iter()
+            .filter(|c| c.is_hidden())
+            .count()
+    }
+
     pub fn get(&self, id: u64) -> Option<Arc<dyn SimulatedComponent>> {
         self.inner.by_id.read().get(&id).cloned()
     }

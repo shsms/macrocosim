@@ -2199,6 +2199,21 @@ async fn the_list_reports_no_runtime_under_inert_runtimes() {
     assert!(v[0]["runtime"].is_null(), "{v}");
 }
 
+/// The list counts every component and says how many are hidden.
+#[tokio::test]
+async fn the_list_counts_hidden_components() {
+    let (config, _dir) = config_with(
+        "(%make-grid-connection-point :id 1 :successors \
+           (list (%make-meter :id 2) (%make-meter :id 3 :hidden t)))",
+    )
+    .await;
+    let (st, body) = call(config, get("/api/microgrids")).await;
+    assert_eq!(st, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v[0]["component_count"], 3, "{v}");
+    assert_eq!(v[0]["hidden_component_count"], 1, "{v}");
+}
+
 /// Runtimes that really bind, on `[::1]`.
 fn live_runtimes(config: &Config, ephemeral_ports: bool) -> crate::runtime::MicrogridRuntimes {
     crate::runtime::MicrogridRuntimes::new(
