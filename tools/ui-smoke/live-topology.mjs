@@ -39,8 +39,11 @@ const browser = await chromium.launch({ args: ["--no-sandbox"] });
 // uPlot's load-time `new Intl.NumberFormat(navigator.language)`
 // throws, uPlot never defines itself, and the metrics panel dies on
 // open. Real browsers always carry a valid tag; give this one the
-// same.
-const page = await (await browser.newContext({ viewport: { width: 1600, height: 950 }, locale: "en-US" })).newPage();
+// same. The browser's own zone is neither UTC nor the demo's
+// Europe/Berlin, so a time shown in the browser's zone instead of the
+// display zone reads differently from the one the checks expect.
+const CONTEXT = { viewport: { width: 1600, height: 950 }, locale: "en-US", timezoneId: "America/New_York" };
+const page = await (await browser.newContext(CONTEXT)).newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
 await page.goto(BASE, { waitUntil: "networkidle" });
@@ -2778,6 +2781,33 @@ const berlinHours = [0, 5000].map((ago) =>
 check("e2e: in sim mode the clock shows the sim zone", berlinHours.includes(simHour), JSON.stringify({ simHour, berlinHours }));
 check("e2e: the zone chip switches back", (await page.textContent("#tz-toggle")) === simChip);
 
+// ── e2e: a dispatch's start round-trips in the display zone ─────────
+// In UTC mode. The browser runs in New York (CONTEXT), so a form that read the
+// wall time in the browser's own zone would be caught.
+const smokeRow = () =>
+  page.evaluate(() => {
+    const row = [...document.querySelectorAll(".disp-table tbody tr")].find((r) => r.textContent.includes("smoke-zone"));
+    return row ? row.children[3].textContent : null;
+  });
+await page.click('#mg-subtoggle .mode-btn[data-subview="dispatches"]');
+const [startZone, startCell] = await inUtc(async () => {
+  await page.click("#dispatch-new-btn");
+  await waitFor(() => page.evaluate(() => document.getElementById("dispatch-dialog").open), 8000);
+  const zoneText = ((await page.textContent("#dd-start-zone")) || "").trim();
+  await page.fill("#dd-type", "smoke-zone");
+  await page.click("#dd-target-categories .dd-chip");
+  await page.check('input[name="dd-start-mode"][value="at"]');
+  await page.fill("#dd-start-at", "2030-01-15T09:30");
+  await page.click('#dispatch-form button[type="submit"]');
+  return [zoneText, await waitFor(smokeRow, 8000).catch(() => null)];
+});
+check("e2e: the start field names the display zone", startZone === "UTC", startZone);
+check("e2e: a dispatch's start shows the wall time it was entered at", startCell === "15 Jan 2030, 09:30", String(startCell));
+page.once("dialog", (d) => d.accept());
+await page.click('.disp-table tbody tr:has-text("smoke-zone") [data-disp-del]');
+await waitFor(async () => (await smokeRow()) === null, 8000).catch(() => null);
+await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+
 // ── e2e: hidden always hides ───────────────────────────────────────
 // Every element carrying `hidden` is actually hidden: a class's own
 // `display` must not beat the attribute.
@@ -2935,7 +2965,7 @@ await clearSelection();
 // invalid browser language tag) nothing in the import graph fails.
 // The chart builders must then say so in their slot and let the rest
 // of the panel work, instead of dying in a render.
-const noPlotCtx = await browser.newContext({ viewport: { width: 1600, height: 950 }, locale: "en-US" });
+const noPlotCtx = await browser.newContext(CONTEXT);
 const noPlot = await noPlotCtx.newPage();
 const noPlotErrors = [];
 noPlot.on("pageerror", (e) => noPlotErrors.push(String(e)));

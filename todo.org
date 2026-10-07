@@ -1475,7 +1475,10 @@ guarantee.
 
 ** UI
 
-*** TODO [#C] Dispatch form's Start-at picker uses the browser TZ  :ui:
+*** DONE [#C] Dispatch form's Start-at picker uses the browser TZ        :ui:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-10-07 Mi 23:39]
+:END:
 =dispatch-form.js= interprets the =datetime-local= value in the
 browser's zone while every displayed timestamp (including the
 resulting dispatch row) renders in the sim TZ from the TZ chip — a

@@ -14,6 +14,7 @@
 import { escapeHtml, mutate, notify } from "./app.js";
 import { ACCEPTS_SETPOINTS } from "./inspect.js";
 import { mgJson, readSelectedMg } from "./routing.js";
+import * as zone from "./zone.js";
 
 // The server's duration_s / recurrence interval are u32 — validate
 // here so the user gets a readable message instead of the server's
@@ -153,8 +154,15 @@ export const dispatchForm = (() => {
 
   // ── form state ────────────────────────────────────────────────
 
+  // Names the display zone beside Start-at as it stands on the date typed
+  // (CET or CEST), or today.
+  function paintZone() {
+    $("dd-start-zone").textContent = zone.label(zone.wallToUtcMs($("dd-start-at").value) ?? Date.now());
+  }
+
   function resetForm() {
     $("dispatch-form").reset();
+    paintZone();
     // The submit button is shared across sessions; a previous
     // session's still-in-flight submit left it disabled. form.reset()
     // doesn't touch `disabled`, so a fresh session must.
@@ -194,8 +202,9 @@ export const dispatchForm = (() => {
     };
 
     if (dlg().querySelector('input[name="dd-start-mode"]:checked').value === "at") {
-      const ms = new Date($("dd-start-at").value).getTime();
-      if (!Number.isFinite(ms)) {
+      // A wall time in the zone the rest of the UI shows times in.
+      const ms = zone.wallToUtcMs($("dd-start-at").value);
+      if (ms == null) {
         throw new Error("pick a start time, or choose Immediately");
       }
       body.start = new Date(ms).toISOString();
@@ -313,6 +322,9 @@ export const dispatchForm = (() => {
     $("dd-recur-interval").addEventListener("input", updateRecurUnit);
 
     $("dd-payload-add").addEventListener("click", () => addPayloadRow());
+
+    zone.onChange(paintZone);
+    $("dd-start-at").addEventListener("input", paintZone);
 
     $("dispatch-form").addEventListener("submit", (e) => {
       e.preventDefault();
