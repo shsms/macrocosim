@@ -5,10 +5,11 @@
 // `(make-weather)` / `(set-weather)` / `(pass-cloud)` doors for
 // people who aren't driving the site from the console.
 //
-// Everything here is UTC: the server prints `"HH:MM"` times and
-// RFC 3339 instants, the panel reads and writes exactly those. There
-// is no timezone conversion anywhere in this module, on purpose — a
-// sunrise the user typed has to come back as the sunrise they typed.
+// Sunrise and sunset are UTC `"HH:MM"` times, as `(make-weather)` takes them:
+// the fields read and write exactly those, so a sunrise the user typed comes
+// back as the sunrise they typed. The day chart and the cloud times are drawn
+// in the display zone (zone.js); the sky itself is computed from UTC seconds of
+// day.
 //
 // The day curve is computed client-side rather than sampled off the
 // server: the clear-sky sine and the clouds' trapezoids are four
@@ -20,12 +21,13 @@
 import { requireUplot } from "./chart-lib.js";
 import { mgFetch } from "./routing.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
+import * as zone from "./zone.js";
 
 const PANEL = "weather-btn";
 // The scenarios panel's cadence (panels.js:945): weather has no WS
 // push of its own, and the readout has to track a passing cloud.
 const POLL_MS = 3000;
-// The curve's sampling grid: the whole UTC day, every 10 minutes.
+// The curve's sampling grid: the whole day, every 10 minutes.
 // Fine enough that the sine reads as a smooth arch and a multi-minute
 // cloud shows as a visible notch, coarse enough to stay 145 points.
 const SAMPLE_S = 600;
@@ -45,10 +47,11 @@ let pollTimer = 0;
 // it writes into the DOM that is already there, which is what keeps
 // a focused field's text from being blown away every 3 s.
 let skeleton = "";
-// Where the now-marker goes, in hours-of-day — read by the draw hook,
-// which uPlot calls on its own schedule and can't be handed an
-// argument. See nowHours() for why the browser's clock is the right
-// one to ask.
+// The day the chart shows (see dayOf) and where the now-marker goes, in hours
+// since that day's start — read by the axis and the draw hook, which uPlot
+// calls on its own schedule and can't be handed an argument. See setDay() for
+// why the browser's clock is the right one to ask.
+let day = { start: 0, hours: 24 };
 let markerHour = 0;
 // The last reading the panel painted. Kept so the ghost preview can
 // re-plot the curve on a keystroke, where there is no fresh payload
@@ -82,8 +85,8 @@ function hhmmToSecs(text) {
 
 const pad2 = (n) => String(Math.floor(n)).padStart(2, "0");
 const secsToHhmm = (s) => `${pad2(s / 3600)}:${pad2((s % 3600) / 60)}`;
-// An absolute instant as its UTC wall time — never the viewer's zone.
-const utcHhmm = (ms) => `${pad2(new Date(ms).getUTCHours())}:${pad2(new Date(ms).getUTCMinutes())}`;
+// Seconds since UTC midnight at instant `ms`: the clock the sky runs on.
+const utcSecsOfDay = (ms) => (((ms / 1000) % DAY_S) + DAY_S) % DAY_S;
 
 // `Weather::clear_sky_pct`, transcribed: zero outside the window,
 // else a sine arch peaking at `peak` at the window's midpoint.
@@ -113,28 +116,33 @@ function attenuationAt(ev, tMs) {
   return depth * ((span - elapsed) / ramp);
 }
 
-// Midnight UTC of the day the marker sits in — the curve's origin.
-function dayStartMs(nowMs) {
-  const d = new Date(nowMs);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+// The display zone's day that instant `nowMs` falls in: its midnight, and its
+// length in hours, which a DST change makes shorter or longer than 24.
+function dayOf(nowMs) {
+  const start = zone.zonedDayStartMs(nowMs);
+  const next = zone.zonedDayStartMs(start + 36 * 3600000);
+  return { start, hours: (next - start) / 3600000 };
 }
 
-// The now-marker's hour-of-day. The server evaluates the sky at the
-// weather's own anchor, which `advance` re-stamps from the wall clock
-// every tick — so the browser's clock is close enough, and asking it
-// here costs nothing. The marker deliberately stays on the browser
-// clock: skew only nudges a pixel-wide line. The cloud-expiry filter
-// is the one place skew has a visible casualty, and it uses the
-// payload's server-stamped `now` instead (see `eventsHtml`).
-const nowHours = (nowMs) => (nowMs - dayStartMs(nowMs)) / 3600000;
+// Points the chart's day and now-marker at instant `nowMs`. The server
+// evaluates the sky at the weather's own anchor, which `advance` re-stamps
+// from the wall clock every tick — so the browser's clock is close enough, and
+// asking it here costs nothing. The marker deliberately stays on the browser
+// clock: skew only nudges a pixel-wide line. The cloud-expiry filter is the one
+// place skew has a visible casualty, and it uses the payload's server-stamped
+// `now` instead (see `eventsHtml`).
+function setDay(nowMs) {
+  day = dayOf(nowMs);
+  markerHour = (nowMs - day.start) / 3600000;
+}
 
-// The curve's x samples, in seconds from UTC midnight: the regular
-// 10-minute grid, plus the ghost trapezoid's four corners. Without
-// those corners a previewed cloud shorter than one grid step would
-// fall between two samples and draw as nothing.
-function sampleSecs(ghostEv, origin) {
+// The curve's x samples, in seconds from the display zone's midnight over a
+// day of `dayS` seconds: the regular 10-minute grid, plus the ghost trapezoid's
+// four corners. Without those corners a previewed cloud shorter than one grid
+// step would fall between two samples and draw as nothing.
+function sampleSecs(ghostEv, origin, dayS) {
   const secs = [];
-  for (let s = 0; s <= DAY_S; s += SAMPLE_S) secs.push(s);
+  for (let s = 0; s <= dayS; s += SAMPLE_S) secs.push(s);
   if (!ghostEv) return secs;
   const ramp = Math.min(ghostEv.ramp, (ghostEv.end - ghostEv.start) / 2);
   // The trailing inside corner is held a millisecond off the end even
@@ -149,19 +157,19 @@ function sampleSecs(ghostEv, origin) {
     ghostEv.end,
   ]) {
     const s = (ms - origin) / 1000;
-    if (s > 0 && s < DAY_S) secs.push(s);
+    if (s > 0 && s < dayS) secs.push(s);
   }
   // A zero ramp makes the leading corners coincide; the Set drops the
   // repeats.
   return [...new Set(secs)].sort((a, b) => a - b);
 }
 
-// The three plotted series over one UTC day: clear-sky, clear-sky
-// attenuated by every tracked cloud (Π (1 − attenuation_i), so
-// overlapping clouds compound — `Weather::pct_at`'s rule), and the
-// ghost — that same attenuated curve with one not-yet-fired cloud
-// laid on top of it, or nulls everywhere when there is no preview.
-function daySeries(w, nowMs, ghost) {
+// The three plotted series over one day in the display zone: clear-sky,
+// clear-sky attenuated by every tracked cloud (Π (1 − attenuation_i), so
+// overlapping clouds compound — `Weather::pct_at`'s rule), and the ghost — that
+// same attenuated curve with one not-yet-fired cloud laid on top of it, or
+// nulls everywhere when there is no preview.
+function daySeries(w, nowMs, ghost, d = dayOf(nowMs)) {
   const sunrise = hhmmToSecs(w.sunrise) ?? 0;
   const sunset = hhmmToSecs(w.sunset) ?? 0;
   const peak = Number(w.peak_pct) || 0;
@@ -176,7 +184,7 @@ function daySeries(w, nowMs, ghost) {
       ramp: rampMs,
     }))
     .filter((e) => Number.isFinite(e.start) && Number.isFinite(e.end));
-  const origin = dayStartMs(nowMs);
+  const { start: origin, hours } = d;
   // The previewed cloud starts at the now-marker: it is what firing
   // the button right now would do — so its span is the span
   // `Weather::pass_cloud` would build, not the duration as typed. That
@@ -197,9 +205,9 @@ function daySeries(w, nowMs, ghost) {
   const clear = [];
   const atten = [];
   const preview = [];
-  for (const s of sampleSecs(ghostEv, origin)) {
+  for (const s of sampleSecs(ghostEv, origin, hours * 3600)) {
     const t = origin + s * 1000;
-    const cs = clearSkyPct(s, sunrise, sunset, peak);
+    const cs = clearSkyPct(utcSecsOfDay(t), sunrise, sunset, peak);
     let transmission = 1;
     for (const e of events) transmission *= 1 - attenuationAt(e, t);
     const lit = cs * transmission;
@@ -243,6 +251,13 @@ function drawNowMarker(u) {
   ctx.restore();
 }
 
+// The day axis: a tick every 4 hours from midnight, each labelled with the wall
+// time it falls on (after a DST change that is off the count); on a 24-hour day
+// the last tick is the day's end, labelled 24:00.
+const axisSplits = () => [0, 4, 8, 12, 16, 20, 24].filter((h) => h <= day.hours);
+const axisValues = (splits) =>
+  splits.map((h) => (h === day.hours ? "24:00" : zone.fmtHm(day.start + h * 3600000)));
+
 function buildChart(slot, data) {
   const Plot = requireUplot(slot);
   if (!Plot) return;
@@ -253,7 +268,7 @@ function buildChart(slot, data) {
     cursor: { drag: { x: false, y: false } },
     legend: { show: false },
     scales: {
-      x: { time: false, range: [0, 24] },
+      x: { time: false, range: () => [0, day.hours] },
       // Pinned to zero at the bottom so a cloudy day doesn't rescale
       // into looking like a clear one; the top follows the peak.
       y: { range: (_u, _min, max) => [0, Math.max(5, max * 1.1)] },
@@ -262,8 +277,8 @@ function buildChart(slot, data) {
       {
         stroke: "#7d848e",
         grid: { stroke: "#353a45", width: 0.5 },
-        splits: [0, 4, 8, 12, 16, 20, 24],
-        values: (_u, splits) => splits.map((h) => `${pad2(h)}:00`),
+        splits: axisSplits,
+        values: (_u, splits) => axisValues(splits),
       },
       {
         stroke: "#7d848e",
@@ -540,12 +555,20 @@ function ghostFromFields() {
 
 const ghostEvent = () => (ghostFocused || ghostEdited ? ghostFromFields() : null);
 
+// The curve for the last reading as of now, with the chart's day and
+// now-marker pointed at now too.
+function curveData() {
+  const nowMs = Date.now();
+  setDay(nowMs);
+  return daySeries(lastWeather, nowMs, ghostEvent(), day);
+}
+
 // Re-plot from the last reading. The ghost's focus / edit / blur
 // handlers call this: the sky hasn't changed, only what is drawn on
-// top of it.
+// top of it. So does a zone switch, which moves the day.
 function redrawCurve() {
   if (!lastWeather || !plot) return;
-  plot.setData(daySeries(lastWeather, Date.now(), ghostEvent()));
+  plot.setData(curveData());
 }
 
 // ── rendering ───────────────────────────────────────────────────────
@@ -613,7 +636,7 @@ const scalarRows = (name) => FIELDS.filter((f) => f.sec === name).map(scalarRow)
 function liveHtml() {
   const clearSky = sectionHtml(
     "Clear sky",
-    "A sine curve between sunrise and sunset, peaking at peak %. Times are UTC.",
+    "A sine curve between sunrise and sunset, peaking at peak %. Sunrise and sunset are UTC.",
     `<div class="wfields">${scalarRows("clear")}</div>`,
   );
   const randomClouds = sectionHtml(
@@ -698,10 +721,10 @@ function eventsHtml(w) {
       const end = Date.parse(e.end);
       const span =
         Number.isFinite(start) && Number.isFinite(end)
-          ? `${utcHhmm(start)}–${utcHhmm(end)}`
+          ? `${zone.timeHtml(start, "hm")}–${zone.timeHtml(end, "hm")}`
           : "—";
       const depth = Number(e.depth_pct) || 0;
-      return `<li><span class="wev-span">${escapeHtml(span)}</span><span class="wev-depth">−${depth.toFixed(0)}%</span></li>`;
+      return `<li><span class="wev-span">${span}</span><span class="wev-depth">−${depth.toFixed(0)}%</span></li>`;
     })
     .join("");
 }
@@ -857,9 +880,7 @@ function applyLive(w) {
   updateRateHint();
 
   lastWeather = w;
-  const nowMs = Date.now();
-  markerHour = nowHours(nowMs);
-  const data = daySeries(w, nowMs, ghostEvent());
+  const data = curveData();
   const slot = document.getElementById("weather-chart");
   if (plot) plot.setData(data);
   else if (slot) buildChart(slot, data);
@@ -920,4 +941,5 @@ function teardown() {
 
 export function setupWeatherPanel() {
   makeSidePanelToggle(PANEL, render, teardown);
+  zone.onChange(redrawCurve);
 }

@@ -4,27 +4,31 @@
 // The panel's arithmetic — the day curve and the cloud list — is pure
 // over one payload, but the module itself imports three browser-bound
 // siblings (routing.js reaches the whole SPA graph). So rather than a
-// DOM shim, the three import lines are swapped for local stubs and the
-// internals under test are re-exported, and the result is imported as
-// a data: URL. Nothing inside the functions is touched: this reads the
-// real source, and a rename here fails loudly rather than silently
-// testing a copy. The field helpers look their inputs up by id, so a
-// stand-in `document` hands them plain objects, and the `mgFetch` stub
-// records each request.
+// DOM shim, the import lines are swapped for local stubs (zone.js, which
+// is DOM-free, for the real module) and the internals under test are
+// re-exported, and the result is imported as a data: URL. Nothing
+// inside the functions is touched: this reads the real source, and a
+// rename here fails loudly rather than silently testing a copy. The
+// field helpers look their inputs up by id, so a stand-in `document`
+// hands them plain objects, and the `mgFetch` stub records each request.
 import { readFileSync } from "node:fs";
+import * as zone from "../ui-assets/zone.js";
 
 const SRC = new URL("../ui-assets/weather-panel.js", import.meta.url);
+const ZONE = new URL("../ui-assets/zone.js", import.meta.url);
 const IMPORT_LINE = /^import .*$/gm;
 const raw = readFileSync(SRC, "utf8");
 const stripped = raw.replace(IMPORT_LINE, "");
 const removed = (raw.match(IMPORT_LINE) || []).length;
-if (removed !== 3) {
+if (removed !== 4) {
   console.error(
-    `weather-panel-test: expected 3 single-line imports to stub, found ${removed} — ` +
+    `weather-panel-test: expected 4 single-line imports to stub, found ${removed} — ` +
       "the stubs below no longer cover what weather-panel.js imports",
   );
   process.exit(1);
 }
+// The fixtures below are UTC days; the zone case switches to Berlin.
+zone.setUtc(true);
 // A stand-in DOM: just the elements the field helpers look up by id,
 // each with the few properties they read and write.
 const elements = new Map();
@@ -32,7 +36,7 @@ const element = (id) => {
   if (!elements.has(id)) elements.set(id, { value: "", dataset: {}, hidden: false, textContent: "" });
   return elements.get(id);
 };
-globalThis.document = { getElementById: element };
+globalThis.document = { getElementById: element, querySelectorAll: () => [] };
 // Every weather request, and the body the next one answers with.
 globalThis.weatherRequests = [];
 globalThis.weatherReply = null;
@@ -44,12 +48,13 @@ const shimmed = [
   "const requireUplot = () => null;",
   "const isPanelOpen = () => false;",
   "const makeSidePanelToggle = () => {};",
+  `import * as zone from "${ZONE.href}";`,
   stripped,
-  "export { FIELDS, commitField, daySeries, eventsHtml, fieldText, updateRateHint };",
+  "export { FIELDS, axisSplits, axisValues, commitField, day, daySeries, eventsHtml, fieldText, markerHour, setDay, updateRateHint };",
 ].join("\n");
-const { FIELDS, commitField, daySeries, eventsHtml, fieldText, updateRateHint } = await import(
-  `data:text/javascript;base64,${Buffer.from(shimmed).toString("base64")}`
-);
+// The namespace, so `day` and `markerHour` read live after setDay.
+const panel = await import(`data:text/javascript;base64,${Buffer.from(shimmed).toString("base64")}`);
+const { FIELDS, axisSplits, axisValues, commitField, daySeries, eventsHtml, fieldText, setDay, updateRateHint } = panel;
 
 let failures = 0;
 function check(name, cond, detail) {
@@ -89,7 +94,8 @@ const PAYLOAD = {
 // ── the split: the list drops a passed cloud, the curve keeps it ─────
 
 {
-  const html = eventsHtml(PAYLOAD);
+  // The times are <time> elements; the checks read their text.
+  const html = eventsHtml(PAYLOAD).replace(/<\/?time[^>]*>/g, "");
   const rows = (html.match(/<li/g) || []).length;
   // The whole point of filtering against the payload's `now` rather
   // than Date.now(): this test runs at a wall-clock time nowhere near
@@ -122,6 +128,42 @@ const PAYLOAD = {
   check("curve: the live cloud darkens the now-hour",
     near(atten[overhead], clear[overhead] * 0.5),
     `${atten[overhead]} vs ${clear[overhead] * 0.5}`);
+}
+
+// ── the day is drawn in the display zone ─────────────────────────────
+
+{
+  // Berlin in January is UTC+1: the day starts at 23:00 UTC the night before,
+  // so a 06:00 UTC sunrise sits at 07:00 on the chart.
+  zone.setUtc(false);
+  zone.setSimZone("Europe/Berlin");
+  const dawn = { ...PAYLOAD, sunrise: "06:00", sunset: "18:00", events: [] };
+  const [xs, clear] = daySeries(dawn, Date.parse(NOW));
+  const firstLit = xs[clear.findIndex((c) => c > 0)];
+  check("zone: a UTC sunrise lands at its sim-zone hour", near(firstLit, 7 + 1 / 6), String(firstLit));
+  check("zone: a winter day spans 24 hours", xs[xs.length - 1] === 24, String(xs[xs.length - 1]));
+  // A DST change: the day starts at the zone's midnight and runs 23 or 25
+  // hours, so every hour after the change is drawn where its wall time is.
+  const spring = daySeries(dawn, Date.UTC(2026, 2, 29, 12));
+  check("zone: the spring-forward day spans 23 hours", spring[0][spring[0].length - 1] === 23, String(spring[0].at(-1)));
+  const autumn = daySeries(dawn, Date.UTC(2026, 9, 25, 12));
+  check("zone: the fall-back day spans 25 hours", autumn[0][autumn[0].length - 1] === 25, String(autumn[0].at(-1)));
+
+  // The axis and the now-marker follow the same day. 12:00 UTC on the
+  // spring-forward day is 14:00 CEST, 13 hours after a CET midnight; the tick
+  // 4 hours in is past the 02:00 change and reads 05:00.
+  setDay(Date.UTC(2026, 2, 29, 12));
+  check("axis: the spring-forward day is 23 hours", panel.day.hours === 23, String(panel.day.hours));
+  check("axis: the marker sits 13 hours in", panel.markerHour === 13, String(panel.markerHour));
+  const springTicks = axisValues(axisSplits());
+  check("axis: ticks read their wall time", springTicks.join(" ") === "00:00 05:00 09:00 13:00 17:00 21:00", springTicks.join(" "));
+  setDay(Date.UTC(2026, 9, 25, 12));
+  const autumnTicks = axisValues(axisSplits());
+  check("axis: the fall-back day's ticks", autumnTicks.join(" ") === "00:00 03:00 07:00 11:00 15:00 19:00 23:00", autumnTicks.join(" "));
+  setDay(Date.parse(NOW));
+  const plainTicks = axisValues(axisSplits());
+  check("axis: an ordinary day ends at 24:00", plainTicks.at(-1) === "24:00" && plainTicks.length === 7, plainTicks.join(" "));
+  zone.setUtc(true);
 }
 
 // ── the ghost preview spans what pass_cloud would actually build ─────
