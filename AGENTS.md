@@ -79,6 +79,11 @@ is wiring the topology + animating the environment.
   `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
   `dialogs.js`, `editor.js`, … own one concern each;
   `http.js` the failed-response reader (`errorText`, `getJson`);
+  `zone.js` the display zone (the sim zone or UTC, from the pulse bar's
+  zone chip) every shown time goes through: the formatters, `<time>`
+  elements it re-formats on a switch, uPlot's `tzDate`, and the
+  wall-time conversion for `datetime-local` fields; imported as
+  `* as zone`, so call sites read `zone.fmtTime`, `zone.tzDate`;
   `paste-forms.js` the DOM-free let* builder the editor's paste
   evals, binding children before the parents that push into them;
   `metrics-store.js` holds the derived-stream rings + the PF helpers

@@ -236,6 +236,23 @@ What to change in your own scripts:
   component and 400 for one that is not a charger.
 - The error of a timer body that fails goes to the log, so the UI's log
   shows it. It was printed to stderr only.
+- Every time the UI shows uses the zone the zone chip in the pulse bar
+  picks: the simulation's zone (set with `set-timezone`), or UTC. This
+  covers the charts, the log tail, the inspector's setpoints, the
+  weather chart and cloud list, the scenario report and the dispatches.
+  Before, charts
+  and logs used the browser's zone and the weather panel and report
+  used UTC. The weather panel's sunrise and sunset fields stay in UTC,
+  as `make-weather` takes them. Times in the HTTP and gRPC APIs stay
+  UTC.
+- Component counts in the UI include hidden components and say how many
+  are hidden, for example `12 components (1 hidden)`. The header left
+  them out while the microgrid card counted them. The header's
+  connection count includes the hidden components' connections too.
+  The loopback pill in the pulse bar shows `✓ connected` and no longer
+  a count.
+- Each `GET /api/microgrids` entry has `hidden_component_count`, the
+  number of its components that are hidden.
 
 ## Bug Fixes
 
@@ -244,3 +261,6 @@ What to change in your own scripts:
   end the server. The Lisp code the server runs after boot (evals,
   reloads, timers and dynamic values) now gets an 8 MiB stack, so such
   code runs, and deeper code stops with a Lisp error.
+- The dispatch form read its start time in the browser's zone, while
+  the dispatch list shows it in the zone the zone chip picks. The form
+  now reads it in that zone too, and names the zone next to the field.
