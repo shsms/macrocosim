@@ -1909,6 +1909,16 @@ const infoLineDisplay = async () =>
     return line ? getComputedStyle(line).display : "none-found";
   });
 check("e2e: the log tail shows info lines at its default level", (await infoLineDisplay()) === "flex" && (await page.evaluate(() => document.getElementById("logs").classList.contains("min-info"))));
+// A painted log line re-formats when the zone chip switches (the demo runs in
+// Europe/Berlin, never UTC+0, so the two times differ).
+const logTime = () => page.evaluate(() => document.querySelector("#logs .log-ts time")?.textContent ?? "");
+const logTimeSim = await logTime();
+const logTimeUtc = await inUtc(logTime);
+check(
+  "e2e: a log line's time follows the zone chip",
+  /^\d\d:\d\d:\d\d$/.test(logTimeSim) && /^\d\d:\d\d:\d\d$/.test(logTimeUtc) && logTimeSim !== logTimeUtc,
+  JSON.stringify({ logTimeSim, logTimeUtc }),
+);
 await page.selectOption("#logs-level", "warn");
 check("e2e: raising the minimum level to warn hides info lines", (await infoLineDisplay()) === "none");
 await page.reload({ waitUntil: "networkidle" });

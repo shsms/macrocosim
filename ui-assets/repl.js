@@ -17,6 +17,7 @@ import {
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
 import { closePanel } from "./side-panel.js";
 import { topology } from "./topology.js";
+import * as zone from "./zone.js";
 
 
 // The Logs panel's tail. /api/logs gives the load-time backfill
@@ -27,9 +28,8 @@ function appendLog(ev) {
   const box = document.getElementById("logs");
   const el = document.createElement("div");
   el.className = `log-line ${(ev.level || "info").toLowerCase()}`;
-  const ts = new Date(ev.ts).toLocaleTimeString();
   el.innerHTML =
-    `<span class="log-ts">${ts}</span>` +
+    `<span class="log-ts">${zone.timeHtml(ev.ts, "hms")}</span>` +
     `<span class="log-lvl">${escapeHtml(ev.level || "")}</span>` +
     `<span class="log-msg">${escapeHtml(ev.message || "")}</span>`;
   // Scroll-pin: only auto-scroll if the user hadn't scrolled away.

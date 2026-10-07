@@ -7,6 +7,7 @@ import { evalQuoted } from "./eval.js";
 import { getJson } from "./http.js";
 import { currentMgEntry, mgJson, readSelectedMg, scenarioMgId } from "./routing.js";
 import { makeSidePanelToggle } from "./side-panel.js";
+import * as zone from "./zone.js";
 
 export function setupHelpButton() {
   const dlg = document.getElementById("help-dialog");
@@ -186,8 +187,7 @@ function renderScenarioCard(r) {
     ? r.grid_window_averages
         .slice(-6)
         .map((w) => {
-          const ts = new Date(w.window_start).toISOString().slice(11, 16);
-          return `<tr><td>${ts}Z</td><td>${(w.avg_w / 1000).toFixed(2)} kW</td></tr>`;
+          return `<tr><td>${zone.timeHtml(w.window_start, "hm")}</td><td>${(w.avg_w / 1000).toFixed(2)} kW</td></tr>`;
         })
         .join("")
     : `<tr><td colspan="2" class="hint">no windows yet</td></tr>`;
@@ -218,8 +218,7 @@ function renderScenarioEvents(events) {
     .slice(-20)
     .reverse()
     .map((e) => {
-      const t = new Date(e.ts).toISOString().slice(11, 19);
-      return `<li><code>${t}Z</code> <strong>${escapeHtml(e.kind)}</strong>
+      return `<li><code>${zone.timeHtml(e.ts, "hms")}</code> <strong>${escapeHtml(e.kind)}</strong>
               ${escapeHtml(e.payload)}</li>`;
     })
     .join("");

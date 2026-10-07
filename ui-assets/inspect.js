@@ -1545,15 +1545,15 @@ async function buildCharts(d, container, snapshotJsonP) {
 
 // One setpoint-event row, shared by the live-WS push and the REST
 // backfill so the markup and escape discipline can't drift. Every
-// interpolation goes through `escapeHtml` — the server currently
+// server string goes through `escapeHtml` — the server currently
 // only emits fixed-shape strings and a numeric `value`, but
 // defense-in-depth: anything that lands in `innerHTML` is escaped.
 function setpointEventLi(ts, kind, value, accepted, reason) {
   const li = document.createElement("li");
   li.className = `sp-event ${accepted ? "accepted" : "rejected"}`;
-  const time = new Date(ts).toLocaleTimeString();
+  const time = zone.timeHtml(ts, "hms");
   const tag = escapeHtml(String(kind ?? "").replace("_", " "));
-  const head = `<span class="sp-ts">${escapeHtml(time)}</span> <span class="sp-tag">${tag}</span> <span class="sp-val">${escapeHtml(String(value))}</span>`;
+  const head = `<span class="sp-ts">${time}</span> <span class="sp-tag">${tag}</span> <span class="sp-val">${escapeHtml(String(value))}</span>`;
   const body = accepted
     ? '<span class="sp-ok">✓ accepted</span>'
     : `<span class="sp-bad">✕ ${escapeHtml(reason || "")}</span>`;
