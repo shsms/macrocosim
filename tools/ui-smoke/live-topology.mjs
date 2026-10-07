@@ -482,8 +482,41 @@ const looksRest = (e) => (e.direction === null ? e.width === null && e.color ===
 // The canvas palette as the page resolved it from the CSS tokens.
 const COLORS = await page.evaluate(async () => (await import("/assets/pill.js")).COLORS);
 
+const demoCardMeta = (await page.textContent(`${DEMO_CARD} .mglist-meta`)) || "";
 await page.click(DEMO_CARD);
 await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+
+// ── e2e: one component count ──────────────────────────────────────
+// The demo's meter #100 is hidden. The header, the card and the health chips
+// all count it, and the header and card name it.
+const statusText = await waitFor(async () => {
+  const t = (await page.textContent("#status")) || "";
+  return /components/.test(t) && t;
+});
+const [, statusCount, statusEdges] = /^(\d+) components \(1 hidden\), (\d+) connections$/.exec(statusText) ?? [];
+check("e2e: the header counts hidden components and names them", statusCount != null, statusText);
+// Connections count every edge the canvas draws, the hidden meter's too.
+const demoTopology = await page.evaluate(async () => (await fetch("/api/mg/2200/topology")).json());
+const drawnEdges = demoTopology.connections.length + demoTopology.hidden_connections.length;
+check(
+  "e2e: the header counts hidden connections",
+  demoTopology.hidden_connections.length > 0 && statusEdges === String(drawnEdges),
+  JSON.stringify({ statusEdges, drawnEdges }),
+);
+check(
+  "e2e: the card's count matches the header's",
+  demoCardMeta.startsWith(`${statusCount} components (1 hidden)`),
+  JSON.stringify({ demoCardMeta, statusText }),
+);
+const healthTotal = await page.$$eval("#pulse-health .health-chip", (cs) =>
+  cs.reduce((n, c) => n + Number(c.textContent.split(" ").pop()), 0),
+);
+check("e2e: the health chips add up to the header's count", String(healthTotal) === statusCount, String(healthTotal));
+const loopbackText = await waitFor(async () => {
+  const t = ((await page.textContent("#pulse-loopback")) || "").trim();
+  return t !== "…" && t;
+});
+check("e2e: the loopback pill shows no count", /^(✓ connected|⚠ connecting)$/.test(loopbackText), loopbackText);
 
 // ── e2e: the microgrid header's file state ────────────────────────
 // Adopt is the way out of read-only, so it shows exactly when the

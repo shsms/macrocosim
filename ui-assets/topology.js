@@ -21,7 +21,7 @@ import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./eval.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
 import { errorText } from "./http.js";
-import { blankLiveEntry, DEAD_FLOW, deadBandW, edgeFlow } from "./live.js";
+import { blankLiveEntry, countText, DEAD_FLOW, deadBandW, edgeFlow } from "./live.js";
 import { COLORS, cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
 import {
   mgFetch,
@@ -1941,21 +1941,16 @@ export const topology = createGraphCanvas("topology", {
   },
   onContextMenu: showContextMenu,
   onApply(data) {
-    // The chrome status pill keeps showing the gRPC-visible count,
-    // which is what most operators care about when reasoning about
-    // their topology. Hidden meters render on the canvas (dashed)
-    // for context but don't bump the official tally.
-    const visibleCount = data.components.filter((c) => !c.hidden).length;
-    setStatus(
-      `${visibleCount} components, ${data.connections.length} connections`,
-      "connected",
-    );
+    // Every component and edge the canvas draws, hidden ones included.
+    const hidden = data.components.filter((c) => c.hidden).length;
+    const edges = data.connections.length + (data.hidden_connections?.length ?? 0);
+    setStatus(`${countText(data.components.length, hidden)}, ${edges} connections`, "connected");
     // Flip the body's mg-empty flag so the topology canvas's
     // empty-hint overlay shows/hides without a separate JS pass. A
     // microgrid with zero visible components is treated as empty for
     // hint purposes — hidden meters by themselves don't disqualify
     // the overlay.
-    if (visibleCount === 0) {
+    if (data.components.length === hidden) {
       document.body.dataset.mgEmpty = "1";
     } else {
       delete document.body.dataset.mgEmpty;

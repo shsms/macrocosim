@@ -5,6 +5,7 @@
 import { escapeHtml, mutate, notify, selectMicrogrid } from "./app.js";
 import { refreshPaletteLock } from "./editor.js";
 import { errorText, getJson } from "./http.js";
+import { countText } from "./live.js";
 import {
   publishMgFlags,
   readSelectedMg,
@@ -72,7 +73,7 @@ export const microgridsPanel = (() => {
         <span class="mglist-id">#${m.id}</span>
         <h3 class="mglist-name">${escapeHtml(m.name || "(unnamed)")}</h3>
         ${tso}${chips}
-        <span class="mglist-meta muted">${m.component_count} components · gRPC ${escapeHtml(grpc)}</span>
+        <span class="mglist-meta muted">${countText(m.component_count, m.hidden_component_count)} · gRPC ${escapeHtml(grpc)}</span>
       `;
       card.addEventListener("click", () => selectMicrogrid(m.id));
       grid.appendChild(card);

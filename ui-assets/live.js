@@ -1,5 +1,5 @@
-// Pure helpers for the live topology overlay: number formatting,
-// the dead band and edge flow attributes. No DOM, no vis-network —
+// Pure helpers for the live topology overlay: number formatting, component
+// counts, the dead band and edge flow attributes. No DOM, no vis-network —
 // unit-testable alone.
 
 // W → kW → MW ladder. The one implementation: metrics-store.js's
@@ -11,6 +11,13 @@ export function formatScaled(value, unit) {
   if (a >= 1e6) return `${(value / 1e6).toFixed(2)} M${unit}`;
   if (a >= 1e3) return `${(value / 1e3).toFixed(2)} k${unit}`;
   return `${value.toFixed(1)} ${unit}`;
+}
+
+// A component count as the UI shows it: every registered component, naming the
+// hidden ones when there are any.
+export function countText(total, hidden) {
+  const noun = total === 1 ? "component" : "components";
+  return hidden > 0 ? `${total} ${noun} (${hidden} hidden)` : `${total} ${noun}`;
 }
 
 // A component's live-overlay entry before any sample: one slot per

@@ -207,7 +207,7 @@ export const pulseBar = (() => {
       }
       const j = await res.json();
       if (res.ok && j.connected) {
-        el.textContent = `✓ ${j.component_count ?? "?"} nodes`;
+        el.textContent = "✓ connected";
         el.className = "pulse-pill ok";
       } else {
         el.textContent = "⚠ connecting";

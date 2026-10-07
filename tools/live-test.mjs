@@ -6,7 +6,7 @@
 // live.js imports nothing and touches no DOM, so no shim is needed.
 import assert from "node:assert/strict";
 
-const { DEAD_FLOW, deadBandW, edgeFlow } = await import(new URL("../ui-assets/live.js", import.meta.url));
+const { DEAD_FLOW, countText, deadBandW, edgeFlow } = await import(new URL("../ui-assets/live.js", import.meta.url));
 
 // ── edgeFlow ────────────────────────────────────────────────────
 // Below the dead band the edge is dead: rest width, no direction.
@@ -34,5 +34,12 @@ assert.equal(edgeFlow(30000, 0, 30000).width, 6); // zero parents treated as 1
 // With nothing rated the 10 kW fallback is the reference.
 assert.equal(edgeFlow(10000, 1, 0).width, 6);
 assert.equal(edgeFlow(2500, 1, 0).width, 3.5);
+
+// ── countText ───────────────────────────────────────────────────
+// Every component counts; the hidden ones are named only when there are any.
+assert.equal(countText(12, 1), "12 components (1 hidden)");
+assert.equal(countText(12, 0), "12 components");
+assert.equal(countText(1, 0), "1 component");
+assert.equal(countText(0, 0), "0 components");
 
 console.log("live-test: all assertions passed");
