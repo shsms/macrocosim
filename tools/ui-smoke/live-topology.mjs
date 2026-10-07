@@ -910,6 +910,15 @@ await chip.click();
 check("e2e: clicking a series chip marks it off", await chip.evaluate((el) => el.classList.contains("off")));
 await chip.click();
 check("e2e: clicking it again clears off", await chip.evaluate((el) => !el.classList.contains("off")));
+// A zone switch rebuilds the charts, so their time axes re-label (zone-test
+// pins what the labels read).
+await page.evaluate(() => {
+  document.querySelector('.mcard[data-card="power"] canvas').dataset.beforeSwitch = "1";
+});
+const rebuilt = await inUtc(() =>
+  waitFor(() => page.evaluate(() => document.querySelector('.mcard[data-card="power"] canvas:not([data-before-switch])') !== null), 5000).catch(() => false),
+);
+check("e2e: a zone switch rebuilds the metrics charts", rebuilt === true);
 // Panels are independent floats now, not a stacked column: opening
 // one must never resize a different panel that's already on screen.
 const metricsHeightBefore = await page.evaluate(() => document.getElementById("panel-metrics-btn").getBoundingClientRect().height);

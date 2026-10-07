@@ -9,6 +9,7 @@
 import { requireUplot, uplot } from "./chart-lib.js";
 import { fmtValue, latestSecond, metricsStore, pfText, pfValue } from "./metrics-store.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
+import * as zone from "./zone.js";
 
 const PANEL = "metrics-btn";
 const WINDOWS = [
@@ -361,6 +362,7 @@ function buildChart(card, slot) {
     height: 150,
     cursor: { drag: { x: false, y: false } },
     legend: { show: false },
+    tzDate: zone.tzDate,
     scales: { x: { time: true }, pf: { range: [0.85, 1.02] } },
     axes,
     series,
@@ -479,6 +481,10 @@ function rebuildCard(key) {
   }
 }
 
+const rebuildAll = () => {
+  for (const c of CARDS) rebuildCard(c.key);
+};
+
 function chipHtml(s) {
   return `
     <button type="button" class="mchip${seriesOn(s) ? "" : " off"}" data-chip="${s.stream}"
@@ -541,7 +547,7 @@ function render(contentEl) {
       for (const b of contentEl.querySelectorAll("[data-window]")) {
         b.classList.toggle("active", b === win);
       }
-      for (const c of CARDS) rebuildCard(c.key);
+      rebuildAll();
       return;
     }
     const pfToggle = ev.target.closest("[data-pf-toggle]");
@@ -571,7 +577,7 @@ function render(contentEl) {
     }
   });
 
-  for (const card of CARDS) rebuildCard(card.key);
+  rebuildAll();
   unsubscribe = metricsStore.subscribe(() => scheduleRepaint(contentEl));
   // The dropped-frame safety net only earns its poll while the panel
   // is on screen, so it runs on the panel's own lifetime rather than
@@ -580,7 +586,7 @@ function render(contentEl) {
   metricsStore.startAutoReseed(() => isPanelOpen(PANEL));
   metricsStore.backfill().then(() => {
     if (!isPanelOpen(PANEL)) return;
-    for (const c of CARDS) rebuildCard(c.key);
+    rebuildAll();
     repaint(contentEl);
   });
 }
@@ -603,4 +609,8 @@ export function metricsTopologyRefresh() {
 
 export function setupMetricsPanel() {
   makeSidePanelToggle(PANEL, render, teardown);
+  // A zone switch rebuilds the charts, so their time axes re-label.
+  zone.onChange(() => {
+    if (isPanelOpen(PANEL)) rebuildAll();
+  });
 }

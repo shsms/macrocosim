@@ -14,6 +14,7 @@ import { powerColor, reactiveColor } from "./pill.js";
 import { mgJson, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
 import { topology } from "./topology.js";
+import * as zone from "./zone.js";
 
 // A recency token for work that awaits and then installs something a
 // teardown must be able to disown. `capture()` before the await,
@@ -149,8 +150,18 @@ export const liveCharts = (() => {
         });
       }
     },
+    // Re-labels the time axes, which read the display zone as they draw.
+    redraw() {
+      if (!active) return;
+      for (const series of active.charts.values()) series.plot.redraw(false, true);
+    },
   };
 })();
+
+zone.onChange(() => {
+  liveCharts.redraw();
+  gridChart?.plot.redraw(false, true);
+});
 
 // The GCP's one chart is fed by the metrics store, not by the
 // per-component history liveCharts owns, so its cleanup (unsubscribe
@@ -1421,6 +1432,7 @@ async function buildGridFrequencyChart(container) {
     title: "Frequency (site) (Hz)",
     cursor: { drag: { x: false, y: false } },
     legend: { show: false },
+    tzDate: zone.tzDate,
     scales: { x: { time: true } },
     axes: [
       { stroke: "#7d848e", grid: { stroke: "#353a45", width: 0.5 } },
@@ -1596,6 +1608,7 @@ function makePlot(Plot, container, metric, quantity, unit, xs, ys, target = null
     title: fullTitle,
     cursor: { drag: { x: false, y: false } },
     legend: { show: false },
+    tzDate: zone.tzDate,
     scales: { x: { time: true } },
     axes: [
       { stroke: "#7d848e", grid: { stroke: "#353a45", width: 0.5 } },
