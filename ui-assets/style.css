@@ -339,7 +339,16 @@ body {
   flex-direction: column;
 }
 body > header,
-#pulse { flex: none; }
+#pulse,
+#server-banner { flex: none; }
+/* Shown while background requests cannot reach the server (connection.js). */
+#server-banner {
+  padding: var(--space-1) var(--space-4);
+  background: color-mix(in srgb, var(--bad) 15%, var(--bg-elev));
+  border-bottom: 1px solid var(--bad);
+  color: var(--fg);
+  font-size: var(--text-md);
+}
 
 header {
   display: flex;

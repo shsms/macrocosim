@@ -7,7 +7,7 @@
 
 import { dispatchesPanel, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
-import { errorText, getJson } from "./http.js";
+import { bgFetch, errorText, getJson } from "./http.js";
 import { refitCharts, showComponent } from "./inspect.js";
 import { notify } from "./notices.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
@@ -27,12 +27,13 @@ export function mgPath(suffix) {
 // microgrid is selected. A 404 saying the selected microgrid is not
 // registered drops the selection for the list view, as a vanished
 // microgrid in a fresh listing does; the response is still returned
-// for the caller's own error path.
-export async function mgFetch(suffix, opts) {
+// for the caller's own error path. With a `source`, it is a background
+// loop's request (bgFetch).
+export async function mgFetch(suffix, opts, source = null) {
   const id = readSelectedMg();
   const path = mgPath(suffix);
   if (path == null) return null;
-  const res = await fetch(path, opts);
+  const res = await (source ? bgFetch(source, path, opts) : fetch(path, opts));
   if (res.status === 404) {
     const text = await errorText(res.clone());
     if (text === `microgrid ${id} not registered` && readSelectedMg() === id) {
@@ -43,10 +44,10 @@ export async function mgFetch(suffix, opts) {
   return res;
 }
 
-// The JSON body of `mgFetch(suffix, opts)`; throws with no
+// The JSON body of `mgFetch(suffix, opts, source)`; throws with no
 // microgrid selected, and with the message of a failed response.
-export async function mgJson(suffix, opts) {
-  const res = await mgFetch(suffix, opts);
+export async function mgJson(suffix, opts, source = null) {
+  const res = await mgFetch(suffix, opts, source);
   if (res == null) throw new Error("no microgrid selected");
   if (!res.ok) throw new Error(await errorText(res));
   return res.json();

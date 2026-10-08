@@ -4,7 +4,7 @@
 
 import { escapeHtml, mutate, selectMicrogrid } from "./app.js";
 import { refreshPaletteLock } from "./editor.js";
-import { errorText, getJson } from "./http.js";
+import { bgFetch, errorText, getJson } from "./http.js";
 import { countText } from "./live.js";
 import { notify } from "./notices.js";
 import {
@@ -621,7 +621,7 @@ export const microgridsPanel = (() => {
     const mg = readSelectedMg();
     let rows = null; // null: the fetch failed outright
     try {
-      const res = await fetch("/api/microgrids");
+      const res = await bgFetch("microgrids", "/api/microgrids");
       listAnswered = Math.max(listAnswered, seq);
       if (!res.ok) return;
       rows = await res.json();

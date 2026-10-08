@@ -3248,6 +3248,29 @@ check(
   JSON.stringify({ earlierOnTop, earlierClosed, dialogStillOpen }),
 );
 
+// ── e2e: server unreachable banner ─────────────────────────────────
+// Background requests that cannot reach the server raise one banner; it
+// clears when they get through again. An HTTP error is not unreachability:
+// it is logged once per failure streak.
+const bannerShown = () => page.evaluate(() => !document.getElementById("server-banner").hidden);
+await page.route("**/api/**", (r) => r.abort());
+const bannerUp = await waitFor(bannerShown, 12000).catch(() => false);
+await page.unroute("**/api/**");
+const bannerDown = await waitFor(async () => !(await bannerShown()), 12000).catch(() => false);
+check("e2e: unreachable background requests raise the banner", bannerUp === true);
+check("e2e: the banner clears when requests get through again", bannerDown === true);
+check("e2e: the banner's change reaches the logs panel", (await uiLogCount("ui: server unreachable")) >= 1);
+await page.route("**/api/microgrids", (r) => r.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' }));
+await page.waitForTimeout(11000);
+const boomLines = await uiLogCount("ui: microgrids: boom");
+const bannerOnHttpError = await bannerShown();
+await page.unroute("**/api/microgrids");
+check(
+  "e2e: a poll's HTTP error is logged once per streak and raises no banner",
+  boomLines === 1 && bannerOnHttpError === false,
+  JSON.stringify({ boomLines, bannerOnHttpError }),
+);
+
 // ── e2e: the button kit ────────────────────────────────────────────
 // Header buttons are the secondary kind, the new-dispatch button the
 // primary one; a disabled kit button is dimmed and ignores hover.
