@@ -33,6 +33,9 @@ async function inUtc(fn) {
   }
 }
 
+// Picks a theme preference through theme.js, as the theme chip does.
+const choose = (pref) => page.evaluate(async (p) => (await import("/assets/theme.js")).choose(p), pref);
+
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
 // A headless Chromium with no locale of its own inherits the host's
 // POSIX one and reports it as "en-US@posix" — not a BCP 47 tag, so
@@ -2812,6 +2815,39 @@ check("e2e: the light choice survives a reload", themeLightReloaded.theme === "l
 check("e2e: the theme chip then picks dark", themeDark.theme === "dark" && themeDark.bg === "#1c2128", JSON.stringify(themeDark));
 check("e2e: the theme chip comes back to auto", themeBack.chip === "◐ auto", JSON.stringify(themeBack));
 await openDemoTopology();
+
+// ── e2e: the canvas follows a theme change ─────────────────────────
+// Without a reload: the pill colours, a category bar and the rest edges take
+// the new theme's tokens.
+const canvasColours = () =>
+  page.evaluate(async () => {
+    const { COLORS, cssToken } = await import("/assets/pill.js");
+    const { topology } = await import("/assets/topology.js");
+    return {
+      surface: COLORS.surface,
+      surfaceToken: cssToken("--pill-surface"),
+      gridBar: topology.debugNodeModels().find((m) => m.idText === "#1")?.catColor,
+      gridToken: cssToken("--cat-grid"),
+      restEdges: [...new Set(topology.debugLiveEdges().filter((e) => e.direction === "dead").map((e) => e.color))],
+      edgeRest: COLORS.edgeRest,
+    };
+  });
+await choose("light");
+const lightCanvas = await canvasColours();
+await choose("auto");
+const darkCanvas = await canvasColours();
+const followsTokens = (c) => c.surface === c.surfaceToken && c.gridBar === c.gridToken;
+check(
+  "e2e: a theme change re-reads the pill colours and category bars",
+  followsTokens(lightCanvas) && followsTokens(darkCanvas) && darkCanvas.surface === "#242a33" && lightCanvas.surface !== darkCanvas.surface,
+  JSON.stringify({ lightCanvas, darkCanvas }),
+);
+check(
+  "e2e: a theme change recolours the rest edges",
+  [lightCanvas, darkCanvas].every((c) => c.restEdges.length > 0 && c.restEdges.every((e) => e === c.edgeRest)) &&
+    lightCanvas.edgeRest !== darkCanvas.edgeRest,
+  JSON.stringify({ lightCanvas, darkCanvas }),
+);
 
 // ── e2e: a dispatch's start round-trips in the display zone ─────────
 // In UTC mode. The browser runs in New York (CONTEXT), so a form that read the

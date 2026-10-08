@@ -55,7 +55,8 @@
   --syn-comment: #888888;
   --syn-special: #c08cf0;
   --syn-fn: #7ab8ff;
-  /* Graph pills and the hover card (pill.js reads these once at load). */
+  /* Graph pills and the hover card (pill.js reads these at load and again on a
+     theme change). */
   --pill-surface: #242a33;
   --pill-border: #323a45;
   --pill-fg: #d5dbe3;

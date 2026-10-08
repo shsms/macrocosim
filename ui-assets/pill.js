@@ -4,6 +4,7 @@
 // renderer (further down) says how it looks.
 
 import { formatScaled } from "./live.js";
+import * as theme from "./theme.js";
 
 // Colours come from the :root tokens in style.css so a re-theme
 // reaches the canvas; the literal is the fallback for a stylesheet
@@ -14,7 +15,7 @@ export function cssToken(name, fallback = "") {
   return v || fallback;
 }
 
-export const COLORS = {
+const readColors = () => ({
   export: cssToken("--flow-export", "#6bd9a5"),
   import: cssToken("--flow-import", "#79b8ff"),
   dim: cssToken("--flow-dim", "#5a626d"),
@@ -30,7 +31,15 @@ export const COLORS = {
   bad: cssToken("--bad", "#e58275"),
   standby: cssToken("--standby", "#c4ad55"),
   socFill: cssToken("--flow-export", "#6bd9a5"),
-};
+});
+
+// The canvas palette, refilled in place when the theme changes, so a module
+// holding COLORS sees the new values.
+export const COLORS = readColors();
+export function refreshColors() {
+  Object.assign(COLORS, readColors());
+}
+theme.onChange(refreshColors);
 
 const finite = (v) => v != null && Number.isFinite(v);
 

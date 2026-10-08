@@ -30,27 +30,34 @@ import {
   structureEditable,
   visibleSubview,
 } from "./routing.js";
+import * as theme from "./theme.js";
 
-const CATEGORY_COLOR = {
-  grid: cssToken("--cat-grid"),
-  meter: cssToken("--cat-meter"),
-  inverter: cssToken("--cat-inverter"),
-  battery: cssToken("--cat-battery"),
-  "ev-charger": cssToken("--cat-ev-charger"),
-  chp: cssToken("--cat-chp"),
-  "wind-turbine": cssToken("--cat-wind-turbine"),
-  "steam-boiler": cssToken("--cat-steam-boiler"),
-  "power-transformer": cssToken("--cat-power-transformer"),
-  breaker: cssToken("--cat-breaker"),
-};
-
+const CATEGORY_COLOR = {};
 // Inverters get a subtype-aware shade so battery-inverters and
 // solar-inverters read as related-but-distinct on the canvas.
-const INVERTER_SUBTYPE_COLOR = {
-  battery: cssToken("--cat-inverter-battery"),
-  solar: cssToken("--cat-inverter-solar"),
-  hybrid: cssToken("--cat-inverter-hybrid"),
-};
+const INVERTER_SUBTYPE_COLOR = {};
+
+// Fills both tables from the theme's tokens; again on a theme change.
+function readCategoryColors() {
+  for (const cat of [
+    "grid",
+    "meter",
+    "inverter",
+    "battery",
+    "ev-charger",
+    "chp",
+    "wind-turbine",
+    "steam-boiler",
+    "power-transformer",
+    "breaker",
+  ]) {
+    CATEGORY_COLOR[cat] = cssToken(`--cat-${cat}`);
+  }
+  for (const subtype of ["battery", "solar", "hybrid"]) {
+    INVERTER_SUBTYPE_COLOR[subtype] = cssToken(`--cat-inverter-${subtype}`);
+  }
+}
+readCategoryColors();
 
 function colorFor(c) {
   if (c.category === "inverter") {
@@ -66,15 +73,19 @@ const LIVE_KEY = "macrocosim-topology-live";
 const KNOB_LIVE_FIELD = new Map([["ev", "soc"]]);
 // Edge colour by flow direction: the pills' import blue and export
 // green, and the structural grey when nothing flows.
-const EDGE_FLOW_COLOR = { import: COLORS.import, export: COLORS.export, dead: COLORS.edgeRest };
+const EDGE_FLOW_COLOR_KEY = { import: "import", export: "export", dead: "edgeRest" };
+const edgeFlowColor = (direction) => COLORS[EDGE_FLOW_COLOR_KEY[direction]];
 
 // The DataSet fields an edgeFlow() result renders as. `flow` is not
 // a vis option; it rides along on the DataSet item so the smoke-test
 // hook can read the direction back. A fresh object per call so
 // every DataSet entry gets its own.
 function edgeStyle({ direction, width }) {
-  return { width, color: { color: EDGE_FLOW_COLOR[direction], inherit: false }, flow: direction };
+  return { width, color: { color: edgeFlowColor(direction), inherit: false }, flow: direction };
 }
+
+// The vis-network edge defaults: the colour of an edge nothing styled.
+const edgeDefaults = () => ({ color: COLORS.edgeRest, highlight: COLORS.accent, hover: COLORS.hover });
 
 // The edge's look with no live flow on it.
 function edgeRestStyle() {
@@ -728,7 +739,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
       keyboard: { enabled: false },
     },
     edges: {
-      color: { color: EDGE_FLOW_COLOR.dead, highlight: COLORS.accent, hover: COLORS.hover },
+      color: edgeDefaults(),
       width: DEAD_FLOW.width,
       smooth: { enabled: true, type: "cubicBezier", forceDirection: "horizontal", roundness: 0.4 },
       arrows: { to: { enabled: true, scaleFactor: 0.6 } },
@@ -1652,6 +1663,28 @@ export function createGraphCanvas(containerId, adapter = {}) {
     valuesOn() {
       return liveEnabled;
     },
+    /// The theme changed: re-read the category colours, then repaint every
+    /// pill, every styled edge and the edge defaults.
+    recolor() {
+      readCategoryColors();
+      if (nodesDS) {
+        nodesDS.update(
+          nodesDS.getIds().filter((id) => componentById.has(id)).map((id) => nodeFor(componentById.get(id))),
+        );
+      }
+      if (edgesDS) {
+        edgesDS.update(
+          edgesDS
+            .get()
+            .filter((e) => e.flow)
+            .map((e) => ({ id: e.id, ...edgeStyle({ direction: e.flow, width: e.width }) })),
+        );
+      }
+      if (network) {
+        network.setOptions({ edges: { color: edgeDefaults() } });
+        network.redraw();
+      }
+    },
     /// Smoke-test hook: one component's live entry.
     debugLiveEntry(id) {
       return liveValues.get(id) ?? null;
@@ -1957,3 +1990,6 @@ export const topology = createGraphCanvas("topology", {
     }
   },
 });
+
+// The pills, edges and category bars follow the colour theme.
+theme.onChange(() => topology.recolor());
