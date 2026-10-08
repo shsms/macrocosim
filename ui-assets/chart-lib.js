@@ -11,6 +11,19 @@
 // before re-entering a builder that can never succeed.
 export const uplot = typeof uPlot !== "undefined" ? uPlot : null;
 
+// The theme's chart colours, read when a chart is built: axis labels and ticks,
+// grid lines, the zero line, and a single series' line.
+export function chartColors() {
+  const style = getComputedStyle(document.documentElement);
+  const token = (name) => style.getPropertyValue(name).trim();
+  return {
+    axis: token("--chart-axis"),
+    grid: token("--chart-grid"),
+    zero: token("--chart-zero"),
+    series: token("--accent"),
+  };
+}
+
 // The uPlot constructor, or null after writing a note into `slot` —
 // the element the chart would have filled, in the panels' usual hint
 // style — so the panel around it keeps working and the user sees why

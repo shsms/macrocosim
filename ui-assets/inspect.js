@@ -6,13 +6,14 @@
 // (side-panel.js runs it on re-render or close).
 
 import { escapeHtml, inspectEl } from "./app.js";
-import { requireUplot } from "./chart-lib.js";
+import { chartColors, requireUplot } from "./chart-lib.js";
 import { evalQuoted, jsToLispString } from "./eval.js";
 import { deadBandW, formatScaled } from "./live.js";
 import { metricsStore } from "./metrics-store.js";
 import { powerColor, reactiveColor } from "./pill.js";
 import { mgJson, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
+import * as theme from "./theme.js";
 import { topology } from "./topology.js";
 import * as zone from "./zone.js";
 
@@ -161,6 +162,12 @@ export const liveCharts = (() => {
 zone.onChange(() => {
   liveCharts.redraw();
   gridChart?.plot.redraw(false, true);
+});
+
+// A chart's colours are fixed at build; a theme switch re-renders the open node
+// panel, as a topology refresh does.
+theme.onChange(() => {
+  if (shownId != null) showComponent(topology.get(shownId));
 });
 
 // The GCP's one chart is fed by the metrics store, not by the
@@ -1275,6 +1282,8 @@ export const inspectorLive = {
 // already built) — same last-STARTED-wins guard as dispatchesPanel's
 // render and formula-panel's refreshFormula.
 let showGen = 0;
+// The component the open node panel shows; null while it is closed.
+let shownId = null;
 
 export function showComponent(d) {
   if (!d) return;
@@ -1288,7 +1297,7 @@ export function showComponent(d) {
     d.category === "ev-charger" && evHtmlId === d.id
       ? { body: document.getElementById("ev-body"), html: evHtml, focused: document.activeElement }
       : null;
-  // The three clears below are the node panel's whole teardown —
+  // The closure below is the node panel's whole teardown —
   // side-panel.js runs the previously registered one before
   // renderNode paints, so re-selecting a node tears the old node's
   // charts, store subscription, and timers down first.
@@ -1300,7 +1309,10 @@ export function showComponent(d) {
     clearGridChart();
     stopTtlTimer();
     stopEvTimer();
+    shownId = null;
   });
+  // After openPanel: it runs the previous teardown, which clears this.
+  shownId = d.id;
 }
 
 async function renderNode(d, gen, keptEvCard) {
@@ -1426,6 +1438,7 @@ async function buildGridFrequencyChart(container) {
     const { xs, ys } = metricsStore.series("grid_frequency", 600);
     return [xs, ys];
   };
+  const colors = chartColors();
   const opts = {
     width: slot.clientWidth || 280,
     height: 140,
@@ -1435,12 +1448,12 @@ async function buildGridFrequencyChart(container) {
     tzDate: zone.tzDate,
     scales: { x: { time: true } },
     axes: [
-      { stroke: "#7d848e", grid: { stroke: "#353a45", width: 0.5 } },
-      { stroke: "#7d848e", grid: { stroke: "#353a45", width: 0.5 }, size: 60 },
+      { stroke: colors.axis, grid: { stroke: colors.grid, width: 0.5 } },
+      { stroke: colors.axis, grid: { stroke: colors.grid, width: 0.5 }, size: 60 },
     ],
     series: [
       {},
-      { stroke: "#79b8ff", width: 1.5, points: { show: false }, spanGaps: false },
+      { stroke: colors.series, width: 1.5, points: { show: false }, spanGaps: false },
     ],
   };
   const plot = new Plot(opts, series(), slot);
@@ -1602,6 +1615,7 @@ function makePlot(Plot, container, metric, quantity, unit, xs, ys, target = null
   const baseTitle = scale.unit ? `${title} (${scale.unit})` : title;
   const fullTitle =
     target != null ? `${baseTitle} — target ${target} ${scale.unit || unit}` : baseTitle;
+  const colors = chartColors();
   const opts = {
     width: container.clientWidth || 280,
     height: 140,
@@ -1611,18 +1625,18 @@ function makePlot(Plot, container, metric, quantity, unit, xs, ys, target = null
     tzDate: zone.tzDate,
     scales: { x: { time: true } },
     axes: [
-      { stroke: "#7d848e", grid: { stroke: "#353a45", width: 0.5 } },
+      { stroke: colors.axis, grid: { stroke: colors.grid, width: 0.5 } },
       // size = pixels reserved for the y-axis labels. 60 fits values
       // up to 6 chars (e.g. -32.5 kW) without truncation.
       {
-        stroke: "#7d848e",
-        grid: { stroke: "#353a45", width: 0.5 },
+        stroke: colors.axis,
+        grid: { stroke: colors.grid, width: 0.5 },
         size: 60,
       },
     ],
     series: [
       {},
-      { stroke: "#79b8ff", width: 1.5, points: { show: false } },
+      { stroke: colors.series, width: 1.5, points: { show: false } },
     ],
   };
   return { plot: new Plot(opts, [xs, scaledYs], container), scale };

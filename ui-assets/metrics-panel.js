@@ -6,9 +6,10 @@
 // module owns the DOM. Series colors follow the category palette so
 // chart lines mean what the canvas already means.
 
-import { requireUplot, uplot } from "./chart-lib.js";
+import { chartColors, requireUplot, uplot } from "./chart-lib.js";
 import { fmtValue, latestSecond, metricsStore, pfText, pfValue } from "./metrics-store.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
+import * as theme from "./theme.js";
 import * as zone from "./zone.js";
 
 const PANEL = "metrics-btn";
@@ -145,7 +146,7 @@ function chooseDiv(values, currentDiv = 1) {
 // a device-pixel context (valToPos's third argument asks for the
 // same space), so the width and dash lengths scale by the canvas's
 // own pixel ratio or they'd be hairlines on a HiDPI screen.
-function drawZeroLine(u) {
+function drawZeroLine(u, color) {
   const { min, max } = u.scales.y;
   if (min == null || max == null || min > 0 || max < 0) return;
   const dpr = u.ctx.canvas.width / (u.width || 1);
@@ -161,7 +162,7 @@ function drawZeroLine(u) {
   ctx.beginPath();
   ctx.rect(left, top, width, height);
   ctx.clip();
-  ctx.strokeStyle = "#3d4450";
+  ctx.strokeStyle = color;
   ctx.lineWidth = dpr;
   ctx.setLineDash([4 * dpr, 4 * dpr]);
   ctx.beginPath();
@@ -279,6 +280,7 @@ function cardFrame(card, secs, currentDiv = 1, shape = null) {
 function buildChart(card, slot) {
   const Plot = requireUplot(slot);
   if (!Plot) return;
+  const colors = chartColors();
   // Scale + shape decisions are made once per build and stored on the
   // plots entry: the band/PF layout, which repaint() feeds back into
   // cardFrame() so the array it hands setData() matches the built shape
@@ -330,10 +332,10 @@ function buildChart(card, slot) {
   // PF overlay: dashed per-source PF on a right-hand 0.85–1.02
   // scale, derived at draw time from the matching P and Q rings.
   const axes = [
-    { stroke: "#7d848e", grid: { stroke: "#353a45", width: 0.5 } },
+    { stroke: colors.axis, grid: { stroke: colors.grid, width: 0.5 } },
     {
-      stroke: "#7d848e",
-      grid: { stroke: "#353a45", width: 0.5 },
+      stroke: colors.axis,
+      grid: { stroke: colors.grid, width: 0.5 },
       size: 56,
       label: prefix || shown ? `${prefix}${shown}` : "",
       labelSize: 12,
@@ -352,7 +354,7 @@ function buildChart(card, slot) {
     axes.push({
       scale: "pf",
       side: 1,
-      stroke: "#7d848e",
+      stroke: colors.axis,
       grid: { show: false },
       size: 44,
     });
@@ -367,7 +369,7 @@ function buildChart(card, slot) {
     axes,
     series,
     bands,
-    hooks: { draw: [drawZeroLine] },
+    hooks: { draw: [(u) => drawZeroLine(u, colors.zero)] },
   };
   plots.set(card.key, {
     plot: new Plot(opts, data, slot),
@@ -609,8 +611,11 @@ export function metricsTopologyRefresh() {
 
 export function setupMetricsPanel() {
   makeSidePanelToggle(PANEL, render, teardown);
-  // A zone switch rebuilds the charts, so their time axes re-label.
-  zone.onChange(() => {
+  // A zone switch rebuilds the charts, so their time axes re-label; a theme
+  // switch, so they take the new colours.
+  const rebuildIfOpen = () => {
     if (isPanelOpen(PANEL)) rebuildAll();
-  });
+  };
+  zone.onChange(rebuildIfOpen);
+  theme.onChange(rebuildIfOpen);
 }

@@ -18,9 +18,10 @@
 // apiece would be a poll-rate stampede for a curve that only moves
 // when the config does.
 
-import { requireUplot } from "./chart-lib.js";
+import { chartColors, requireUplot } from "./chart-lib.js";
 import { mgFetch } from "./routing.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
+import * as theme from "./theme.js";
 import * as zone from "./zone.js";
 
 const PANEL = "weather-btn";
@@ -230,7 +231,7 @@ function daySeries(w, nowMs, ghost, d = dayOf(nowMs)) {
 // uPlot hands canvas hooks a DPR-scaled context, so the width, the
 // dashes and the half-pixel snap all scale by the canvas's own ratio
 // or the line lands as a grey smear on a HiDPI screen.
-function drawNowMarker(u) {
+function drawNowMarker(u, color) {
   const { min, max } = u.scales.x;
   if (min == null || max == null || markerHour < min || markerHour > max) return;
   const dpr = u.ctx.canvas.width / (u.width || 1);
@@ -241,7 +242,7 @@ function drawNowMarker(u) {
   ctx.beginPath();
   ctx.rect(left, top, width, height);
   ctx.clip();
-  ctx.strokeStyle = "#7d848e";
+  ctx.strokeStyle = color;
   ctx.lineWidth = dpr;
   ctx.setLineDash([3 * dpr, 3 * dpr]);
   ctx.beginPath();
@@ -262,6 +263,7 @@ function buildChart(slot, data) {
   const Plot = requireUplot(slot);
   if (!Plot) return;
   const solar = cssColor("--cat-inverter-solar") || "#a8d35a";
+  const colors = chartColors();
   const opts = {
     width: slot.clientWidth || 380,
     height: 140,
@@ -275,14 +277,14 @@ function buildChart(slot, data) {
     },
     axes: [
       {
-        stroke: "#7d848e",
-        grid: { stroke: "#353a45", width: 0.5 },
+        stroke: colors.axis,
+        grid: { stroke: colors.grid, width: 0.5 },
         splits: axisSplits,
         values: (_u, splits) => axisValues(splits),
       },
       {
-        stroke: "#7d848e",
-        grid: { stroke: "#353a45", width: 0.5 },
+        stroke: colors.axis,
+        grid: { stroke: colors.grid, width: 0.5 },
         size: 42,
         label: "%",
         labelSize: 12,
@@ -302,8 +304,9 @@ function buildChart(slot, data) {
       // than as a reading. It is all nulls unless a preview is up.
       { stroke: solar, width: 1.5, dash: [2, 3], alpha: 0.55, points: { show: false } },
     ],
-    bands: [{ series: [1, 2], fill: "rgba(168, 211, 90, 0.14)" }],
-    hooks: { draw: [drawNowMarker] },
+    // The band is the sky colour at about a seventh opacity (#rrggbb + alpha).
+    bands: [{ series: [1, 2], fill: `${solar}24` }],
+    hooks: { draw: [(u) => drawNowMarker(u, colors.axis)] },
   };
   plot = new Plot(opts, data, slot);
 }
@@ -942,4 +945,12 @@ function teardown() {
 export function setupWeatherPanel() {
   makeSidePanelToggle(PANEL, render, teardown);
   zone.onChange(redrawCurve);
+  // A theme switch rebuilds the chart in the new colours.
+  theme.onChange(() => {
+    const slot = document.getElementById("weather-chart");
+    if (!plot || !lastWeather || !slot) return;
+    plot.destroy();
+    plot = null;
+    buildChart(slot, curveData());
+  });
 }

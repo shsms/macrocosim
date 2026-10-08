@@ -36,6 +36,27 @@ async function inUtc(fn) {
 // Picks a theme preference through theme.js, as the theme chip does.
 const choose = (pref) => page.evaluate(async (p) => (await import("/assets/theme.js")).choose(p), pref);
 
+// Whether switching the theme to `pref` rebuilds the chart canvas at `sel`: the
+// canvases marked before the switch are gone after it, and a new one is in
+// their place. False when there was no canvas to mark.
+async function chartRebuiltOn(sel, pref) {
+  const marked = await page.evaluate((s) => {
+    const canvases = document.querySelectorAll(s);
+    for (const canvas of canvases) canvas.dataset.beforeTheme = "1";
+    return canvases.length;
+  }, sel);
+  if (marked === 0) return false;
+  await choose(pref);
+  return waitFor(
+    () =>
+      page.evaluate(
+        (s) => document.querySelector(`${s}[data-before-theme]`) === null && document.querySelector(s) !== null,
+        sel,
+      ),
+    5000,
+  ).catch(() => false);
+}
+
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
 // A headless Chromium with no locale of its own inherits the host's
 // POSIX one and reports it as "en-US@posix" — not a BCP 47 tag, so
@@ -1130,6 +1151,11 @@ check(
   JSON.stringify({ inspNarrow, wide: inspWide ?? (await inspChartsAt()) }),
 );
 await page.evaluate(() => { document.getElementById("inspector").style.width = ""; });
+// A theme switch rebuilds the GCP's frequency chart, which has no component
+// snapshot behind it.
+const gcpRebuilt = await chartRebuiltOn("#card-charts canvas", "light");
+await choose("auto");
+check("e2e: a theme change rebuilds the GCP's frequency chart", gcpRebuilt);
 await page.evaluate(async () => {
   const { topology } = await import("/assets/topology.js");
   topology.select([]);
@@ -1727,6 +1753,10 @@ check(
   JSON.stringify({ weatherNarrow, wide: weatherWide ?? (await weatherChartAt()) }),
 );
 await page.evaluate(() => { document.getElementById("panel-weather-btn").style.width = ""; });
+// A theme switch rebuilds the day chart.
+const weatherRebuilt = await chartRebuiltOn("#weather-chart canvas", "light");
+await choose("auto");
+check("e2e: a theme change rebuilds the weather chart", weatherRebuilt);
 
 // The spinner convention (AGENTS.md) is revert-silent: drop the CSS and
 // nothing here fails, the arrows just come back. Pin it in the computed
@@ -2848,6 +2878,16 @@ check(
     lightCanvas.edgeRest !== darkCanvas.edgeRest,
   JSON.stringify({ lightCanvas, darkCanvas }),
 );
+
+// ── e2e: the metrics charts follow a theme change ──────────────────
+// Each switch builds the power chart afresh.
+await page.click("#metrics-btn");
+const powerCanvas = '.mcard[data-card="power"] canvas';
+await waitFor(() => page.evaluate((sel) => document.querySelector(sel) !== null, powerCanvas), 10000).catch(() => null);
+const rebuiltLight = await chartRebuiltOn(powerCanvas, "light");
+const rebuiltDark = await chartRebuiltOn(powerCanvas, "auto");
+await page.click("#metrics-btn");
+check("e2e: a theme change rebuilds the metrics charts", rebuiltLight && rebuiltDark);
 
 // ── e2e: a dispatch's start round-trips in the display zone ─────────
 // In UTC mode. The browser runs in New York (CONTEXT), so a form that read the
