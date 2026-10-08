@@ -251,7 +251,7 @@ async function renderDefaults(contentEl) {
     const rows = Math.min(10, Math.max(3, e.value.split("\n").length + 1));
     block.innerHTML = `
       <label>${e.var_name}</label>
-      <textarea rows="${rows}" wrap="off" spellcheck="false">${escapeHtml(e.value)}</textarea>
+      <textarea class="field" rows="${rows}" wrap="off" spellcheck="false">${escapeHtml(e.value)}</textarea>
       <button class="btn btn-sm">Save</button>
     `;
     const ta = block.querySelector("textarea");

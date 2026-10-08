@@ -574,8 +574,8 @@ function redrawCurve() {
 
 const fieldInput = (f) =>
   f.kind === "time"
-    ? `<input id="${f.id}" class="wfield-input" type="text" placeholder="HH:MM" />`
-    : `<input id="${f.id}" class="wfield-input" type="number" step="any" placeholder="${escapeHtml(f.placeholder ?? "—")}" />`;
+    ? `<input id="${f.id}" class="field field-sm wfield-input" type="text" placeholder="HH:MM" />`
+    : `<input id="${f.id}" class="field field-sm wfield-input" type="number" step="any" placeholder="${escapeHtml(f.placeholder ?? "—")}" />`;
 
 // One label with its explainer hung off it. The `title` is what a
 // hover shows; it is the only place the knobs are spelled out, so
@@ -590,9 +590,9 @@ const scalarRow = (f) =>
 const rangeRow = (r) =>
   `<div class="wfield">${fieldLabel(r.lo, r.label, r.tip)}
         <span class="wfield-pair">
-          <input id="${r.lo}" class="wfield-input" type="number" step="any" placeholder="lo" title="${escapeHtml(TIPS.bound)}" />
+          <input id="${r.lo}" class="field field-sm wfield-input" type="number" step="any" placeholder="lo" title="${escapeHtml(TIPS.bound)}" />
           <span class="wfield-dash">–</span>
-          <input id="${r.hi}" class="wfield-input" type="number" step="any" placeholder="hi" title="${escapeHtml(TIPS.bound)}" />
+          <input id="${r.hi}" class="field field-sm wfield-input" type="number" step="any" placeholder="hi" title="${escapeHtml(TIPS.bound)}" />
         </span>
       </div>`;
 
@@ -651,11 +651,11 @@ function liveHtml() {
     "One deterministic cloud, right now.",
     `<div class="wcloud-row">
           ${fieldLabel("weather-cloud-depth", "depth %", TIPS.depth)}
-          <input id="weather-cloud-depth" class="wfield-input wfield-fire" type="number" step="any" value="60" />
+          <input id="weather-cloud-depth" class="field field-sm wfield-input wfield-fire" type="number" step="any" value="60" />
           ${fieldLabel("weather-cloud-duration", "for s", TIPS.duration)}
-          <input id="weather-cloud-duration" class="wfield-input wfield-fire" type="number" step="any" value="600" />
+          <input id="weather-cloud-duration" class="field field-sm wfield-input wfield-fire" type="number" step="any" value="600" />
           ${fieldLabel("weather-cloud-ramp", "ramp s", TIPS.ramp)}
-          <input id="weather-cloud-ramp" class="wfield-input wfield-fire" type="number" step="any" value="60" />
+          <input id="weather-cloud-ramp" class="field field-sm wfield-input wfield-fire" type="number" step="any" value="60" />
           <button type="button" class="pill" id="weather-cloud-fire">fire</button>
         </div>`,
   );
@@ -667,7 +667,7 @@ function liveHtml() {
       </div>
       <div class="wchart" id="weather-chart"></div>
       <p class="hint weather-sub" id="weather-clear-sky">clear sky —</p>
-      <p class="hint weather-err" id="weather-error" hidden></p>
+      <p class="form-error" id="weather-error" hidden></p>
       ${clearSky}${randomClouds}${fireCloudSec}
       <section class="wevents">
         <h3>Clouds</h3>
@@ -683,7 +683,7 @@ const EMPTY_HTML = `
       the same one <code>(make-weather)</code> gives, which you can retune here
       afterwards.</p>
     <button type="button" class="pill" id="weather-create">Create weather</button>
-    <p class="hint weather-err" id="weather-error" hidden></p>
+    <p class="form-error" id="weather-error" hidden></p>
   </div>`;
 
 const NO_SELECTION_HTML = `

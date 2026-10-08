@@ -115,9 +115,9 @@ export const dispatchForm = (() => {
     const row = document.createElement("div");
     row.className = "dd-kv-row";
     row.innerHTML = `
-      <input class="dd-input dd-input-inline dd-kv-key" placeholder="key" />
+      <input class="field field-sm dd-kv-key" placeholder="key" />
       <span class="dd-kv-arrow">→</span>
-      <input class="dd-input dd-input-inline dd-kv-value" placeholder="value" />
+      <input class="field field-sm dd-kv-value" placeholder="value" />
       <button type="button" class="btn btn-quiet btn-icon dd-kv-del" title="Remove field">×</button>`;
     row.querySelector(".dd-kv-key").value = key;
     row.querySelector(".dd-kv-value").value = value;

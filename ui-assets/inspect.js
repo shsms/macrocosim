@@ -330,7 +330,7 @@ function selectField(knob, current, options, disabledReason = null) {
   const attrs = disabledReason
     ? ` disabled title="${escapeHtml(disabledReason)}"`
     : "";
-  return `<select data-knob="${knob}"${attrs}>${opts}</select>`;
+  return `<select class="field field-sm" data-knob="${knob}"${attrs}>${opts}</select>`;
 }
 
 // Chip knob token → the same Lisp setter the old <select> onchange
@@ -415,9 +415,9 @@ function evBodyHtml(info) {
     return `
       <p>no EV plugged in</p>
       <dl>
-        <dt>preset</dt><dd><select id="ev-preset">${options}</select></dd>
-        <dt>initial SoC (%)</dt><dd><input id="ev-soc" type="number" step="any" min="0" max="100" placeholder="preset default" /></dd>
-        <dt>target SoC (%)</dt><dd><input id="ev-target" type="number" step="any" min="0" max="100" placeholder="100" /></dd>
+        <dt>preset</dt><dd><select id="ev-preset" class="field field-sm">${options}</select></dd>
+        <dt>initial SoC (%)</dt><dd><input id="ev-soc" class="field field-sm" type="number" step="any" min="0" max="100" placeholder="preset default" /></dd>
+        <dt>target SoC (%)</dt><dd><input id="ev-target" class="field field-sm" type="number" step="any" min="0" max="100" placeholder="100" /></dd>
       </dl>
       <button type="button" id="ev-plug" class="btn btn-sm">Plug in</button>`;
   }
@@ -592,7 +592,7 @@ function renderInspect(d, parentIds, childIds) {
         ? `<button type="button" class="btn btn-quiet btn-icon knob-measure-btn" data-clear="${k.clear}" hidden title="clear override, measure from children again">✕</button>`
         : "";
       return `<dt>${escapeHtml(k.label)}</dt><dd>
-        <input ${inputAttrs} class="knob-input"
+        <input ${inputAttrs} class="field field-sm knob-input"
                data-defun="${k.defun}"${k.token ? ` data-token="${k.token}"` : ""}${k.dynamic ? ` data-dynamic="1" data-unit="${escapeHtml(k.unit || "")}"` : ""} />${exprChipHtml}${flagHtml}${measureBtnHtml}${resolvedHtml}
       </dd>`;
     };

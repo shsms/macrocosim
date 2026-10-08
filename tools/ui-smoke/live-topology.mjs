@@ -3200,11 +3200,18 @@ const smokeRow = () =>
     return row ? row.children[3].textContent : null;
   });
 await page.click('#mg-subtoggle .mode-btn[data-subview="dispatches"]');
+// The type field while it has focus, for the field kit's check below.
+let ddField = null;
 const [startZone, startCell] = await inUtc(async () => {
   await page.click("#dispatch-new-btn");
   await waitFor(() => page.evaluate(() => document.getElementById("dispatch-dialog").open), 8000);
   const zoneText = ((await page.textContent("#dd-start-zone")) || "").trim();
   await page.fill("#dd-type", "smoke-zone");
+  ddField = await page.evaluate(() => {
+    const s = getComputedStyle(document.activeElement);
+    return { id: document.activeElement.id, outline: s.outlineStyle, outlineColour: s.outlineColor, borderColor: s.borderTopColor };
+  });
+  ddField.border = await tokenColour("--border");
   await page.click("#dd-target-categories .dd-chip");
   await page.check('input[name="dd-start-mode"][value="at"]');
   await page.fill("#dd-start-at", "2030-01-15T09:30");
@@ -3212,6 +3219,11 @@ const [startZone, startCell] = await inUtc(async () => {
   return [zoneText, await waitFor(smokeRow, 8000).catch(() => null)];
 });
 check("e2e: the start field names the display zone", startZone === "UTC", startZone);
+check(
+  "e2e: a focused field shows the accent outline on the kit's border",
+  ddField?.id === "dd-type" && ddField.outline === "solid" && ddField.outlineColour === accent && ddField.borderColor === ddField.border,
+  JSON.stringify({ ddField, accent }),
+);
 check("e2e: a dispatch's start shows the wall time it was entered at", startCell === "15 Jan 2030, 09:30", String(startCell));
 page.once("dialog", (d) => d.accept());
 await page.click('.disp-table tbody tr:has-text("smoke-zone") [data-disp-del]');

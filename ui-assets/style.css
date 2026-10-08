@@ -313,6 +313,24 @@ button:focus-visible {
   font-size: var(--text-lg);
   line-height: 1;
 }
+/* Fields: .field in forms and dialogs, .field-sm for a field set inline with
+   text or other controls, .field-num for a short number. A field keeps its own
+   font family. */
+.field {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  font-size: var(--text-md);
+  padding: var(--space-1) var(--space-2);
+}
+.field:focus { outline: 1px solid var(--accent); outline-offset: 0; }
+.field[aria-invalid="true"] { border-color: var(--bad); }
+.field:disabled { opacity: 0.45; }
+.field-sm { padding: 1px var(--space-1); }
+.field-num { width: 64px; }
+/* An error a form shows under itself. */
+.form-error { margin: var(--space-2) 0 0; font-size: var(--text-md); color: var(--bad); }
 
 /* Header, pulse bar, then main taking whatever height is left, so
    main fits the window whatever the header and pulse bar measure. */
@@ -856,14 +874,6 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   font-size: var(--text-md);
   color: var(--muted);
 }
-#snapshots-dialog #snapshot-name-input {
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg);
-  padding: var(--space-2);
-  font-size: var(--text-md);
-}
 #snapshots-list { list-style: none; padding: 0; margin: 0; }
 
 /* The create-microgrid form: one field per row, matching the
@@ -882,20 +892,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   font-size: var(--text-md);
   color: var(--muted);
 }
-#create-mg-form .dlg-input {
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg);
-  padding: var(--space-2);
-  font-size: var(--text-md);
-}
 #create-mg-form button { align-self: flex-start; }
-.dialog-error {
-  margin: 0;
-  font-size: var(--text-md);
-  color: var(--bad);
-}
 
 /* The load dialog's collision offer: the file names an id something
    else already loaded, so the row carries the reason and (for a
@@ -981,15 +978,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   font-size: var(--text-md);
   color: var(--muted);
 }
-#load-script-dialog #load-script-path {
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg);
-  padding: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-md);
-}
+#load-script-dialog #load-script-path { font-family: var(--font-mono); }
 .snapshot-row {
   display: flex;
   justify-content: space-between;
@@ -1451,13 +1440,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-size: var(--text-sm);
 }
 .logs-head select {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  padding: 1px var(--space-1);
 }
 .logs-head .pill { margin-left: auto; }
 /* The minimum level: #logs carries one min-* class and the lines
@@ -1791,10 +1775,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .weather-panel .weather-sub {
   margin: var(--space-2) 0 0;
 }
-.weather-panel .weather-err {
-  margin: var(--space-2) 0 0;
-  color: var(--bad);
-}
 .wfields {
   display: grid;
   grid-template-columns: max-content 1fr;
@@ -1828,19 +1808,10 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   color: var(--muted);
 }
 .wfield-input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg);
   font-family: var(--font-mono);
-  font-size: var(--text-md);
-  padding: 1px var(--space-1);
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-}
-.wfield-input:focus {
-  outline: 1px solid var(--accent);
 }
 /* A captioned group of knobs (Clear sky / Random clouds / Fire a
    cloud). The header and its one-line caption stay quiet — they are
@@ -1927,28 +1898,15 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 
 #inspect select[data-knob] {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-1);
   font-family: var(--font-mono);
   font-size: var(--text-lg);
 }
-#inspect select[data-knob]:focus { outline: 1px solid var(--accent); }
 
 #inspect .knob-input {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-1);
   font-family: var(--font-mono);
-  font-size: var(--text-md);
   width: 100%;
   box-sizing: border-box;
 }
-#inspect .knob-input:focus { outline: 1px solid var(--accent); }
 
 /* Enter-commit numeric fields hide the browser's spinner arrows: an
    arrow click changes the value WITHOUT committing it (commits are
@@ -2266,22 +2224,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 .defaults-entry textarea {
   width: 100%;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
   font-family: var(--font-mono);
-  font-size: var(--text-md);
   resize: vertical;
   box-sizing: border-box;
 }
-.defaults-entry textarea:focus { outline: 1px solid var(--accent); }
-.defaults-entry button {
-  margin-top: var(--space-1);
-  font-size: var(--text-md);
-  padding: var(--space-0) var(--space-3);
-}
+.defaults-entry button { margin-top: var(--space-1); }
 
 .setpoints {
   margin-top: var(--space-4);
@@ -2467,18 +2414,6 @@ dialog#dispatch-dialog { max-width: 640px; }
   letter-spacing: 0.06em;
   color: var(--muted);
 }
-.dd-input {
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg);
-  padding: var(--space-2);
-  font-size: var(--text-md);
-}
-.dd-input:focus { outline: none; border-color: var(--accent); }
-.dd-input:disabled { opacity: 0.45; }
-.dd-input-inline { padding: var(--space-0) var(--space-2); font-size: var(--text-md); }
-.dd-input-num { width: 64px; padding: var(--space-0) var(--space-2); font-size: var(--text-md); }
 .dd-hint { margin: 0; font-size: var(--text-sm); color: var(--muted); }
 .dd-hint-inline { color: var(--muted); font-size: var(--text-sm); }
 
@@ -2574,11 +2509,7 @@ dialog#dispatch-dialog { max-width: 640px; }
 .dd-kv-row .dd-kv-arrow { color: var(--muted); text-align: center; }
 #dd-payload-add { align-self: flex-start; }
 
-.dd-error {
-  margin: var(--space-2) var(--space-4) 0;
-  font-size: var(--text-md);
-  color: var(--bad);
-}
+#dd-error { margin: var(--space-2) var(--space-4) 0; }
 .dd-footer {
   display: flex;
   justify-content: flex-end;

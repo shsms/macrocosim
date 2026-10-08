@@ -255,7 +255,7 @@
           <div id="logs-body" class="panel-content">
             <div class="logs-head">
               <label for="logs-level" class="ctl-label">show</label>
-              <select id="logs-level" title="Hide log lines below this level">
+              <select id="logs-level" class="field field-sm" title="Hide log lines below this level">
                 <option value="debug">debug+</option>
                 <option value="info">info+</option>
                 <option value="warn">warn+</option>
@@ -288,20 +288,20 @@
         <form id="create-mg-form">
           <label class="dlg-field">
             <span>name</span>
-            <input class="dlg-input" type="text" id="create-mg-name"
+            <input class="field" type="text" id="create-mg-name"
                    placeholder="Berlin site" autocomplete="off" required />
           </label>
           <label class="dlg-field">
             <span>microgrid id</span>
-            <input class="dlg-input" type="number" id="create-mg-id" min="1" step="1"
+            <input class="field" type="number" id="create-mg-id" min="1" step="1"
                    autocomplete="off" />
           </label>
           <label class="dlg-field">
             <span>gRPC port</span>
-            <input class="dlg-input" type="number" id="create-mg-port" min="1" max="65535"
+            <input class="field" type="number" id="create-mg-port" min="1" max="65535"
                    step="1" placeholder="next free" autocomplete="off" />
           </label>
-          <p id="create-mg-error" class="dialog-error" hidden></p>
+          <p id="create-mg-error" class="form-error" hidden></p>
           <button type="submit" class="btn btn-primary">Create</button>
         </form>
         <p class="hint">
@@ -320,15 +320,15 @@
         <form id="import-mg-form">
           <label class="dlg-field">
             <span>name</span>
-            <input class="dlg-input" type="text" id="import-mg-name"
+            <input class="field" type="text" id="import-mg-name"
                    placeholder="Berlin site" autocomplete="off" required />
           </label>
           <label class="dlg-field">
             <span>microgrid id</span>
-            <input class="dlg-input" type="number" id="import-mg-id" min="1" step="1"
+            <input class="field" type="number" id="import-mg-id" min="1" step="1"
                    autocomplete="off" />
           </label>
-          <p id="import-mg-error" class="dialog-error" hidden></p>
+          <p id="import-mg-error" class="form-error" hidden></p>
           <button type="submit" class="btn btn-primary">Import</button>
         </form>
         <p class="hint">
@@ -348,7 +348,7 @@
         <form id="snapshot-save-form">
           <label>
             <span>Save this microgrid's file as</span>
-            <input type="text" id="snapshot-name-input" placeholder="snapshot name"
+            <input type="text" id="snapshot-name-input" class="field" placeholder="snapshot name"
                    pattern="[A-Za-z0-9_\-]+" autocomplete="off" required />
           </label>
           <button type="submit" class="btn btn-primary">Save</button>
@@ -376,7 +376,7 @@
         <form id="load-script-form">
           <label>
             <span>or type a path</span>
-            <input type="text" id="load-script-path"
+            <input type="text" id="load-script-path" class="field"
                    placeholder="examples/starter-site.lisp" autocomplete="off" />
           </label>
           <button type="submit" class="btn btn-primary">Load</button>
@@ -397,7 +397,7 @@
         <div class="dd-body">
           <section class="dd-field">
             <label class="dd-label" for="dd-type">Type</label>
-            <input id="dd-type" name="type" class="dd-input"
+            <input id="dd-type" name="type" class="field"
                    placeholder="enter dispatch type" />
             <p class="dd-hint">Free-form tag; the downstream actor decides what it means.</p>
           </section>
@@ -424,7 +424,7 @@
                 <label class="dd-choice">
                   <input type="radio" name="dd-start-mode" value="at" />
                   <span>At</span>
-                  <input type="datetime-local" id="dd-start-at" class="dd-input dd-input-inline" disabled />
+                  <input type="datetime-local" id="dd-start-at" class="field field-sm" disabled />
                   <span id="dd-start-zone" class="dd-hint-inline" title="the zone the zone chip picks"></span>
                 </label>
               </div>
@@ -440,9 +440,9 @@
                 <label class="dd-choice">
                   <input type="radio" name="dd-duration-mode" value="for" />
                   <span>For</span>
-                  <input type="number" id="dd-duration-value" class="dd-input dd-input-num"
+                  <input type="number" id="dd-duration-value" class="field field-sm field-num"
                          min="0" step="1" value="1" disabled />
-                  <select id="dd-duration-unit" class="dd-input dd-input-inline" disabled>
+                  <select id="dd-duration-unit" class="field field-sm" disabled>
                     <option value="1">seconds</option>
                     <option value="60">minutes</option>
                     <option value="3600" selected>hours</option>
@@ -457,7 +457,7 @@
             <section class="dd-field">
               <label class="dd-label" for="dd-recur-freq">Repeat</label>
               <div class="dd-inline">
-                <select id="dd-recur-freq" class="dd-input dd-input-inline">
+                <select id="dd-recur-freq" class="field field-sm">
                   <option value="once" selected>once</option>
                   <option value="minutely" data-unit="minutes">minutely</option>
                   <option value="hourly" data-unit="hours">hourly</option>
@@ -468,7 +468,7 @@
                 </select>
                 <span id="dd-recur-every" class="dd-inline" hidden>
                   <span>every</span>
-                  <input type="number" id="dd-recur-interval" class="dd-input dd-input-num"
+                  <input type="number" id="dd-recur-interval" class="field field-sm field-num"
                          min="1" step="1" value="1" />
                   <span id="dd-recur-unit">days</span>
                 </span>
@@ -501,7 +501,7 @@
             </p>
           </section>
         </div>
-        <p id="dd-error" class="dd-error" hidden></p>
+        <p id="dd-error" class="form-error" hidden></p>
         <footer class="dd-footer">
           <button type="button" id="dd-cancel" class="btn">Cancel</button>
           <button type="submit" class="btn btn-primary">Create dispatch</button>

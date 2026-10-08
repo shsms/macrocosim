@@ -17,6 +17,13 @@ const RETIRED = [
   "link-btn",
   "tool-btn",
   "canvas-btn",
+  "dd-input",
+  "dd-input-inline",
+  "dd-input-num",
+  "dlg-input",
+  "dialog-error",
+  "dd-error",
+  "weather-err",
   // the lit state of a panel's toggle, now aria-pressed
   "primary",
 ];
