@@ -4,7 +4,7 @@
 
 import { escapeHtml, mutate } from "./app.js";
 import { evalQuoted } from "./eval.js";
-import { getJson } from "./http.js";
+import { bgFetch, getJson } from "./http.js";
 import { notify } from "./notices.js";
 import { currentMgEntry, mgJson, readSelectedMg, scenarioMgId } from "./routing.js";
 import { makeSidePanelToggle } from "./side-panel.js";
@@ -159,8 +159,8 @@ async function refreshScenarioReport() {
       return;
     }
     const [reportRes, eventsRes] = await Promise.all([
-      fetch(`/api/mg/${mg}/scenario/report`),
-      fetch(`/api/mg/${mg}/scenario/events?limit=50`),
+      bgFetch("report", `/api/mg/${mg}/scenario/report`),
+      bgFetch("report events", `/api/mg/${mg}/scenario/events?limit=50`),
     ]);
     if (!reportRes.ok || !eventsRes.ok) return;
     const r = await reportRes.json();

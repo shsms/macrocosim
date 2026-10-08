@@ -955,10 +955,11 @@ export const scenariosPanel = (() => {
     updateActiveChip();
   }
 
-  // JSON body of `/api/mg/{mg}/{suffix}`; null when `mg` is null.
+  // JSON body of `/api/mg/{mg}/{suffix}`, a background request named by
+  // its suffix; null when `mg` is null.
   const getMgJson = async (mg, suffix) => {
     if (mg == null) return null;
-    return getJson(`/api/mg/${mg}/${suffix}`);
+    return getJson(`/api/mg/${mg}/${suffix}`, suffix);
   };
   // `scenarioMgId`, with a failed listing read as no microgrid.
   const readoutMgId = () => scenarioMgId().catch(() => null);
@@ -971,7 +972,7 @@ export const scenariosPanel = (() => {
     // selected, where the summary waits on the listing).
     const mgP = readoutMgId();
     const [sc, sum] = await Promise.allSettled([
-      getJson("/api/scenarios"),
+      getJson("/api/scenarios", "scenarios"),
       mgP.then((mg) => getMgJson(mg, "scenario")),
     ]);
     const mg = await mgP;

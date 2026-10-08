@@ -142,7 +142,7 @@ export const pulseBar = (() => {
     const el = document.getElementById("pulse-loopback");
     if (!el) return;
     try {
-      const res = await mgFetch("metrics/status");
+      const res = await mgFetch("metrics/status", undefined, "loopback");
       if (res == null) {
         el.textContent = "…";
         el.className = "pulse-pill";

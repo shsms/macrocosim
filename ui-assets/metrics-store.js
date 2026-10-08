@@ -154,7 +154,7 @@ export const metricsStore = (() => {
       // empty. Best-effort: a 503 mid-rebuild leaves the old rings;
       // WS frames fill forward from here.
       try {
-        const hres = await mgFetch("metrics/history");
+        const hres = await mgFetch("metrics/history", undefined, "metrics history");
         if (hres?.ok) {
           const hmap = await hres.json();
           for (const [stream, samples] of Object.entries(hmap)) {
@@ -182,7 +182,7 @@ export const metricsStore = (() => {
     // WS/backfill sample flow.
     async reseedLatest() {
       try {
-        const res = await mgFetch("metrics/latest");
+        const res = await mgFetch("metrics/latest", undefined, "metrics latest");
         if (!res?.ok) return;
         const map = await res.json();
         for (const [stream, snap] of Object.entries(map)) {

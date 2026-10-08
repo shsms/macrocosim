@@ -450,7 +450,7 @@ async function refreshEvCard(id) {
   const token = beginEvFetch();
   let info;
   try {
-    info = await mgJson(`component/${id}/ev`);
+    info = await mgJson(`component/${id}/ev`, undefined, "ev");
   } catch (err) {
     if (evFetchStale(token)) return;
     const body = document.getElementById("ev-body");

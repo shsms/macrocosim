@@ -43,7 +43,8 @@ let plot = null;
 let sizeObserver = null;
 let pollTimer = 0;
 // Which skeleton is currently painted — "" (nothing yet), "empty"
-// (404, the create prompt), "none" (no microgrid selected) or "live".
+// (404, the create prompt), "none" (no microgrid selected),
+// "unavailable" (no good answer yet) or "live".
 // A refresh only re-paints the skeleton when this changes; otherwise
 // it writes into the DOM that is already there, which is what keeps
 // a focused field's text from being blown away every 3 s.
@@ -312,12 +313,13 @@ function buildChart(slot, data) {
 // Both doors answer with a body either way — the weather shape on
 // success, `{"error": …}` on a 4xx — so one envelope covers both and
 // callers branch on `ok` alone. A dead fetch (server gone) lands here
-// as ok:false with a message rather than an unhandled rejection.
-async function call(init) {
+// as ok:false with a message rather than an unhandled rejection. The poll
+// passes a `source`, making it a background request (bgFetch).
+async function call(init, source = null) {
   try {
     // Weather is site data: it reads and writes the selected
     // microgrid's sky, like every sibling data panel.
-    const r = await mgFetch("weather", init);
+    const r = await mgFetch("weather", init, source);
     if (r == null) return { ok: false, status: 0, body: null, noSelection: true };
     const body = await r.json().catch(() => null);
     return { ok: r.ok, status: r.status, body };
@@ -326,7 +328,7 @@ async function call(init) {
   }
 }
 
-const getWeather = () => call(undefined);
+const getWeather = () => call(undefined, "weather");
 const postWeather = (payload) =>
   call({
     method: "POST",
@@ -906,7 +908,14 @@ async function refresh() {
     return;
   }
   if (!res.ok) {
-    showError(errorOf(res));
+    // Before the first good answer the panel has nothing to show but why; after
+    // it, the last weather stays up (an unreachable server raises the banner;
+    // an HTTP error goes to the logs panel).
+    if (skeleton === "" || skeleton === "unavailable") {
+      paintStatic('<p class="hint"></p>');
+      contentEl.firstChild.textContent = `weather unavailable: ${errorOf(res)}`;
+      skeleton = "unavailable";
+    }
     return;
   }
   applyLive(res.body);

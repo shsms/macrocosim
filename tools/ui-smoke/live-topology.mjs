@@ -1825,11 +1825,25 @@ await page.evaluate(() => localStorage.removeItem("macrocosim-topology-live"));
 // driven by a set-solar-sunlight source (examples/starter-site.lisp), so
 // it's Manual and its power does not follow weather — assert the panel's own
 // site-% readout, not inverter power.
+// A first answer that fails says why, rather than "loading weather…".
+await page.route("**/weather", (r) => r.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' }));
 await page.click("#weather-btn");
 check(
   "e2e: weather panel opens",
   await page.evaluate(() => document.getElementById("panel-weather-btn")?.classList.contains("open") === true),
 );
+const weatherUnavailable = await waitFor(
+  () =>
+    page.evaluate(
+      () => [...document.querySelectorAll("#panel-weather-btn .hint")].map((h) => h.textContent).find((t) => t.startsWith("weather")) ?? null,
+    ),
+  5000,
+).catch(() => null);
+await page.unroute("**/weather");
+check("e2e: a weather panel whose first answer fails says why", weatherUnavailable === "weather unavailable: boom", String(weatherUnavailable));
+// Opened again, the panel asks at once rather than at its next poll.
+await page.click("#weather-btn");
+await page.click("#weather-btn");
 // starter-site.lisp never calls (make-weather) — the site starts with
 // no weather, so the panel opens on its empty state.
 await waitFor(async () => (await page.locator("#weather-create").count()) > 0, 10000);
@@ -3371,6 +3385,23 @@ check(
     JSON.stringify({ firstLogs, dropLogs }),
   );
 }
+// Every background loop reports: with only the metrics panel's polls cut off
+// (the pulse bar's metrics/status poll still gets through), the banner still
+// comes up. Closing the panel stops those polls, and the banner still clears
+// once the other loops get through.
+const metricsPolls = /\/metrics\/(latest|history)/;
+await openDemoTopology();
+await page.click("#metrics-btn");
+await page.route(metricsPolls, (r) => r.abort());
+const metricsBannerUp = await waitFor(bannerShown, 12000).catch(() => false);
+await page.click("#metrics-btn");
+await page.unroute(metricsPolls);
+const metricsBannerDown = await waitFor(async () => !(await bannerShown()), 12000).catch(() => false);
+check(
+  "e2e: the metrics panel's polls raise the banner, and a closed panel does not hold it up",
+  metricsBannerUp === true && metricsBannerDown === true,
+  JSON.stringify({ metricsBannerUp, metricsBannerDown }),
+);
 
 // ── e2e: the button kit ────────────────────────────────────────────
 // Header buttons are the secondary kind, the new-dispatch button the

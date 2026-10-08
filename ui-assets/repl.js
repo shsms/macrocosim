@@ -6,7 +6,7 @@
 import { dispatchesPanel, escapeHtml, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
 import { onReachedAgain } from "./connection.js";
-import { errorText } from "./http.js";
+import { errorText, getJson } from "./http.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
 import { appendLog } from "./logs.js";
 import { metricsStore } from "./metrics-store.js";
@@ -27,9 +27,12 @@ import { topology } from "./topology.js";
 // recent records); /ws/events kind:"log" appends each new record live.
 export async function backfillLogs() {
   try {
-    const lines = await (await fetch("/api/logs")).json();
+    const lines = await getJson("/api/logs");
     for (const ln of lines) appendLog(ln);
-  } catch (_) {}
+  } catch (_) {
+    // A one-off read at boot: a server that cannot be reached shows in the
+    // banner, through the polls.
+  }
 }
 
 // The Logs panel head: the minimum level goes on #logs as a class the
