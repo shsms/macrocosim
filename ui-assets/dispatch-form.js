@@ -11,8 +11,9 @@
 // `open(mgId)` resets the form, loads the microgrid's components,
 // and shows the dialog.
 
-import { escapeHtml, mutate, notify } from "./app.js";
+import { escapeHtml, mutate } from "./app.js";
 import { ACCEPTS_SETPOINTS } from "./inspect.js";
+import { notify } from "./notices.js";
 import { mgJson, readSelectedMg } from "./routing.js";
 import * as zone from "./zone.js";
 

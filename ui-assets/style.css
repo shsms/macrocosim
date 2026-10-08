@@ -496,20 +496,29 @@ dialog header h3 {
   padding: 0 var(--space-1);
   background: var(--bg);
 }
+/* A popover, so it can sit above modal dialogs (notices.js re-shows it on
+   each toast); the UA popover box is reset to a bare corner column. */
 #toast-host {
   position: fixed;
-  bottom: 18px;
-  right: 18px;
-  display: flex;
+  inset: auto var(--space-4) var(--space-4) auto;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  overflow: visible;
   flex-direction: column;
   gap: var(--space-2);
   z-index: var(--z-toast);
   pointer-events: none;
 }
+#toast-host:popover-open { display: flex; }
 .toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--text-md);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
@@ -519,6 +528,8 @@ dialog header h3 {
   pointer-events: auto;
   box-shadow: var(--shadow-1);
 }
+.toast-msg { flex: 1; align-self: center; }
+.toast-count { align-self: center; color: var(--muted); }
 .toast-error { border-color: var(--cat-grid); }
 .toast-success { border-color: var(--accent); }
 

@@ -2,10 +2,11 @@
 // poll the corresponding /api endpoint, render a card grid, and
 // respond to clicks / WS pushes by re-fetching + re-rendering.
 
-import { escapeHtml, mutate, notify, selectMicrogrid } from "./app.js";
+import { escapeHtml, mutate, selectMicrogrid } from "./app.js";
 import { refreshPaletteLock } from "./editor.js";
 import { errorText, getJson } from "./http.js";
 import { countText } from "./live.js";
+import { notify } from "./notices.js";
 import {
   publishMgFlags,
   readSelectedMg,

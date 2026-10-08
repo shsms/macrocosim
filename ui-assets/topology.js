@@ -16,12 +16,13 @@
 // - topology.resetLayout(name) / setSnap / alignSelection / scaleSelection
 // - topology.setValues(on) / valuesOn() — toggle live metric values on nodes/edges
 
-import { notify, setStatus } from "./app.js";
+import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
 import { evalQuoted } from "./eval.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
 import { errorText } from "./http.js";
 import { blankLiveEntry, countText, DEAD_FLOW, deadBandW, edgeFlow } from "./live.js";
+import { notify } from "./notices.js";
 import { COLORS, cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
 import {
   mgFetch,

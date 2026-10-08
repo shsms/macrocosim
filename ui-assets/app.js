@@ -31,6 +31,7 @@ import {
 import { errorText } from "./http.js";
 import { setupInspectorChips, showComponent } from "./inspect.js";
 import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
+import { notify } from "./notices.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { backfillLogs, openWebSocket, setupLogsPanel, setupRepl } from "./repl.js";
 import {
@@ -77,27 +78,6 @@ export const inspectorEl = document.getElementById("inspector");
 export function setStatus(text, klass) {
   status.textContent = text;
   status.className = `status ${klass || ""}`;
-}
-
-// Surface a transient toast in the bottom-right. Auto-dismisses after
-// ~5s. Use this — not alert() — for action-failure feedback so the
-// chrome stays unblocking when the server hiccups during, say, a WS
-// reconnect storm. Three places fall outside this rule:
-//   * `setStatus` for the persistent connection-state pill (top bar).
-//   * `console.error` for diagnostics that only matter in the dev tools.
-//   * confirm() prompts that genuinely need a synchronous yes/no.
-export function notify(message, kind = "error") {
-  let host = document.getElementById("toast-host");
-  if (!host) {
-    host = document.createElement("div");
-    host.id = "toast-host";
-    document.body.appendChild(host);
-  }
-  const t = document.createElement("div");
-  t.className = `toast toast-${kind}`;
-  t.textContent = message;
-  host.appendChild(t);
-  setTimeout(() => t.remove(), 5000);
 }
 
 // Whether the strip's layout / drag / show groups are folded away

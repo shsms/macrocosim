@@ -2,9 +2,10 @@
 // - Help, Snapshots dialogs.
 // - Side-panel toggles for Defaults and the live Scenario report.
 
-import { escapeHtml, mutate, notify } from "./app.js";
+import { escapeHtml, mutate } from "./app.js";
 import { evalQuoted } from "./eval.js";
 import { getJson } from "./http.js";
+import { notify } from "./notices.js";
 import { currentMgEntry, mgJson, readSelectedMg, scenarioMgId } from "./routing.js";
 import { makeSidePanelToggle } from "./side-panel.js";
 import * as zone from "./zone.js";

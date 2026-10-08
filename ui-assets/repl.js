@@ -3,11 +3,13 @@
 // /ws/events frames to liveCharts / the metrics store / pulseBar /
 // the log panel.
 
-import { dispatchesPanel, escapeHtml, notify, setStatus } from "./app.js";
+import { dispatchesPanel, escapeHtml, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
 import { errorText } from "./http.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
+import { appendLog } from "./logs.js";
 import { metricsStore } from "./metrics-store.js";
+import { notify } from "./notices.js";
 import {
   COMPLETIONS,
   indentForNewline,
@@ -18,28 +20,10 @@ import { mgPath, readSelectedMg, readSubview } from "./routing.js";
 import { closePanel } from "./side-panel.js";
 import { readStorage, writeStorage } from "./storage.js";
 import { topology } from "./topology.js";
-import * as zone from "./zone.js";
 
 
-// The Logs panel's tail. /api/logs gives the load-time backfill
-// (ring of recent records); /ws/events kind:"log" appends each new
-// record live. Capped at 500 DOM rows so a chatty session doesn't
-// freeze the panel.
-function appendLog(ev) {
-  const box = document.getElementById("logs");
-  const el = document.createElement("div");
-  el.className = `log-line ${(ev.level || "info").toLowerCase()}`;
-  el.innerHTML =
-    `<span class="log-ts">${zone.timeHtml(ev.ts, "hms")}</span>` +
-    `<span class="log-lvl">${escapeHtml(ev.level || "")}</span>` +
-    `<span class="log-msg">${escapeHtml(ev.message || "")}</span>`;
-  // Scroll-pin: only auto-scroll if the user hadn't scrolled away.
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
-  box.appendChild(el);
-  while (box.children.length > 500) box.removeChild(box.firstChild);
-  if (atBottom) box.scrollTop = box.scrollHeight;
-}
-
+// The Logs panel's tail: /api/logs gives the load-time backfill (a ring of
+// recent records); /ws/events kind:"log" appends each new record live.
 export async function backfillLogs() {
   try {
     const lines = await (await fetch("/api/logs")).json();
@@ -446,7 +430,7 @@ export function openWebSocket(onTopologyChanged) {
       } else if (ev.kind === "config_error") {
         // A failed hot-reload (site already reset) or an eval the
         // microgrid's file could not record — the one moment the user most
-        // needs an explanation, so toast it and keep it in the log.
+        // needs an explanation, so toast it (which also logs it).
         // A reload failure is broadcast on every registered site's
         // bus (the WS pump has no enterprise channel for it), so a
         // multi-microgrid setup delivers N copies — collapse repeats
@@ -457,7 +441,6 @@ export function openWebSocket(onTopologyChanged) {
         }
         lastConfigError = { message: ev.message, tsMs };
         notify(ev.message);
-        appendLog({ ts: ev.ts, level: "error", message: ev.message });
       } else if (ev.kind === "dispatch_changed") {
         // The dispatch store changed for ev.microgrid_id; refetch only if
         // we're actually looking at that microgrid's Dispatches tab.

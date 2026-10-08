@@ -7,9 +7,10 @@
 // topology WS events while the panel is open, and the "limit to the
 // selected components" toggle re-fetches on selection changes.
 
-import { jumpToTopology, notify } from "./app.js";
+import { jumpToTopology } from "./app.js";
 import { formulaToHtml, formulaToText, parseFormula } from "./formula-ast.js";
 import { errorText } from "./http.js";
+import { notify } from "./notices.js";
 import { mgFetch, readSelectedMg } from "./routing.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 import { topology } from "./topology.js";

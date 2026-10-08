@@ -3,10 +3,11 @@
 // the floating right-click menu, the side-panel `Add component`
 // form, and helpers around them.
 
-import { escapeHtml, notify } from "./app.js";
+import { escapeHtml } from "./app.js";
 import { evalQuoted } from "./eval.js";
 import { errorText } from "./http.js";
 import { OPERATIONAL_MODES, showComponent } from "./inspect.js";
+import { notify } from "./notices.js";
 import { makeFnFor, pasteSource } from "./paste-forms.js";
 import { READ_ONLY_TITLE, readSelectedMg, structureEditable } from "./routing.js";
 import { ALIGN_MODES, topology } from "./topology.js";

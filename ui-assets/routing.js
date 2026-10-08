@@ -5,10 +5,11 @@
 // toggle, and the refreshTopology fetch that ferries the selected
 // microgrid's topology into the canvas + chrome pulse bar.
 
-import { dispatchesPanel, notify, setStatus } from "./app.js";
+import { dispatchesPanel, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
 import { errorText, getJson } from "./http.js";
 import { refitCharts, showComponent } from "./inspect.js";
+import { notify } from "./notices.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { closeAllPanels } from "./side-panel.js";
 import { readStorage, removeStorage, writeStorage } from "./storage.js";

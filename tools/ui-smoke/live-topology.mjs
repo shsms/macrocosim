@@ -81,6 +81,27 @@ const tokenColour = (name) =>
     return colour;
   }, name);
 
+// The text of each toast on screen, in page `p`.
+const toastTexts = (p = page) =>
+  p.evaluate(() => [...document.querySelectorAll("#toast-host .toast-msg")].map((t) => t.textContent));
+// Closes every toast on screen.
+const dismissToasts = () =>
+  page.evaluate(() => {
+    for (const t of document.querySelectorAll("#toast-host .toast-close")) t.click();
+  });
+// The logs panel's `ui: ` lines, in page `p`.
+const uiLogLines = (p = page) =>
+  p.evaluate(() => [...document.querySelectorAll("#logs .log-msg")].map((m) => m.textContent).filter((t) => t.startsWith("ui: ")));
+// How many of them read exactly `text`.
+const uiLogCount = async (text) => (await uiLogLines()).filter((t) => t === text).length;
+// Whether the first toast is the topmost element at its centre.
+const firstToastOnTop = () =>
+  page.evaluate(() => {
+    const t = document.querySelector("#toast-host .toast");
+    const r = t.getBoundingClientRect();
+    return t.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+  });
+
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
 // A headless Chromium with no locale of its own inherits the host's
 // POSIX one and reports it as "en-US@posix" — not a BCP 47 tag, so
@@ -449,8 +470,7 @@ const dialogsBefore = await openDialogCount();
 await page.setInputFiles("#import-files", exportFixture(99403));
 const busyToast = await waitFor(
   async () =>
-    (await page.evaluate(() => [...document.querySelectorAll(".toast")].map((t) => t.textContent)))
-      .find((t) => /already in progress/i.test(t)) || null,
+    (await toastTexts()).find((t) => /already in progress/i.test(t)) || null,
   5000,
 ).catch(() => null);
 check("e2e: a second import mid-flow is refused with a toast", busyToast !== null, String(busyToast));
@@ -2251,9 +2271,7 @@ const redoRes = await redoPost;
 const redoError = redoRes ? (await redoRes.json().catch(() => ({}))).error : undefined;
 const redoToast = await waitFor(
   async () =>
-    (await page.evaluate(() => [...document.querySelectorAll(".toast")].map((t) => t.textContent))).find((t) =>
-      t.startsWith("Redo failed"),
-    ) || null,
+    (await toastTexts()).find((t) => t.startsWith("Redo failed")) || null,
   5000,
 ).catch(() => null);
 check(
@@ -3165,6 +3183,69 @@ check(
   "e2e: a focused chip shows the focus ring",
   chipRing.style === "solid" && chipRing.colour === accent,
   JSON.stringify({ chipRing, accent }),
+);
+
+// ── e2e: toasts ────────────────────────────────────────────────────
+// An error toast stays until closed, a repeat raises its count, its message
+// reaches the logs panel, and a toast shows above an open modal dialog.
+const toastNotify = (message) => page.evaluate(async (m) => (await import("/assets/notices.js")).notify(m), message);
+const toastState = () =>
+  page.evaluate(() =>
+    [...document.querySelectorAll("#toast-host .toast")].map((t) => ({
+      text: t.querySelector(".toast-msg")?.textContent,
+      count: t.querySelector(".toast-count")?.textContent ?? "",
+    })),
+  );
+await dismissToasts();
+await toastNotify("smoke toast");
+await toastNotify("smoke toast");
+await page.waitForTimeout(5500);
+const keptToasts = await toastState();
+check(
+  "e2e: an error toast stays past 5 s and a repeat raises its count",
+  keptToasts.length === 1 && keptToasts[0].text === "smoke toast" && keptToasts[0].count === "×2",
+  JSON.stringify(keptToasts),
+);
+check("e2e: a toast's message reaches the logs panel once", (await uiLogCount("ui: smoke toast")) === 1);
+await page.click("#toast-host .toast-close");
+check("e2e: a toast's × closes it", (await toastState()).length === 0, JSON.stringify(await toastState()));
+await page.click("#snapshots-btn");
+await toastNotify("over the dialog");
+check("e2e: a toast shows above an open modal dialog", await firstToastOnTop());
+await page.keyboard.press("Escape");
+// The observer that moves the host back runs after the dialog has closed.
+const hostState = () =>
+  page.evaluate(() => {
+    const host = document.getElementById("toast-host");
+    return { inBody: host.parentElement === document.body, open: host.matches(":popover-open"), toasts: host.children.length };
+  });
+const afterDialog = await waitFor(async () => {
+  const s = await hostState();
+  return s.inBody ? s : null;
+}, 3000).catch(hostState);
+check(
+  "e2e: a toast outlives the dialog it was raised over",
+  afterDialog.inBody && afterDialog.open && afterDialog.toasts === 1,
+  JSON.stringify(afterDialog),
+);
+await page.click("#toast-host .toast-close");
+// A toast already up when a dialog opens is lifted above it too: its × is
+// clickable and leaves the dialog open.
+await toastNotify("before the dialog");
+await page.click("#snapshots-btn");
+await page.waitForTimeout(300);
+const earlierOnTop = await firstToastOnTop();
+const earlierClosed = await page
+  .click("#toast-host .toast-close", { timeout: 3000 })
+  .then(() => true)
+  .catch(() => false);
+const dialogStillOpen = await page.evaluate(() => document.getElementById("snapshots-dialog").open);
+await page.keyboard.press("Escape");
+await dismissToasts();
+check(
+  "e2e: a toast shown before a dialog opens stays clickable above it",
+  earlierOnTop && earlierClosed && dialogStillOpen,
+  JSON.stringify({ earlierOnTop, earlierClosed, dialogStillOpen }),
 );
 
 // ── e2e: the button kit ────────────────────────────────────────────

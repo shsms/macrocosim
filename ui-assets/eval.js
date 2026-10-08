@@ -1,5 +1,5 @@
-import { notify } from "./app.js";
 import { errorText } from "./http.js";
+import { notify } from "./notices.js";
 import { mgPath } from "./routing.js";
 
 export function jsToLispString(s) {
