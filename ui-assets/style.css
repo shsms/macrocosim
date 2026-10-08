@@ -94,6 +94,66 @@
   --cat-steam-boiler: #c99c7a;
   --cat-power-transformer: #9aa5b1;
   --cat-breaker: #8a94a3;
+  color-scheme: dark;
+}
+
+/* The light theme: the same roles, readable on white. theme.js sets
+   data-theme; every colour token above has a value here. */
+:root[data-theme="light"] {
+  --bg: #f6f7f9;
+  --bg-elev: #ffffff;
+  --bg-deep: #eceff3;
+  --border: #d3d8df;
+  --fg: #1f2328;
+  --muted: #5c636d;
+  --accent: #0a66c2;
+  --good: #1a7f37;
+  --bad: #c62828;
+  --warn: #8a6a00;
+  --warn-strong: #8f6600;
+  --standby: #7d6400;
+  --chart-zero: #b8bfc8;
+  --shadow-1: 0 1px 4px rgba(31, 35, 40, 0.12);
+  --shadow-2: 0 4px 12px rgba(31, 35, 40, 0.15);
+  --shadow-3: 0 8px 24px rgba(31, 35, 40, 0.18);
+  --backdrop: rgba(31, 35, 40, 0.3);
+  --syn-paren-1: #b42318;
+  --syn-paren-2: #b25e00;
+  --syn-paren-3: #7f7000;
+  --syn-paren-4: #1a7f37;
+  --syn-paren-5: #0b6f9c;
+  --syn-paren-6: #3b55b5;
+  --syn-paren-7: #9b2f9b;
+  --syn-mismatch: #cf222e;
+  --syn-string: #a3540f;
+  --syn-comment: #6e7781;
+  --syn-special: #7b3fc4;
+  --syn-fn: #0a66c2;
+  --pill-surface: #ffffff;
+  --pill-border: #d3d8df;
+  --pill-fg: #1f2328;
+  --pill-muted: #5c636d;
+  --pill-hover: #1f2328;
+  --flow-export: #138a5a;
+  --flow-import: #0a66c2;
+  --flow-dim: #9aa2ac;
+  --flow-export-dull: #3f8f6e;
+  --flow-import-dull: #4a78b3;
+  --edge-rest: #9aa2ac;
+  --cat-grid: #a8891a;
+  --cat-meter: #2f74c0;
+  --cat-inverter: #3f8f43;
+  --cat-inverter-battery: #3f8f43;
+  --cat-inverter-solar: #6e9a1f;
+  --cat-inverter-hybrid: #2f9a6a;
+  --cat-battery: #d0661c;
+  --cat-ev-charger: #8058b0;
+  --cat-chp: #b04a58;
+  --cat-wind-turbine: #2a8f99;
+  --cat-steam-boiler: #9a6a45;
+  --cat-power-transformer: #6a7682;
+  --cat-breaker: #5e6876;
+  color-scheme: light;
 }
 
 /* `hidden` always hides. The UA's own `[hidden] { display: none }`

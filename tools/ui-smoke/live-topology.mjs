@@ -41,8 +41,15 @@ const browser = await chromium.launch({ args: ["--no-sandbox"] });
 // open. Real browsers always carry a valid tag; give this one the
 // same. The browser's own zone is neither UTC nor the demo's
 // Europe/Berlin, so a time shown in the browser's zone instead of the
-// display zone reads differently from the one the checks expect.
-const CONTEXT = { viewport: { width: 1600, height: 950 }, locale: "en-US", timezoneId: "America/New_York" };
+// display zone reads differently from the one the checks expect. The OS
+// is dark, so the theme's auto setting renders the dark tokens the
+// colour checks pin.
+const CONTEXT = {
+  viewport: { width: 1600, height: 950 },
+  locale: "en-US",
+  timezoneId: "America/New_York",
+  colorScheme: "dark",
+};
 const page = await (await browser.newContext(CONTEXT)).newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
@@ -2780,6 +2787,31 @@ const berlinHours = [0, 5000].map((ago) =>
 );
 check("e2e: in sim mode the clock shows the sim zone", berlinHours.includes(simHour), JSON.stringify({ simHour, berlinHours }));
 check("e2e: the zone chip switches back", (await page.textContent("#tz-toggle")) === simChip);
+
+// ── e2e: the theme chip ────────────────────────────────────────────
+// Auto follows the (dark) OS; the chip cycles light, dark, auto, and the choice
+// survives a reload.
+const themeState = () =>
+  page.evaluate(() => ({
+    theme: document.documentElement.dataset.theme,
+    chip: document.getElementById("theme-toggle").textContent,
+    bg: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+  }));
+const themeAuto = await themeState();
+await page.click("#theme-toggle");
+const themeLight = await themeState();
+await page.reload({ waitUntil: "networkidle" });
+const themeLightReloaded = await themeState();
+await page.click("#theme-toggle");
+const themeDark = await themeState();
+await page.click("#theme-toggle");
+const themeBack = await themeState();
+check("e2e: auto follows the dark OS", themeAuto.theme === "dark" && themeAuto.chip === "◐ auto", JSON.stringify(themeAuto));
+check("e2e: the theme chip switches to light", themeLight.theme === "light" && themeLight.bg === "#f6f7f9", JSON.stringify(themeLight));
+check("e2e: the light choice survives a reload", themeLightReloaded.theme === "light" && themeLightReloaded.chip === "☀ light", JSON.stringify(themeLightReloaded));
+check("e2e: the theme chip then picks dark", themeDark.theme === "dark" && themeDark.bg === "#1c2128", JSON.stringify(themeDark));
+check("e2e: the theme chip comes back to auto", themeBack.chip === "◐ auto", JSON.stringify(themeBack));
+await openDemoTopology();
 
 // ── e2e: a dispatch's start round-trips in the display zone ─────────
 // In UTC mode. The browser runs in New York (CONTEXT), so a form that read the

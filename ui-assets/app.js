@@ -5,7 +5,7 @@
 // /api/eval mutation path so anything done in the UI is also
 // scriptable from outside.
 
-import { pulseBar, setupZoneChip } from "./chrome.js";
+import { pulseBar, setupThemeChip, setupZoneChip } from "./chrome.js";
 import {
   setupDefaultsToggle,
   setupHelpButton,
@@ -46,6 +46,7 @@ import {
   visibleSubview,
 } from "./routing.js";
 import { closePanel, closeTopPanel, isPanelOpen, makeSidePanelToggle, openPanel } from "./side-panel.js";
+import * as theme from "./theme.js";
 import { topology } from "./topology.js";
 import { setupWeatherPanel } from "./weather-panel.js";
 import * as zone from "./zone.js";
@@ -524,6 +525,8 @@ async function init() {
   setupWeatherPanel();
   scenariosPanel.setup();
   dispatchesPanel.setup();
+  theme.init();
+  setupThemeChip();
   await zone.init();
   setupZoneChip();
   pulseBar.setup();

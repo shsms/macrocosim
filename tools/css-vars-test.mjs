@@ -27,10 +27,22 @@ const css = readFileSync(new URL("style.css", dir), "utf8").replace(/\/\*[\s\S]*
 // The theme blocks, by selector: dark on :root, light under data-theme.
 const themeBlock = /(:root(?:\[data-theme="light"\])?)\s*\{([^}]*)\}/g;
 const outside = css.replace(themeBlock, "");
+const themes = new Map([...css.matchAll(themeBlock)].map((m) => [m[1], m[2]]));
+
 // A hex colour is not followed by a name character, which tells it from an id
 // selector like `#add-panel`.
 const colour = /#[0-9a-fA-F]{3,8}(?![\w-])|\b(?:rgba?|hsla?)\(/g;
 const literals = [...outside.matchAll(colour)].map((m) => m[0]);
 assert.deepEqual(literals, [], `colour literals outside the theme blocks: ${literals.join(" ")}`);
+
+// Every colour token on :root has a light value, so the light theme never shows
+// a dark colour by omission.
+const tokensIn = (text = "") => new Map([...text.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+const dark = tokensIn(themes.get(":root"));
+const light = tokensIn(themes.get(':root[data-theme="light"]'));
+assert.ok(dark.size > 0 && light.size > 0, "the dark and light theme blocks were not found");
+const colourTokens = [...dark].filter(([, v]) => v.match(colour)).map(([k]) => k);
+const missing = colourTokens.filter((k) => !light.has(k)).sort();
+assert.deepEqual(missing, [], `colour tokens with no light value: ${missing.join(", ")}`);
 
 console.log("css-vars-test: all assertions passed");

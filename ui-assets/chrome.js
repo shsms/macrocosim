@@ -2,6 +2,7 @@
 // and the always-on pulse bar.
 
 import { mgFetch, setupDensityToggle } from "./routing.js";
+import * as theme from "./theme.js";
 import * as zone from "./zone.js";
 
 // ─── Clock + zone chip ─────────────────────────────────────────────────────
@@ -24,6 +25,24 @@ export function setupZoneChip() {
 function renderClock() {
   const el = document.getElementById("pulse-clock");
   if (el) el.textContent = zone.fmtTime(Date.now());
+}
+
+// ─── Theme chip ────────────────────────────────────────────────────────────
+//
+// Cycles the theme preference auto → light → dark (theme.js).
+const THEME_LABEL = { auto: "◐ auto", light: "☀ light", dark: "☾ dark" };
+
+export function setupThemeChip() {
+  const chip = document.getElementById("theme-toggle");
+  if (!chip) return;
+  const paint = () => {
+    chip.textContent = THEME_LABEL[theme.preference()];
+  };
+  chip.addEventListener("click", () => {
+    theme.choose(theme.nextPreference(theme.preference()));
+    paint();
+  });
+  paint();
 }
 
 // ─── Pulse bar ─────────────────────────────────────────────────────────────

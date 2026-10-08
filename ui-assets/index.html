@@ -4,6 +4,24 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>macrocosim</title>
+    <script>
+      {
+        // The theme before first paint; theme.js keeps it current. The
+        // theme is a stored light or dark, else the OS setting, by
+        // theme.js's rule.
+        const stored = (key) => {
+          try {
+            return localStorage.getItem(key);
+          } catch (_) {
+            return null;
+          }
+        };
+        const pref = stored("macrocosim-theme");
+        const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme =
+          pref === "light" || pref === "dark" ? pref : dark ? "dark" : "light";
+      }
+    </script>
     <link rel="stylesheet" href="/assets/vendor/vis-network.min.css" />
     <link rel="stylesheet" href="/assets/vendor/uplot.min.css" />
     <link rel="stylesheet" href="/assets/style.css" />
@@ -45,6 +63,7 @@
       </span>
       <span class="pulse-spacer"></span>
       <span class="pulse-chip" id="tz-toggle" title="toggle between local sim zone and UTC">local</span>
+      <span class="pulse-chip" id="theme-toggle" title="colour theme: auto follows the OS">◐ auto</span>
       <span class="pulse-chip" id="density-toggle" title="toggle compact density">compact</span>
       <span class="pulse-clock" id="pulse-clock">--:--:--</span>
     </section>
@@ -507,7 +526,7 @@
         <h4>Aggregations</h4>
         <ul class="help-list">
           <li>The <em>metrics</em> pill (top-right of the canvas) opens live site metrics — power, reactive power / PF, frequency — read from the same <code>frequenz-microgrid</code> client a production control app would use. The <em>formulas</em> pill next to it shows how each of those aggregates is derived from the topology; every <code>#N</code> in a formula is a link back to the canvas.</li>
-          <li>Pulse-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>density</em> + <em>TZ</em> toggle visual options.</li>
+          <li>Pulse-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>theme</em>, <em>density</em> + <em>TZ</em> toggle visual options.</li>
         </ul>
         <h4>Snapshots</h4>
         <ul class="help-list">
