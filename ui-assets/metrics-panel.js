@@ -6,7 +6,7 @@
 // module owns the DOM. Series colors follow the category palette so
 // chart lines mean what the canvas already means.
 
-import { chartColors, requireUplot, uplot } from "./chart-lib.js";
+import { chartAxis, chartColors, requireUplot, uplot } from "./chart-lib.js";
 import { fmtValue, latestSecond, metricsStore, pfText, pfValue } from "./metrics-store.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 import * as theme from "./theme.js";
@@ -332,14 +332,12 @@ function buildChart(card, slot) {
   // PF overlay: dashed per-source PF on a right-hand 0.85–1.02
   // scale, derived at draw time from the matching P and Q rings.
   const axes = [
-    { stroke: colors.axis, grid: { stroke: colors.grid, width: 0.5 } },
-    {
-      stroke: colors.axis,
-      grid: { stroke: colors.grid, width: 0.5 },
+    chartAxis(colors),
+    chartAxis(colors, {
       size: 56,
       label: prefix || shown ? `${prefix}${shown}` : "",
       labelSize: 12,
-    },
+    }),
   ];
   if (withPf) {
     for (const s of active) {
@@ -351,13 +349,7 @@ function buildChart(card, slot) {
         scale: "pf",
       });
     }
-    axes.push({
-      scale: "pf",
-      side: 1,
-      stroke: colors.axis,
-      grid: { show: false },
-      size: 44,
-    });
+    axes.push(chartAxis(colors, { scale: "pf", side: 1, grid: { show: false }, size: 44 }));
   }
   const opts = {
     width: slot.clientWidth || 380,

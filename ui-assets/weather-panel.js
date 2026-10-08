@@ -18,7 +18,7 @@
 // apiece would be a poll-rate stampede for a curve that only moves
 // when the config does.
 
-import { chartColors, requireUplot } from "./chart-lib.js";
+import { chartAxis, chartColors, requireUplot } from "./chart-lib.js";
 import { mgFetch } from "./routing.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 import * as theme from "./theme.js";
@@ -276,19 +276,15 @@ function buildChart(slot, data) {
       y: { range: (_u, _min, max) => [0, Math.max(5, max * 1.1)] },
     },
     axes: [
-      {
-        stroke: colors.axis,
-        grid: { stroke: colors.grid, width: 0.5 },
+      chartAxis(colors, {
         splits: axisSplits,
         values: (_u, splits) => axisValues(splits),
-      },
-      {
-        stroke: colors.axis,
-        grid: { stroke: colors.grid, width: 0.5 },
+      }),
+      chartAxis(colors, {
         size: 42,
         label: "%",
         labelSize: 12,
-      },
+      }),
     ],
     series: [
       {},

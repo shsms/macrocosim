@@ -6,7 +6,7 @@
 // (side-panel.js runs it on re-render or close).
 
 import { escapeHtml, inspectEl } from "./app.js";
-import { chartColors, requireUplot } from "./chart-lib.js";
+import { chartAxis, chartColors, requireUplot } from "./chart-lib.js";
 import { evalQuoted, jsToLispString } from "./eval.js";
 import { deadBandW, formatScaled } from "./live.js";
 import { metricsStore } from "./metrics-store.js";
@@ -1448,8 +1448,8 @@ async function buildGridFrequencyChart(container) {
     tzDate: zone.tzDate,
     scales: { x: { time: true } },
     axes: [
-      { stroke: colors.axis, grid: { stroke: colors.grid, width: 0.5 } },
-      { stroke: colors.axis, grid: { stroke: colors.grid, width: 0.5 }, size: 60 },
+      chartAxis(colors),
+      chartAxis(colors, { size: 60 }),
     ],
     series: [
       {},
@@ -1625,14 +1625,10 @@ function makePlot(Plot, container, metric, quantity, unit, xs, ys, target = null
     tzDate: zone.tzDate,
     scales: { x: { time: true } },
     axes: [
-      { stroke: colors.axis, grid: { stroke: colors.grid, width: 0.5 } },
+      chartAxis(colors),
       // size = pixels reserved for the y-axis labels. 60 fits values
       // up to 6 chars (e.g. -32.5 kW) without truncation.
-      {
-        stroke: colors.axis,
-        grid: { stroke: colors.grid, width: 0.5 },
-        size: 60,
-      },
+      chartAxis(colors, { size: 60 }),
     ],
     series: [
       {},

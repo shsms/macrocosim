@@ -5,6 +5,8 @@
 // graph fails, and the first `new uPlot(...)` throws from inside a
 // render. Every chart builder asks here first.
 
+import { FONT_MONO, FONT_SANS } from "./pill.js";
+
 // The uPlot constructor, or null. Resolved once: a classic <script>
 // is settled before any module runs, so the answer never changes.
 // The loops that retry a chart build once its data arrives ask this
@@ -21,6 +23,19 @@ export function chartColors() {
     grid: token("--chart-grid"),
     zero: token("--chart-zero"),
     series: token("--accent"),
+  };
+}
+
+// A uPlot axis in those colours, with mono ticks and a semi-bold sans label at
+// 12px in both densities (the axis widths are fixed pixels); `extra` adds or
+// overrides options.
+export function chartAxis(colors, extra = {}) {
+  return {
+    stroke: colors.axis,
+    grid: { stroke: colors.grid, width: 0.5 },
+    font: `12px ${FONT_MONO}`,
+    labelFont: `600 12px ${FONT_SANS}`,
+    ...extra,
   };
 }
 

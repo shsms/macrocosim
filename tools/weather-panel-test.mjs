@@ -49,6 +49,7 @@ const shimmed = [
   "};",
   "const requireUplot = () => null;",
   "const chartColors = () => ({});",
+  "const chartAxis = (_colors, extra = {}) => extra;",
   "const isPanelOpen = () => false;",
   "const makeSidePanelToggle = () => {};",
   `import * as theme from "${THEME.href}";`,
