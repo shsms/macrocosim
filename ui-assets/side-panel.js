@@ -1055,12 +1055,11 @@ window.addEventListener("resize", () => {
   }, REFIT_SETTLE);
 });
 
-// The matching chrome toggle lights up while its panel is open, so
-// its state tracks the actual panel instead of a private flag.
+// The matching chrome toggle is pressed (and lit) while its panel is open,
+// so its state tracks the actual panel instead of a private flag.
 function syncButton(name, open) {
-  document
-    .getElementById(name)
-    ?.classList.toggle("primary", open && name.endsWith("-btn"));
+  if (!name.endsWith("-btn")) return;
+  document.getElementById(name)?.setAttribute("aria-pressed", String(open));
 }
 
 // Open (or re-render) the panel `name`. `render(contentEl)` fills the
@@ -1138,6 +1137,7 @@ export function closeTopPanel() {
 /// panels are unaffected — the button's id doubles as the panel name.
 export function makeSidePanelToggle(btnId, render, teardown = null) {
   const btn = document.getElementById(btnId);
+  syncButton(btnId, isPanelOpen(btnId));
   btn.addEventListener("click", () => {
     if (isPanelOpen(btnId)) {
       closePanel(btnId);

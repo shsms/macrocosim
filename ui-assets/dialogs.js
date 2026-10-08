@@ -67,7 +67,7 @@ export function setupSnapshotsDialog() {
         li.className = "snapshot-row";
         li.innerHTML = `
           <span class="snapshot-name">${escapeHtml(name)}</span>
-          <button class="hdr-btn snapshot-load" type="button">Load</button>
+          <button class="btn snapshot-load" type="button">Load</button>
         `;
         li.querySelector(".snapshot-load").addEventListener("click", async () => {
           if (!confirm(`Load snapshot "${name}"? Microgrid #${id}'s current file will be replaced.`)) return;
@@ -252,7 +252,7 @@ async function renderDefaults(contentEl) {
     block.innerHTML = `
       <label>${e.var_name}</label>
       <textarea rows="${rows}" wrap="off" spellcheck="false">${escapeHtml(e.value)}</textarea>
-      <button class="hdr-btn primary">Save</button>
+      <button class="btn btn-sm">Save</button>
     `;
     const ta = block.querySelector("textarea");
     block.querySelector("button").addEventListener("click", async () => {

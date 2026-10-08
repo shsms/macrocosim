@@ -243,6 +243,58 @@ kbd {
   font-family: var(--font-mono);
 }
 
+/* ─── Controls ─────────────────────────────────────────────────────────
+   Buttons: .btn is the secondary (default) button; .btn-primary (the main
+   action of a form, dialog or page), .btn-quiet (toolbars, panel heads) and
+   .btn-danger (delete) are the other kinds; .btn-sm is the small size. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  line-height: 1.3;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+/* A toggle with a fixed label, while it is pressed (its panel is open). */
+.btn[aria-pressed="true"],
+.pill[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.btn-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.btn-quiet:hover:not(:disabled) {
+  background: var(--bg);
+  border-color: transparent;
+  color: var(--fg);
+}
+.btn-danger {
+  background: transparent;
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border-color: var(--bad);
+}
+.btn-sm { font-size: var(--text-sm); padding: 1px var(--space-2); }
+
 /* Header, pulse bar, then main taking whatever height is left, so
    main fits the window whatever the header and pulse bar measure. */
 body {
@@ -417,25 +469,6 @@ dialog header button:hover { color: var(--fg); }
   padding: 0 var(--space-1);
   background: var(--bg);
 }
-.hdr-btn {
-  font-family: var(--font-mono);
-  font-size: var(--text-md);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  cursor: pointer;
-}
-.hdr-btn:hover:not(:disabled) { border-color: var(--accent); }
-.hdr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.hdr-btn.primary {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-}
-.hdr-btn.primary:hover:not(:disabled) { filter: brightness(1.1); }
-
 #toast-host {
   position: fixed;
   bottom: 18px;
@@ -1009,7 +1042,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 .sc-run-header { display: flex; gap: var(--space-3); align-items: center; }
 .sc-run-name { font-weight: 600; font-size: var(--text-lg); }
 .sc-run-header .muted { font-variant-numeric: tabular-nums; }
-.sc-run-header .hdr-btn { margin-left: auto; }
+.sc-run-header .btn { margin-left: auto; }
 .sc-run-timeline {
   position: relative;
   height: 34px;
@@ -2659,8 +2692,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
    contents` dissolves the wrapper so its labels and pills stay direct
    flex items of the strip — expanded, the row is byte-identical to
    the ungrouped one. Collapsed, the strip keeps only the chevron and
-   the `panels` group, so the formula / metrics pills (and the
-   `.primary` lit state side-panel.js paints on them) never leave. */
+   the `panels` group, so the formula / metrics pills (and the lit
+   state side-panel.js gives them) never leave. */
 .ctl-collapsible { display: contents; }
 #topology-controls.collapsed .ctl-collapsible { display: none; }
 .ctl-label {
@@ -2685,14 +2718,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   border-color: var(--accent);
   color: var(--bg);
   font-weight: 600;
-}
-/* A lit panels-group pill: its panel is open. side-panel.js's
-   syncButton toggles `primary` on the chrome button, and the group
-   wants the layout picker's accent treatment rather than the header
-   button's filled one. */
-#topology-controls .pill.primary {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* Group separators inside the right-click menu (the align section). */

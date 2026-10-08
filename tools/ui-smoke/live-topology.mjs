@@ -57,6 +57,18 @@ async function chartRebuiltOn(sel, pref) {
   ).catch(() => false);
 }
 
+// A colour token as the browser computes it (an rgb() string), to compare
+// with a computed style.
+const tokenColour = (name) =>
+  page.evaluate((n) => {
+    const probe = document.createElement("div");
+    probe.style.color = `var(${n})`;
+    document.body.append(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  }, name);
+
 const browser = await chromium.launch({ args: ["--no-sandbox"] });
 // A headless Chromium with no locale of its own inherits the host's
 // POSIX one and reports it as "en-US@posix" — not a BCP 47 tag, so
@@ -1084,15 +1096,28 @@ check(
   ),
 );
 // Collapsed is not a dead strip: the panel pills still toggle their
-// panels and light up (side-panel.js's syncButton paints .primary).
+// panels and light up (side-panel.js's syncButton sets aria-pressed). The
+// pointer moves off first: hover draws the accent border too.
 await page.click("#metrics-btn");
+await page.mouse.move(5, 5);
+const collapsedPill = await page.evaluate(() => {
+  const pill = document.getElementById("metrics-btn");
+  const s = getComputedStyle(pill);
+  return {
+    open: document.getElementById("panel-metrics-btn")?.classList.contains("open") === true,
+    pressed: pill.getAttribute("aria-pressed"),
+    border: s.borderTopColor,
+    colour: s.color,
+  };
+});
+const pillAccent = await tokenColour("--accent");
 check(
   "e2e: the metrics pill still works while collapsed",
-  await page.evaluate(
-    () =>
-      document.getElementById("panel-metrics-btn")?.classList.contains("open") === true &&
-      document.getElementById("metrics-btn").classList.contains("primary"),
-  ),
+  collapsedPill.open &&
+    collapsedPill.pressed === "true" &&
+    collapsedPill.border === pillAccent &&
+    collapsedPill.colour === pillAccent,
+  JSON.stringify({ collapsedPill, pillAccent }),
 );
 await page.click("#metrics-btn");
 await page.click("#ctl-collapse");
@@ -3004,7 +3029,7 @@ const fonts = await page.evaluate(() => {
   const style = (sel) => getComputedStyle(document.querySelector(sel));
   return {
     body: style("body").fontFamily,
-    button: style(".hdr-btn").fontFamily,
+    button: style("#help-btn").fontFamily,
     clock: style("#pulse-clock").fontFamily,
     numerals: style("#pulse-clock").fontVariantNumeric,
     control: style("#logs-clear").fontFamily,
@@ -3014,6 +3039,56 @@ const fonts = await page.evaluate(() => {
 });
 check("e2e: page text is IBM Plex Sans and the header buttons IBM Plex Mono", /^"IBM Plex Sans"/.test(fonts.body) && /^"IBM Plex Mono"/.test(fonts.button), JSON.stringify(fonts));
 check("e2e: the clock is mono with tabular figures", /^"IBM Plex Mono"/.test(fonts.clock) && fonts.numerals === "tabular-nums", JSON.stringify(fonts));
+// ── e2e: the button kit ────────────────────────────────────────────
+// Header buttons are the secondary kind, the new-dispatch button the
+// primary one; a disabled kit button is dimmed and ignores hover.
+const accent = await tokenColour("--accent");
+const kit = await page.evaluate(() => {
+  const disabled = document.createElement("button");
+  disabled.className = "btn btn-danger";
+  disabled.id = "smoke-disabled";
+  disabled.textContent = "Delete";
+  disabled.disabled = true;
+  disabled.style.cssText = "position:fixed;top:0;left:0;z-index:99999";
+  document.body.append(disabled);
+  const s = (sel) => getComputedStyle(document.querySelector(sel));
+  return {
+    helpClass: document.getElementById("help-btn").className,
+    helpBorder: s("#help-btn").borderTopStyle,
+    primary: s("#dispatch-new-btn").backgroundColor,
+    disabledOpacity: s("#smoke-disabled").opacity,
+    disabledBackground: s("#smoke-disabled").backgroundColor,
+  };
+});
+await page.hover("#smoke-disabled", { force: true });
+kit.hoveredBackground = await page.evaluate(() => {
+  const disabled = document.getElementById("smoke-disabled");
+  const background = getComputedStyle(disabled).backgroundColor;
+  disabled.remove();
+  return background;
+});
+check(
+  "e2e: header buttons are secondary kit buttons, the new-dispatch button primary",
+  kit.helpClass === "btn" && kit.helpBorder === "solid" && kit.primary === accent,
+  JSON.stringify({ kit, accent }),
+);
+check("e2e: a disabled kit button is dimmed", kit.disabledOpacity === "0.4", JSON.stringify(kit));
+check("e2e: a disabled danger button ignores hover", kit.disabledBackground === kit.hoveredBackground, JSON.stringify(kit));
+// A header button is unpressed until its panel opens, then lights up.
+const unpressed = await page.evaluate(() => document.getElementById("defaults-btn").getAttribute("aria-pressed"));
+await page.click("#defaults-btn");
+await page.mouse.move(5, 5);
+const lit = await page.evaluate(() => {
+  const btn = document.getElementById("defaults-btn");
+  const s = getComputedStyle(btn);
+  return { pressed: btn.getAttribute("aria-pressed"), border: s.borderTopColor, colour: s.color };
+});
+await page.click("#defaults-btn");
+check(
+  "e2e: a header button lights up while its panel is open",
+  unpressed === "false" && lit.pressed === "true" && lit.border === accent && lit.colour === accent,
+  JSON.stringify({ unpressed, lit, accent }),
+);
 check(
   "e2e: a control with no font rule is Plex Sans with tabular figures, code is Plex Mono",
   /^"IBM Plex Sans"/.test(fonts.control) && fonts.controlNumerals === "tabular-nums" && /^"IBM Plex Mono"/.test(fonts.code),

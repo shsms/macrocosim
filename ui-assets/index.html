@@ -42,10 +42,10 @@
       </nav>
       <span id="active-scenarios" class="active-scenarios" hidden></span>
       <span class="spacer"></span>
-      <button type="button" id="help-btn" class="hdr-btn" title="Keyboard + mouse shortcuts">?</button>
-      <button type="button" id="scenario-report-btn" class="hdr-btn">Report</button>
-      <button type="button" id="defaults-btn" class="hdr-btn">Defaults</button>
-      <button type="button" id="snapshots-btn" class="hdr-btn" title="Save / load a copy of the selected microgrid's file">Snapshots</button>
+      <button type="button" id="help-btn" class="btn" title="Keyboard + mouse shortcuts">?</button>
+      <button type="button" id="scenario-report-btn" class="btn">Report</button>
+      <button type="button" id="defaults-btn" class="btn">Defaults</button>
+      <button type="button" id="snapshots-btn" class="btn" title="Save / load a copy of the selected microgrid's file">Snapshots</button>
     </header>
     <section id="pulse" aria-label="system pulse">
       <span class="pulse-group">
@@ -81,11 +81,11 @@
         <input id="import-files" type="file" accept=".json,application/json" multiple hidden />
       </div>
       <header id="mg-header">
-        <button type="button" id="mg-back" class="hdr-btn" title="Back to microgrid list">← Microgrids</button>
+        <button type="button" id="mg-back" class="btn" title="Back to microgrid list">← Microgrids</button>
         <span id="mg-breadcrumb-name" class="mg-name"></span>
         <span id="mg-breadcrumb-tso" class="muted"></span>
         <span id="mg-file-chips"></span>
-        <button type="button" id="mg-adopt-btn" class="hdr-btn"
+        <button type="button" id="mg-adopt-btn" class="btn"
                 title="Write the live structure into this file so macrocosim may rewrite it from now on"
                 hidden>Adopt</button>
         <nav id="mg-subtoggle" aria-label="microgrid view">
@@ -115,7 +115,7 @@
             <span id="sc-run-name" class="sc-run-name"></span>
             <span id="sc-run-status" class="sc-badge"></span>
             <span id="sc-run-elapsed" class="muted"></span>
-            <button type="button" id="sc-run-stop" class="hdr-btn">Stop</button>
+            <button type="button" id="sc-run-stop" class="btn">Stop</button>
           </header>
           <div id="sc-run-timeline" class="sc-run-timeline" aria-label="cue and check timeline"></div>
           <div class="sc-run-cols">
@@ -137,7 +137,7 @@
               them to downstream control apps.
             </p>
           </div>
-          <button id="dispatch-new-btn" class="hdr-btn primary" type="button">+ New dispatch</button>
+          <button id="dispatch-new-btn" class="btn btn-primary" type="button">+ New dispatch</button>
         </header>
         <div id="dispatches-body"></div>
       </div>
@@ -302,7 +302,7 @@
                    step="1" placeholder="next free" autocomplete="off" />
           </label>
           <p id="create-mg-error" class="dialog-error" hidden></p>
-          <button type="submit" class="hdr-btn primary">Create</button>
+          <button type="submit" class="btn btn-primary">Create</button>
         </form>
         <p class="hint">
           Writes <code>microgrids/&lt;id&gt;.lisp</code> — a managed
@@ -329,7 +329,7 @@
                    autocomplete="off" />
           </label>
           <p id="import-mg-error" class="dialog-error" hidden></p>
-          <button type="submit" class="hdr-btn primary">Import</button>
+          <button type="submit" class="btn btn-primary">Import</button>
         </form>
         <p class="hint">
           The export's component ids are kept verbatim; this id names
@@ -351,7 +351,7 @@
             <input type="text" id="snapshot-name-input" placeholder="snapshot name"
                    pattern="[A-Za-z0-9_\-]+" autocomplete="off" required />
           </label>
-          <button type="submit" class="hdr-btn primary">Save</button>
+          <button type="submit" class="btn btn-primary">Save</button>
         </form>
         <ul id="snapshots-list">
           <li class="hint">No snapshots yet.</li>
@@ -379,7 +379,7 @@
             <input type="text" id="load-script-path"
                    placeholder="examples/starter-site.lisp" autocomplete="off" />
           </label>
-          <button type="submit" class="hdr-btn primary">Load</button>
+          <button type="submit" class="btn btn-primary">Load</button>
         </form>
         <p class="hint">
           Evals <code>(load "…")</code> on the server. The browser and
@@ -503,8 +503,8 @@
         </div>
         <p id="dd-error" class="dd-error" hidden></p>
         <footer class="dd-footer">
-          <button type="button" id="dd-cancel" class="hdr-btn">Cancel</button>
-          <button type="submit" class="hdr-btn primary">Create dispatch</button>
+          <button type="button" id="dd-cancel" class="btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create dispatch</button>
         </footer>
       </form>
     </dialog>

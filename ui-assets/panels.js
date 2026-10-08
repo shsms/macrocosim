@@ -182,7 +182,7 @@ export const microgridsPanel = (() => {
     if (!info.managed) return;
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "hdr-btn primary";
+    btn.className = "btn";
     btn.textContent = `Load as ${info.suggested_id}`;
     btn.addEventListener("click", async () => {
       btn.disabled = true;
@@ -732,7 +732,7 @@ export const scenariosPanel = (() => {
   function mkBtn(label, onClick) {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "hdr-btn";
+    b.className = "btn";
     b.textContent = label;
     b.addEventListener("click", onClick);
     return b;
