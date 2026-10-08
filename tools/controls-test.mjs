@@ -36,10 +36,6 @@ const ALLOWED = [
   "dd-chip",
   "repl-mg-chip",
   "seg-chip",
-  // still to move onto the kit
-  "float-close",
-  "float-dock",
-  "dd-kv-del",
 ];
 
 // The text from `from` up to the first `stop` character outside a template
@@ -203,7 +199,10 @@ for (const [f, text] of sources) {
   if (f.endsWith(".css")) continue;
   for (const m of text.matchAll(/<button\b/g)) {
     const [cls] = classAttrs(scanTo(text, m.index, ">"));
-    if (cls === undefined) continue;
+    if (cls === undefined) {
+      offenders.push(`${f}: a <button> with no class`);
+      continue;
+    }
     if (!classWords(cls).some((c) => ALLOWED.includes(c))) offenders.push(`${f}: ${cls}`);
   }
   // A button built in JS: its class is set somewhere in the rest of the

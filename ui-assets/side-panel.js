@@ -174,8 +174,8 @@ function ensurePanel(name) {
     el.setAttribute("aria-label", name.replace(/-btn$/, ""));
     el.innerHTML = `
       <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
-      <button class="float-close" type="button" title="Close (Esc)">×</button>
-      <button class="float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
+      <button class="btn btn-quiet btn-icon float-close" type="button" title="Close (Esc)">×</button>
+      <button class="btn btn-quiet btn-icon float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
       <div class="panel-content"></div>`;
     dockEl().appendChild(el);
     contentEl = el.querySelector(".panel-content");

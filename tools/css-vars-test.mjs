@@ -55,9 +55,10 @@ const offending = (props, ok) =>
   declarations(props)
     .filter(([, v]) => !parts(v).every(ok))
     .map(([p, v]) => `${p}: ${v.trim()}`);
-// A viewport unit places a box on the page; it is layout, not spacing.
+// A viewport unit places a box on the page; it is layout, not spacing. A calc
+// may also make room for controls by their size token.
 const space = /^var\(--space-[0-5]\)$/;
-const spaceCalc = /^calc\((?:[\s\d.*+-]|var\(--space-[0-5]\))*\)$/;
+const spaceCalc = /^calc\((?:[\s\d.*+-]|var\(--space-[0-5]\)|var\(--icon-btn-size\))*\)$/;
 const spacing = offending(
   "(?:padding|margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?|(?:row-|column-)?gap",
   (p) => ["0", "1px", "-1px", "auto"].includes(p) || /^\d+v[hw]$/.test(p) || space.test(p) || spaceCalc.test(p),

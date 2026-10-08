@@ -183,7 +183,7 @@
       <aside id="add-panel" aria-label="add component">
         <header class="float-head">
           <h2>Add component</h2>
-          <button id="add-panel-close" class="float-close" type="button" title="Close">×</button>
+          <button id="add-panel-close" class="btn btn-quiet btn-icon float-close" type="button" title="Close">×</button>
         </header>
         <div id="palette">
           <button type="button" class="pal-btn" data-make="make-grid-connection-point" style="--dot: var(--cat-grid)">grid</button>
@@ -219,16 +219,16 @@
         <div class="snap-zone" data-edge="right"></div>
         <aside id="inspector" class="float-panel" aria-label="inspector">
           <div id="inspector-drag" class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
-          <button id="inspector-close" class="float-close" type="button" title="Close (Esc)">×</button>
-          <button class="float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
+          <button id="inspector-close" class="btn btn-quiet btn-icon float-close" type="button" title="Close (Esc)">×</button>
+          <button class="btn btn-quiet btn-icon float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
           <div id="inspect" class="panel-content">
             <p class="hint">Click a node to inspect. Right-click for the context menu.</p>
           </div>
         </aside>
         <aside id="repl" class="float-panel" aria-label="repl">
           <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
-          <button class="float-close" type="button" title="Close (Esc)">×</button>
-          <button class="float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
+          <button class="btn btn-quiet btn-icon float-close" type="button" title="Close (Esc)">×</button>
+          <button class="btn btn-quiet btn-icon float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
           <div id="repl-body" class="panel-content">
             <div id="repl-output"></div>
             <form id="repl-form">
@@ -250,8 +250,8 @@
         </aside>
         <aside id="logs-panel" class="float-panel" aria-label="logs">
           <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
-          <button class="float-close" type="button" title="Close (Esc)">×</button>
-          <button class="float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
+          <button class="btn btn-quiet btn-icon float-close" type="button" title="Close (Esc)">×</button>
+          <button class="btn btn-quiet btn-icon float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
           <div id="logs-body" class="panel-content">
             <div class="logs-head">
               <label for="logs-level" class="ctl-label">show</label>
@@ -282,7 +282,7 @@
     <dialog id="create-mg-dialog">
       <header>
         <h3>New microgrid</h3>
-        <button id="create-mg-close" type="button">×</button>
+        <button id="create-mg-close" type="button" class="btn btn-quiet btn-icon">×</button>
       </header>
       <div id="create-mg-content">
         <form id="create-mg-form">
@@ -314,7 +314,7 @@
     <dialog id="import-mg-dialog">
       <header>
         <h3>Import microgrid</h3>
-        <button id="import-mg-close" type="button">×</button>
+        <button id="import-mg-close" type="button" class="btn btn-quiet btn-icon">×</button>
       </header>
       <div id="import-mg-content">
         <form id="import-mg-form">
@@ -341,7 +341,7 @@
     <dialog id="snapshots-dialog">
       <header>
         <h3>Snapshots</h3>
-        <button id="snapshots-dialog-close" type="button">×</button>
+        <button id="snapshots-dialog-close" type="button" class="btn btn-quiet btn-icon">×</button>
       </header>
       <div id="snapshots-dialog-content">
         <p id="snapshots-blocked" class="hint" hidden></p>
@@ -367,7 +367,7 @@
     <dialog id="load-script-dialog">
       <header>
         <h3>Load script</h3>
-        <button id="load-script-close" type="button">×</button>
+        <button id="load-script-close" type="button" class="btn btn-quiet btn-icon">×</button>
       </header>
       <div id="load-script-content">
         <div id="load-script-breadcrumb" class="hint"></div>
@@ -391,7 +391,7 @@
     <dialog id="dispatch-dialog">
       <header>
         <h3>New dispatch</h3>
-        <button id="dispatch-dialog-close" type="button" title="Close">×</button>
+        <button id="dispatch-dialog-close" type="button" class="btn btn-quiet btn-icon" title="Close">×</button>
       </header>
       <form id="dispatch-form" autocomplete="off" novalidate>
         <div class="dd-body">
@@ -511,7 +511,7 @@
     <dialog id="help-dialog">
       <header>
         <h3>Macrocosim reference</h3>
-        <button id="help-dialog-close" type="button">×</button>
+        <button id="help-dialog-close" type="button" class="btn btn-quiet btn-icon">×</button>
       </header>
       <div id="help-dialog-content">
         <h4>Modes</h4>

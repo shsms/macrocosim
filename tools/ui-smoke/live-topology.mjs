@@ -33,6 +33,18 @@ async function inUtc(fn) {
   }
 }
 
+// Runs `fn` in compact density, then in comfortable, and switches back:
+// [compact result, comfortable result].
+async function inBothDensities(fn) {
+  const compact = await fn();
+  await page.click("#density-toggle");
+  try {
+    return [compact, await fn()];
+  } finally {
+    await page.click("#density-toggle");
+  }
+}
+
 // Picks a theme preference through theme.js, as the theme chip does.
 const choose = (pref) => page.evaluate(async (p) => (await import("/assets/theme.js")).choose(p), pref);
 
@@ -1062,6 +1074,40 @@ await waitFor(async () => (await page.locator("#panel-metrics-btn .panel-drag").
 check(
   "e2e: the metrics panel is still open after the window is restored",
   await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open") === true),
+);
+// A floating card's content starts below its close and dock buttons, in
+// either density.
+const floatingHead = () =>
+  page.evaluate(() => {
+    const el = document.getElementById("panel-metrics-btn");
+    const content = el.querySelector(".panel-content");
+    return {
+      buttonsBottom: el.querySelector(".float-close").getBoundingClientRect().bottom,
+      contentTop: content.getBoundingClientRect().top + Number.parseFloat(getComputedStyle(content).paddingTop),
+    };
+  });
+const [compactFloat, comfortableFloat] = await inBothDensities(floatingHead);
+check(
+  "e2e: a floating card's content starts below its head buttons",
+  [compactFloat, comfortableFloat].every((h) => h.contentTop >= h.buttonsBottom),
+  JSON.stringify({ compactFloat, comfortableFloat }),
+);
+// The REPL's and logs card's floors grow with the card head (measured on the
+// open metrics card), so a taller head takes no room from what the floor holds
+// below it.
+const cardFloors = () =>
+  page.evaluate(() => {
+    const head = document.querySelector("#panel-metrics-btn .panel-drag").getBoundingClientRect().height;
+    const floor = (id) => Number.parseFloat(getComputedStyle(document.getElementById(id)).minHeight) - head;
+    return { head, repl: floor("repl"), logs: floor("logs-panel") };
+  });
+const [compactFloors, comfortableFloors] = await inBothDensities(cardFloors);
+check(
+  "e2e: the REPL and logs cards' floors grow with the card head",
+  compactFloors.head < comfortableFloors.head &&
+    compactFloors.repl === comfortableFloors.repl &&
+    compactFloors.logs === comfortableFloors.logs,
+  JSON.stringify({ compactFloors, comfortableFloors }),
 );
 await page.click("#panel-metrics-btn .float-close");
 await page.evaluate(() => localStorage.removeItem("mc-panel-pos-metrics-btn"));
@@ -2517,6 +2563,31 @@ const stripRoom = await page.evaluate(() => {
   };
 });
 check("e2e: a docked tile's title strip leaves room for its buttons", stripRoom.padding >= stripRoom.buttons, JSON.stringify(stripRoom));
+// The card's close and dock buttons never overlap, in either density, and the
+// docked head leaves room around them for the focus ring (2px wide, 1px off).
+const headButtons = () =>
+  page.evaluate(() => {
+    const el = document.getElementById("panel-metrics-btn");
+    const head = el.querySelector(".panel-drag").getBoundingClientRect();
+    const close = el.querySelector(".float-close").getBoundingClientRect();
+    const dock = el.querySelector(".float-dock").getBoundingClientRect();
+    return {
+      closeLeft: close.left,
+      dockRight: dock.right,
+      ringRoom: Math.min(close.top - head.top, head.bottom - close.bottom, head.right - close.right),
+    };
+  });
+const [compactHead, comfortableHead] = await inBothDensities(headButtons);
+check(
+  "e2e: a card's close and dock buttons do not overlap",
+  [compactHead, comfortableHead].every((h) => h.dockRight <= h.closeLeft),
+  JSON.stringify({ compactHead, comfortableHead }),
+);
+check(
+  "e2e: a docked card's head has room for its buttons' focus ring",
+  [compactHead, comfortableHead].every((h) => h.ringRoom >= 3),
+  JSON.stringify({ compactHead, comfortableHead }),
+);
 h = await headOf("#panel-metrics-btn .panel-drag");
 await page.mouse.move(h.x, h.y);
 await page.mouse.down();

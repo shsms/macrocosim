@@ -547,7 +547,7 @@ function renderInspect(d, parentIds, childIds) {
   const renderEdgeRow = (id, dataAttr) => {
     const c = topology.get(id);
     const label = c ? c.name : `id ${id}`;
-    return `<li>${escapeHtml(label)} <button class="btn btn-quiet btn-sm" ${dataAttr}="${id}"${lockAttrs}>✕</button></li>`;
+    return `<li>${escapeHtml(label)} <button class="btn btn-quiet btn-icon" ${dataAttr}="${id}"${lockAttrs}>✕</button></li>`;
   };
   const parentList = parentIds.length
     ? parentIds.map((id) => renderEdgeRow(id, "data-disconnect-from")).join("")
@@ -589,7 +589,7 @@ function renderInspect(d, parentIds, childIds) {
       // only while this token carries a live override, toggled by
       // paintKnobEntry/setKnobText alongside the input text itself.
       const measureBtnHtml = k.clear
-        ? `<button type="button" class="btn btn-quiet btn-sm knob-measure-btn" data-clear="${k.clear}" hidden title="clear override, measure from children again">✕</button>`
+        ? `<button type="button" class="btn btn-quiet btn-icon knob-measure-btn" data-clear="${k.clear}" hidden title="clear override, measure from children again">✕</button>`
         : "";
       return `<dt>${escapeHtml(k.label)}</dt><dd>
         <input ${inputAttrs} class="knob-input"

@@ -118,7 +118,7 @@ export const dispatchForm = (() => {
       <input class="dd-input dd-input-inline dd-kv-key" placeholder="key" />
       <span class="dd-kv-arrow">→</span>
       <input class="dd-input dd-input-inline dd-kv-value" placeholder="value" />
-      <button type="button" class="dd-kv-del" title="Remove field">×</button>`;
+      <button type="button" class="btn btn-quiet btn-icon dd-kv-del" title="Remove field">×</button>`;
     row.querySelector(".dd-kv-key").value = key;
     row.querySelector(".dd-kv-value").value = value;
     row.querySelector(".dd-kv-del").addEventListener("click", () => row.remove());

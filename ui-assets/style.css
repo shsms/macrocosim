@@ -81,6 +81,11 @@
   --pulse-height: 24px;
   --pulse-spark-width: 64px;
   --pulse-spark-height: 12px;
+  /* The square of a glyph-only button (×, ⤓, ✕). */
+  --icon-btn-size: 20px;
+  /* The height of a card's head: its close and dock buttons with room around
+     them for the focus ring. */
+  --card-head-height: calc(var(--icon-btn-size) + 2 * var(--space-1));
   /* Spacing steps; comfortable density widens them. */
   --space-0: 2px;
   --space-1: 4px;
@@ -137,6 +142,7 @@
   --pulse-height: 28px;
   --pulse-spark-width: 80px;
   --pulse-spark-height: 16px;
+  --icon-btn-size: 24px;
   --space-1: 6px;
   --space-2: 10px;
   --space-3: 14px;
@@ -294,6 +300,14 @@ kbd {
   border-color: var(--bad);
 }
 .btn-sm { font-size: var(--text-sm); padding: 1px var(--space-2); }
+/* A glyph-only button (×, ⤓, ✕): a square of --icon-btn-size. */
+.btn-icon {
+  width: var(--icon-btn-size);
+  height: var(--icon-btn-size);
+  padding: 0;
+  font-size: var(--text-lg);
+  line-height: 1;
+}
 
 /* Header, pulse bar, then main taking whatever height is left, so
    main fits the window whatever the header and pulse bar measure. */
@@ -377,16 +391,6 @@ dialog header h3 {
   font-size: var(--text-lg);
   color: var(--accent);
 }
-dialog header button {
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: var(--text-xl);
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 var(--space-1);
-}
-dialog header button:hover { color: var(--fg); }
 #help-dialog-content,
 #snapshots-dialog-content,
 #create-mg-content,
@@ -1250,13 +1254,12 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
 #repl.docked #repl-output, #logs-panel.docked #logs { min-height: 0; }
 /* The tile head: the grab strip grows a title (the card's landmark
    label) and room for its buttons; the grip stays as the handle. The
-   right padding covers .float-dock and .float-close, which sit at fixed
-   offsets from the right edge. */
+   right padding covers .float-close and .float-dock, two --icon-btn-size
+   squares, and the gaps around them. */
 .float-panel.docked .panel-drag {
-  height: 24px;
   justify-content: flex-start;
   gap: var(--space-3);
-  padding: 0 calc(2 * var(--space-5) + var(--space-4)) 0 var(--space-3);
+  padding: 0 calc(2 * var(--icon-btn-size) + var(--space-0) + var(--space-2)) 0 var(--space-3);
   border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -1265,13 +1268,11 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   color: var(--muted);
 }
 .float-panel.docked .panel-drag::before { content: attr(data-title); }
-.float-panel.docked .float-close { top: 1px; }
 .panel-content {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  /* slim top padding — the drag strip above already clears the
-     floating × */
+  /* slim top padding: the card head above holds the × and ⤓ */
   padding: var(--space-2) var(--space-4) var(--space-4);
 }
 
@@ -1283,7 +1284,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 18px;
+  height: var(--card-head-height);
   cursor: grab;
   touch-action: none;
 }
@@ -1296,38 +1297,16 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
 }
 .panel-drag:hover .drag-grip { background: var(--muted); }
 
-.float-close {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: var(--z-canvas);
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--text-xl);
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
-}
-.float-close:hover { color: var(--fg); background: var(--bg); }
-/* Dock / float toggle, left of the ×. */
+/* The card's close (×) and dock (⤓) buttons: .btn-icon squares centred in the
+   card head at the right, the dock one left of the close one. */
+.float-close,
 .float-dock {
   position: absolute;
-  top: 7px;
-  right: 34px;
+  top: var(--space-1);
   z-index: var(--z-canvas);
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--text-lg);
-  line-height: 1;
-  cursor: pointer;
-  padding: var(--space-0) var(--space-2);
-  border-radius: var(--radius-sm);
 }
-.float-dock:hover { color: var(--fg); background: var(--bg); }
-.float-panel.docked .float-dock { top: 2px; }
+.float-close { right: var(--space-1); }
+.float-dock { right: calc(var(--space-1) + var(--icon-btn-size) + var(--space-0)); }
 /* Column splitter between two tiles (side-panel.js layoutStrip). */
 .tile-splitter {
   flex: 0 0 5px;
@@ -1421,10 +1400,10 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
    content up to the gripper's cap or the dock bound; the output
    band's floor leaves room for the completion popup
    (#repl-completions, 220px) above the input. The card's own floor
-   has to hold the drag strip, that 240px output floor and the input
+   has to hold the card head, that 240px output floor and the input
    form, or a cap dragged (or restored) below it would squeeze the
    form out of the card and leave the REPL unusable. */
-#repl { min-height: 340px; }
+#repl { min-height: calc(var(--card-head-height) + 322px); }
 #repl-body {
   display: flex;
   flex-direction: column;
@@ -1435,9 +1414,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 
 /* Logs panel: the tail scrolls inside the card. Its floor holds the
-   drag strip, the head row and the tail's own 160px floor, so a cap
+   card head, the head row and the tail's own 160px floor, so a cap
    below it cannot squeeze the head away. */
-#logs-panel { min-height: 240px; }
+#logs-panel { min-height: calc(var(--card-head-height) + 222px); }
 #logs-body {
   display: flex;
   flex-direction: column;
@@ -2586,15 +2565,6 @@ dialog#dispatch-dialog { max-width: 640px; }
   gap: var(--space-2);
 }
 .dd-kv-row .dd-kv-arrow { color: var(--muted); text-align: center; }
-.dd-kv-row .dd-kv-del {
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: var(--text-xl);
-  cursor: pointer;
-  padding: 0;
-}
-.dd-kv-row .dd-kv-del:hover { color: var(--bad); }
 #dd-payload-add { align-self: flex-start; }
 
 .dd-error {
