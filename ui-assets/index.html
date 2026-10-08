@@ -6,9 +6,10 @@
     <title>macrocosim</title>
     <script>
       {
-        // The theme before first paint; theme.js keeps it current. The
-        // theme is a stored light or dark, else the OS setting, by
-        // theme.js's rule.
+        // The theme and density before first paint; theme.js and
+        // routing.js keep them current. The theme is a stored light or
+        // dark, else the OS setting, by theme.js's rule. The density is
+        // comfortable if stored ("normal" is its old name), else compact.
         const stored = (key) => {
           try {
             return localStorage.getItem(key);
@@ -16,6 +17,9 @@
             return null;
           }
         };
+        const density = stored("macrocosim-density");
+        document.documentElement.dataset.density =
+          density === "comfortable" || density === "normal" ? "comfortable" : "compact";
         const pref = stored("macrocosim-theme");
         const dark = matchMedia("(prefers-color-scheme: dark)").matches;
         document.documentElement.dataset.theme =
@@ -64,7 +68,7 @@
       <span class="pulse-spacer"></span>
       <span class="pulse-chip" id="tz-toggle" title="toggle between local sim zone and UTC">local</span>
       <span class="pulse-chip" id="theme-toggle" title="colour theme: auto follows the OS">◐ auto</span>
-      <span class="pulse-chip" id="density-toggle" title="toggle compact density">compact</span>
+      <span class="pulse-chip" id="density-toggle" title="text size and spacing: compact or comfortable">compact</span>
       <span class="pulse-clock" id="pulse-clock">--:--:--</span>
     </section>
     <main id="app">

@@ -2784,8 +2784,10 @@ await page.unroute("**/api/microgrids");
 await page.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
 await waitFor(async () => page.evaluate(() => document.body.dataset.mgView === "selected"), 10000).catch(() => null);
 
-// ── e2e: compact density ───────────────────────────────────────────
-// The pulse-bar chip turns compact density on: the pulse bar shrinks.
+// ── e2e: density ───────────────────────────────────────────────────
+// Compact is the default; the pulse-bar chip switches to comfortable,
+// which sets larger text and a taller pulse bar, and back. The old stored
+// value "normal" reads as comfortable.
 // The checks from here on drive the starter site's topology directly.
 async function openDemoTopology() {
   await page.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
@@ -2794,14 +2796,110 @@ async function openDemoTopology() {
     8000,
   ).catch(() => null);
 }
+await page.evaluate(() => localStorage.removeItem("macrocosim-density"));
 await openDemoTopology();
-const pulseHeight = () => page.evaluate(() => document.getElementById("pulse").getBoundingClientRect().height);
-const roomyPulse = await pulseHeight();
+const densityState = () =>
+  page.evaluate(() => ({
+    density: document.documentElement.dataset.density,
+    chip: document.getElementById("density-toggle").textContent,
+    text: getComputedStyle(document.body).fontSize,
+    pulse: document.getElementById("pulse").getBoundingClientRect().height,
+  }));
+const compactState = await densityState();
 await page.click("#density-toggle");
-const compactPulse = await pulseHeight();
+const comfortableState = await densityState();
 await page.click("#density-toggle");
-check("e2e: compact density shrinks the pulse bar", compactPulse < roomyPulse, JSON.stringify({ roomyPulse, compactPulse }));
-check("e2e: the density chip turns compact off again", (await pulseHeight()) === roomyPulse);
+const compactAgain = await densityState();
+check(
+  "e2e: compact is the default density",
+  compactState.density === "compact" && compactState.chip === "compact" && compactState.text === "13px",
+  JSON.stringify(compactState),
+);
+check(
+  "e2e: the density chip switches to comfortable",
+  comfortableState.density === "comfortable" && comfortableState.text === "14px" && comfortableState.pulse > compactState.pulse,
+  JSON.stringify({ compactState, comfortableState }),
+);
+check("e2e: the density chip switches back", compactAgain.density === "compact" && compactAgain.pulse === compactState.pulse, JSON.stringify(compactAgain));
+// A reload, not openDemoTopology: a goto to the same hash reloads nothing.
+await page.evaluate(() => localStorage.setItem("macrocosim-density", "normal"));
+await page.reload({ waitUntil: "networkidle" });
+const fromNormal = await densityState();
+check("e2e: the old stored 'normal' reads as comfortable", fromNormal.density === "comfortable", JSON.stringify(fromNormal));
+await page.evaluate(() => localStorage.removeItem("macrocosim-density"));
+await page.reload({ waitUntil: "networkidle" });
+await openDemoTopology();
+
+// ── e2e: the open Add panel clears the + Add button ─────────────────
+// In both densities.
+const addClearance = () =>
+  page.evaluate(() => {
+    const panel = document.getElementById("add-panel");
+    panel.classList.add("open");
+    const toggleBottom = document.getElementById("add-toggle").getBoundingClientRect().bottom;
+    const panelTop = panel.getBoundingClientRect().top;
+    panel.classList.remove("open");
+    return { toggleBottom, panelTop };
+  });
+const addCompact = await addClearance();
+await page.click("#density-toggle");
+const addComfortable = await addClearance();
+await page.click("#density-toggle");
+check(
+  "e2e: the open Add panel starts below the + Add button",
+  [addCompact, addComfortable].every((a) => a.toggleBottom > 0 && a.panelTop >= a.toggleBottom),
+  JSON.stringify({ addCompact, addComfortable }),
+);
+
+// ── e2e: the theme and density before any module runs ──────────────
+// What the first-paint script sets, read when parsing ends and before the
+// modules run, in a light OS: unknown stored values fall back to the OS theme
+// and compact, and with storage blocked the page still paints light.
+const firstPaint = async (setup) => {
+  const ctx = await browser.newContext({ ...CONTEXT, colorScheme: "light" });
+  await ctx.addInitScript(setup);
+  await ctx.addInitScript(() => {
+    document.addEventListener("readystatechange", () => {
+      if (document.readyState !== "interactive") return;
+      const { theme, density } = document.documentElement.dataset;
+      // What storage held for the two keys ("blocked" when reading throws), so
+      // a check knows its setup took effect.
+      let stored;
+      try {
+        stored = [localStorage.getItem("macrocosim-theme"), localStorage.getItem("macrocosim-density")].join();
+      } catch (_) {
+        stored = "blocked";
+      }
+      window.__firstPaint = { theme, density, stored };
+    });
+  });
+  const p = await ctx.newPage();
+  await p.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  const seen = await p.evaluate(() => window.__firstPaint);
+  await ctx.close();
+  return seen;
+};
+const unknownStored = await firstPaint(() => {
+  localStorage.setItem("macrocosim-theme", "sepia");
+  localStorage.setItem("macrocosim-density", "sepia");
+});
+check(
+  "e2e: unknown stored theme and density paint as the OS theme and compact",
+  unknownStored?.stored === "sepia,sepia" && unknownStored.theme === "light" && unknownStored.density === "compact",
+  JSON.stringify(unknownStored),
+);
+const blockedStorage = await firstPaint(() => {
+  Object.defineProperty(window, "localStorage", {
+    get() {
+      throw new DOMException("storage blocked", "SecurityError");
+    },
+  });
+});
+check(
+  "e2e: with storage blocked the page still paints in the OS theme",
+  blockedStorage?.stored === "blocked" && blockedStorage.theme === "light",
+  JSON.stringify(blockedStorage),
+);
 
 // ── e2e: the zone chip ─────────────────────────────────────────────
 // The demo runs in Europe/Berlin, never UTC+0, so the clock's hour moves when

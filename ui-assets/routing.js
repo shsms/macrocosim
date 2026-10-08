@@ -94,35 +94,31 @@ export const READ_ONLY_TITLE =
   "unmanaged file — structure is read-only (Adopt to edit)";
 
 // ─── Density toggle ────────────────────────────────────────────────────────
-// CSS-only mode that shrinks pane + pulse-bar paddings and fonts.
-// For power users on long soak runs who want more rows on screen at
-// once. Default = normal (the 32" 4K target keeps the comfortable
-// layout the landing one). Preference persists in localStorage so a
-// refresh keeps you put.
+// Compact (the default) or comfortable, set as data-density on <html>; the type
+// and spacing tokens in style.css follow it. The choice is kept per browser.
+// index.html reads the stored choice before first paint; this keeps it current.
 const DENSITY_KEY = "macrocosim-density";
 
-function applyDensity(mode) {
-  if (mode === "compact") {
-    document.body.dataset.density = "compact";
-  } else {
-    delete document.body.dataset.density;
-  }
+function applyDensity(chip, mode) {
+  document.documentElement.dataset.density = mode;
+  chip.textContent = mode;
+  chip.classList.toggle("active", mode === "comfortable");
 }
 
 export function setupDensityToggle() {
   const chip = document.getElementById("density-toggle");
-  if (chip) {
-    const stored = localStorage.getItem(DENSITY_KEY);
-    applyDensity(stored);
-    chip.classList.toggle("active", stored === "compact");
-    chip.addEventListener("click", () => {
-      const next =
-        document.body.dataset.density === "compact" ? "normal" : "compact";
+  if (!chip) return;
+  applyDensity(chip, document.documentElement.dataset.density ?? "compact");
+  chip.addEventListener("click", () => {
+    const next =
+      document.documentElement.dataset.density === "compact"
+        ? "comfortable"
+        : "compact";
+    try {
       localStorage.setItem(DENSITY_KEY, next);
-      applyDensity(next);
-      chip.classList.toggle("active", next === "compact");
-    });
-  }
+    } catch (_) {}
+    applyDensity(chip, next);
+  });
 }
 
 // ─── Route state keys + read helpers ───────────────────────────────────────
