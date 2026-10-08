@@ -173,8 +173,10 @@ export function pillModel(c, live, { valuesOn, catColor, deadBand }) {
 // Everything below draws in canvas units; vis-network applies the
 // zoom and device-pixel scaling, so 14 px here is 14 px at scale 1.
 
-export const FONT_SANS = '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif';
-export const FONT_MONO = '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+// The stylesheet's font stacks, on one line for a canvas `font` string.
+const fontToken = (name, fallback) => cssToken(name, fallback).replace(/\s+/g, " ");
+export const FONT_SANS = fontToken("--font-sans", '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif');
+export const FONT_MONO = fontToken("--font-mono", '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace');
 
 const GEOM = {
   minWidth: 96,

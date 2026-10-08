@@ -2889,6 +2889,28 @@ const rebuiltDark = await chartRebuiltOn(powerCanvas, "auto");
 await page.click("#metrics-btn");
 check("e2e: a theme change rebuilds the metrics charts", rebuiltLight && rebuiltDark);
 
+// ── e2e: fonts ─────────────────────────────────────────────────────
+// Page text in IBM Plex Sans, the chrome in IBM Plex Mono, figures tabular.
+const fonts = await page.evaluate(() => {
+  const style = (sel) => getComputedStyle(document.querySelector(sel));
+  return {
+    body: style("body").fontFamily,
+    button: style(".hdr-btn").fontFamily,
+    clock: style("#pulse-clock").fontFamily,
+    numerals: style("#pulse-clock").fontVariantNumeric,
+    control: style("#logs-clear").fontFamily,
+    controlNumerals: style("#logs-clear").fontVariantNumeric,
+    code: style("code").fontFamily,
+  };
+});
+check("e2e: page text is IBM Plex Sans and the header buttons IBM Plex Mono", /^"IBM Plex Sans"/.test(fonts.body) && /^"IBM Plex Mono"/.test(fonts.button), JSON.stringify(fonts));
+check("e2e: the clock is mono with tabular figures", /^"IBM Plex Mono"/.test(fonts.clock) && fonts.numerals === "tabular-nums", JSON.stringify(fonts));
+check(
+  "e2e: a control with no font rule is Plex Sans with tabular figures, code is Plex Mono",
+  /^"IBM Plex Sans"/.test(fonts.control) && fonts.controlNumerals === "tabular-nums" && /^"IBM Plex Mono"/.test(fonts.code),
+  JSON.stringify(fonts),
+);
+
 // ── e2e: a dispatch's start round-trips in the display zone ─────────
 // In UTC mode. The browser runs in New York (CONTEXT), so a form that read the
 // wall time in the browser's own zone would be caught.
