@@ -2689,14 +2689,14 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 
 /* A labelled row of controls inside a card. */
-.field {
+.card-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
   margin-bottom: var(--space-2);
 }
-.field-label {
+.card-row-label {
   flex-basis: 100%;
   font-size: var(--text-xs);
   text-transform: uppercase;

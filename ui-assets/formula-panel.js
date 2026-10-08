@@ -51,8 +51,8 @@ const MARKUP = `
   <section class="card">
     <h2>Metric</h2>
     <div id="metric-buttons">
-      <div class="field">
-        <span class="field-label">power</span>
+      <div class="card-row">
+        <span class="card-row-label">power</span>
         <button type="button" class="pill metric-btn" data-metric="grid">grid</button>
         <button type="button" class="pill metric-btn" data-metric="consumer">consumer</button>
         <button type="button" class="pill metric-btn" data-metric="producer">producer</button>
@@ -63,14 +63,14 @@ const MARKUP = `
         <button type="button" class="pill metric-btn" data-metric="ev_charger">EV</button>
         <button type="button" class="pill metric-btn" data-metric="steam_boiler">boiler</button>
       </div>
-      <div class="field">
-        <span class="field-label">voltage / freq</span>
+      <div class="card-row">
+        <span class="card-row-label">voltage / freq</span>
         <button type="button" class="pill metric-btn" data-metric="grid_coalesce">grid</button>
         <button type="button" class="pill metric-btn" data-metric="battery_ac_coalesce">battery</button>
         <button type="button" class="pill metric-btn" data-metric="pv_ac_coalesce">PV</button>
       </div>
-      <div class="field">
-        <span class="field-label">one component</span>
+      <div class="card-row">
+        <span class="card-row-label">one component</span>
         <button type="button" class="pill metric-btn" data-metric="component">reading</button>
         <button type="button" class="pill metric-btn" data-metric="component_ac_coalesce">voltage / freq</button>
       </div>
@@ -80,8 +80,8 @@ const MARKUP = `
   </section>
   <details class="card" id="config-panel">
     <summary><h2>Engine options</h2><span id="config-count" class="muted"></span></summary>
-    <div class="field">
-      <span class="field-label">formulas</span>
+    <div class="card-row">
+      <span class="card-row-label">formulas</span>
       <label class="check"><input type="checkbox" id="cfg-prefer-meters" />
         prefer meters over component readings</label>
       <label class="check"><input type="checkbox" id="cfg-phantom" />
@@ -89,8 +89,8 @@ const MARKUP = `
       <label class="check"><input type="checkbox" id="cfg-no-fallback" />
         disable fallback components</label>
     </div>
-    <div class="field">
-      <span class="field-label">graph building</span>
+    <div class="card-row">
+      <span class="card-row-label">graph building</span>
       <label class="check"><input type="checkbox" id="cfg-allow-unconnected" />
         allow unconnected components</label>
       <label class="check"><input type="checkbox" id="cfg-allow-validation-failures" />
@@ -103,7 +103,7 @@ const MARKUP = `
     <h2>Formula</h2>
     <p id="formula-error" class="graph-error" hidden></p>
     <pre id="formula-view" class="formula-tree"></pre>
-    <div class="field">
+    <div class="card-row">
       <button type="button" class="btn btn-sm" id="copy-formula"
         title="Copy the plain formula string">copy</button>
     </div>
