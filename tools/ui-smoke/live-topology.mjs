@@ -122,6 +122,13 @@ const CONTEXT = {
 const page = await (await browser.newContext(CONTEXT)).newPage();
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e)));
+// Whether the main page's first socket has received a frame, so is open.
+let mainSocketOpened = false;
+page.once("websocket", (ws) =>
+  ws.once("framereceived", () => {
+    mainSocketOpened = true;
+  }),
+);
 await page.goto(BASE, { waitUntil: "networkidle" });
 
 // ── unit tests: import the module in the browser ──────────────────
@@ -314,6 +321,14 @@ const unit = await page.evaluate(async () => {
   return out;
 });
 for (const t of unit) check(`unit: ${t.name}`, t.ok, `got ${t.got} want ${t.want}`);
+
+// The main page's socket has opened once, at its load: nothing is logged.
+const mainSocketOpen = await waitFor(() => mainSocketOpened, 10000).catch(() => false);
+check(
+  "e2e: a socket's first open logs nothing",
+  mainSocketOpen === true && (await uiLogCount("ui: live updates reconnected")) === 0,
+  JSON.stringify({ mainSocketOpen }),
+);
 
 // ── e2e: managed-file chrome on the microgrid list ────────────────
 // The overrides file is gone from the server, so nothing in the
@@ -3270,6 +3285,92 @@ check(
   boomLines === 1 && bannerOnHttpError === false,
   JSON.stringify({ boomLines, bannerOnHttpError }),
 );
+// A socket that drops while requests get through is not unreachability. The
+// header status shows the drop until the socket reopens, and on the microgrid
+// list the reopen clears it too. The refused first socket and a later drop are
+// each logged once, with their reopens. This runs in a page of its own on the
+// demo topology. Its first socket is refused, as when a server restarts while
+// the page loads, and the reopen still brings the connection counts back. Later
+// the route closes the first socket that opened, and the next reconnect is
+// refused too, so the socket closes twice before it reopens.
+{
+  const ctx = await browser.newContext(CONTEXT);
+  // Each socket opened while `smokeRefuseSockets` is above zero goes to a port
+  // nothing listens on.
+  await ctx.addInitScript(() => {
+    const Real = window.WebSocket;
+    window.smokeRefuseSockets = 1;
+    window.WebSocket = class extends Real {
+      constructor(url, ...rest) {
+        super(window.smokeRefuseSockets-- > 0 ? "ws://127.0.0.1:1/" : url, ...rest);
+      }
+    };
+  });
+  const p = await ctx.newPage();
+  const sockets = [];
+  // Every socket in the order it was made, the refused ones too: the route
+  // wraps the page's WebSocket, which the init script points elsewhere.
+  await p.routeWebSocket("**/ws/events", (ws) => {
+    sockets.push(ws);
+    ws.connectToServer();
+  });
+  await p.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
+  const statusText = () => p.evaluate(() => document.getElementById("status").textContent);
+  const firstCounts = await waitFor(async () => / connections$/.test(await statusText()) && sockets.length === 2, 8000).catch(
+    () => false,
+  );
+  // The drop and reopen log lines so far, in that order.
+  const socketLogCounts = async () => {
+    const lines = await uiLogLines(p);
+    return ["ui: live updates disconnected", "ui: live updates reconnected"].map((l) => lines.filter((t) => t === l).length);
+  };
+  const firstLogs = await socketLogCounts();
+  await p.evaluate(() => {
+    const banner = document.getElementById("server-banner");
+    window.smokeBannerSeen = false;
+    new MutationObserver(() => {
+      if (!banner.hidden) window.smokeBannerSeen = true;
+    }).observe(banner, { attributes: true });
+  });
+  await p.evaluate(() => {
+    window.smokeRefuseSockets = 1;
+  });
+  sockets[1].close();
+  const dropShown = await waitFor(async () => (await statusText()).startsWith("disconnected"), 5000).catch(() => false);
+  const dropCleared = await waitFor(async () => !(await statusText()).startsWith("disconnected"), 5000).catch(() => false);
+  // One background poll after the reopen.
+  await p.waitForResponse((r) => r.url().endsWith("/metrics/status"), { timeout: 8000 }).catch(() => null);
+  const socketBanner = await p.evaluate(() => window.smokeBannerSeen);
+  const dropLogs = (await socketLogCounts()).map((n, i) => n - firstLogs[i]);
+  // On the microgrid list nothing writes the counts, so only the reopen's own
+  // clear takes "disconnected" away.
+  await p.goto(`${BASE}/#microgrids`);
+  const listView = await waitFor(() => p.evaluate(() => document.body.dataset.mgView === "list"), 5000).catch(() => false);
+  const listSockets = sockets.length + 1;
+  sockets.at(-1).close();
+  const listCleared = await waitFor(async () => sockets.length === listSockets && (await statusText()) === "", 5000).catch(
+    () => false,
+  );
+  const listStatus = await statusText();
+  await ctx.close();
+  check("e2e: a socket that fails before its first open still brings the counts back", firstCounts === true);
+  check(
+    "e2e: a dropped socket shows in the header status until it reopens",
+    dropShown === true && dropCleared === true,
+    JSON.stringify({ dropShown, dropCleared, sockets: sockets.length }),
+  );
+  check("e2e: a dropped socket raises no banner while requests get through", socketBanner === false);
+  check(
+    "e2e: on the microgrid list a reopen clears the status",
+    listView === true && listCleared === true,
+    JSON.stringify({ listView, listStatus, sockets: sockets.length, listSockets }),
+  );
+  check(
+    "e2e: a drop and its reopen are logged once each, for a first socket and for a later drop",
+    JSON.stringify(firstLogs) === "[1,1]" && JSON.stringify(dropLogs) === "[1,1]",
+    JSON.stringify({ firstLogs, dropLogs }),
+  );
+}
 
 // ── e2e: the button kit ────────────────────────────────────────────
 // Header buttons are the secondary kind, the new-dispatch button the

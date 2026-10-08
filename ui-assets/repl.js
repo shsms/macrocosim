@@ -5,11 +5,12 @@
 
 import { dispatchesPanel, escapeHtml, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
+import { onReachedAgain } from "./connection.js";
 import { errorText } from "./http.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
 import { appendLog } from "./logs.js";
 import { metricsStore } from "./metrics-store.js";
-import { notify } from "./notices.js";
+import { logUi, notify } from "./notices.js";
 import {
   COMPLETIONS,
   indentForNewline,
@@ -347,30 +348,45 @@ export function setupRepl() {
 // onopen. A laptop returning from sleep, a server bounce, or a
 // notify-reload that briefly drops connections all heal without
 // a manual page refresh — important for an overnight soak run.
+// While it is closed the header status says so; the banner is for the
+// background requests (connection.js).
 //
-// On reconnect (i.e. open after a previous open) we also nudge a
-// topology refresh because samples may have moved while we were
-// away. The very first open is a no-op there because init()
-// already awaited refreshTopology before opening the WS.
+// An open after a close also nudges a topology refresh, because samples may
+// have moved while we were away and the status line was overwritten. A first
+// open that went through is a no-op there because init() already awaited
+// refreshTopology before opening the WS.
 export function openWebSocket(onTopologyChanged) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${proto}//${location.host}/ws/events`;
   const MIN_DELAY = 1000;
   const MAX_DELAY = 30000;
   let delay = MIN_DELAY;
-  let everConnected = false;
   let lastConfigError = { message: null, tsMs: 0 };
+  // The pending reconnect while the socket is closed, else null.
+  let retry = null;
+  // Whether the socket has closed since it last opened.
+  let dropped = false;
+  // The server is back after the background requests failed to reach it: try
+  // now instead of waiting out the backoff.
+  onReachedAgain(() => {
+    if (retry == null) return;
+    clearTimeout(retry);
+    retry = null;
+    connect();
+  });
   function connect() {
     const ws = new WebSocket(url);
     ws.onopen = () => {
       delay = MIN_DELAY;
-      if (everConnected) {
+      if (dropped) {
+        dropped = false;
+        setStatus("", "");
+        logUi("info", "live updates reconnected");
         // Catch up state the canvas and inspector cached from
         // before the drop. Loopback pill + metrics panel also
         // self-heal via their next poll / WS frame.
         onTopologyChanged(0);
       }
-      everConnected = true;
     };
     ws.onmessage = (msg) => {
       // Defensive: vis-network and other libs sometimes pump non-string
@@ -450,9 +466,14 @@ export function openWebSocket(onTopologyChanged) {
       }
     };
     ws.onclose = () => {
+      if (!dropped) logUi("warn", "live updates disconnected");
+      dropped = true;
       const secs = Math.round(delay / 1000);
       setStatus(`disconnected — retry in ${secs}s`, "error");
-      setTimeout(connect, delay);
+      retry = setTimeout(() => {
+        retry = null;
+        connect();
+      }, delay);
       delay = Math.min(delay * 2, MAX_DELAY);
     };
     // onerror fires alongside onclose; setStatus message stays as
