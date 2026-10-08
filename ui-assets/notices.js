@@ -1,5 +1,6 @@
 // How the UI tells the user about errors: a toast for an action, a form's own
-// .form-error for a form, and the logs panel for every one of them.
+// .form-error for a form, and the logs panel for each of them but a form's own
+// check of its input.
 import { appendLog } from "./logs.js";
 
 const MAX_TOASTS = 5;
@@ -84,9 +85,15 @@ function dismiss(t) {
   if (host?.children.length === 0 && host.matches(":popover-open")) host.hidePopover();
 }
 
-// A form's inline error: shown, and logged unless it is already the one shown.
+// A form's inline error from the server: shown, and logged unless it is already
+// the one shown.
 export function showFormError(el, message) {
   if (el.hidden || el.textContent !== message) logUi("error", message);
+  showInputError(el, message);
+}
+
+// A form's inline error from its own check of the input: shown, not logged.
+export function showInputError(el, message) {
   el.textContent = message;
   el.hidden = false;
 }

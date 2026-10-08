@@ -204,6 +204,7 @@ export function setupRepl() {
       out.className = "repl-error";
       out.textContent = `transport error: ${err.message}`;
       entry.appendChild(out);
+      logUi("error", `REPL: transport error: ${err.message}`);
     }
     input.value = "";
     refreshOverlay();

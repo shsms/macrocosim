@@ -2,7 +2,7 @@
 // Run: node tools/weather-panel-test.mjs   (exits non-zero on failure)
 //
 // The panel's arithmetic — the day curve and the cloud list — is pure
-// over one payload, but the module itself imports three browser-bound
+// over one payload, but the module itself imports four browser-bound
 // siblings (routing.js reaches the whole SPA graph). So rather than a
 // DOM shim, the import lines are swapped for local stubs (zone.js and
 // theme.js, which are DOM-free, for the real modules) and the internals
@@ -22,9 +22,9 @@ const IMPORT_LINE = /^import .*$/gm;
 const raw = readFileSync(SRC, "utf8");
 const stripped = raw.replace(IMPORT_LINE, "");
 const removed = (raw.match(IMPORT_LINE) || []).length;
-if (removed !== 5) {
+if (removed !== 6) {
   console.error(
-    `weather-panel-test: expected 5 single-line imports to stub, found ${removed} — ` +
+    `weather-panel-test: expected 6 single-line imports to stub, found ${removed} — ` +
       "the stubs below no longer cover what weather-panel.js imports",
   );
   process.exit(1);
@@ -52,6 +52,8 @@ const shimmed = [
   "const chartAxis = (_colors, extra = {}) => extra;",
   "const isPanelOpen = () => false;",
   "const makeSidePanelToggle = () => {};",
+  'const setFormError = (el, message) => { el.textContent = message ?? ""; el.hidden = !message; };',
+  "const showInputError = (el, message) => { el.textContent = message; el.hidden = false; };",
   `import * as theme from "${THEME.href}";`,
   `import * as zone from "${ZONE.href}";`,
   stripped,

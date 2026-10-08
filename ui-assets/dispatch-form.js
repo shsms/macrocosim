@@ -13,7 +13,7 @@
 
 import { escapeHtml, mutate } from "./app.js";
 import { ACCEPTS_SETPOINTS } from "./inspect.js";
-import { notify } from "./notices.js";
+import { notify, setFormError, showInputError } from "./notices.js";
 import { mgJson, readSelectedMg } from "./routing.js";
 import * as zone from "./zone.js";
 
@@ -178,11 +178,7 @@ export const dispatchForm = (() => {
     showError("");
   }
 
-  function showError(message) {
-    const el = $("dd-error");
-    el.textContent = message;
-    el.hidden = !message;
-  }
+  const showError = (message) => setFormError($("dd-error"), message);
 
   function buildBody() {
     const type = $("dd-type").value.trim();
@@ -243,7 +239,7 @@ export const dispatchForm = (() => {
     try {
       body = buildBody();
     } catch (err) {
-      showError(err.message);
+      showInputError($("dd-error"), err.message);
       return;
     }
     const mg = currentMg;

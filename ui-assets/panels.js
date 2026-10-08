@@ -323,9 +323,6 @@ export const microgridsPanel = (() => {
   function showCreateMgDialog() {
     const dlg = document.getElementById("create-mg-dialog");
     if (!dlg) return;
-    const err = document.getElementById("create-mg-error");
-    err.hidden = true;
-    err.textContent = "";
     document.getElementById("create-mg-name").value = "";
     // Pre-filled, not fixed: the server re-checks the id under the
     // create lock, and a taken one comes back as the inline 409.
@@ -348,6 +345,7 @@ export const microgridsPanel = (() => {
       .addEventListener("submit", async (e) => {
         e.preventDefault();
         const err = document.getElementById("create-mg-error");
+        clearFormError(err);
         const name = document.getElementById("create-mg-name").value.trim();
         if (!name) return;
         const body = { name };
@@ -364,8 +362,7 @@ export const microgridsPanel = (() => {
           // A taken id or port comes back 409 with the server's own
           // wording — shown in the dialog, which stays open so the
           // user can pick another without retyping the name.
-          err.textContent = ex.message;
-          err.hidden = false;
+          showFormError(err, ex.message);
           return;
         }
         dlg.close();

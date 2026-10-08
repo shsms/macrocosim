@@ -19,6 +19,7 @@
 // when the config does.
 
 import { chartAxis, chartColors, requireUplot } from "./chart-lib.js";
+import { setFormError, showInputError } from "./notices.js";
 import { mgFetch } from "./routing.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 import * as theme from "./theme.js";
@@ -339,11 +340,16 @@ const postWeather = (payload) =>
 const errorOf = (res) =>
   res.noSelection ? "no microgrid selected" : (res.body?.error ?? `request failed (${res.status || "no response"})`);
 
+// The panel's inline error: showError for a server answer (or null to clear
+// it), showInvalid for the panel's own check of a field.
 function showError(text) {
   const el = document.getElementById("weather-error");
-  if (!el) return;
-  el.textContent = text ?? "";
-  el.hidden = !text;
+  if (el) setFormError(el, text);
+}
+
+function showInvalid(text) {
+  const el = document.getElementById("weather-error");
+  if (el) showInputError(el, text);
 }
 
 // ── editable fields ─────────────────────────────────────────────────
@@ -468,7 +474,7 @@ async function commitField(f) {
   let value;
   if (f.kind === "time") {
     if (hhmmToSecs(text) === null) {
-      showError(`${f.label}: expected "HH:MM"`);
+      showInvalid(`${f.label}: expected "HH:MM"`);
       inp.value = inp.dataset.live ?? "";
       return;
     }
@@ -476,7 +482,7 @@ async function commitField(f) {
   } else {
     value = Number(text);
     if (!Number.isFinite(value)) {
-      showError(`${f.label}: expected a number`);
+      showInvalid(`${f.label}: expected a number`);
       inp.value = inp.dataset.live ?? "";
       return;
     }
@@ -497,7 +503,7 @@ async function commitRange(r) {
   const lo = Number(loEl.value.trim());
   const hi = Number(hiEl.value.trim());
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-    showError(`${r.label}: both bounds must be numbers`);
+    showInvalid(`${r.label}: both bounds must be numbers`);
     loEl.value = loEl.dataset.live ?? "";
     hiEl.value = hiEl.dataset.live ?? "";
     return;
@@ -829,7 +835,7 @@ async function fireCloud() {
   const duration = numIn(PASS_CLOUD.duration);
   const ramp = numIn(PASS_CLOUD.ramp);
   if (!Number.isFinite(depth) || !Number.isFinite(duration) || !Number.isFinite(ramp)) {
-    showError("pass a cloud: depth, duration and ramp must all be numbers");
+    showInvalid("pass a cloud: depth, duration and ramp must all be numbers");
     return;
   }
   const res = await postWeather({

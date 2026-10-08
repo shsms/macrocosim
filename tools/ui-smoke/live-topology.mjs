@@ -3571,10 +3571,14 @@ const smokeRow = () =>
 await page.click('#mg-subtoggle .mode-btn[data-subview="dispatches"]');
 // The type field while it has focus, for the field kit's check below.
 let ddField = null;
+// The form's own check of an empty type: shown, not logged.
+let ddInvalid = null;
 const [startZone, startCell] = await inUtc(async () => {
   await page.click("#dispatch-new-btn");
   await waitFor(() => page.evaluate(() => document.getElementById("dispatch-dialog").open), 8000);
   const zoneText = ((await page.textContent("#dd-start-zone")) || "").trim();
+  await page.click('#dispatch-form button[type="submit"]');
+  ddInvalid = { shown: await shownError("#dd-error"), logged: await uiLogCount("ui: type is required") };
   await page.fill("#dd-type", "smoke-zone");
   ddField = await page.evaluate(() => {
     const s = getComputedStyle(document.activeElement);
@@ -3594,6 +3598,11 @@ check(
   JSON.stringify({ ddField, accent }),
 );
 check("e2e: a dispatch's start shows the wall time it was entered at", startCell === "15 Jan 2030, 09:30", String(startCell));
+check(
+  "e2e: a form's own check of its input is shown, not logged",
+  ddInvalid?.shown === "type is required" && ddInvalid.logged === 0,
+  JSON.stringify(ddInvalid),
+);
 page.once("dialog", (d) => d.accept());
 await page.click('.disp-table tbody tr:has-text("smoke-zone") [data-disp-del]');
 await waitFor(async () => (await smokeRow()) === null, 8000).catch(() => null);

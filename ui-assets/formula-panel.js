@@ -10,7 +10,7 @@
 import { jumpToTopology } from "./app.js";
 import { formulaToHtml, formulaToText, parseFormula } from "./formula-ast.js";
 import { errorText } from "./http.js";
-import { notify } from "./notices.js";
+import { clearFormError, notify, showFormError } from "./notices.js";
 import { mgFetch, readSelectedMg } from "./routing.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 import { topology } from "./topology.js";
@@ -266,9 +266,7 @@ function stale(seq) {
 // Show `message` in the error banner and clear the formula pane. Only
 // ever called from behind a stale() guard, so the elements exist.
 function showFormulaError(message) {
-  const errorEl = document.getElementById("formula-error");
-  errorEl.textContent = message;
-  errorEl.hidden = false;
+  showFormError(document.getElementById("formula-error"), message);
   document.getElementById("formula-view").innerHTML = "";
   formulaText = "";
 }
@@ -334,7 +332,7 @@ export async function refreshFormula() {
     return;
   }
   if (stale(seq)) return;
-  document.getElementById("formula-error").hidden = true;
+  clearFormError(document.getElementById("formula-error"));
   formulaText = data.formula;
   const ast = parseFormula(data.formula);
   document.getElementById("formula-view").innerHTML = formulaToHtml(ast);
