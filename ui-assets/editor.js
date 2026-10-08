@@ -3,9 +3,8 @@
 // the floating right-click menu, the side-panel `Add component`
 // form, and helpers around them.
 
-import { escapeHtml } from "./app.js";
+import { escapeHtml, mutate } from "./app.js";
 import { evalQuoted } from "./eval.js";
-import { errorText } from "./http.js";
 import { OPERATIONAL_MODES, showComponent } from "./inspect.js";
 import { notify } from "./notices.js";
 import { makeFnFor, pasteSource } from "./paste-forms.js";
@@ -52,11 +51,12 @@ export const undoMgr = (() => {
       notify(`Select a microgrid to ${direction}.`);
       return;
     }
-    const res = await fetch(`/api/mg/${mgId}/${direction}`, { method: "POST" });
-    if (!res.ok) {
-      // 409 is "nothing left on that stack" or "unmanaged file" —
-      // the server's own wording says which, so pass it through.
-      notify(`${cap(direction)} failed: ${await errorText(res)}`);
+    try {
+      await mutate("POST", `/api/mg/${mgId}/${direction}`);
+    } catch (e) {
+      // A 409 is "nothing left on that stack" or "unmanaged file" — the
+      // server's own wording says which, so pass it through.
+      notify(`${cap(direction)} failed: ${e.message}`);
     }
   }
   const cap = (s) => s[0].toUpperCase() + s.slice(1);

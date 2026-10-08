@@ -342,6 +342,14 @@ let topologyBackfillTimer = null;
 let topologyBackfillPending = false;
 
 async function init() {
+  // A failure no handler caught still reaches the user and the logs panel.
+  window.addEventListener("unhandledrejection", (e) => notify(`Unexpected error: ${e.reason?.message ?? e.reason}`));
+  window.addEventListener("error", (e) => {
+    // An error event with no Error object is a browser notice, such as a
+    // ResizeObserver loop it has already settled, not a failure.
+    if (!e.error) return;
+    notify(`Unexpected error: ${e.error.message ?? e.error}`);
+  });
   setupAddForm();
   setupDefaultsToggle();
   setupScenarioReportToggle();

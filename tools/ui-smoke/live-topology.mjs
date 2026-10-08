@@ -2334,6 +2334,57 @@ check(
     !redoToast.includes('{"error"'),
   JSON.stringify({ status: redoRes?.status(), redoError, redoToast }),
 );
+// An undo that cannot reach the server toasts like a refused one, rather
+// than failing as an unhandled rejection.
+await page.route("**/api/mg/*/undo", (r) => r.abort());
+await page.evaluate(() => {
+  import("/assets/editor.js").then((m) => m.undoMgr.undo());
+});
+const undoToast = await waitFor(
+  async () =>
+    (await toastTexts()).find((t) => t.startsWith("Undo failed:")) || null,
+  5000,
+).catch(() => null);
+await page.unroute("**/api/mg/*/undo");
+check("e2e: an undo that cannot reach the server toasts", undoToast !== null, String(undoToast));
+// A rejection nothing caught still reaches the user as a toast. In a page
+// of its own, since it is a page error on purpose.
+{
+  const ctx = await browser.newContext(CONTEXT);
+  const p = await ctx.newPage();
+  await p.goto(`${BASE}/#microgrids`, { waitUntil: "networkidle" });
+  await p.evaluate(() => {
+    Promise.reject(new Error("smoke stray"));
+  });
+  const strayToast = await waitFor(async () => (await toastTexts(p)).includes("Unexpected error: smoke stray"), 5000).catch(
+    () => false,
+  );
+  // An uncaught throw toasts its own message.
+  await p.evaluate(() => {
+    setTimeout(() => {
+      throw new Error("smoke thrown");
+    });
+  });
+  const thrownToast = await waitFor(async () => (await toastTexts(p)).includes("Unexpected error: smoke thrown"), 5000).catch(
+    () => false,
+  );
+  // The browser's own ResizeObserver loop notice is noise, not an error to
+  // show; a rejection with a bare value still reads as that value.
+  await p.evaluate(() => {
+    window.dispatchEvent(new ErrorEvent("error", { message: "ResizeObserver loop completed with undelivered notifications." }));
+    Promise.reject("plain reason");
+  });
+  await p.waitForTimeout(300);
+  const strayMessages = await toastTexts(p);
+  await ctx.close();
+  check("e2e: a rejection nothing caught still toasts", strayToast === true);
+  check("e2e: an uncaught throw toasts its own message", thrownToast === true, JSON.stringify(strayMessages));
+  check(
+    "e2e: the safety net skips ResizeObserver notices and names a bare rejection",
+    !strayMessages.some((m) => m.includes("ResizeObserver")) && strayMessages.includes("Unexpected error: plain reason"),
+    JSON.stringify(strayMessages),
+  );
+}
 await page.click('.mode-btn[data-mode="microgrids"]');
 await page.click(DEMO_CARD);
 
