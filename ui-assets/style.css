@@ -300,6 +300,11 @@ kbd {
   border-color: var(--bad);
 }
 .btn-sm { font-size: var(--text-sm); padding: 1px var(--space-2); }
+/* Keyboard focus on any button. */
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 /* A glyph-only button (×, ⤓, ✕): a square of --icon-btn-size. */
 .btn-icon {
   width: var(--icon-btn-size);
@@ -533,6 +538,8 @@ dialog header h3 {
 .pulse-pill.warn { color: var(--warn-strong); border-color: var(--warn-strong); }
 .pulse-pill.bad  { color: var(--bad); border-color: var(--bad); }
 .pulse-chip {
+  font: inherit;
+  background: transparent;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 0 var(--space-2);

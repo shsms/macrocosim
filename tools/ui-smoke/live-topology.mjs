@@ -3110,10 +3110,35 @@ const fonts = await page.evaluate(() => {
 });
 check("e2e: page text is IBM Plex Sans and the header buttons IBM Plex Mono", /^"IBM Plex Sans"/.test(fonts.body) && /^"IBM Plex Mono"/.test(fonts.button), JSON.stringify(fonts));
 check("e2e: the clock is mono with tabular figures", /^"IBM Plex Mono"/.test(fonts.clock) && fonts.numerals === "tabular-nums", JSON.stringify(fonts));
+// ── e2e: the pulse-bar chips work from the keyboard ─────────────────
+// Tab reaches the theme chip from the zone chip, so :focus-visible
+// applies; Enter cycles it.
+const accent = await tokenColour("--accent");
+const chipTag = await page.evaluate(() => document.getElementById("theme-toggle").tagName);
+await page.focus("#tz-toggle");
+await page.keyboard.press("Tab");
+const chipRing = await page.evaluate(() => {
+  const s = getComputedStyle(document.activeElement);
+  return { id: document.activeElement.id, style: s.outlineStyle, colour: s.outlineColor };
+});
+const chipBefore = await page.textContent("#theme-toggle");
+await page.keyboard.press("Enter");
+const chipAfter = await page.textContent("#theme-toggle");
+await choose("auto");
+check(
+  "e2e: the theme chip is a button Enter works",
+  chipTag === "BUTTON" && chipRing.id === "theme-toggle" && chipBefore !== chipAfter,
+  JSON.stringify({ chipTag, chipRing, chipBefore, chipAfter }),
+);
+check(
+  "e2e: a focused chip shows the focus ring",
+  chipRing.style === "solid" && chipRing.colour === accent,
+  JSON.stringify({ chipRing, accent }),
+);
+
 // ── e2e: the button kit ────────────────────────────────────────────
 // Header buttons are the secondary kind, the new-dispatch button the
 // primary one; a disabled kit button is dimmed and ignores hover.
-const accent = await tokenColour("--accent");
 const kit = await page.evaluate(() => {
   const disabled = document.createElement("button");
   disabled.className = "btn btn-danger";
