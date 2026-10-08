@@ -21,6 +21,8 @@
   --bg-elev: #262b34;
   /* Card and bar surfaces: the elevated background. */
   --panel: var(--bg-elev);
+  /* Inputs, code wells and timelines: a step below the background. */
+  --bg-deep: #1b1f27;
   --border: #353a45;
   --fg: #b0b8c1;
   --muted: #7d848e;
@@ -28,7 +30,31 @@
   --good: #6fbf73;
   --bad: #e58275;
   --warn: #d9c46b;
+  /* The saturated amber of warn pills, standby chips and warn log lines. */
+  --warn-strong: #d2a106;
   --standby: #c4ad55;
+  /* Chart axes, grid lines and the zero line (read by chart-lib.js). */
+  --chart-axis: var(--muted);
+  --chart-grid: var(--border);
+  --chart-zero: #3d4450;
+  /* Elevation: chips and toasts, menus, floating cards. */
+  --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --backdrop: rgba(0, 0, 0, 0.55);
+  /* REPL syntax: the rainbow parens by depth, then the token kinds. */
+  --syn-paren-1: #dd3333;
+  --syn-paren-2: #dd8800;
+  --syn-paren-3: #cccc00;
+  --syn-paren-4: #22cc22;
+  --syn-paren-5: #2299cc;
+  --syn-paren-6: #4466cc;
+  --syn-paren-7: #cc44cc;
+  --syn-mismatch: #ff5555;
+  --syn-string: #e8a366;
+  --syn-comment: #888888;
+  --syn-special: #c08cf0;
+  --syn-fn: #7ab8ff;
   /* Graph pills and the hover card (pill.js reads these once at load). */
   --pill-surface: #242a33;
   --pill-border: #323a45;
@@ -132,14 +158,14 @@ header strong {
 .active-scenarios {
   font-family: var(--font-mono);
   font-size: 14px;
-  color: var(--good, #6bd97b);
-  background: rgba(96, 200, 120, 0.12);
+  color: var(--good);
+  background: color-mix(in srgb, var(--good) 12%, transparent);
   padding: 2px 8px;
   border-radius: 10px;
-  border: 1px solid rgba(96, 200, 120, 0.35);
+  border: 1px solid color-mix(in srgb, var(--good) 35%, transparent);
   cursor: pointer;
 }
-.active-scenarios:hover { border-color: var(--good, #6bd97b); }
+.active-scenarios:hover { border-color: var(--good); }
 
 /* Every <dialog> in the app is a themed modal with the same
    header shape (h3 title + × close), so the base theme applies by
@@ -158,7 +184,7 @@ dialog {
   max-height: 80vh;
 }
 dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--backdrop);
 }
 dialog header {
   display: flex;
@@ -237,7 +263,7 @@ dialog header button:hover { color: var(--fg); }
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 4px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-2);
   padding: 4px 0;
   font-family: var(--font-mono);
   font-size: 14px;
@@ -309,7 +335,7 @@ dialog header button:hover { color: var(--fg); }
   max-width: 28rem;
   white-space: pre-wrap;
   pointer-events: auto;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-1);
 }
 .toast-error { border-color: var(--cat-grid); }
 .toast-success { border-color: var(--accent); }
@@ -347,7 +373,7 @@ dialog header button:hover { color: var(--fg); }
   color: var(--fg);
 }
 .pulse-pill.ok   { color: var(--good); border-color: var(--good); }
-.pulse-pill.warn { color: #d2a106; border-color: #d2a106; }
+.pulse-pill.warn { color: var(--warn-strong); border-color: var(--warn-strong); }
 .pulse-pill.bad  { color: var(--bad); border-color: var(--bad); }
 .pulse-chip {
   border: 1px solid var(--border);
@@ -366,7 +392,7 @@ dialog header button:hover { color: var(--fg); }
 #pulse-spark rect.bar { fill: currentColor; }
 .health-chip { font-variant-numeric: tabular-nums; }
 .health-chip.ok      { color: var(--good); }
-.health-chip.standby { color: #d2a106; }
+.health-chip.standby { color: var(--warn-strong); }
 .health-chip.error   { color: var(--bad); }
 
 main {
@@ -478,7 +504,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
 }
 .mglist-card:hover { border-color: var(--accent); }
 .mglist-id {
-  font-family: var(--mono, ui-monospace, "Cascadia Mono", monospace);
+  font-family: var(--font-mono);
   font-size: 13px;
   color: var(--muted);
 }
@@ -492,7 +518,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
   letter-spacing: 0.04em;
   padding: 1px 6px;
   border-radius: 3px;
-  background: rgba(121, 184, 255, 0.18);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 .mglist-meta {
@@ -552,7 +578,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
 .repl-mg-chip {
   font: inherit;
   font-size: 14px;
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 4px 10px;
@@ -588,7 +614,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 #topology-empty-hint ol { padding-left: 20px; margin: 6px 0; }
 #topology-empty-hint li { margin: 4px 0; }
 #topology-empty-hint code {
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   padding: 1px 4px;
   border-radius: 3px;
 }
@@ -626,16 +652,16 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 .formula-panel h2 code {
   font-size: 15px;
   color: var(--accent);
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   padding: 1px 6px;
   border-radius: 3px;
 }
 .formula-tree {
-  font-family: var(--mono, ui-monospace, "Cascadia Mono", monospace);
+  font-family: var(--font-mono);
   font-size: 14px;
   line-height: 1.5;
   white-space: pre-wrap;
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 10px 12px;
@@ -647,10 +673,10 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   cursor: pointer;
   text-decoration: underline dotted;
 }
-.formula-ref:hover { color: var(--good, #6bd97b); }
+.formula-ref:hover { color: var(--good); }
 .formula-num { color: var(--muted); }
 .formula-op  { color: var(--warn); }
-.formula-call { color: var(--good, #6bd97b); }
+.formula-call { color: var(--good); }
 
 #snapshots-dialog #snapshot-save-form {
   display: flex;
@@ -667,7 +693,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   color: var(--muted);
 }
 #snapshots-dialog #snapshot-name-input {
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--fg);
@@ -693,7 +719,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   color: var(--muted);
 }
 #create-mg-form .dlg-input {
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--fg);
@@ -720,7 +746,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   font-size: 14px;
   border: 1px solid var(--warn);
   border-radius: 4px;
-  background: rgba(217, 196, 107, 0.12);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
 /* File-state chips on a microgrid card and in its header. */
@@ -733,12 +759,12 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   margin-left: 4px;
 }
 .mg-chip.unmanaged {
-  background: rgba(217, 196, 107, 0.18);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
   color: var(--warn);
 }
 .mg-chip.unsaved,
 .mg-chip.failed {
-  background: rgba(255, 121, 121, 0.18);
+  background: color-mix(in srgb, var(--bad) 18%, transparent);
   color: var(--bad);
 }
 .mg-chip.failed {
@@ -792,7 +818,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   color: var(--muted);
 }
 #load-script-dialog #load-script-path {
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--fg);
@@ -809,7 +835,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 }
 .snapshot-row:last-child { border-bottom: none; }
 .snapshot-name {
-  font-family: var(--mono, ui-monospace, "Cascadia Mono", monospace);
+  font-family: var(--font-mono);
   font-size: 15px;
 }
 
@@ -824,15 +850,15 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  background: rgba(217, 196, 107, 0.18);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
   color: var(--warn);
   padding: 2px 8px;
   border-radius: 4px;
   white-space: nowrap;
 }
-.sc-badge.running { background: rgba(121, 184, 255, 0.18); color: var(--accent, #79b8ff); }
-.sc-badge.pass { background: rgba(95, 179, 122, 0.18); color: #5fb37a; }
-.sc-badge.fail { background: rgba(217, 117, 107, 0.2); color: #d9756b; }
+.sc-badge.running { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.sc-badge.pass { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.sc-badge.fail { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); }
 
 /* Registered-scenario list */
 .scenarios-list { display: grid; gap: 6px; margin-bottom: 18px; }
@@ -867,7 +893,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 .sc-run-timeline {
   position: relative;
   height: 34px;
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 6px;
 }
@@ -882,9 +908,9 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 }
 .sc-tl-cue { border-radius: 50%; }
 .sc-tl-check { transform: translate(-50%, -50%) rotate(45deg); } /* diamond */
-.sc-tl-fired { background: var(--accent, #79b8ff); border-color: var(--accent, #79b8ff); }
-.sc-tl-pass { background: #5fb37a; border-color: #5fb37a; }
-.sc-tl-fail { background: #d9756b; border-color: #d9756b; }
+.sc-tl-fired { background: var(--accent); border-color: var(--accent); }
+.sc-tl-pass { background: var(--good); border-color: var(--good); }
+.sc-tl-fail { background: var(--bad); border-color: var(--bad); }
 .sc-run-cols { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
 .sc-run-metrics h3, .sc-run-checks h3, .sc-run-events h3 {
   font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em;
@@ -900,16 +926,16 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   padding: 3px 0;
   font-variant-numeric: tabular-nums;
 }
-.sc-check.pass > span:first-child { color: #5fb37a; }
-.sc-check.fail > span:first-child { color: #d9756b; }
+.sc-check.pass > span:first-child { color: var(--good); }
+.sc-check.fail > span:first-child { color: var(--bad); }
 .sc-event { font-size: 14px; padding: 2px 0; }
-.sc-event code { color: var(--accent, #79b8ff); }
+.sc-event code { color: var(--accent); }
 .sc-csv-link {
   display: inline-block;
   font-size: 14px;
   margin: 2px 8px 2px 0;
-  color: var(--accent, #79b8ff);
-  font-family: var(--mono, ui-monospace, "Cascadia Mono", monospace);
+  color: var(--accent);
+  font-family: var(--font-mono);
 }
 
 /* ── Floating panels ─────────────────────────────────────────────────
@@ -988,7 +1014,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-3);
   overflow: hidden;
 }
 .float-panel.open { display: flex; flex-direction: column; }
@@ -1164,7 +1190,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 4px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-2);
   padding: 4px 0;
   font-family: var(--font-mono);
   font-size: 14px;
@@ -1187,7 +1213,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   position: absolute;
   display: none;
   pointer-events: none;
-  background: rgba(121, 184, 255, 0.10);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   border: 0 dashed var(--accent);
 }
 /* The 40px extents keep in step with SNAP_ZONE in side-panel.js. */
@@ -1218,7 +1244,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-1);
 }
 .canvas-btn:hover { border-color: var(--accent); color: var(--accent); }
 #add-panel {
@@ -1235,7 +1261,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-3);
 }
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #add-toggle {
   display: inline-flex;
@@ -1326,7 +1352,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .log-line .log-ts { color: var(--muted); flex-shrink: 0; }
 .log-line .log-lvl { flex-shrink: 0; width: 4ch; text-transform: lowercase; }
 .log-line.info  .log-lvl { color: var(--accent); }
-.log-line.warn  .log-lvl { color: #d2a106; }
+.log-line.warn  .log-lvl { color: var(--warn-strong); }
 .log-line.error .log-lvl { color: var(--bad); }
 .log-line.debug .log-lvl,
 .log-line.trace .log-lvl { color: var(--muted); }
@@ -1396,7 +1422,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   z-index: 1;
 }
 #repl-input:focus { outline: 1px solid var(--accent); }
-#repl-input::selection { background: rgba(120, 160, 220, 0.35); color: transparent; }
+#repl-input::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: transparent; }
 #repl-input-overlay {
   position: absolute;
   inset: 0;
@@ -1406,20 +1432,20 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   overflow: hidden;
   z-index: 0;
 }
-.paren-0 { color: #d33; }
-.paren-1 { color: #d80; }
-.paren-2 { color: #cc0; }
-.paren-3 { color: #2c2; }
-.paren-4 { color: #29c; }
-.paren-5 { color: #46c; }
-.paren-6 { color: #c4c; }
-.paren-mismatch { color: #f55; background: rgba(255, 80, 80, 0.18); }
-.repl-string { color: #e8a366; }
-.repl-comment { color: #888; font-style: italic; }
+.paren-0 { color: var(--syn-paren-1); }
+.paren-1 { color: var(--syn-paren-2); }
+.paren-2 { color: var(--syn-paren-3); }
+.paren-3 { color: var(--syn-paren-4); }
+.paren-4 { color: var(--syn-paren-5); }
+.paren-5 { color: var(--syn-paren-6); }
+.paren-6 { color: var(--syn-paren-7); }
+.paren-mismatch { color: var(--syn-mismatch); background: color-mix(in srgb, var(--syn-mismatch) 18%, transparent); }
+.repl-string { color: var(--syn-string); }
+.repl-comment { color: var(--syn-comment); font-style: italic; }
 /* Special-form heads (defun / let / when / …): syntax keywords. */
-.repl-special-form { color: #c08cf0; font-weight: bold; }
+.repl-special-form { color: var(--syn-special); font-weight: bold; }
 /* Any other symbol immediately after `(` — a function call. */
-.repl-function-head { color: #7ab8ff; }
+.repl-function-head { color: var(--syn-fn); }
 
 #repl-completions {
   position: absolute;
@@ -1437,7 +1463,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   max-height: 220px;
   overflow-y: auto;
   z-index: 10;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-2);
 }
 #repl-completions li {
   padding: 3px 10px;
@@ -1859,7 +1885,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-size: 12px;
   padding: 1px 6px;
   border-radius: 8px;
-  background: rgba(121, 184, 255, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
   border: 1px solid var(--accent);
 }
@@ -1901,11 +1927,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   border: 1px solid var(--border);
 }
 #inspect .insp-cat-chip { background: transparent; }
-#inspect .insp-health-chip.ok      { background: rgba(111, 191, 115, 0.16); color: var(--good); border-color: var(--good); }
-#inspect .insp-health-chip.standby { background: rgba(196, 173, 85, 0.16); color: var(--standby); border-color: var(--standby); }
-#inspect .insp-health-chip.error   { background: rgba(229, 130, 117, 0.16); color: var(--bad); border-color: var(--bad); }
+#inspect .insp-health-chip.ok      { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); border-color: var(--good); }
+#inspect .insp-health-chip.standby { background: color-mix(in srgb, var(--standby) 16%, transparent); color: var(--standby); border-color: var(--standby); }
+#inspect .insp-health-chip.error   { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); border-color: var(--bad); }
 #inspect .insp-augmented {
-  background: rgba(121, 184, 255, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
   border-color: var(--accent);
 }
@@ -1932,17 +1958,17 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #inspect .seg-chip:hover { border-color: var(--accent); }
 #inspect .seg-chip.on-good {
-  background: rgba(111, 191, 115, 0.16);
+  background: color-mix(in srgb, var(--good) 16%, transparent);
   color: var(--good);
   border-color: var(--good);
 }
 #inspect .seg-chip.on-warn {
-  background: rgba(196, 173, 85, 0.16);
+  background: color-mix(in srgb, var(--standby) 16%, transparent);
   color: var(--standby);
   border-color: var(--standby);
 }
 #inspect .seg-chip.on-bad {
-  background: rgba(229, 130, 117, 0.16);
+  background: color-mix(in srgb, var(--bad) 16%, transparent);
   color: var(--bad);
   border-color: var(--bad);
 }
@@ -2200,7 +2226,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   grid-template-columns: max-content 1fr;
   gap: 2px 8px;
 }
-.sc-report-dl dt { color: var(--muted, #888); }
+.sc-report-dl dt { color: var(--muted); }
 .sc-report-dl dd { margin: 0; }
 .sc-report-tbl {
   width: 100%;
@@ -2227,7 +2253,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   border-bottom: 1px solid var(--border);
 }
 .sc-events code {
-  color: var(--muted, #888);
+  color: var(--muted);
   margin-right: 0.5rem;
 }
 
@@ -2366,7 +2392,7 @@ dialog#dispatch-dialog { max-width: 640px; }
   color: var(--muted);
 }
 .dd-input {
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--fg);
@@ -2406,7 +2432,7 @@ dialog#dispatch-dialog { max-width: 640px; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: 14px;
   color: var(--fg);
@@ -2417,7 +2443,7 @@ dialog#dispatch-dialog { max-width: 640px; }
 .dd-chip:hover { border-color: var(--accent); }
 .dd-chip.active {
   border-color: var(--accent);
-  background: rgba(121, 184, 255, 0.12);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
 }
 .dd-chip-n { color: var(--muted); font-size: 13px; }
@@ -2429,7 +2455,7 @@ dialog#dispatch-dialog { max-width: 640px; }
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--bg-deep, #1b1f27);
+  background: var(--bg-deep);
   padding: 4px 0;
 }
 .dd-comp-group {
@@ -2517,7 +2543,7 @@ dialog#dispatch-dialog { max-width: 640px; }
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-1);
 }
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #topology-controls {
   display: flex;
@@ -2638,9 +2664,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .tool-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .graph-error {
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 14px;
-  color: var(--bad, #e58275);
+  color: var(--bad);
   white-space: pre-wrap;
 }
 
@@ -2651,7 +2677,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   text-decoration: none;
 }
 .formula-ref.hl.hl-sub {
-  background: var(--bad, #e58275);
+  background: var(--bad);
   color: var(--bg);
 }
 /* Subtracted terms tint pastel red: they are removed from the
@@ -2664,26 +2690,26 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
    (nearest wrapper via closest()) stays exact at any depth. */
 .formula-subtracted,
 .formula-subtracted .formula-num,
-.formula-subtracted .formula-call { color: var(--bad, #e58275); }
-.formula-subtracted .formula-ref:not(.hl) { color: var(--bad, #e58275); }
-.formula-subtracted .formula-ref:not(.hl):hover { color: var(--good, #6bd97b); }
+.formula-subtracted .formula-call { color: var(--bad); }
+.formula-subtracted .formula-ref:not(.hl) { color: var(--bad); }
+.formula-subtracted .formula-ref:not(.hl):hover { color: var(--good); }
 .formula-unsubtracted { color: var(--fg); }
 .formula-unsubtracted .formula-num { color: var(--muted); }
-.formula-unsubtracted .formula-call { color: var(--good, #6bd97b); }
+.formula-unsubtracted .formula-call { color: var(--good); }
 .formula-unsubtracted .formula-ref:not(.hl) { color: var(--accent); }
-.formula-unsubtracted .formula-ref:not(.hl):hover { color: var(--good, #6bd97b); }
+.formula-unsubtracted .formula-ref:not(.hl):hover { color: var(--good); }
 /* …and a flip back to subtracted inside one of those out-specifies
    the restore again (`#2 - (#3 - (#4 - #5))`) — this rung wins on
    specificity, not source order, and it is the ladder's last. */
 .formula-unsubtracted .formula-subtracted,
 .formula-unsubtracted .formula-subtracted .formula-num,
-.formula-unsubtracted .formula-subtracted .formula-call { color: var(--bad, #e58275); }
-.formula-unsubtracted .formula-subtracted .formula-ref:not(.hl) { color: var(--bad, #e58275); }
-.formula-unsubtracted .formula-subtracted .formula-ref:not(.hl):hover { color: var(--good, #6bd97b); }
+.formula-unsubtracted .formula-subtracted .formula-call { color: var(--bad); }
+.formula-unsubtracted .formula-subtracted .formula-ref:not(.hl) { color: var(--bad); }
+.formula-unsubtracted .formula-subtracted .formula-ref:not(.hl):hover { color: var(--good); }
 .formula-node.expr-hl {
-  background: rgba(121, 184, 255, 0.14);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   border-radius: 3px;
-  outline: 1px solid rgba(121, 184, 255, 0.35);
+  outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 /* Component palette in the ＋ Add panel: one button per variant,
@@ -2732,7 +2758,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   border-radius: 10px;
   background: var(--pill-surface);
   border: 1px solid var(--pill-border);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-3);
   color: var(--pill-fg);
   font-family: "IBM Plex Sans", var(--font-sans);
   font-size: 14px;
@@ -2743,8 +2769,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .hover-card .hc-title { font-weight: 600; font-size: 15px; }
 .hover-card .hc-id { color: var(--muted); font-family: "IBM Plex Mono", var(--font-mono); font-size: 13px; margin-bottom: 6px; }
 .hover-card .hc-chip { font-size: 12px; padding: 1px 6px; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
-.hover-card .hc-chip-error { background: var(--bad); color: #1c2128; }
-.hover-card .hc-chip-standby { background: var(--standby); color: #1c2128; }
+.hover-card .hc-chip-error { background: var(--bad); color: var(--bg); }
+.hover-card .hc-chip-standby { background: var(--standby); color: var(--bg); }
 .hover-card .hc-spark { display: block; width: 100%; height: 36px; margin: 2px 0 6px; }
 .hover-card .hc-spark-empty { color: var(--muted); font-size: 13px; line-height: 36px; text-align: center; }
 .hover-card .hc-spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
