@@ -375,41 +375,35 @@ export const microgridsPanel = (() => {
       });
   }
 
-  // The import dialog's answer, handed back to importSiteFiles. The
-  // submit handler parks it here just before closing the dialog, so
-  // the single `close` listener settles every way out — Escape, ×,
-  // the backdrop and submit alike — and a cancel is simply the value
-  // staying null.
-  let importAnswer = null;
+  // Settles the pending ask with the next answer: `{ name, mid }` from a
+  // submit, which leaves the dialog open, or null when it closes.
   let settleImport = null;
 
   // Ask for the imported microgrid's name and id. Resolves to
   // `{ name, mid }` — `mid` null for "let the server allocate" — or
-  // null if the user backed out.
-  //
-  // `seed` re-opens the dialog after a refused import: the previous
-  // answer back in the fields, the server's wording in the error
-  // paragraph. Without one the dialog starts fresh.
-  function askImportDetails(seed = null) {
+  // null if the user backed out. The dialog opens fresh if it is closed;
+  // after a refused import it is still open, with the user's answer and
+  // the server's error in it, and this waits for the next submit.
+  function askImportDetails() {
     const dlg = document.getElementById("import-mg-dialog");
     if (!dlg) return Promise.resolve(null);
-    const err = document.getElementById("import-mg-error");
-    err.textContent = seed?.error || "";
-    err.hidden = !seed?.error;
-    document.getElementById("import-mg-name").value = seed?.name || "";
-    // Pre-filled the way the create dialog pre-fills its id — the
-    // lowest free one — and just as editable: the server re-checks
-    // under the create lock, and a taken one comes back as a 409.
-    document.getElementById("import-mg-id").value = seed
-      ? seed.mid == null
-        ? ""
-        : String(seed.mid)
-      : String(nextFreeId());
-    return new Promise((resolve) => {
-      importAnswer = null;
-      settleImport = resolve;
+    if (!dlg.open) {
+      document.getElementById("import-mg-name").value = "";
+      // Pre-filled the way the create dialog pre-fills its id — the
+      // lowest free one — and just as editable: the server re-checks
+      // under the create lock, and a taken one comes back as a 409.
+      document.getElementById("import-mg-id").value = String(nextFreeId());
       dlg.showModal();
+    }
+    return new Promise((resolve) => {
+      settleImport = resolve;
     });
+  }
+
+  function settleImportWith(answer) {
+    const settle = settleImport;
+    settleImport = null;
+    settle?.(answer);
   }
 
   function setupImportMgDialog() {
@@ -421,16 +415,13 @@ export const microgridsPanel = (() => {
     dlg.addEventListener("click", (e) => {
       if (e.target === dlg) dlg.close();
     });
-    dlg.addEventListener("close", () => {
-      const settle = settleImport;
-      settleImport = null;
-      if (settle) settle(importAnswer);
-    });
+    dlg.addEventListener("close", () => settleImportWith(null));
     document.getElementById("import-mg-form").addEventListener("submit", (e) => {
       e.preventDefault();
       const err = document.getElementById("import-mg-error");
       const name = document.getElementById("import-mg-name").value.trim();
       if (!name) return;
+      clearFormError(err);
       // A blank id field means "let the server allocate" — the same
       // bargain the create dialog offers, and the only way to reach
       // the import endpoint's auto-assign path from the UI. A filled
@@ -447,8 +438,7 @@ export const microgridsPanel = (() => {
           return;
         }
       }
-      importAnswer = { name, mid };
-      dlg.close();
+      settleImportWith({ name, mid });
     });
   }
 
@@ -516,14 +506,14 @@ export const microgridsPanel = (() => {
       notify("Pick the components.json file (connections.json is optional).");
       return;
     }
-    // The parsed exports stay in scope across retries: a refused id
-    // reopens the dialog rather than ending the import, so correcting
-    // it costs one edit instead of another trip through the file
-    // picker (the input was cleared the moment it fired). Cancelling
-    // from the reopened dialog still abandons the whole thing.
-    let seed = null;
+    // The parsed exports stay in scope across retries: a refused id keeps
+    // the dialog open with the server's error rather than ending the
+    // import, so correcting it costs one edit instead of another trip
+    // through the file picker (the input was cleared the moment it
+    // fired). Cancelling the dialog still abandons the whole thing.
+    const dlg = document.getElementById("import-mg-dialog");
     for (;;) {
-      const chosen = await askImportDetails(seed);
+      const chosen = await askImportDetails();
       if (!chosen) return;
       const body = { name: chosen.name, components, connections };
       // Omitted entirely when blank, so the server allocates.
@@ -531,6 +521,7 @@ export const microgridsPanel = (() => {
       try {
         const res = await mutate("POST", "/api/microgrids/import", body);
         const m = await res.json();
+        dlg.close();
         notify(
           `Imported ${m.components} components, ${m.connections} connections.`,
           "success",
@@ -539,7 +530,14 @@ export const microgridsPanel = (() => {
         selectMicrogrid(m.id);
         return;
       } catch (e) {
-        seed = { ...chosen, error: `Import failed: ${e.message}` };
+        const message = `Import failed: ${e.message}`;
+        // Dismissed while the request was out: say so in a toast rather
+        // than open the dialog again unasked.
+        if (!dlg.open) {
+          notify(message);
+          return;
+        }
+        showFormError(document.getElementById("import-mg-error"), message);
       }
     }
   }

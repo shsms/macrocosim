@@ -456,8 +456,8 @@ check(
   JSON.stringify(await mgIds()),
 );
 
-// A taken id is the server's call. The dialog reopens carrying its
-// wording and what was typed, so the files never have to be re-picked.
+// A taken id is the server's call. The dialog stays open with its wording
+// and what was typed, so the files never have to be re-picked.
 await openImport(99402);
 await page.fill("#import-mg-name", "smoke import collides");
 await page.fill("#import-mg-id", String(IMPORT_ID_A));
@@ -467,12 +467,12 @@ const seededError = await waitFor(
   10000,
 ).catch(() => null);
 check(
-  "e2e: a taken id reopens the import dialog with the server's message",
+  "e2e: a taken id keeps the import dialog open with the server's message",
   seededError?.includes(String(IMPORT_ID_A)) === true,
   String(seededError),
 );
 check(
-  "e2e: the reopened import dialog keeps what was typed",
+  "e2e: the import dialog keeps what was typed after a refusal",
   (await page.inputValue("#import-mg-name")) === "smoke import collides" &&
     (await page.inputValue("#import-mg-id")) === String(IMPORT_ID_A),
 );
@@ -555,6 +555,29 @@ check(
   "e2e: a cancelled import registers nothing",
   (await mgIds()).length === idsBeforeCancel,
   `${(await mgIds()).length} vs ${idsBeforeCancel}`,
+);
+
+// Escape while an import is in flight: a refusal that comes back after it is
+// a toast, and the dialog does not pop up again.
+await page.route("**/api/microgrids/import", async (r) => {
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  await r.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' });
+});
+await openImport(99406);
+await page.fill("#import-mg-name", "smoke import escaped");
+await page.click("#import-mg-form button[type=submit]");
+await page.keyboard.press("Escape");
+await page.waitForTimeout(1500);
+const escapedImport = {
+  open: await importDialogOpen(),
+  toast: (await toastTexts()).includes("Import failed: boom"),
+};
+await page.unroute("**/api/microgrids/import");
+await dismissToasts();
+check(
+  "e2e: an import refused after Escape toasts and does not reopen the dialog",
+  !escapedImport.open && escapedImport.toast,
+  JSON.stringify(escapedImport),
 );
 
 // Back to the list: the sections below start by clicking a card.
@@ -1596,7 +1619,7 @@ await page.evaluate(async () => {
 // decline the allotment back toward zero once it drifts above the
 // 8 bar target. Fresh fixture ids (9901/9902), clear of the demo's
 // (1, 2, 100, 1000, 1001) and the import section's (9801/9802,
-// 99401-99405). Connected the way the demo wires a branch meter: a
+// 99401-99406). Connected the way the demo wires a branch meter: a
 // new meter hangs off the site's main meter (2), the boiler hangs off
 // that meter — same (connect parent child) shape as starter-site.lisp.
 const BOILER_ID = 9901;
