@@ -123,7 +123,7 @@ is wiring the topology + animating the environment.
 - `tools/ui-smoke/` — Playwright smoke scripts against a live server
   (`MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`
   points it at a server you already run). The e2e half drives the
-  Berlin demo (microgrid 2200) from a scratch state dir; `make ui-e2e`
+  Starter site (microgrid 2200) from a scratch state dir; `make ui-e2e`
   boots one and runs it, and the `ui-e2e` job in
   `.github/workflows/ci.yml` does the same on pushes to main and PRs
   targeting main.
@@ -142,7 +142,7 @@ is wiring the topology + animating the environment.
 - `sim/common.lisp` — Lisp helpers (`every`, `cancel-timers`,
   `reset-state`); embedded into the binary with `defaults.lisp` +
   `scenarios.lisp` as the prelude
-- `examples/berlin-demo.lisp` — self-contained demo world: generated
+- `examples/starter-site.lisp` — self-contained demo world: generated
   topology block + a script section with the environment animation
   and the seven starter scenarios. Boot scripts are optional
   (`macrocosim [script …]`); a bare boot loads worlds on demand via
@@ -332,7 +332,7 @@ UI").
 ```sh
 cargo build
 cargo test                                # unit tests for bounds/ramp/decay
-cargo run --bin macrocosim examples/berlin-demo.lisp
+cargo run --bin macrocosim examples/starter-site.lisp
 cargo run --bin macroctl -- info
 cargo run --bin macroctl -- tree
 cargo run --bin macroctl -- stream 1001 --samples 5
@@ -541,7 +541,7 @@ rebuild; a script that wants live defaults-editing can still
    accessor on `SimulatedComponent`, and a row in the capability table
    test. Use `(every …)` or `(run-with-timer …)` from the config to
    script behaviour over time.
-3. Demonstrate via a new line in `examples/berlin-demo.lisp` and
+3. Demonstrate via a new line in `examples/starter-site.lisp` and
    verify via macroctl.
 
 ## EV chargers

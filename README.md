@@ -33,11 +33,11 @@ The simulator exposes three surfaces:
 
 ```sh
 cargo build
-cargo run --bin macrocosim examples/berlin-demo.lisp
+cargo run --bin macrocosim examples/starter-site.lisp
 ```
 
 The binary takes zero or more Lisp scripts. Each script is a
-self-contained world — `examples/berlin-demo.lisp` wires a demo
+self-contained world — `examples/starter-site.lisp` wires a demo
 topology, animates its AC environment, and registers seven starter
 scenarios; saving the file hot-reloads the world. With no scripts
 the engine boots bare: UI up, no microgrids, and you load a script
@@ -45,7 +45,7 @@ on demand from the Microgrids tab or the REPL (the `repl` pill on a
 microgrid's Topology view, or a backtick anywhere, opens it):
 
 ```lisp
-(load "examples/berlin-demo.lisp")
+(load "examples/starter-site.lisp")
 ```
 
 Relative paths (and all persistent state: managed microgrid files

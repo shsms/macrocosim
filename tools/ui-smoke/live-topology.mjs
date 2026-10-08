@@ -283,8 +283,8 @@ await page.click("#load-script-close");
 //
 // There is no delete-microgrid endpoint, so whatever this section
 // imports stays in the registry for the rest of the run. It therefore
-// claims ids far ABOVE the demo's range and names nothing "Berlin
-// demo", leaving the later sections' card and id lookups untouched.
+// claims ids far ABOVE the demo's range and names nothing "Starter
+// site", leaving the later sections' card and id lookups untouched.
 // The blank-id check is the one exception — it lands on the lowest
 // free id by definition — and nothing below depends on that id being
 // free.
@@ -469,10 +469,10 @@ check(
 
 // Back to the list: the sections below start by clicking a card.
 await backToMgList();
-await waitFor(async () => (await page.locator('.mglist-card:has-text("Berlin demo")').count()) > 0, 8000);
+await waitFor(async () => (await page.locator('.mglist-card:has-text("Starter site")').count()) > 0, 8000);
 
 // ── e2e: live pill models on the canvas ───────────────────────────
-const DEMO_CARD = '.mglist-card:has-text("Berlin demo")';
+const DEMO_CARD = '.mglist-card:has-text("Starter site")';
 const getModels = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
@@ -620,7 +620,7 @@ const edges = await waitFor(async () => {
 });
 const liveEdges = edges.filter(isLive);
 check("e2e: some edge carries live flow", liveEdges.length > 0, JSON.stringify(edges));
-// berlin demo: the hidden consumer meter (id 100, under meter-2)
+// starter site: the hidden consumer meter (id 100, under meter-2)
 // always consumes, so its edge takes the import colour regardless
 // of PV sunlight.
 const consumer = await waitFor(async () => (await getEdges()).find((e) => e.id === "2-100" && isLive(e)));
@@ -755,7 +755,7 @@ check("e2e: full tier paints name and id on every pill", paintFull.lod === "full
 await page.evaluate(async () => { const { topology } = await import("/assets/topology.js"); topology.fit(); });
 
 // ── e2e: hover card ──────────────────────────────────────────────
-// The Berlin demo's battery inverter idles at 0 W, and a card with
+// The starter site's battery inverter idles at 0 W, and a card with
 // no power through it has no power factor to show. Command it (the
 // setpoint expires on its own, so re-runs start from the same
 // state) and wait for the ramp to reach the live overlay.
@@ -902,7 +902,7 @@ const reactiveSummary = await waitFor(async () => {
 }, 15000);
 check("e2e: the folded reactive card's fold-summary paints a VAr value", /VAr/.test(reactiveSummary ?? ""), reactiveSummary);
 // The Frequency card is folded by default too (grid_frequency), and
-// the Berlin demo's grid connection point streams it every second.
+// the starter site's grid connection point streams it every second.
 const frequencySummary = await waitFor(async () => {
   const t = await page.evaluate(() => document.querySelector('[data-summary="frequency"]')?.textContent);
   return t && /Hz/.test(t) ? t : null;
@@ -1075,7 +1075,7 @@ check(
 );
 
 // ── e2e: the GCP inspector slims to Charts + Connections ───────────
-// The grid connection point (id 1 in the Berlin demo) takes no knobs,
+// The grid connection point (id 1 in the starter site) takes no knobs,
 // no setpoints, and publishes no per-component telemetry — its
 // inspector renders only a Charts card (the site frequency stream,
 // open by default) and Connections, not Component/Power/Setpoints.
@@ -1297,7 +1297,7 @@ check(
 );
 // The demo's hidden consumer meter (id 100, one of this meter's
 // children) drives ±500 W of per-tick random jitter plus a slow
-// 15-min sine (examples/berlin-demo.lisp; the edge-flow block above
+// 15-min sine (examples/starter-site.lisp; the edge-flow block above
 // pins it to a steady 17.5 kW, but the other children still move) —
 // the round trip can't land on the exact pre-override reading, so
 // this compares with a generous threshold, same idiom as the boiler
@@ -1327,7 +1327,7 @@ await page.evaluate(async () => {
 // instead of reporting which UI step stopped working. `.catch` turns
 // each one back into a FAIL line — the same idiom the panel-cache and
 // REPL sections use.
-const chargerId = 1004; // the Berlin demo's charger
+const chargerId = 1004; // the starter site's charger
 await page.evaluate(async (id) => {
   const { topology } = await import("/assets/topology.js");
   topology.select([id]);
@@ -1456,7 +1456,7 @@ await page.evaluate(async () => {
 // (1, 2, 100, 1000, 1001) and the import section's (9801/9802,
 // 99401-99405). Connected the way the demo wires a branch meter: a
 // new meter hangs off the site's main meter (2), the boiler hangs off
-// that meter — same (connect parent child) shape as berlin-demo.lisp.
+// that meter — same (connect parent child) shape as starter-site.lisp.
 const BOILER_ID = 9901;
 const BOILER_METER_ID = 9902;
 const boilerSetupOk = (
@@ -1615,7 +1615,7 @@ const entryOff = await waitFor(async () => {
 check("e2e: sampling continues while values are off", entryOff && Number.isFinite(entryOff.p) && entryOff.ts > tsAtOff && lastHistTs(entryOff) > tsAtOff, JSON.stringify(entryOff));
 // Batteries never emit active_power_w, so a populated hist here can
 // only come from the dc_power_w branch of histMetric — id 1000 is
-// bat-1000 in the Berlin demo.
+// bat-1000 in the starter site.
 const batteryTsAtOff = (await liveEntry(1000))?.ts ?? -Infinity;
 const batteryEntryOff = await waitFor(async () => {
   const e = await liveEntry(1000);
@@ -1679,16 +1679,16 @@ await page.evaluate(() => localStorage.removeItem("macrocosim-topology-live"));
 // ── e2e: weather panel ──────────────────────────────────────────────
 // Runs LAST: the weather this section installs (and the sunrise/sunset
 // override below) persists on the site for the rest of the run.
-// Berlin's PV (id 200) passes :sunlight-pct explicitly and is driven by a
-// set-solar-sunlight timer (examples/berlin-demo.lisp), so it's Manual
-// and its power does not follow weather — assert the panel's own
+// The starter site's PV (id 200) passes :sunlight-pct explicitly and is
+// driven by a set-solar-sunlight source (examples/starter-site.lisp), so
+// it's Manual and its power does not follow weather — assert the panel's own
 // site-% readout, not inverter power.
 await page.click("#weather-btn");
 check(
   "e2e: weather panel opens",
   await page.evaluate(() => document.getElementById("panel-weather-btn")?.classList.contains("open") === true),
 );
-// berlin-demo.lisp never calls (make-weather) — the site starts with
+// starter-site.lisp never calls (make-weather) — the site starts with
 // no weather, so the panel opens on its empty state.
 await waitFor(async () => (await page.locator("#weather-create").count()) > 0, 10000);
 await page.click("#weather-create");
@@ -2746,7 +2746,7 @@ await waitFor(async () => page.evaluate(() => document.body.dataset.mgView === "
 
 // ── e2e: compact density ───────────────────────────────────────────
 // The pulse-bar chip turns compact density on: the pulse bar shrinks.
-// The checks from here on drive the Berlin demo's topology directly.
+// The checks from here on drive the starter site's topology directly.
 async function openDemoTopology() {
   await page.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
   await waitFor(
@@ -2881,7 +2881,7 @@ check(
 // leave the selection alone after Delete on a focused button,
 // Backspace after a click on an inspector fold header, or Backspace,
 // Ctrl+X and Ctrl+A after a click on the inspector's drag strip.
-const chpId = 1006; // the Berlin demo's CHP
+const chpId = 1006; // the starter site's CHP
 const nodeCount = async () => (await getModels()).length;
 const selectedIds = () =>
   page.evaluate(async () => (await import("/assets/topology.js")).topology.selectedIds());

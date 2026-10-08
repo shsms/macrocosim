@@ -26,7 +26,7 @@ There's no auto-discovery. Load explicitly from the REPL —
 ```
 
 — or put the forms in the world script itself so they run at load
-time (`examples/berlin-demo.lisp` registers its seven
+time (`examples/starter-site.lisp` registers its seven
 `define-scenario`s that way). `(load …)` resolves relative to the
 server's state dir (`--state-dir`, default: the directory the
 server was started from).
@@ -49,7 +49,7 @@ server was started from).
 ## Driving the environment
 
 These setters work outside scenarios too — they're the same
-animation knobs `examples/berlin-demo.lisp` uses for its built-in
+animation knobs `examples/starter-site.lisp` uses for its built-in
 load and cloud curves — but inside a scenario they're how a script
 exercises the simulator:
 
@@ -82,7 +82,7 @@ scenario cue reaches for to script a passing cloud over the array:
 It needs weather installed first — `(make-weather)` gives the default
 06:00–20:00 UTC clear-sky day — and only bites a solar inverter that is
 following the sky (no `:sunlight-pct` of its own); one driven by
-`set-solar-sunlight`, like `examples/berlin-demo.lisp`'s PV, is Manual
+`set-solar-sunlight`, like `examples/starter-site.lisp`'s PV, is Manual
 and ignores it.
 
 `(set-meter-power 100 (lambda () (csv-lookup …)))` and

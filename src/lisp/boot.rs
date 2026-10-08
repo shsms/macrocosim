@@ -395,7 +395,7 @@ impl Config {
             if scripts.is_empty() {
                 log::info!(
                     "bare boot: no microgrids registered — load a script from \
-                     the UI or REPL, e.g. (load \"examples/berlin-demo.lisp\")"
+                     the UI or REPL, e.g. (load \"examples/starter-site.lisp\")"
                 );
             } else {
                 log::warn!(
@@ -1539,7 +1539,7 @@ mod tests {
             "sim/common.lisp",
             "sim/defaults.lisp",
             "sim/scenarios.lisp",
-            "examples/berlin-demo.lisp",
+            "examples/starter-site.lisp",
             "examples/scenario-driving.lisp",
         ] {
             for line in std::fs::read_to_string(path).unwrap().lines() {
@@ -1789,8 +1789,8 @@ mod tests {
     fn default_config_boots_and_registers_library_scenarios() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (cfg, _clock) = rt
-            .block_on(async { Config::new_headless("examples/berlin-demo.lisp") })
-            .expect("shipped berlin-demo.lisp boots headless");
+            .block_on(async { Config::new_headless("examples/starter-site.lisp") })
+            .expect("shipped starter-site.lisp boots headless");
         std::mem::forget(rt);
         let names: Vec<String> = cfg.scenarios().lock().keys().cloned().collect();
         assert!(

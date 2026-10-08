@@ -87,6 +87,12 @@ an unknown field answers 400.
 `--emit-endpoints` writes `microgrids[].grpc_addr`. It was
 `microgrids[].grpc`.
 
+### Example world
+
+`examples/berlin-demo.lisp` is now `examples/starter-site.lisp`, and its
+microgrid is named "Starter site". Point a boot command or a `(load …)`
+call at the new path.
+
 ### macroctl
 
 - `set-power --lifetime` is `--lifetime-s`, in whole seconds.

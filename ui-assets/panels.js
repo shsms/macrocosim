@@ -104,7 +104,7 @@ export const microgridsPanel = (() => {
     grid.appendChild(importCard);
     // Trailing [▶ Load script…] card: opens the server-side file
     // browser dialog, which POSTs /api/load so an on-disk lisp file
-    // (a microgrid file, or a script like examples/berlin-demo.lisp)
+    // (a microgrid file, or a script like examples/starter-site.lisp)
     // builds its world at runtime — the on-demand path for a bare
     // boot.
     const loadCard = document.createElement("button");

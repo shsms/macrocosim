@@ -1,5 +1,5 @@
-;; A 30-minute imperative demo scenario, driving the Berlin demo
-;; world (load examples/berlin-demo.lisp first).
+;; A 30-minute imperative demo scenario, driving the starter site
+;; world (load examples/starter-site.lisp first).
 ;;
 ;; Run from the REPL:
 ;;
@@ -14,11 +14,11 @@
 ;;   curl -s http://127.0.0.1:8801/api/mg/2200/scenario/events   ;; journal
 ;;   curl -s http://127.0.0.1:8801/api/mg/2200/scenario/report   ;; metrics
 ;;
-;; Component ids referenced below match berlin-demo.lisp's pinned
+;; Component ids referenced below match starter-site.lisp's pinned
 ;; topology:
 ;;
 ;;   id 2    main meter (the grid's sole child)
-;;   id 100  hidden consumer meter (driven by its inline :power-w lambda)
+;;   id 100  hidden consumer meter (driven by its set-meter-power lambda)
 ;;   id 200  solar inverter
 ;;   id 1000 battery, 1001 battery-inverter
 
@@ -30,7 +30,7 @@
 ;; unwinds the run: every knob this script drove goes back to what it
 ;; was before the run first touched it. So the minute-15 sunlight
 ;; setting is itself reverted at minute 30 — inverter 200 returns to
-;; berlin-demo.lisp's own sunlight source, not to the 100 % this
+;; starter-site.lisp's own sunlight source, not to the 100 % this
 ;; script last set — and the outage chain below, armed while the run
 ;; is in progress, is cancelled with the run. If minute 30 lands
 ;; inside one of that chain's outages (with the timings below, a
@@ -52,8 +52,8 @@
 (scenario-end-after-s 1800)
 
 ;; ── Consumer load: end-of-window spike ─────────────────────────
-;; Replaces berlin-demo.lisp's gentler inline :power-w profile with a sharper
-;; profile: 5 kW base for the first 13 minutes of every 15-minute
+;; Replaces starter-site.lisp's gentler set-meter-power sine with a
+;; sharper profile: 5 kW base for the first 13 minutes of every 15-minute
 ;; window, then a 25 kW spike for the last 100 seconds. This is the
 ;; classic "demand peak right before the billing window closes"
 ;; stress case.

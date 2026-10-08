@@ -10,8 +10,8 @@
 //! Usage:
 //!
 //!   macrocosim-etags                              # ./config.lisp → ./TAGS
-//!   macrocosim-etags examples/berlin-demo.lisp examples/scenario-driving.lisp
-//!   macrocosim-etags examples/berlin-demo.lisp -o /tmp/TAGS
+//!   macrocosim-etags examples/starter-site.lisp examples/scenario-driving.lisp
+//!   macrocosim-etags examples/starter-site.lisp -o /tmp/TAGS
 
 use std::{env, io::Write as _, path::Path, process};
 

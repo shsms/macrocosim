@@ -154,7 +154,7 @@ jobs:
       - name: pytest
         run: uv run --no-sync pytest -q
 
-  # Live browser smoke: boots the binary against a scratch Berlin-demo
+  # Live browser smoke: boots the binary against a scratch starter-site
   # microgrid (`make ui-e2e`, the same target AGENTS.md gives for
   # running tools/ui-smoke/live-topology.mjs by hand) and drives the
   # real SPA with Playwright/Chromium — inspector knobs, dialogs, the

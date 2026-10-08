@@ -43,7 +43,7 @@ $(PLAYWRIGHT_STAMP):
 ui-e2e: ui-e2e-deps
 	cargo build --bin macrocosim
 	@set -e; sd=$$(mktemp -d); mkdir "$$sd/microgrids"; \
-	  cp examples/berlin-demo.lisp "$$sd/microgrids/2200.lisp"; \
+	  cp examples/starter-site.lisp "$$sd/microgrids/2200.lisp"; \
 	  $(TARGET_DIR)/debug/macrocosim --state-dir "$$sd" --ephemeral-ports \
 	      --emit-endpoints="$$sd/endpoints.json" "$$sd/microgrids/2200.lisp" \
 	      > "$$sd/server.log" 2>&1 & pid=$$!; \
