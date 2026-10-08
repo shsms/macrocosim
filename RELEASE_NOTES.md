@@ -259,6 +259,16 @@ What to change in your own scripts:
   a count.
 - Each `GET /api/microgrids` entry has `hidden_component_count`, the
   number of its components that are hidden.
+- The UI has a light theme. By default it follows the OS setting. The
+  theme chip in the pulse bar picks auto, light or dark, and the
+  browser remembers the choice.
+- The UI is set in IBM Plex: IBM Plex Mono where it used a monospace
+  font, IBM Plex Sans for the rest. Chart axes show their numbers in
+  IBM Plex Mono. Numbers line up in columns.
+- The UI is compact by default, with 13px text. The density chip in
+  the pulse bar switches to comfortable, with larger text and more
+  space, and the browser remembers the choice. If you had turned
+  compact off with the old chip, the UI opens comfortable.
 
 ## Bug Fixes
 

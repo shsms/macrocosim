@@ -84,6 +84,10 @@ is wiring the topology + animating the environment.
   elements it re-formats on a switch, uPlot's `tzDate`, and the
   wall-time conversion for `datetime-local` fields; imported as
   `* as zone`, so call sites read `zone.fmtTime`, `zone.tzDate`;
+  `theme.js` the colour theme (auto follows the OS, or light or dark
+  from the pulse bar's theme chip), set as `data-theme` on `<html>`;
+  code that draws with colours read from the tokens (the canvas, the
+  charts) re-reads them in a `theme.onChange` listener;
   `paste-forms.js` the DOM-free let* builder the editor's paste
   evals, binding children before the parents that push into them;
   `metrics-store.js` holds the derived-stream rings + the PF helpers
@@ -361,6 +365,15 @@ wheel) — either affordance changes the value without committing it, and
 the next poll or blur silently reverts. Arrow KEYS keep stepping: those
 are deliberate keyboard edits, one Enter from a commit. Fields that
 commit via a button (dialogs, pass-a-cloud) may keep both.
+
+UI style convention: colours, text sizes, spacing, radii, shadows and layers
+come from the tokens on `:root` in `style.css` (`--text-*`, `--space-*`,
+`--radius-*`, `--z-*`, and the colour roles). Every colour token has a value in
+the `:root[data-theme="light"]` block too, and comfortable density overrides the
+size and spacing tokens on `:root[data-density="comfortable"]`.
+`tools/css-vars-test.mjs` fails on a colour literal outside the token blocks, a
+light value missing, or a raw length in a spacing, radius or z-index
+declaration.
 
 Each registered microgrid binds its own gRPC port; the first
 defaults to `[::1]:8800` and subsequent microgrids step by ten
