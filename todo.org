@@ -2594,3 +2594,21 @@ does not look the component up), while =.../component/{id}=, =status=
 and =drive= answer 404. Make the two read routes answer 404 for an
 unknown component id as well, and check the SPA's inspector copes when
 a selected component disappears.
+
+** TODO Deferred Lisp runs on the lowest microgrid, not its own :lisp:scenarios:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-08 Do 01:36]
+:END:
+
+A microgrid file's script section runs in that microgrid's scope, but only
+while it loads. Everything it leaves to run later runs with no microgrid
+in scope, and =SiteRouter::site= falls back to the lowest registered id:
+=every= and =run-with-timer= bodies (the refresh pass ticks them unscoped),
+=define-scenario= setups and cues (=scenarios.rs= =start= funcalls
+=scenario--run= unscoped), and the lambda sources of =set-meter-power= /
+=set-solar-sunlight= (evaluated by the refresh pass). Load a second
+microgrid with a lower id next to the starter site and its line-voltage
+timer drives the other microgrid, and its scenarios' =(set-meter-power 100
+…)= fail with "component 100 not found". Capture the scope where the
+deferred code is created (the timer, the cue, the source) and restore it
+when it runs. Related: D7.
