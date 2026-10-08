@@ -1,7 +1,8 @@
 // The stylesheet's custom properties and colours: every variable the UI
 // reads is defined somewhere (an undefined one is not an error to the
 // browser, it silently drops the declaration or takes the fallback for
-// ever), and every colour in style.css is a token from the theme blocks.
+// ever), every colour in style.css is a token from the theme blocks, and
+// spacing, radii and z-index come from --space-*, --radius-* and --z-*.
 // Run: node tools/css-vars-test.mjs   (exits non-zero on failure)
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -44,5 +45,27 @@ assert.ok(dark.size > 0 && light.size > 0, "the dark and light theme blocks were
 const colourTokens = [...dark].filter(([, v]) => v.match(colour)).map(([k]) => k);
 const missing = colourTokens.filter((k) => !light.has(k)).sort();
 assert.deepEqual(missing, [], `colour tokens with no light value: ${missing.join(", ")}`);
+
+// Spacing, radius and layers come from tokens too. A value is split into its
+// parts at the top level, so a calc() is one part.
+const parts = (value) => value.replace(/!important/, "").trim().match(/(?:[^\s(]+|\([^()]*(?:\([^()]*\)[^()]*)*\))+/g) ?? [];
+const declarations = (props) =>
+  [...outside.matchAll(new RegExp(`(?<![\\w-])(${props})\\s*:\\s*([^;}]+)`, "g"))].map((m) => [m[1], m[2]]);
+const offending = (props, ok) =>
+  declarations(props)
+    .filter(([, v]) => !parts(v).every(ok))
+    .map(([p, v]) => `${p}: ${v.trim()}`);
+// A viewport unit places a box on the page; it is layout, not spacing.
+const space = /^var\(--space-[0-5]\)$/;
+const spaceCalc = /^calc\((?:[\s\d.*+-]|var\(--space-[0-5]\))*\)$/;
+const spacing = offending(
+  "(?:padding|margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?|(?:row-|column-)?gap",
+  (p) => ["0", "1px", "-1px", "auto"].includes(p) || /^\d+v[hw]$/.test(p) || space.test(p) || spaceCalc.test(p),
+);
+assert.deepEqual(spacing, [], `spacing not from --space-*:\n  ${spacing.join("\n  ")}`);
+const radius = offending("border(?:-(?:top|bottom)-(?:left|right))?-radius", (p) => p === "0" || p === "50%" || /^var\(--radius-(?:sm|md|lg|full)\)$/.test(p));
+assert.deepEqual(radius, [], `radius not from --radius-*:\n  ${radius.join("\n  ")}`);
+const layers = offending("z-index", (p) => p === "0" || /^var\(--z-[\w-]+\)$/.test(p));
+assert.deepEqual(layers, [], `z-index not from --z-*:\n  ${layers.join("\n  ")}`);
 
 console.log("css-vars-test: all assertions passed");

@@ -2481,6 +2481,17 @@ check("e2e: the strip is empty again after the drag-out", !st.has && st.tiles.le
 // snapping straight back into the strip it just left.
 await page.click("#panel-metrics-btn .float-dock");
 await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
+// A docked tile's title strip keeps its right padding clear of the dock and
+// close buttons, so a narrow tile's title and grip never run under them.
+const stripRoom = await page.evaluate(() => {
+  const el = document.getElementById("panel-metrics-btn");
+  const drag = el.querySelector(".panel-drag");
+  return {
+    padding: Number.parseFloat(getComputedStyle(drag).paddingRight),
+    buttons: drag.getBoundingClientRect().right - el.querySelector(".float-dock").getBoundingClientRect().left,
+  };
+});
+check("e2e: a docked tile's title strip leaves room for its buttons", stripRoom.padding >= stripRoom.buttons, JSON.stringify(stripRoom));
 h = await headOf("#panel-metrics-btn .panel-drag");
 await page.mouse.move(h.x, h.y);
 await page.mouse.down();

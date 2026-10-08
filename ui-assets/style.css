@@ -81,6 +81,25 @@
   --pulse-height: 24px;
   --pulse-spark-width: 64px;
   --pulse-spark-height: 12px;
+  /* Spacing steps; comfortable density widens them. */
+  --space-0: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-full: 999px;
+  /* Layers, lowest first. */
+  --z-canvas: 1;
+  --z-overlay: 6;
+  --z-dock: 7;
+  --z-popover: 10;
+  --z-hovercard: 60;
+  --z-menu: 900;
+  --z-toast: 1000;
   /* A capped floating card stays at least this tall: the drag strip
      plus a row of content. side-panel.js reads it for its cap floor. */
   --panel-min-height: 60px;
@@ -118,6 +137,11 @@
   --pulse-height: 28px;
   --pulse-spark-width: 80px;
   --pulse-spark-height: 16px;
+  --space-1: 6px;
+  --space-2: 10px;
+  --space-3: 14px;
+  --space-4: 20px;
+  --space-5: 32px;
 }
 
 /* The light theme: the same roles, readable on white. theme.js sets
@@ -231,8 +255,8 @@ body > header,
 header {
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 9px 18px;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
 }
@@ -261,8 +285,8 @@ header strong {
   font-size: var(--text-md);
   color: var(--good);
   background: color-mix(in srgb, var(--good) 12%, transparent);
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius-lg);
   border: 1px solid color-mix(in srgb, var(--good) 35%, transparent);
   cursor: pointer;
 }
@@ -278,7 +302,7 @@ dialog {
   background: var(--bg-elev);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0;
   max-width: 720px;
   width: 80vw;
@@ -291,7 +315,7 @@ dialog header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px;
+  padding: var(--space-4);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
@@ -308,7 +332,7 @@ dialog header button {
   font-size: var(--text-xl);
   line-height: 1;
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
 }
 dialog header button:hover { color: var(--fg); }
 #help-dialog-content,
@@ -316,7 +340,7 @@ dialog header button:hover { color: var(--fg); }
 #create-mg-content,
 #load-script-content {
   overflow-y: auto;
-  padding: 14px 18px 18px;
+  padding: var(--space-4);
   max-height: calc(80vh - 60px);
 }
 #help-dialog-content h4 {
@@ -324,46 +348,46 @@ dialog header button:hover { color: var(--fg); }
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
-  margin: 14px 0 7px;
+  margin: var(--space-4) 0 var(--space-2);
 }
 #help-dialog-content h4:first-child {
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 .help-list {
   list-style: none;
   padding: 0;
-  margin: 0 0 9px;
+  margin: 0 0 var(--space-2);
   font-size: var(--text-md);
   line-height: 1.6;
 }
 .help-list li {
-  padding: 3px 0;
+  padding: var(--space-0) 0;
 }
 #help-dialog-content kbd {
   font-size: var(--text-sm);
-  padding: 1px 5px;
+  padding: 1px var(--space-1);
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--fg);
 }
 #help-dialog-content code {
   font-size: var(--text-md);
   background: var(--bg);
-  padding: 1px 4px;
-  border-radius: 3px;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
 }
 
 #ctx-menu {
   position: fixed;
-  z-index: 900;
+  z-index: var(--z-menu);
   min-width: 180px;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow-2);
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   font-family: var(--font-mono);
   font-size: var(--text-md);
 }
@@ -372,8 +396,8 @@ dialog header button:hover { color: var(--fg); }
   width: 100%;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 5px 12px;
+  gap: var(--space-4);
+  padding: var(--space-1) var(--space-3);
   background: none;
   border: 0;
   color: var(--fg);
@@ -389,15 +413,15 @@ dialog header button:hover { color: var(--fg); }
   color: var(--muted);
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: 3px;
-  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
   background: var(--bg);
 }
 .hdr-btn {
   font-family: var(--font-mono);
   font-size: var(--text-md);
-  padding: 4px 10px;
-  border-radius: 3px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -418,15 +442,15 @@ dialog header button:hover { color: var(--fg); }
   right: 18px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  z-index: 1000;
+  gap: var(--space-2);
+  z-index: var(--z-toast);
   pointer-events: none;
 }
 .toast {
   font-family: var(--font-mono);
   font-size: var(--text-md);
-  padding: 9px 14px;
-  border-radius: 4px;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
@@ -438,17 +462,15 @@ dialog header button:hover { color: var(--fg); }
 .toast-error { border-color: var(--cat-grid); }
 .toast-success { border-color: var(--accent); }
 
-/* Pulse bar: persistent, ~28 px tall. Lives between the header and
-   the main grid so it stays visible across mode switches. Carries
-   compact-mono content — setpoint sparkbar, health counters,
-   loopback pill, clock. Mirrors tradingsim's `.pulse` section
-   shape; future items (scenario chip, density toggle, TZ toggle)
-   slot in alongside without changing the layout. */
+/* Pulse bar: persistent, --pulse-height tall. Lives between the header and the
+   main grid so it stays visible across mode switches. Carries compact content —
+   setpoint sparkbar, health counters, loopback pill, the zone, theme and
+   density chips, clock. Mirrors tradingsim's `.pulse` section shape. */
 #pulse {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 12px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
@@ -459,15 +481,15 @@ dialog header button:hover { color: var(--fg); }
   overflow: hidden;
   white-space: nowrap;
 }
-.pulse-group { display: inline-flex; align-items: center; gap: 6px; }
-.pulse-sep   { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
+.pulse-group { display: inline-flex; align-items: center; gap: var(--space-2); }
+.pulse-sep   { width: 1px; align-self: stretch; background: var(--border); margin: 0 var(--space-0); }
 .pulse-spacer { flex: 1; }
 .pulse-label { color: var(--muted); }
 .pulse-clock { color: var(--muted); }
 .pulse-pill  {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0 7px;
+  border-radius: var(--radius-lg);
+  padding: 0 var(--space-2);
   color: var(--fg);
 }
 .pulse-pill.ok   { color: var(--good); border-color: var(--good); }
@@ -475,8 +497,8 @@ dialog header button:hover { color: var(--fg); }
 .pulse-pill.bad  { color: var(--bad); border-color: var(--bad); }
 .pulse-chip {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0 7px;
+  border-radius: var(--radius-lg);
+  padding: 0 var(--space-2);
   color: var(--muted);
   cursor: pointer;
   user-select: none;
@@ -562,38 +584,38 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"]  
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"] #topology { display: none; }
 
 #scenarios {
-  padding: 16px 20px;
+  padding: var(--space-4) var(--space-5);
   overflow: auto;
 }
 
 #microgrid-list {
   grid-area: topology;
   background: var(--bg);
-  padding: 16px 20px;
+  padding: var(--space-4) var(--space-5);
   overflow: auto;
 }
 
 .mglist-header h2 {
   font-size: var(--text-xl);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 
 .mglist-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
-  margin-top: 16px;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .mglist-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   align-items: flex-start;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
   text-align: left;
   cursor: pointer;
   color: var(--fg);
@@ -614,14 +636,14 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
   font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 1px 6px;
-  border-radius: 3px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 .mglist-meta {
   font-size: var(--text-sm);
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 .mglist-new {
   border-style: dashed;
@@ -639,9 +661,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
 #mg-header {
   grid-area: mgheader;
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: center;
-  padding: 6px 12px;
+  padding: var(--space-2) var(--space-3);
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -652,21 +674,21 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
 
 #mg-subtoggle {
   display: inline-flex;
-  gap: 2px;
+  gap: var(--space-0);
   margin-left: auto;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px;
+  border-radius: var(--radius-md);
+  padding: var(--space-0);
 }
 #mg-subtoggle .mode-btn {
   background: transparent;
   border: none;
   color: var(--muted);
   font: inherit;
-  padding: 4px 10px;
+  padding: var(--space-1) var(--space-3);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 #mg-subtoggle .mode-btn.active {
   background: var(--bg-elev);
@@ -678,8 +700,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
   font-size: var(--text-md);
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
   color: var(--accent);
   cursor: pointer;
   white-space: nowrap;
@@ -697,24 +719,24 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
   max-width: 480px;
   background: var(--panel);
   border: 1px dashed var(--border);
-  border-radius: 8px;
-  padding: 20px 26px;
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
   font-size: var(--text-md);
-  z-index: 1;
+  z-index: var(--z-canvas);
 }
 body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topology-empty-hint {
   display: block;
 }
 #topology-empty-hint h3 {
   font-size: var(--text-lg);
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-2);
 }
-#topology-empty-hint ol { padding-left: 20px; margin: 6px 0; }
-#topology-empty-hint li { margin: 4px 0; }
+#topology-empty-hint ol { padding-left: var(--space-5); margin: var(--space-2) 0; }
+#topology-empty-hint li { margin: var(--space-1) 0; }
 #topology-empty-hint code {
   background: var(--bg-deep);
-  padding: 1px 4px;
-  border-radius: 3px;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
 }
 
 /* Mode toggle in the header. Sits just right of the status pill,
@@ -722,22 +744,22 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
    at" affordance. */
 #mode-toggle {
   display: inline-flex;
-  gap: 2px;
-  margin-left: 9px;
+  gap: var(--space-0);
+  margin-left: var(--space-2);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-0);
 }
 .mode-btn {
   background: transparent;
   color: var(--muted);
   border: 0;
-  padding: 4px 10px;
+  padding: var(--space-1) var(--space-3);
   font-family: var(--font-mono);
   font-size: var(--text-md);
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 .mode-btn:hover { color: var(--fg); }
 .mode-btn.active {
@@ -745,14 +767,14 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   color: var(--accent);
 }
 
-.formula-panel { padding: 8px 4px; }
-.formula-panel h2 { font-size: var(--text-lg); margin-bottom: 8px; }
+.formula-panel { padding: var(--space-2) var(--space-1); }
+.formula-panel h2 { font-size: var(--text-lg); margin-bottom: var(--space-2); }
 .formula-panel h2 code {
   font-size: var(--text-md);
   color: var(--accent);
   background: var(--bg-deep);
-  padding: 1px 6px;
-  border-radius: 3px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
 }
 .formula-tree {
   font-family: var(--font-mono);
@@ -761,11 +783,11 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   white-space: pre-wrap;
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
   color: var(--fg);
 }
-.formula-arg { padding-left: 14px; }
+.formula-arg { padding-left: var(--space-4); }
 .formula-ref {
   color: var(--accent);
   cursor: pointer;
@@ -778,24 +800,24 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 
 #snapshots-dialog #snapshot-save-form {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: end;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 #snapshots-dialog #snapshot-save-form label {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--text-md);
   color: var(--muted);
 }
 #snapshots-dialog #snapshot-name-input {
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--fg);
-  padding: 6px 8px;
+  padding: var(--space-2);
   font-size: var(--text-md);
 }
 #snapshots-list { list-style: none; padding: 0; margin: 0; }
@@ -805,23 +827,23 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 #create-mg-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: stretch;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 #create-mg-form .dlg-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--text-md);
   color: var(--muted);
 }
 #create-mg-form .dlg-input {
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--fg);
-  padding: 6px 8px;
+  padding: var(--space-2);
   font-size: var(--text-md);
 }
 #create-mg-form button { align-self: flex-start; }
@@ -837,13 +859,13 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 .collision-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
-  padding: 8px 10px;
-  margin-bottom: 8px;
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
   font-size: var(--text-md);
   border: 1px solid var(--warn);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
@@ -852,9 +874,9 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 1px 6px;
-  border-radius: 3px;
-  margin-left: 4px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  margin-left: var(--space-1);
 }
 .mg-chip.unmanaged {
   background: color-mix(in srgb, var(--warn) 18%, transparent);
@@ -871,22 +893,22 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 
 #load-script-breadcrumb {
   font-family: var(--font-mono);
-  margin-bottom: 6px;
+  margin-bottom: var(--space-2);
 }
 #load-script-list {
   list-style: none;
   padding: 0;
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
   max-height: 40vh;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 #load-script-list button {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 7px 10px;
+  padding: var(--space-2) var(--space-3);
   border: none;
   border-bottom: 1px solid var(--border);
   background: none;
@@ -900,27 +922,27 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   background: var(--bg);
   color: var(--accent);
 }
-#load-script-list .hint { padding: 7px 10px; }
+#load-script-list .hint { padding: var(--space-2) var(--space-3); }
 #load-script-dialog #load-script-form {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: end;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 #load-script-dialog #load-script-form label {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--text-md);
   color: var(--muted);
 }
 #load-script-dialog #load-script-path {
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--fg);
-  padding: 6px 8px;
+  padding: var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--text-md);
 }
@@ -928,7 +950,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 .snapshot-row:last-child { border-bottom: none; }
@@ -939,9 +961,9 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 
 .scenarios-header {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: baseline;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 .scenarios-title { font-size: var(--text-xl); margin: 0; }
 .sc-badge {
@@ -950,8 +972,8 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   letter-spacing: 0.04em;
   background: color-mix(in srgb, var(--warn) 18%, transparent);
   color: var(--warn);
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius-sm);
   white-space: nowrap;
 }
 .sc-badge.running { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
@@ -959,19 +981,19 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 .sc-badge.fail { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); }
 
 /* Registered-scenario list */
-.scenarios-list { display: grid; gap: 6px; margin-bottom: 18px; }
+.scenarios-list { display: grid; gap: var(--space-2); margin-bottom: var(--space-4); }
 .sc-row {
   display: grid;
   grid-template-columns: 1fr auto auto auto;
   align-items: center;
-  gap: 14px;
-  padding: 10px 14px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 .sc-row.selected { border-color: var(--accent); }
-.sc-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sc-row-main { display: flex; flex-direction: column; gap: var(--space-0); min-width: 0; }
 .sc-row-name { font-weight: 500; }
 .sc-row-meta { font-size: var(--text-md); color: var(--muted); font-variant-numeric: tabular-nums; }
 .sc-row-desc { font-size: var(--text-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -980,11 +1002,11 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 /* Run view */
 .sc-run-view {
   border-top: 1px solid var(--border);
-  padding-top: 14px;
+  padding-top: var(--space-4);
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
-.sc-run-header { display: flex; gap: 12px; align-items: center; }
+.sc-run-header { display: flex; gap: var(--space-3); align-items: center; }
 .sc-run-name { font-weight: 600; font-size: var(--text-lg); }
 .sc-run-header .muted { font-variant-numeric: tabular-nums; }
 .sc-run-header .hdr-btn { margin-left: auto; }
@@ -993,7 +1015,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   height: 34px;
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 .sc-tl-mark {
   position: absolute;
@@ -1009,29 +1031,29 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 .sc-tl-fired { background: var(--accent); border-color: var(--accent); }
 .sc-tl-pass { background: var(--good); border-color: var(--good); }
 .sc-tl-fail { background: var(--bad); border-color: var(--bad); }
-.sc-run-cols { display: grid; grid-template-columns: 240px 1fr; gap: 16px; }
+.sc-run-cols { display: grid; grid-template-columns: 240px 1fr; gap: var(--space-4); }
 .sc-run-metrics h3, .sc-run-checks h3, .sc-run-events h3 {
   font-size: var(--text-md); text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--muted); margin: 0 0 6px;
+  color: var(--muted); margin: 0 0 var(--space-2);
 }
-.sc-metric { display: flex; justify-content: space-between; font-size: var(--text-md); padding: 2px 0; }
+.sc-metric { display: flex; justify-content: space-between; font-size: var(--text-md); padding: var(--space-0) 0; }
 .sc-metric b { font-variant-numeric: tabular-nums; }
 .sc-check {
   display: grid;
   grid-template-columns: 16px auto 1fr;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: var(--text-md);
-  padding: 3px 0;
+  padding: var(--space-0) 0;
   font-variant-numeric: tabular-nums;
 }
 .sc-check.pass > span:first-child { color: var(--good); }
 .sc-check.fail > span:first-child { color: var(--bad); }
-.sc-event { font-size: var(--text-md); padding: 2px 0; }
+.sc-event { font-size: var(--text-md); padding: var(--space-0) 0; }
 .sc-event code { color: var(--accent); }
 .sc-csv-link {
   display: inline-block;
   font-size: var(--text-md);
-  margin: 2px 8px 2px 0;
+  margin: var(--space-0) var(--space-2) var(--space-0) 0;
   color: var(--accent);
   font-family: var(--font-mono);
 }
@@ -1049,7 +1071,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
    height and one opening cannot shrink another. The dock itself is
    click-through (pointer-events: none); each card re-enables hits.
    The dock reaches the same top inset as the floating canvas controls
-   (10px), so a card can be dragged all the way up to that row: the
+   (--space-3), so a card can be dragged all the way up to that row: the
    dock itself stays click-through, and only a card actually dragged
    over the controls covers them (the dock outranks them in z-order).
    Cards nobody has placed still cascade in below the row, off
@@ -1069,8 +1091,8 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
      against the row's real size rather than a grown one. */
   min-height: 0;
   min-width: 0;
-  margin: 10px;
-  z-index: 7;
+  margin: var(--space-3);
+  z-index: var(--z-dock);
   position: relative;
   pointer-events: none;
 }
@@ -1111,7 +1133,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   pointer-events: auto;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-3);
   overflow: hidden;
 }
@@ -1194,12 +1216,14 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
 /* And so do the bands inside them, or they clip the tile's own floor. */
 #repl.docked #repl-output, #logs-panel.docked #logs { min-height: 0; }
 /* The tile head: the grab strip grows a title (the card's landmark
-   label) and room for its buttons; the grip stays as the handle. */
+   label) and room for its buttons; the grip stays as the handle. The
+   right padding covers .float-dock and .float-close, which sit at fixed
+   offsets from the right edge. */
 .float-panel.docked .panel-drag {
   height: 24px;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 0 64px 0 12px;
+  gap: var(--space-3);
+  padding: 0 calc(2 * var(--space-5) + var(--space-4)) 0 var(--space-3);
   border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -1215,7 +1239,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   overflow-y: auto;
   /* slim top padding — the drag strip above already clears the
      floating × */
-  padding: 7px 18px 18px;
+  padding: var(--space-2) var(--space-4) var(--space-4);
 }
 
 /* Grab strip along the card's top edge: drag to move the floating
@@ -1234,7 +1258,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
 .panel-drag .drag-grip {
   width: 36px;
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--border);
 }
 .panel-drag:hover .drag-grip { background: var(--muted); }
@@ -1243,15 +1267,15 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   position: absolute;
   top: 6px;
   right: 8px;
-  z-index: 1;
+  z-index: var(--z-canvas);
   border: none;
   background: transparent;
   color: var(--muted);
   font-size: var(--text-xl);
   line-height: 1;
   cursor: pointer;
-  padding: 0 6px;
-  border-radius: 4px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
 }
 .float-close:hover { color: var(--fg); background: var(--bg); }
 /* Dock / float toggle, left of the ×. */
@@ -1259,15 +1283,15 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   position: absolute;
   top: 7px;
   right: 34px;
-  z-index: 1;
+  z-index: var(--z-canvas);
   border: none;
   background: transparent;
   color: var(--muted);
   font-size: var(--text-lg);
   line-height: 1;
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius-sm);
 }
 .float-dock:hover { color: var(--fg); background: var(--bg); }
 .float-panel.docked .float-dock { top: 2px; }
@@ -1283,13 +1307,13 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
 /* The dock menu a floating card's ⤓ opens: one entry per strip. */
 .dock-menu {
   position: fixed;
-  z-index: 900;
+  z-index: var(--z-menu);
   min-width: 160px;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow-2);
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   font-family: var(--font-mono);
   font-size: var(--text-md);
 }
@@ -1300,7 +1324,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   border: none;
   background: transparent;
   color: var(--fg);
-  padding: 4px 12px;
+  padding: var(--space-1) var(--space-3);
   cursor: pointer;
   font: inherit;
 }
@@ -1322,7 +1346,7 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 .float-head h2 { margin: 0; }
 
@@ -1333,14 +1357,14 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   grid-area: topology;
   justify-self: start;
   align-self: start;
-  z-index: 6;
-  margin: 10px;
-  padding: 5px 11px;
+  z-index: var(--z-overlay);
+  margin: var(--space-3);
+  padding: var(--space-1) var(--space-3);
   font-size: var(--text-md);
   background: var(--bg-elev);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   box-shadow: var(--shadow-1);
 }
@@ -1350,15 +1374,15 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   grid-area: topology;
   justify-self: start;
   align-self: start;
-  z-index: 6;
+  z-index: var(--z-overlay);
   position: relative;
   width: 300px;
   max-width: calc(100% - 20px);
-  margin: 48px 10px 10px;
-  padding: 12px 14px;
+  margin: calc(2 * var(--space-5)) var(--space-3) var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-3);
 }
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #add-toggle {
@@ -1400,7 +1424,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   flex: 1 1 auto;
   min-height: 160px;
   overflow-y: auto;
-  padding: 7px 14px;
+  padding: var(--space-2) var(--space-4);
   background: var(--bg);
   font-family: var(--font-mono);
   font-size: var(--text-md);
@@ -1410,8 +1434,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 4px 14px 7px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4) var(--space-2);
   border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -1420,10 +1444,10 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
 }
 .logs-head .pill { margin-left: auto; }
 /* The minimum level: #logs carries one min-* class and the lines
@@ -1442,7 +1466,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 
 .log-line {
   display: flex;
-  gap: 9px;
+  gap: var(--space-2);
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.35;
@@ -1460,7 +1484,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   flex: 1 1 auto;
   min-height: 240px;
   overflow-y: auto;
-  padding: 9px 14px;
+  padding: var(--space-2) var(--space-4);
   background: var(--bg-elev);
 }
 #repl-output:empty::before {
@@ -1470,8 +1494,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-style: italic;
 }
 
-.repl-entry { margin-bottom: 9px; }
-.repl-entry pre { margin: 0; padding: 4px 9px; border-radius: 3px; border: none; background: transparent; }
+.repl-entry { margin-bottom: var(--space-2); }
+.repl-entry pre { margin: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); border: none; background: transparent; }
 .repl-prompt   { color: var(--accent); }
 .repl-value    { color: var(--good); white-space: pre-wrap; }
 .repl-error    { color: var(--bad); white-space: pre-wrap; }
@@ -1482,8 +1506,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   flex: 0 0 auto;
   display: flex;
   align-items: stretch;
-  gap: 9px;
-  padding: 9px;
+  gap: var(--space-2);
+  padding: var(--space-2);
   border-top: 1px solid var(--border);
   background: var(--bg);
 }
@@ -1502,8 +1526,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--text-lg);
   line-height: 1.4;
@@ -1517,7 +1541,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   color: transparent;
   caret-color: var(--fg);
   resize: none;
-  z-index: 1;
+  z-index: var(--z-canvas);
 }
 #repl-input:focus { outline: 1px solid var(--accent); }
 #repl-input::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: transparent; }
@@ -1549,22 +1573,22 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   position: absolute;
   bottom: 100%;       /* float upward from the textarea */
   left: 0;
-  margin: 0 0 4px 0;
-  padding: 4px 0;
+  margin: 0 0 var(--space-1);
+  padding: var(--space-1) 0;
   list-style: none;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--text-md);
   min-width: 240px;
   max-height: 220px;
   overflow-y: auto;
-  z-index: 10;
+  z-index: var(--z-popover);
   box-shadow: var(--shadow-2);
 }
 #repl-completions li {
-  padding: 3px 10px;
+  padding: var(--space-0) var(--space-3);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1578,8 +1602,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   background: var(--accent);
   color: var(--bg);
   border: none;
-  border-radius: 3px;
-  padding: 0 18px;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-4);
   font-family: var(--font-mono);
   font-size: var(--text-lg);
   font-weight: 600;
@@ -1592,7 +1616,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .panel-content h2, .float-head h2 {
   font-family: var(--font-mono);
   font-size: var(--text-lg);
-  margin: 0 0 9px;
+  margin: 0 0 var(--space-2);
   color: var(--accent);
 }
 
@@ -1609,7 +1633,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   border-bottom: 1px dashed transparent;
   font-family: var(--font-mono);
   font-size: var(--text-lg);
-  padding: 2px 0;
+  padding: var(--space-0) 0;
 }
 .name-input:hover, .name-input:focus {
   border-bottom-color: var(--accent);
@@ -1622,7 +1646,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--muted);
-  margin: 18px 0 7px;
+  margin: var(--space-4) 0 var(--space-2);
 }
 
 /* ── Metrics panel ─────────────────────────────────────────────
@@ -1636,21 +1660,21 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .metrics-panel .metrics-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 2px 0 10px;
+  gap: var(--space-2);
+  margin: var(--space-0) 0 var(--space-3);
 }
 .metrics-panel .metrics-head h2 {
   font-size: var(--text-md);
   margin: 0 auto 0 0;
 }
 .metrics-panel .win-pill {
-  padding: 2px 9px;
+  padding: var(--space-0) var(--space-2);
   font-size: var(--text-sm);
 }
 .mcard {
   border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 10px;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
   background: var(--bg);
 }
 /* The inspector's fold machinery, re-declared for .mcard: the
@@ -1662,12 +1686,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   align-items: center;
   cursor: pointer;
   user-select: none;
-  margin: 4px 10px;
+  margin: var(--space-1) var(--space-3);
 }
 .mcard .fold-summary {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   text-transform: none;
   letter-spacing: 0;
   font-size: var(--text-md);
@@ -1679,7 +1703,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 .mcard .fold-body {
   display: none;
-  padding: 2px 10px 10px;
+  padding: var(--space-0) var(--space-3) var(--space-3);
 }
 .mcard.open .fold-chevron { transform: rotate(0deg); }
 .mcard.open .fold-body { display: block; }
@@ -1689,17 +1713,17 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .mchips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 .mchip {
   display: flex;
   align-items: baseline;
-  gap: 7px;
+  gap: var(--space-2);
   background: var(--pill-surface);
   border: 1px solid var(--pill-border);
-  border-radius: 999px;
-  padding: 3px 11px;
+  border-radius: var(--radius-full);
+  padding: var(--space-0) var(--space-3);
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: var(--text-md);
@@ -1744,8 +1768,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .weather-panel .weather-head {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  margin: 2px 0 10px;
+  gap: var(--space-2);
+  margin: var(--space-0) 0 var(--space-3);
 }
 .weather-panel .weather-head h2 {
   font-size: var(--text-md);
@@ -1762,23 +1786,23 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .weather-readout .weather-unit {
   font-size: var(--text-md);
   color: var(--muted);
-  margin-left: 2px;
+  margin-left: var(--space-0);
 }
 .wchart {
   min-height: 20px;
 }
 .weather-panel .weather-sub {
-  margin: 6px 0 0;
+  margin: var(--space-2) 0 0;
 }
 .weather-panel .weather-err {
-  margin: 6px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--bad);
 }
 .wfields {
   display: grid;
   grid-template-columns: max-content 1fr;
   align-items: center;
-  gap: 5px 8px;
+  gap: var(--space-1) var(--space-2);
   margin: 0;
 }
 .wfield {
@@ -1800,7 +1824,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .wfield-pair {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .wfield-pair .wfield-dash {
@@ -1809,11 +1833,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .wfield-input {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   color: var(--fg);
   font-family: var(--font-mono);
   font-size: var(--text-md);
-  padding: 1px 5px;
+  padding: 1px var(--space-1);
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
@@ -1825,18 +1849,18 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
    cloud). The header and its one-line caption stay quiet — they are
    there to be read once, not to compete with the values. */
 .wsec {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .wsec h3,
 .wevents h3 {
   font-size: var(--text-sm);
   color: var(--muted);
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-2);
 }
 .weather-panel .wsec-cap {
   font-size: var(--text-sm);
   line-height: 1.35;
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-2);
 }
 /* The cloud sketch: one trapezoid naming depth, duration and ramp.
    Sized by its viewBox, so it scales with the panel, and painted in
@@ -1845,7 +1869,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   display: block;
   width: 100%;
   height: auto;
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
 }
 .wsketch-shape {
   fill: var(--accent);
@@ -1877,7 +1901,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
 }
 .wcloud-row label {
   font-size: var(--text-sm);
@@ -1887,7 +1911,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   width: 62px;
 }
 .wevents {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .wevents ul {
   list-style: none;
@@ -1909,8 +1933,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1);
   font-family: var(--font-mono);
   font-size: var(--text-lg);
 }
@@ -1920,8 +1944,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-1);
   font-family: var(--font-mono);
   font-size: var(--text-md);
   width: 100%;
@@ -1955,7 +1979,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect dd:has(.knob-flag) {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 /* flex-basis 0 (not the input's own width) so the row never widens
@@ -1965,7 +1989,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect .knob-flag {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   color: var(--muted);
   font-size: var(--text-md);
   white-space: nowrap;
@@ -1978,11 +2002,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
    token), just scoped to the knob's own dd. */
 #inspect .knob-expr-chip {
   display: inline-block;
-  margin-top: 2px;
+  margin-top: var(--space-0);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  padding: 1px 6px;
-  border-radius: 8px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);
   border: 1px solid var(--accent);
@@ -1993,7 +2017,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
    doesn't say what it currently evaluates to. */
 #inspect .knob-resolved {
   display: block;
-  margin-top: 2px;
+  margin-top: var(--space-0);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--muted);
@@ -2006,9 +2030,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect .insp-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   flex-wrap: wrap;
-  margin: -0.25rem 0 14px;
+  margin: calc(-1 * var(--space-1)) 0 var(--space-4);
 }
 #inspect .insp-meta-id {
   font-family: var(--font-mono);
@@ -2018,8 +2042,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect .insp-chip {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  padding: 1px 7px;
-  border-radius: 8px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-md);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border: 1px solid var(--border);
@@ -2043,12 +2067,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect .seg {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 #inspect .seg-chip {
-  padding: 2px 8px;
+  padding: var(--space-0) var(--space-2);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--muted);
   font: var(--text-sm) var(--font-mono);
@@ -2080,16 +2104,16 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect .env-bar {
   position: relative;
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   background: var(--border);
-  margin: 4px 0 2px;
+  margin: var(--space-1) 0 var(--space-0);
 }
 #inspect .env-live {
   position: absolute;
   top: -4px;
   width: 3px;
   height: 12px;
-  border-radius: 1.5px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   /* A soft glow so the live marker reads at a glance against the
      track — it's the one element on the bar that moves. */
@@ -2101,7 +2125,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   top: -2px;
   width: 2px;
   height: 8px;
-  border-radius: 1px;
+  border-radius: var(--radius-sm);
   background: var(--standby);
   transform: translateX(-1px);
 }
@@ -2111,7 +2135,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   color: var(--muted);
   font-size: var(--text-xs);
   font-family: var(--font-mono);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
   /* A transient null envelope (see applySnapshot's fallback in
      inspect.js) empties this row's innerHTML for a beat; without a
      fixed line-height a flex row with no children collapses to 0
@@ -2122,7 +2146,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #inspect .env-setpoint {
   font-size: var(--text-sm);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 
 /* Foldable one-line rows (Charts, Connections). The header is an h3
@@ -2139,7 +2163,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect .fold-summary {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 #inspect .fold-chevron {
   display: inline-block;
@@ -2157,12 +2181,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #inspect .insp-card {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-top: 14px;
-  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  margin-top: var(--space-4);
+  padding: var(--space-2) var(--space-4);
 }
-#inspect .insp-card > .fold-toggle { margin: 4px 0; }
-#inspect .insp-card > .fold-body { padding-bottom: 9px; }
+#inspect .insp-card > .fold-toggle { margin: var(--space-1) 0; }
+#inspect .insp-card > .fold-body { padding-bottom: var(--space-2); }
 /* Sub-headers inside the Component card (Graph / Simulation): the
    card title owns the h3 treatment, these sit one step below it. */
 #inspect .insp-card h4 {
@@ -2171,7 +2195,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--muted);
-  margin: 14px 0 7px;
+  margin: var(--space-4) 0 var(--space-2);
 }
 
 /* The EV card's SoC gauge: a fill to the car's SoC with a tick at
@@ -2181,13 +2205,13 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   position: relative;
   height: 8px;
   background: var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: inline-block;
   width: 120px;
   vertical-align: middle;
-  margin-right: 6px;
+  margin-right: var(--space-2);
 }
-.ev-soc-fill { height: 100%; background: var(--cat-ev-charger); border-radius: 4px; }
+.ev-soc-fill { height: 100%; background: var(--cat-ev-charger); border-radius: var(--radius-sm); }
 .ev-soc-target { position: absolute; top: -2px; width: 2px; height: 12px; background: currentColor; }
 
 /* Standalone commit button — the EV card's Plug in / Unplug. The
@@ -2198,8 +2222,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
    `btn` is a generic enough name to collide outside the panel. */
 #inspect .btn {
   font-size: var(--text-md);
-  padding: 3px 10px;
-  border-radius: 5px;
+  padding: var(--space-0) var(--space-3);
+  border-radius: var(--radius-md);
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--fg);
@@ -2209,12 +2233,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 
 /* Per-axis block in the Power card: a big live readout headlines
    each envelope bar. */
-#inspect .env-axis { margin: 9px 0 14px; }
+#inspect .env-axis { margin: var(--space-2) 0 var(--space-4); }
 #inspect .env-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-0);
 }
 #inspect .env-label {
   font-family: var(--font-mono);
@@ -2233,12 +2257,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .conns {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: var(--space-4);
 }
 .conns ul {
   list-style: none;
   padding: 0;
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-family: var(--font-mono);
   font-size: var(--text-md);
 }
@@ -2255,28 +2279,28 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   border: none;
   color: var(--bad);
   cursor: pointer;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   font-size: var(--text-md);
 }
-.link-btn:hover { background: var(--bg); border-radius: 3px; }
+.link-btn:hover { background: var(--bg); border-radius: var(--radius-sm); }
 
 .defaults-entry {
-  margin-bottom: 14px;
+  margin-bottom: var(--space-4);
 }
 .defaults-entry label {
   display: block;
   font-family: var(--font-mono);
   font-size: var(--text-md);
   color: var(--accent);
-  margin-bottom: 2px;
+  margin-bottom: var(--space-0);
 }
 .defaults-entry textarea {
   width: 100%;
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--text-md);
   resize: vertical;
@@ -2284,36 +2308,36 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 .defaults-entry textarea:focus { outline: 1px solid var(--accent); }
 .defaults-entry button {
-  margin-top: 4px;
+  margin-top: var(--space-1);
   font-size: var(--text-md);
-  padding: 3px 10px;
+  padding: var(--space-0) var(--space-3);
 }
 
 .setpoints {
-  margin-top: 14px;
+  margin-top: var(--space-4);
 }
 .sp-list {
   list-style: none;
   padding: 0;
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-family: var(--font-mono);
   font-size: var(--text-md);
   max-height: 220px;
   overflow-y: auto;
 }
 .sp-event {
-  padding: 4px 6px;
+  padding: var(--space-1) var(--space-2);
   border-left: 2px solid var(--border);
-  margin-bottom: 2px;
+  margin-bottom: var(--space-0);
   background: var(--bg);
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   word-break: break-word;
 }
 .sp-event.accepted { border-left-color: var(--good); }
 .sp-event.rejected { border-left-color: var(--bad); }
 .sp-ts { color: var(--muted); }
-.sp-tag { color: var(--accent); margin-left: 4px; }
-.sp-val { color: var(--fg); margin-left: 4px; }
+.sp-tag { color: var(--accent); margin-left: var(--space-1); }
+.sp-val { color: var(--fg); margin-left: var(--space-1); }
 .sp-ok  { color: var(--good); }
 .sp-bad { color: var(--bad); }
 
@@ -2322,7 +2346,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-size: var(--text-md);
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 2px 8px;
+  gap: var(--space-0) var(--space-2);
 }
 .sc-report-dl dt { color: var(--muted); }
 .sc-report-dl dd { margin: 0; }
@@ -2334,7 +2358,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 .sc-report-tbl th, .sc-report-tbl td {
   text-align: left;
-  padding: 2px 6px;
+  padding: var(--space-0) var(--space-2);
   border-bottom: 1px solid var(--border);
 }
 .sc-events {
@@ -2347,12 +2371,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-size: var(--text-md);
 }
 .sc-events li {
-  padding: 2px 4px;
+  padding: var(--space-0) var(--space-1);
   border-bottom: 1px solid var(--border);
 }
 .sc-events code {
   color: var(--muted);
-  margin-right: 9px;
+  margin-right: var(--space-2);
 }
 
 .panel-content dl {
@@ -2364,18 +2388,18 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
      card the panel's 420px loses two rounds of padding, so the
      inputs cannot spare what a max-content label column takes. */
   grid-template-columns: fit-content(45%) 1fr;
-  gap: 4px 14px;
+  gap: var(--space-1) var(--space-4);
   margin: 0;
 }
 
 .panel-content dt { color: var(--muted); }
 .panel-content dd { margin: 0; word-break: break-all; }
 
-#charts { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
-.chart { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 4px; }
+#charts { margin-top: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
+.chart { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1); }
 
 /* uPlot's title styling — match the inspector typography. */
-.u-title { color: var(--fg) !important; font-family: var(--font-mono) !important; font-size: var(--text-md) !important; font-weight: normal !important; padding: 4px 6px 0 !important; }
+.u-title { color: var(--fg) !important; font-family: var(--font-mono) !important; font-size: var(--text-md) !important; font-weight: normal !important; padding: var(--space-1) var(--space-2) 0 !important; }
 .u-legend { display: none !important; }
 
 pre {
@@ -2384,8 +2408,8 @@ pre {
   line-height: 1.4;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 14px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
   overflow: auto;
 }
 
@@ -2394,7 +2418,7 @@ pre {
    Read-only table of dispatches the dispatch API holds for the selected
    microgrid; a padded pane with its own scroll. */
 #dispatches {
-  padding: 16px;
+  padding: var(--space-4);
   overflow-y: auto;
   align-content: start;
 }
@@ -2402,10 +2426,10 @@ pre {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
-.dispatches-header h2 { margin: 0 0 4px 0; font-size: var(--text-xl); }
+.dispatches-header h2 { margin: 0 0 var(--space-1); font-size: var(--text-xl); }
 .dispatches-header .hint { margin: 0; }
 #dispatch-new-btn { flex-shrink: 0; }
 .disp-table { width: 100%; border-collapse: collapse; font-size: var(--text-md); }
@@ -2417,11 +2441,11 @@ pre {
   letter-spacing: 0.05em;
   color: var(--muted);
   font-weight: 500;
-  padding: 6px 10px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 .disp-table td {
-  padding: 7px 10px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
@@ -2436,8 +2460,8 @@ pre {
   display: inline-block;
   font-size: var(--text-sm);
   font-family: var(--font-mono);
-  padding: 1px 6px;
-  border-radius: 3px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
   border: 1px solid currentColor;
 }
 .disp-on  { color: var(--good); }
@@ -2445,7 +2469,7 @@ pre {
 .disp-dry { color: var(--warn); }
 
 .disp-actions { white-space: nowrap; }
-.disp-actions .link-btn { margin-right: 8px; }
+.disp-actions .link-btn { margin-right: var(--space-2); }
 .disp-del { color: var(--bad); }
 
 /* ── New-dispatch dialog ───────────────────────────────────────────
@@ -2457,17 +2481,17 @@ dialog#dispatch-dialog { max-width: 640px; }
 #dispatch-form .dd-body {
   overflow-y: auto;
   max-height: calc(80vh - 130px);
-  padding: 16px 18px 4px;
+  padding: var(--space-4) var(--space-4) var(--space-1);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }
 .dd-row2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: var(--space-4);
 }
-.dd-field { display: flex; flex-direction: column; gap: 6px; }
+.dd-field { display: flex; flex-direction: column; gap: var(--space-2); }
 .dd-label {
   font-size: var(--text-sm);
   text-transform: uppercase;
@@ -2477,15 +2501,15 @@ dialog#dispatch-dialog { max-width: 640px; }
 .dd-input {
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--fg);
-  padding: 6px 8px;
+  padding: var(--space-2);
   font-size: var(--text-md);
 }
 .dd-input:focus { outline: none; border-color: var(--accent); }
 .dd-input:disabled { opacity: 0.45; }
-.dd-input-inline { padding: 3px 6px; font-size: var(--text-md); }
-.dd-input-num { width: 64px; padding: 3px 6px; font-size: var(--text-md); }
+.dd-input-inline { padding: var(--space-0) var(--space-2); font-size: var(--text-md); }
+.dd-input-num { width: 64px; padding: var(--space-0) var(--space-2); font-size: var(--text-md); }
 .dd-hint { margin: 0; font-size: var(--text-sm); color: var(--muted); }
 .dd-hint-inline { color: var(--muted); font-size: var(--text-sm); }
 
@@ -2493,7 +2517,7 @@ dialog#dispatch-dialog { max-width: 640px; }
 .dd-seg {
   display: inline-flex;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   align-self: flex-start;
 }
@@ -2502,7 +2526,7 @@ dialog#dispatch-dialog { max-width: 640px; }
   border: none;
   color: var(--muted);
   font-size: var(--text-md);
-  padding: 4px 12px;
+  padding: var(--space-1) var(--space-3);
   cursor: pointer;
 }
 .dd-seg-btn + .dd-seg-btn { border-left: 1px solid var(--border); }
@@ -2510,17 +2534,17 @@ dialog#dispatch-dialog { max-width: 640px; }
 .dd-seg-btn:hover:not(.active) { color: var(--fg); }
 
 /* Category chips: toggleable, count badge per category. */
-.dd-chiprow { display: flex; flex-wrap: wrap; gap: 6px; }
+.dd-chiprow { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .dd-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   background: var(--bg-deep);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   color: var(--fg);
   font-size: var(--text-md);
-  padding: 4px 12px;
+  padding: var(--space-1) var(--space-3);
   cursor: pointer;
 }
 .dd-chip:hover { border-color: var(--accent); }
@@ -2537,22 +2561,22 @@ dialog#dispatch-dialog { max-width: 640px; }
   max-height: 180px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-deep);
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 .dd-comp-group {
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
-  padding: 6px 10px 2px;
+  padding: var(--space-2) var(--space-3) var(--space-0);
 }
 .dd-comp {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
   font-size: var(--text-md);
   cursor: pointer;
 }
@@ -2560,23 +2584,23 @@ dialog#dispatch-dialog { max-width: 640px; }
 .dd-comp .dd-comp-id { font-family: var(--font-mono); color: var(--muted); }
 
 /* Radio / checkbox stacks. */
-.dd-choice-col { display: flex; flex-direction: column; gap: 6px; }
+.dd-choice-col { display: flex; flex-direction: column; gap: var(--space-2); }
 .dd-choice {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-2);
   font-size: var(--text-md);
   cursor: pointer;
 }
-.dd-inline { display: inline-flex; align-items: center; gap: 7px; font-size: var(--text-md); }
+.dd-inline { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-md); }
 
 /* Payload key → value rows. */
-.dd-kv-rows { display: flex; flex-direction: column; gap: 6px; }
+.dd-kv-rows { display: flex; flex-direction: column; gap: var(--space-2); }
 .dd-kv-row {
   display: grid;
   grid-template-columns: 1fr 16px 1.4fr 24px;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 .dd-kv-row .dd-kv-arrow { color: var(--muted); text-align: center; }
 .dd-kv-row .dd-kv-del {
@@ -2591,17 +2615,17 @@ dialog#dispatch-dialog { max-width: 640px; }
 #dd-payload-add { align-self: flex-start; }
 
 .dd-error {
-  margin: 6px 18px 0;
+  margin: var(--space-2) var(--space-4) 0;
   font-size: var(--text-md);
   color: var(--bad);
 }
 .dd-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 14px 18px;
+  gap: var(--space-2);
+  padding: var(--space-4);
   border-top: 1px solid var(--border);
-  margin-top: 10px;
+  margin-top: var(--space-3);
 }
 
 /* Floating canvas controls (top-right): layout picker + snap toggle.
@@ -2612,11 +2636,11 @@ dialog#dispatch-dialog { max-width: 640px; }
   grid-area: topology;
   justify-self: end;
   align-self: start;
-  z-index: 6;
-  margin: 10px;
-  padding: 4px 8px;
+  z-index: var(--z-overlay);
+  margin: var(--space-3);
+  padding: var(--space-1) var(--space-2);
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   /* The canvas column does not widen to fit this strip (see main's
      grid-template-columns), so it wraps onto a second row rather than
      running off the left edge when the right dock strip narrows the
@@ -2625,7 +2649,7 @@ dialog#dispatch-dialog { max-width: 640px; }
   justify-content: flex-end;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-1);
 }
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #topology-controls {
@@ -2644,12 +2668,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
-  margin-right: 2px;
+  margin-right: var(--space-0);
 }
 .pill {
   font-size: var(--text-md);
-  padding: 3px 9px;
-  border-radius: 12px;
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius-lg);
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -2674,21 +2698,21 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 /* Group separators inside the right-click menu (the align section). */
 #ctx-menu .ctx-separator {
   border-top: 1px solid var(--border);
-  margin: 4px 0;
+  margin: var(--space-1) 0;
 }
 
 /* Cards: one bordered block per section of a floating panel. */
 .card {
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
 }
 /* The cards used to be flex children of #formula-side, which supplied
    the gap; inside a .panel-content they stack in normal flow. */
-.card + .card { margin-top: 12px; }
+.card + .card { margin-top: var(--space-3); }
 .card h2 {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   font-size: var(--text-md);
   font-weight: 600;
   text-transform: uppercase;
@@ -2706,9 +2730,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   display: inline;
   margin: 0;
 }
-#config-panel[open] > summary { margin-bottom: 8px; }
+#config-panel[open] > summary { margin-bottom: var(--space-2); }
 #config-count {
-  margin-left: 8px;
+  margin-left: var(--space-2);
   font-size: var(--text-sm);
 }
 
@@ -2717,8 +2741,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
 }
 .field-label {
   flex-basis: 100%;
@@ -2730,15 +2754,15 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 .check {
   display: block;
-  margin-top: 6px;
+  margin-top: var(--space-2);
   font-size: var(--text-md);
   cursor: pointer;
 }
-.check input { margin-right: 6px; }
+.check input { margin-right: var(--space-2); }
 .tool-btn {
   font-size: var(--text-md);
-  padding: 3px 8px;
-  border-radius: 5px;
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius-md);
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--fg);
@@ -2791,7 +2815,7 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .formula-unsubtracted .formula-subtracted .formula-ref:not(.hl):hover { color: var(--good); }
 .formula-node.expr-hl {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
@@ -2800,15 +2824,15 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #palette {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .pal-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   font-size: var(--text-md);
-  padding: 3px 9px 3px 7px;
-  border-radius: 5px;
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius-md);
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--fg);
@@ -2834,11 +2858,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
    pointer: moving the mouse onto it must not blur the node. */
 .hover-card {
   position: fixed;
-  z-index: 60;
+  z-index: var(--z-hovercard);
   width: 300px;
   box-sizing: border-box;
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
   background: var(--pill-surface);
   border: 1px solid var(--pill-border);
   box-shadow: var(--shadow-3);
@@ -2848,25 +2872,25 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   line-height: 1.4;
   pointer-events: none;
 }
-.hover-card .hc-head { display: flex; align-items: center; gap: 8px; }
+.hover-card .hc-head { display: flex; align-items: center; gap: var(--space-2); }
 .hover-card .hc-title { font-weight: 600; font-size: var(--text-lg); }
-.hover-card .hc-id { color: var(--muted); font-family: "IBM Plex Mono", var(--font-mono); font-size: var(--text-sm); margin-bottom: 6px; }
-.hover-card .hc-chip { font-size: var(--text-xs); padding: 1px 6px; border-radius: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+.hover-card .hc-id { color: var(--muted); font-family: "IBM Plex Mono", var(--font-mono); font-size: var(--text-sm); margin-bottom: var(--space-2); }
+.hover-card .hc-chip { font-size: var(--text-xs); padding: 1px var(--space-2); border-radius: var(--radius-md); text-transform: uppercase; letter-spacing: 0.04em; }
 .hover-card .hc-chip-error { background: var(--bad); color: var(--bg); }
 .hover-card .hc-chip-standby { background: var(--standby); color: var(--bg); }
-.hover-card .hc-spark { display: block; width: 100%; height: 36px; margin: 2px 0 6px; }
+.hover-card .hc-spark { display: block; width: 100%; height: 36px; margin: var(--space-0) 0 var(--space-2); }
 .hover-card .hc-spark-empty { color: var(--muted); font-size: var(--text-sm); line-height: 36px; text-align: center; }
 .hover-card .hc-spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .hover-card .hc-spark-zero { stroke: var(--pill-border); stroke-width: 1; }
 .hover-card .hc-spark-end { fill: var(--accent); }
-.hover-card .hc-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+.hover-card .hc-row { display: flex; justify-content: space-between; gap: var(--space-3); padding: var(--space-0) 0; }
 .hover-card .hc-label { color: var(--muted); }
 .hover-card .hc-value { font-family: "IBM Plex Mono", var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
 .hover-card .hc-cmd { font-size: var(--text-sm); }
 .hover-card .hc-pf { justify-content: flex-end; font-family: "IBM Plex Mono", var(--font-mono); color: var(--muted); font-size: var(--text-sm); }
-.hover-card .hc-bar { position: relative; height: 4px; border-radius: 2px; background: var(--pill-border); margin: 2px 0; }
-.hover-card .hc-bar-marker { position: absolute; top: -2px; width: 2px; height: 8px; border-radius: 1px; transform: translateX(-1px); }
-.hover-card .hc-bar-ends { display: flex; justify-content: space-between; color: var(--muted); font-size: var(--text-xs); font-family: "IBM Plex Mono", var(--font-mono); margin-bottom: 4px; }
-.hover-card .hc-soc-fill { height: 100%; border-radius: 2px; background: var(--flow-export); }
-.hover-card .hc-foot { display: flex; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--pill-border); color: var(--muted); font-size: var(--text-xs); }
+.hover-card .hc-bar { position: relative; height: 4px; border-radius: var(--radius-sm); background: var(--pill-border); margin: var(--space-0) 0; }
+.hover-card .hc-bar-marker { position: absolute; top: -2px; width: 2px; height: 8px; border-radius: var(--radius-sm); transform: translateX(-1px); }
+.hover-card .hc-bar-ends { display: flex; justify-content: space-between; color: var(--muted); font-size: var(--text-xs); font-family: "IBM Plex Mono", var(--font-mono); margin-bottom: var(--space-1); }
+.hover-card .hc-soc-fill { height: 100%; border-radius: var(--radius-sm); background: var(--flow-export); }
+.hover-card .hc-foot { display: flex; justify-content: space-between; margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--pill-border); color: var(--muted); font-size: var(--text-xs); }
 .hover-card .hc-stale { color: var(--standby); }
