@@ -2314,6 +2314,42 @@ check(
   /smoke-boom/.test(replError ?? "") && !replError.includes('{"error"'),
   String(replError),
 );
+// Tab on text that does not parse shows the formatter's message in the REPL,
+// like an eval error: no toast, nothing logged.
+await dismissToasts();
+await page.fill("#repl-input", "(smoke-unparsed");
+await page.keyboard.press("Tab");
+const formatError = await waitFor(
+  () =>
+    page.evaluate(
+      () => [...document.querySelectorAll("#repl-output .repl-error")].map((e) => e.textContent).find((t) => t.startsWith("format:")) ?? null,
+    ),
+  5000,
+).catch(() => null);
+const formatToasts = await toastTexts();
+const formatLogged = formatError !== null && (await uiLogLines()).some((t) => t.includes(formatError.slice("format: ".length)));
+check(
+  "e2e: a Tab-format parse error shows in the REPL, not as a toast or a log line",
+  formatError !== null && formatToasts.length === 0 && !formatLogged,
+  JSON.stringify({ formatError, formatToasts, formatLogged }),
+);
+// A format that cannot reach the server shows there too, and is logged.
+await page.route("**/api/format*", (r) => r.abort());
+await page.keyboard.press("Tab");
+const formatDown = await waitFor(
+  () =>
+    page.evaluate(
+      () => [...document.querySelectorAll("#repl-output .repl-error")].map((e) => e.textContent).find((t) => t.startsWith("format: transport")) ?? null,
+    ),
+  5000,
+).catch(() => null);
+await page.unroute("**/api/format*");
+await page.fill("#repl-input", "");
+check(
+  "e2e: a Tab-format that cannot reach the server shows in the REPL and is logged",
+  formatDown !== null && (await uiLogCount(`ui: REPL: ${formatDown}`)) === 1,
+  String(formatDown),
+);
 await page.click("#repl .float-close");
 // A failed mutation's toast carries the server's message: redo with
 // nothing to redo answers 409.

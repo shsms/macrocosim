@@ -154,13 +154,14 @@ export function setupRepl() {
         method: "POST",
         body: src,
       });
-    } catch (_) {
+    } catch (e) {
+      formatFailed(`transport error: ${e.message}`);
+      logUi("error", `REPL: format: transport error: ${e.message}`);
       return;
     }
     if (!res.ok) {
-      // 400 carries the parse diagnostic (unbalanced parens etc.) —
-      // a silent no-op Tab gives the user nothing to act on.
-      notify(await errorText(res));
+      // A 400 carries the parse diagnostic (unbalanced parens etc.).
+      formatFailed(await errorText(res));
       return;
     }
     let formatted = await res.text();
@@ -183,6 +184,24 @@ export function setupRepl() {
     refreshOverlay();
   }
 
+  // A failed format gets a transcript entry of its own, like a failed eval.
+  function formatFailed(message) {
+    const entry = document.createElement("div");
+    entry.className = "repl-entry";
+    output.appendChild(entry);
+    addResult(entry, "repl-error", `format: ${message}`);
+    output.scrollTop = output.scrollHeight;
+  }
+
+  // A result line under a transcript entry, of class "repl-value" or
+  // "repl-error".
+  function addResult(entry, klass, text) {
+    const out = document.createElement("pre");
+    out.className = klass;
+    out.textContent = text;
+    entry.appendChild(out);
+  }
+
   async function run() {
     const src = input.value.trim();
     if (!src) return;
@@ -195,15 +214,9 @@ export function setupRepl() {
       const res = await fetch(mgPath("eval") ?? "/api/eval", { method: "POST", body: src });
       const klass = res.ok ? "repl-value" : "repl-error";
       const text = res.ok ? (await res.json()).value : await errorText(res);
-      const out = document.createElement("pre");
-      out.className = klass;
-      out.textContent = text;
-      entry.appendChild(out);
+      addResult(entry, klass, text);
     } catch (err) {
-      const out = document.createElement("pre");
-      out.className = "repl-error";
-      out.textContent = `transport error: ${err.message}`;
-      entry.appendChild(out);
+      addResult(entry, "repl-error", `transport error: ${err.message}`);
       logUi("error", `REPL: transport error: ${err.message}`);
     }
     input.value = "";
