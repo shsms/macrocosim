@@ -375,6 +375,18 @@ size and spacing tokens on `:root[data-density="comfortable"]`.
 light value missing, or a raw length in a spacing, radius or z-index
 declaration.
 
+UI controls convention: a button is `.btn` (the secondary kind) with
+`.btn-primary`, `.btn-quiet` or `.btn-danger` for the other kinds, `.btn-sm` for
+the small size and `.btn-icon` for a glyph-only one (×, ⤓, ✕); a field is
+`.field` (`.field-sm` for a field set inline with text or other controls, as in
+panel rows and the dispatch dialog's inline choices; `.field-num` for a short
+number); a form's inline error is `.form-error`. A form or dialog has at most
+one primary button. Toggles keep their own components (`.pill`, `.pulse-chip`,
+`.mode-btn`, …). A panel's toggle, a header button or a canvas pill, carries
+`aria-pressed` and has an accent border and text while its panel is open.
+`tools/controls-test.mjs` lists the allowed button classes and fails on a class
+the kit replaced.
+
 Each registered microgrid binds its own gRPC port; the first
 defaults to `[::1]:8800` and subsequent microgrids step by ten
 (`:8810`, `:8820`, …), skipping the assets and dispatch ports; an

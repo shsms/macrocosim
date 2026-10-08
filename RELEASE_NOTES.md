@@ -269,6 +269,11 @@ What to change in your own scripts:
   the pulse bar switches to comfortable, with larger text and more
   space, and the browser remembers the choice. If you had turned
   compact off with the old chip, the UI opens comfortable.
+- Buttons and fields share one look across the UI. A dispatch's Delete
+  button is red.
+- The zone, theme and density chips in the pulse bar can be reached
+  with Tab and used with Enter or Space. A control with keyboard focus
+  shows an outline.
 
 ## Bug Fixes
 
