@@ -261,8 +261,8 @@ export const dispatchesPanel = (() => {
       <td>${escapeHtml(d.recurrence || "once")}</td>
       <td class="disp-payload">${payloadCell}</td>
       <td class="disp-actions">
-        <button class="link-btn" data-disp-toggle="${d.id}" data-next="${d.active ? 0 : 1}">${toggle}</button>
-        <button class="link-btn disp-del" data-disp-del="${d.id}">Delete</button>
+        <button class="btn btn-quiet btn-sm" data-disp-toggle="${d.id}" data-next="${d.active ? 0 : 1}">${toggle}</button>
+        <button class="btn btn-danger btn-sm" data-disp-del="${d.id}">Delete</button>
       </td>
     </tr>`;
   }

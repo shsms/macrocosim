@@ -14,6 +14,9 @@ const sources = new Map(
 // Classes the kit replaced; none may appear in markup, JS or CSS.
 const RETIRED = [
   "hdr-btn",
+  "link-btn",
+  "tool-btn",
+  "canvas-btn",
   // the lit state of a panel's toggle, now aria-pressed
   "primary",
 ];
@@ -34,9 +37,6 @@ const ALLOWED = [
   "repl-mg-chip",
   "seg-chip",
   // still to move onto the kit
-  "link-btn",
-  "tool-btn",
-  "canvas-btn",
   "float-close",
   "float-dock",
   "dd-kv-del",

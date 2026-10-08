@@ -419,7 +419,7 @@ function evBodyHtml(info) {
         <dt>initial SoC (%)</dt><dd><input id="ev-soc" type="number" step="any" min="0" max="100" placeholder="preset default" /></dd>
         <dt>target SoC (%)</dt><dd><input id="ev-target" type="number" step="any" min="0" max="100" placeholder="100" /></dd>
       </dl>
-      <button type="button" id="ev-plug" class="btn">Plug in</button>`;
+      <button type="button" id="ev-plug" class="btn btn-sm">Plug in</button>`;
   }
   const pct = Math.round(info.soc_pct);
   const mins = Math.max(0, Math.round((Date.now() - Date.parse(info.plugged_at)) / 60000));
@@ -430,7 +430,7 @@ function evBodyHtml(info) {
       <dt>session</dt><dd>${formatScaled(info.energy_wh, "Wh")} in ${mins} min</dd>
       <dt>state</dt><dd>${escapeHtml(info.state)}</dd>
     </dl>
-    <button type="button" id="ev-unplug" class="btn">Unplug</button>`;
+    <button type="button" id="ev-unplug" class="btn btn-sm">Unplug</button>`;
 }
 
 // Call when starting an EV-card fetch; pass the token to evFetchStale
@@ -547,7 +547,7 @@ function renderInspect(d, parentIds, childIds) {
   const renderEdgeRow = (id, dataAttr) => {
     const c = topology.get(id);
     const label = c ? c.name : `id ${id}`;
-    return `<li>${escapeHtml(label)} <button class="link-btn" ${dataAttr}="${id}"${lockAttrs}>✕</button></li>`;
+    return `<li>${escapeHtml(label)} <button class="btn btn-quiet btn-sm" ${dataAttr}="${id}"${lockAttrs}>✕</button></li>`;
   };
   const parentList = parentIds.length
     ? parentIds.map((id) => renderEdgeRow(id, "data-disconnect-from")).join("")
@@ -585,11 +585,11 @@ function renderInspect(d, parentIds, childIds) {
       // to paintKnobEntry without another lookup table there.
       const resolvedHtml = k.dynamic ? `<div class="knob-resolved" hidden></div>` : "";
       // `k.clear`: the small "✕ measure" button, styled like the
-      // link-btn disconnect affordances above. Starts hidden — shown
+      // ✕ disconnect buttons above. Starts hidden — shown
       // only while this token carries a live override, toggled by
       // paintKnobEntry/setKnobText alongside the input text itself.
       const measureBtnHtml = k.clear
-        ? `<button type="button" class="link-btn knob-measure-btn" data-clear="${k.clear}" hidden title="clear override, measure from children again">✕</button>`
+        ? `<button type="button" class="btn btn-quiet btn-sm knob-measure-btn" data-clear="${k.clear}" hidden title="clear override, measure from children again">✕</button>`
         : "";
       return `<dt>${escapeHtml(k.label)}</dt><dd>
         <input ${inputAttrs} class="knob-input"

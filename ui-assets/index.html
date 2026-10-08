@@ -178,7 +178,7 @@
                 title="The server's log tail">logs</button>
       </div>
       <!-- Floating left: summon the Add-component panel (topology only). -->
-      <button id="add-toggle" class="canvas-btn" type="button"
+      <button id="add-toggle" class="btn" type="button"
               title="Add a component">+ Add</button>
       <aside id="add-panel" aria-label="add component">
         <header class="float-head">
@@ -244,7 +244,7 @@
                           placeholder="(eval lisp here — ctrl/cmd+enter to run, tab to complete)"></textarea>
                 <ul id="repl-completions" hidden></ul>
               </div>
-              <button type="submit">Eval</button>
+              <button type="submit" class="btn btn-primary">Eval</button>
             </form>
           </div>
         </aside>
@@ -493,7 +493,7 @@
           <section class="dd-field">
             <span class="dd-label">Payload</span>
             <div id="dd-payload-rows" class="dd-kv-rows"></div>
-            <button type="button" id="dd-payload-add" class="link-btn">+ Add field</button>
+            <button type="button" id="dd-payload-add" class="btn btn-quiet btn-sm">+ Add field</button>
             <p class="dd-hint">
               Optional key → value pairs delivered verbatim to the consumer.
               Values that parse as JSON (numbers, true/false, arrays, objects)

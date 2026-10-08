@@ -1385,23 +1385,15 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
 
 /* Summon button (top-left) + the Add-component card it opens. Only the
    Topology sub-tab shows either; #add-panel needs `.open` too. */
-.canvas-btn {
+#add-toggle {
   display: none;
   grid-area: topology;
   justify-self: start;
   align-self: start;
   z-index: var(--z-overlay);
   margin: var(--space-3);
-  padding: var(--space-1) var(--space-3);
-  font-size: var(--text-md);
-  background: var(--bg-elev);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
   box-shadow: var(--shadow-1);
 }
-.canvas-btn:hover { border-color: var(--accent); color: var(--accent); }
 #add-panel {
   display: none;
   grid-area: topology;
@@ -1420,7 +1412,6 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
 }
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #add-toggle {
   display: inline-flex;
-  align-items: center;
 }
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #add-panel.open {
   display: block;
@@ -1630,19 +1621,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   background: var(--accent);
   color: var(--bg);
 }
-
-#repl-form button {
-  background: var(--accent);
-  color: var(--bg);
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-4);
-  font-family: var(--font-mono);
-  font-size: var(--text-lg);
-  font-weight: 600;
-  cursor: pointer;
-}
-#repl-form button:hover { filter: brightness(1.1); }
 
 /* Panel typography: shared by the inspector (#inspect is itself a
    .panel-content) and every other floating panel's content. */
@@ -2247,23 +2225,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .ev-soc-fill { height: 100%; background: var(--cat-ev-charger); border-radius: var(--radius-sm); }
 .ev-soc-target { position: absolute; top: -2px; width: 2px; height: 12px; background: currentColor; }
 
-/* Standalone commit button — the EV card's Plug in / Unplug. The
-   inspector's other buttons are .link-btn glyphs or segmented rows,
-   neither of which fits an action with a word on it; this borrows
-   .pal-btn's shape, the panel shell's other standalone button.
-   Scoped to #inspect like every other inspector rule in this file:
-   `btn` is a generic enough name to collide outside the panel. */
-#inspect .btn {
-  font-size: var(--text-md);
-  padding: var(--space-0) var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--fg);
-  cursor: pointer;
-}
-#inspect .btn:hover { border-color: var(--accent); }
-
 /* Per-axis block in the Power card: a big live readout headlines
    each envelope bar. */
 #inspect .env-axis { margin: var(--space-2) 0 var(--space-4); }
@@ -2306,16 +2267,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   padding: 1px 0;
   word-break: break-all;
 }
-
-.link-btn {
-  background: none;
-  border: none;
-  color: var(--bad);
-  cursor: pointer;
-  padding: 0 var(--space-1);
-  font-size: var(--text-md);
-}
-.link-btn:hover { background: var(--bg); border-radius: var(--radius-sm); }
 
 .defaults-entry {
   margin-bottom: var(--space-4);
@@ -2502,8 +2453,7 @@ pre {
 .disp-dry { color: var(--warn); }
 
 .disp-actions { white-space: nowrap; }
-.disp-actions .link-btn { margin-right: var(--space-2); }
-.disp-del { color: var(--bad); }
+.disp-actions .btn { margin-right: var(--space-2); }
 
 /* ── New-dispatch dialog ───────────────────────────────────────────
    One column of labelled sections; Start/Duration and Repeat/Options
@@ -2784,16 +2734,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   cursor: pointer;
 }
 .check input { margin-right: var(--space-2); }
-.tool-btn {
-  font-size: var(--text-md);
-  padding: var(--space-0) var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--fg);
-  cursor: pointer;
-}
-.tool-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .graph-error {
   font-family: var(--font-mono);

@@ -104,7 +104,7 @@ const MARKUP = `
     <p id="formula-error" class="graph-error" hidden></p>
     <pre id="formula-view" class="formula-tree"></pre>
     <div class="field">
-      <button type="button" class="tool-btn" id="copy-formula"
+      <button type="button" class="btn btn-sm" id="copy-formula"
         title="Copy the plain formula string">copy</button>
     </div>
     <p class="hint">Hover a part of the formula to highlight its
