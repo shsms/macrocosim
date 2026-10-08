@@ -46,6 +46,7 @@ import {
   visibleSubview,
 } from "./routing.js";
 import { closePanel, closeTopPanel, isPanelOpen, makeSidePanelToggle, openPanel } from "./side-panel.js";
+import { readStorage, removeStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
 import { topology } from "./topology.js";
 import { setupWeatherPanel } from "./weather-panel.js";
@@ -101,24 +102,10 @@ export function notify(message, kind = "error") {
 
 // Whether the strip's layout / drag / show groups are folded away
 // behind the chevron, leaving the `panels` pills. Persisted like the
-// other UI preferences — in a try/catch, since private-mode and
-// quota-exceeded storage throw — and falling back to expanded.
+// other UI preferences, and expanded when nothing is stored.
 const CTL_COLLAPSED_KEY = "mc-controls-collapsed";
-function loadCtlCollapsed() {
-  try {
-    return localStorage.getItem(CTL_COLLAPSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-function saveCtlCollapsed(collapsed) {
-  try {
-    localStorage.setItem(CTL_COLLAPSED_KEY, collapsed ? "1" : "0");
-  } catch {
-    // Storage unavailable — the fold still works for this session,
-    // it just won't remember next time.
-  }
-}
+const loadCtlCollapsed = () => readStorage(CTL_COLLAPSED_KEY) === "1";
+const saveCtlCollapsed = (collapsed) => writeStorage(CTL_COLLAPSED_KEY, collapsed ? "1" : "0");
 // Paint the fold: the class the CSS keys off, plus a chevron that
 // points the way the click goes — ‹ folds left, › unfolds right.
 function applyCtlCollapsed(strip, collapsed) {
@@ -514,13 +501,9 @@ async function init() {
   // markup is already in place.
   makeSidePanelToggle("repl-btn", focusRepl);
   makeSidePanelToggle("logs-btn", pinLogTail);
-  try {
-    // The drawer these panels replaced left its height and its two
-    // open flags behind; nothing reads them now.
-    for (const k of ["macrocosim-drawer-h", "macrocosim-drawer-logs", "macrocosim-drawer-repl"]) localStorage.removeItem(k);
-  } catch {
-    // Storage unavailable — there is nothing stale to drop either.
-  }
+  // The drawer these panels replaced left its height and its two open flags
+  // behind; nothing reads them now.
+  for (const k of ["macrocosim-drawer-h", "macrocosim-drawer-logs", "macrocosim-drawer-repl"]) removeStorage(k);
   setupLogsPanel();
   setupWeatherPanel();
   scenariosPanel.setup();

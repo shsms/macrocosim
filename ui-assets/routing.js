@@ -11,6 +11,7 @@ import { errorText, getJson } from "./http.js";
 import { refitCharts, showComponent } from "./inspect.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { closeAllPanels } from "./side-panel.js";
+import { readStorage, removeStorage, writeStorage } from "./storage.js";
 import { topology } from "./topology.js";
 
 // ─── Per-mg URL helper ─────────────────────────────────────────────────────
@@ -114,9 +115,7 @@ export function setupDensityToggle() {
       document.documentElement.dataset.density === "compact"
         ? "comfortable"
         : "compact";
-    try {
-      localStorage.setItem(DENSITY_KEY, next);
-    } catch (_) {}
+    writeStorage(DENSITY_KEY, next);
     applyDensity(chip, next);
   });
 }
@@ -129,14 +128,14 @@ const VALID_MODES = new Set(["microgrids", "scenarios"]);
 const VALID_SUBVIEWS = new Set(["topology", "dispatches"]);
 
 export function readSelectedMg() {
-  const raw = localStorage.getItem(MG_SELECTED_KEY);
+  const raw = readStorage(MG_SELECTED_KEY);
   if (raw == null || raw === "" || raw === "null") return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
 
 export function readSubview() {
-  const v = localStorage.getItem(MG_SUBVIEW_KEY);
+  const v = readStorage(MG_SUBVIEW_KEY);
   return VALID_SUBVIEWS.has(v) ? v : "topology";
 }
 
@@ -154,7 +153,7 @@ export function visibleSubview() {
 // ─── URL routing ────────────────────────────────────────────────────────────
 function currentRoute() {
   return {
-    mode: localStorage.getItem(MODE_KEY) || "microgrids",
+    mode: readStorage(MODE_KEY) || "microgrids",
     selectedMg: readSelectedMg(),
     subview: readSubview(),
   };
@@ -196,13 +195,13 @@ function parseHash(hash) {
 }
 
 function writeRouteToStorage({ mode, selectedMg, subview }) {
-  if (mode) localStorage.setItem(MODE_KEY, mode);
+  if (mode) writeStorage(MODE_KEY, mode);
   if (selectedMg != null) {
-    localStorage.setItem(MG_SELECTED_KEY, String(selectedMg));
+    writeStorage(MG_SELECTED_KEY, String(selectedMg));
   } else if (selectedMg === null) {
-    localStorage.removeItem(MG_SELECTED_KEY);
+    removeStorage(MG_SELECTED_KEY);
   }
-  if (subview) localStorage.setItem(MG_SUBVIEW_KEY, subview);
+  if (subview) writeStorage(MG_SUBVIEW_KEY, subview);
 }
 
 export function navigateTo(next) {

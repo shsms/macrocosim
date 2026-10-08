@@ -13,6 +13,7 @@ import { metricsStore } from "./metrics-store.js";
 import { powerColor, reactiveColor } from "./pill.js";
 import { mgJson, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
+import { readStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
 import { topology } from "./topology.js";
 import * as zone from "./zone.js";
@@ -375,28 +376,17 @@ export function setupInspectorChips() {
   });
 }
 
-// Per-card fold state, persisted across selections and reloads.
-// Reads/writes are wrapped in try/catch (private-mode /
-// quota-exceeded storage throws) and fall back to the card's default
-// on any failure. Power starts open — the P/Q readouts are the
-// panel's headline — the other cards start folded.
+// Per-card fold state, persisted across selections and reloads; a card with
+// nothing stored takes its default. Power starts open — the P/Q readouts are
+// the panel's headline — the other cards start folded.
 const CARD_KEY_PREFIX = "mc-inspector-card-";
 const CARD_DEFAULT_OPEN = { component: false, ev: true, power: true, charts: false, setpoints: false };
 function loadCardOpen(name) {
-  try {
-    const v = localStorage.getItem(CARD_KEY_PREFIX + name);
-    return v == null ? (CARD_DEFAULT_OPEN[name] ?? false) : v === "1";
-  } catch {
-    return CARD_DEFAULT_OPEN[name] ?? false;
-  }
+  const v = readStorage(CARD_KEY_PREFIX + name);
+  return v == null ? (CARD_DEFAULT_OPEN[name] ?? false) : v === "1";
 }
 function saveCardOpen(name, open) {
-  try {
-    localStorage.setItem(CARD_KEY_PREFIX + name, open ? "1" : "0");
-  } catch {
-    // Storage unavailable — the fold still works for this session,
-    // it just won't remember next time.
-  }
+  writeStorage(CARD_KEY_PREFIX + name, open ? "1" : "0");
 }
 
 // ── EV card ────────────────────────────────────────────────────────

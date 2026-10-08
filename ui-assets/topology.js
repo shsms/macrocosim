@@ -30,6 +30,7 @@ import {
   structureEditable,
   visibleSubview,
 } from "./routing.js";
+import { readStorage, removeStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
 
 const CATEGORY_COLOR = {};
@@ -242,7 +243,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
   // canvas in ONE nodesDS/edgesDS update per second.
   const liveValues = new Map(); // id -> { p, q, soc }
   const liveDirty = new Set();
-  let liveEnabled = localStorage.getItem(LIVE_KEY) !== "0";
+  let liveEnabled = readStorage(LIVE_KEY) !== "0";
   let liveFlushTimer = null;
   // Largest |active power bound| seen — the magnitude reference for
   // edge flow scaling. Reset on topology refresh.
@@ -1645,11 +1646,11 @@ export function createGraphCanvas(containerId, adapter = {}) {
         );
       }
       if (liveEnabled) {
-        localStorage.removeItem(LIVE_KEY);
+        removeStorage(LIVE_KEY);
         for (const id of liveValues.keys()) liveDirty.add(id);
         flushLive();
       } else {
-        localStorage.setItem(LIVE_KEY, "0");
+        writeStorage(LIVE_KEY, "0");
         liveDirty.clear();
         if (edgesDS) {
           edgesDS.update(edgesDS.get().map((e) => ({ id: e.id, ...edgeRestStyle() })));

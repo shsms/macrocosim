@@ -9,6 +9,7 @@
 import { chartAxis, chartColors, requireUplot, uplot } from "./chart-lib.js";
 import { fmtValue, latestSecond, metricsStore, pfText, pfValue } from "./metrics-store.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
+import { readStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
 import * as zone from "./zone.js";
 
@@ -70,22 +71,9 @@ const CARDS = [
   },
 ];
 
-// ── persisted knobs (same try/catch discipline as the inspector) ──
-function loadKey(key, fallback) {
-  try {
-    const v = localStorage.getItem(key);
-    return v == null ? fallback : v;
-  } catch (_) {
-    return fallback;
-  }
-}
-function saveKey(key, value) {
-  try {
-    localStorage.setItem(key, value);
-  } catch (_) {
-    // Storage unavailable — the choice just doesn't stick.
-  }
-}
+// ── persisted knobs ──
+const loadKey = (key, fallback) => readStorage(key) ?? fallback;
+const saveKey = writeStorage;
 const cardOpen = (c) => loadKey(`mc-metrics-card-${c.key}`, c.defaultOpen ? "1" : "0") === "1";
 const seriesOn = (s) => loadKey(`mc-metrics-series-${s.stream}`, "1") === "1";
 const pfOn = () => loadKey("mc-metrics-pf", "0") === "1";

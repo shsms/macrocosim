@@ -16,6 +16,7 @@ import {
 } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
 import { closePanel } from "./side-panel.js";
+import { readStorage, writeStorage } from "./storage.js";
 import { topology } from "./topology.js";
 import * as zone from "./zone.js";
 
@@ -59,9 +60,9 @@ export function setupLogsPanel() {
   const LOG_LEVELS = [...level.options].map((o) => o.value);
   const apply = () => {
     for (const l of LOG_LEVELS) box.classList.toggle(`min-${l}`, l === level.value);
-    localStorage.setItem(LOGS_LEVEL_KEY, level.value);
+    writeStorage(LOGS_LEVEL_KEY, level.value);
   };
-  const stored = localStorage.getItem(LOGS_LEVEL_KEY);
+  const stored = readStorage(LOGS_LEVEL_KEY);
   level.value = LOG_LEVELS.includes(stored) ? stored : "info";
   level.addEventListener("change", apply);
   apply();

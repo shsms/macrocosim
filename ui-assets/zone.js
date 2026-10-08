@@ -3,6 +3,7 @@
 // says so. Times on the wire stay UTC; only display goes through here.
 
 import { getJson } from "./http.js";
+import { readStorage, writeStorage } from "./storage.js";
 
 // localStorage: "utc", or "local" for the sim zone.
 const TZ_PREF_KEY = "macrocosim-tz";
@@ -46,28 +47,18 @@ export function onChange(fn) {
 // as a switch would. Without an answer from the server the zone stays
 // Europe/Berlin.
 export async function init() {
-  let on = false;
   try {
     const j = await getJson("/api/clock");
     if (j.tz) setSimZone(j.tz);
   } catch (_) {
     // Keep the fallback zone.
   }
-  try {
-    on = localStorage.getItem(TZ_PREF_KEY) === "utc";
-  } catch (_) {
-    // No remembered choice: the sim zone.
-  }
-  setUtc(on);
+  setUtc(readStorage(TZ_PREF_KEY) === "utc");
 }
 
 // The chip's choice: remembered, then applied.
 export function chooseUtc(on) {
-  try {
-    localStorage.setItem(TZ_PREF_KEY, on ? "utc" : "local");
-  } catch (_) {
-    // Applied without being remembered.
-  }
+  writeStorage(TZ_PREF_KEY, on ? "utc" : "local");
   setUtc(on);
 }
 

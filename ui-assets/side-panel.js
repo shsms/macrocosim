@@ -17,6 +17,7 @@
 import { cascadeColumn, cascadeSlot } from "./panel-geometry.js";
 import { cssToken } from "./pill.js";
 import { makeSplitter } from "./splitter.js";
+import { readStorage, writeStorage } from "./storage.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
 // name → { el, contentEl, teardown, pos, shown, cascade, isStatic,
@@ -562,41 +563,31 @@ function settleResize(p, name) {
   saveSize(name, cap);
 }
 
-function loadPos(name) {
+// A stored JSON value, or null when nothing (or no JSON) is stored.
+function readJson(key) {
   try {
-    const raw = JSON.parse(localStorage.getItem(POS_KEY_PREFIX + name));
-    if (!raw || !Number.isFinite(raw.dx) || !Number.isFinite(raw.dy)) return null;
-    // `bottom` post-dates the other two: an offset stored before it
-    // existed was measured against the top edge.
-    return { dx: raw.dx, dy: raw.dy, bottom: raw.bottom === true };
+    return JSON.parse(readStorage(key));
   } catch (_) {
     return null;
   }
+}
+
+function loadPos(name) {
+  const raw = readJson(POS_KEY_PREFIX + name);
+  if (!raw || !Number.isFinite(raw.dx) || !Number.isFinite(raw.dy)) return null;
+  // `bottom` post-dates the other two: an offset stored before it
+  // existed was measured against the top edge.
+  return { dx: raw.dx, dy: raw.dy, bottom: raw.bottom === true };
 }
 function savePos(name, pos) {
-  try {
-    localStorage.setItem(
-      POS_KEY_PREFIX + name,
-      JSON.stringify({ dx: pos.dx, dy: pos.dy, bottom: pos.bottom === true }),
-    );
-  } catch (_) {
-    // Storage unavailable — the position just doesn't stick.
-  }
+  writeStorage(POS_KEY_PREFIX + name, JSON.stringify({ dx: pos.dx, dy: pos.dy, bottom: pos.bottom === true }));
 }
 function loadSize(name) {
-  try {
-    const raw = JSON.parse(localStorage.getItem(SIZE_KEY_PREFIX + name));
-    return raw && Number.isFinite(raw.h) ? raw.h : null;
-  } catch (_) {
-    return null;
-  }
+  const raw = readJson(SIZE_KEY_PREFIX + name);
+  return raw && Number.isFinite(raw.h) ? raw.h : null;
 }
 function saveSize(name, h) {
-  try {
-    localStorage.setItem(SIZE_KEY_PREFIX + name, JSON.stringify({ h }));
-  } catch (_) {
-    // Storage unavailable — the cap just doesn't stick.
-  }
+  writeStorage(SIZE_KEY_PREFIX + name, JSON.stringify({ h }));
 }
 
 // Fit a visible card to the geometry it currently finds itself in: a
@@ -901,40 +892,24 @@ function ensureStripSplitter(edge) {
 }
 
 function loadStrip(edge) {
-  try {
-    const raw = JSON.parse(localStorage.getItem(STRIPS[edge].key));
-    return raw && typeof raw === "object" ? raw : null;
-  } catch (_) {
-    return null;
-  }
+  const raw = readJson(STRIPS[edge].key);
+  return raw && typeof raw === "object" ? raw : null;
 }
 function saveStrip(edge, patch) {
-  try {
-    localStorage.setItem(STRIPS[edge].key, JSON.stringify({ ...(loadStrip(edge) ?? {}), ...patch }));
-  } catch (_) {
-    // Storage unavailable — the strip just doesn't stick.
-  }
+  writeStorage(STRIPS[edge].key, JSON.stringify({ ...(loadStrip(edge) ?? {}), ...patch }));
 }
 // A strip's stored shares as the model wants them: a plain map, empty
 // when the strip has none.
 const storedShares = (edge) => loadStrip(edge)?.shares ?? {};
 
 function loadDock(name) {
-  try {
-    const raw = JSON.parse(localStorage.getItem(DOCK_KEY_PREFIX + name));
-    // Own properties only: `"toString" in STRIPS` is true, and docking
-    // to that edge would throw the moment a strip config was read.
-    return Object.hasOwn(STRIPS, raw?.mode) ? raw : null;
-  } catch (_) {
-    return null;
-  }
+  const raw = readJson(DOCK_KEY_PREFIX + name);
+  // Own properties only: `"toString" in STRIPS` is true, and docking
+  // to that edge would throw the moment a strip config was read.
+  return Object.hasOwn(STRIPS, raw?.mode) ? raw : null;
 }
 function saveDock(name, v) {
-  try {
-    localStorage.setItem(DOCK_KEY_PREFIX + name, JSON.stringify(v));
-  } catch (_) {
-    // Storage unavailable — the dock mode just doesn't stick.
-  }
+  writeStorage(DOCK_KEY_PREFIX + name, JSON.stringify(v));
 }
 
 // The menu a floating card's dock button opens: one entry per

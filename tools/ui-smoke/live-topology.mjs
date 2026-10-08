@@ -3007,6 +3007,37 @@ check(
   blockedStorage?.stored === "blocked" && blockedStorage.theme === "light",
   JSON.stringify(blockedStorage),
 );
+// With storage blocked the modules still load: the app boots, lists the
+// microgrids and selects one, raising no page error.
+{
+  const ctx = await browser.newContext(CONTEXT);
+  await ctx.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", {
+      get() {
+        throw new DOMException("storage blocked", "SecurityError");
+      },
+    });
+  });
+  const p = await ctx.newPage();
+  const errors = [];
+  p.on("pageerror", (e) => errors.push(e.message));
+  await p.goto(`${BASE}/#microgrids`, { waitUntil: "domcontentloaded" });
+  const booted = await waitFor(
+    () => p.evaluate(() => document.querySelectorAll("#mglist-grid .mglist-card:not(.mglist-new)").length > 0),
+    8000,
+  ).catch(() => false);
+  let selected = false;
+  if (booted) {
+    await p.click("#mglist-grid .mglist-card:not(.mglist-new)");
+    selected = await waitFor(() => p.evaluate(() => document.body.dataset.mgView === "selected"), 8000).catch(() => false);
+  }
+  await ctx.close();
+  check(
+    "e2e: with storage blocked the app boots, lists and selects a microgrid",
+    booted === true && selected === true && errors.length === 0,
+    JSON.stringify({ booted, selected, errors }),
+  );
+}
 
 // ── e2e: the zone chip ─────────────────────────────────────────────
 // The demo runs in Europe/Berlin, never UTC+0, so the clock's hour moves when
