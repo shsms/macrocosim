@@ -26,10 +26,9 @@
     (connect 2 100)
     (connect 1 2)))
 ;;; macrocosim:end
-;; Starter site — a self-contained macrocosim world: one microgrid
-;; (id 2200) with battery, solar, EV-charger, CHP and consumer
-;; branches, its environment animation, and the seven starter
-;; scenarios that drive it.
+;; Starter site — the world to start from: one microgrid (id 2200) with
+;; a battery, PV, an EV charger, a CHP and a hidden consumer load, the
+;; environment that animates it, and seven scenarios that drive it.
 ;;
 ;; Run it as the boot script:
 ;;
@@ -43,46 +42,33 @@
 ;; A relative path resolves against the state dir (--state-dir,
 ;; default: the directory the server was started from).
 ;;
-;; Anything below is yours. It runs after the structure above, in
-;; this microgrid's scope, on every load. Drive meters, define
-;; scenarios, set setpoints here — do not construct components (the
-;; generated block above owns the structure; constructing more here
-;; collides on the next load).
+;; Anything below is yours. Its forms run after the structure above, in
+;; this microgrid's scope, on every load; a reload cancels the timers
+;; this file armed with `every` before the file runs again. What the forms
+;; leave to run later (timers, scenario setups and cues, `set-…` lambda
+;; sources) runs outside that scope, on the lowest-id microgrid loaded:
+;; this one, when it is alone. Drive meters, define scenarios, set
+;; setpoints here — do not construct components (the generated block
+;; above owns the structure; constructing more here collides on the
+;; next load).
 ;;
 ;; Component ids are pinned throughout. Auto ids come from an
 ;; enterprise-wide allocator, so they depend on what else loaded
 ;; first — and the scenarios below address components by id.
 
-;; No timer hygiene needed here: loading a file that is already
-;; loaded is treated as a reload — the file's own timers are
-;; cancelled first, so each script's `every` blocks re-register
-;; exactly once.
-
 ;; -----------------------------------------------------------------------------
-;; Enterprise-level identity + grid frequency
+;; Enterprise
 ;; -----------------------------------------------------------------------------
 
+;; The enterprise id the gRPC metadata reports.
 (set-enterprise-id 1)
-
-;; Grid frequency — one Ornstein-Uhlenbeck process per process,
-;; shared by every microgrid in the registry (frequency is a
-;; property of the AC grid, not the microgrid). Values below pick
-;; a healthy synchronous-grid shape: ~47 mHz equilibrium std dev
-;; (σ / sqrt(2k) with σ = 0.015 Hz/√s and k = 0.05 /s), ~20-second
-;; correlation time. Scenarios pull toward a specific value via
-;; `(override-frequency-model :nominal-hz F)` / `(clear-frequency-override)`.
-(set-frequency-model
- :nominal-hz    50.0
- :mean-rev-rate  0.05
- :sigma          0.015)
 
 ;; -----------------------------------------------------------------------------
 ;; Environment animation
 ;; -----------------------------------------------------------------------------
 
-;; Per-tick noise on the AC line voltage — a slow random wander a
-;; few hundred mV either side of nominal. Applies to the active
-;; microgrid; the scenarios per-microgrid replay fans it out.
+;; Line voltage: every 0.2 s each phase takes a random value between
+;; 229 and 231 V.
 (every
  :interval-s 0.2
  :call (lambda ()
@@ -91,14 +77,12 @@
           (+ 229.0 (/ (random 200) 100.0))
           (+ 229.0 (/ (random 200) 100.0)))))
 
-;; PV cloud-cover schedule over a 10-minute window, driving the solar
-;; inverter (id 200). Sunny first 3 min (80%), 2-min ramp into clouds
-;; (→ 20%), 2 min cloudy, 2-min ramp back to clear. Installed as the
-;; inverter's :sunlight-pct source below via `set-solar-sunlight` rather
-;; than an imperative timer: a timer would overwrite a scenario's
-;; numeric sunlight set within a second, while a scenario's numeric
-;; set cleanly collapses a source and takes over. A lambda source
-;; can't live in the generated block above, so it's wired here.
+;; The solar inverter's (id 200) sunlight over a 10-minute cycle: 3 min
+;; at 80 %, a 2-min ramp down to 20 %, 2 min there, a 2-min ramp back
+;; up, then 80 % again. It is a source, not a timer, so a scenario's
+;; numeric `set-solar-sunlight` takes over cleanly instead of being
+;; overwritten a moment later. A lambda can't live in the generated
+;; block, so it is set here.
 (defun cloud-curve (t-window)
   (cond ((< t-window 180.0) 80.0)
         ((< t-window 300.0) (- 80.0 (* 0.5 (- t-window 180.0))))
@@ -107,28 +91,24 @@
 
 (set-solar-sunlight 200 (lambda () (cloud-curve (window-elapsed 600.0))))
 
-;; Hidden consumer meter (id 100) — invisible in ListComponents / tree
-;; but aggregated into the main meter. Power follows a sine wave: peak
-;; 30 kW, trough 5 kW, one cycle every 15 min, plus ±500 W jitter.
-;; Wired here for the same reason as the sunlight source above.
+;; The hidden consumer load (meter id 100): left out of the gRPC
+;; component list and drawn dashed on the canvas, but counted into the
+;; main meter. A 15-minute sine between 5 and 30 kW, plus ±500 W of
+;; noise; a lambda, so set here like the sunlight above.
 (set-meter-power 100
                   (lambda ()
                     (+ 17500.0
                        (* 12500.0 (sin (* 6.2831853 (/ (window-elapsed 900.0) 900.0))))
                        (- (random 1000) 500))))
 
-;; A car on the EV charger (id 1004). The plug is runtime state, not
-;; structure, so it can't live in the generated block above — that
-;; block is rewritten from live state and never renders `:ev`. Here it
-;; re-runs on every load, and the demo's charger always has a car to
-;; show an SoC for. `:idle` is paused, so it draws nothing until
-;; something commands the charger.
+;; A car at 35 % on the EV charger (id 1004). The plug is runtime state,
+;; which the generated block never records, so it is set here on every
+;; load. The charger idles paused: it draws nothing until commanded.
 (plug-ev 1004 'sedan :soc-pct 35)
 
 ;; -----------------------------------------------------------------------------
-;; Scenarios — appear in the Scenarios mode dropdown; run one with
-;; (scenario-run "<name>") or from the UI. All address the pinned
-;; component ids above.
+;; Scenarios — appear in the Scenarios mode dropdown; run one from the
+;; UI or with `macroctl scenario run <name>`.
 ;; -----------------------------------------------------------------------------
 
 ;; Consumer load ramps through the evening peak; PV is gone, the
