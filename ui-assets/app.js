@@ -31,7 +31,7 @@ import {
 import { errorText } from "./http.js";
 import { setupInspectorChips, showComponent } from "./inspect.js";
 import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
-import { notify } from "./notices.js";
+import { clearFormError, notify } from "./notices.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
 import { backfillLogs, openWebSocket, setupLogsPanel, setupRepl } from "./repl.js";
 import {
@@ -348,6 +348,14 @@ async function init() {
   setupFloatingPanels();
   setupInspectorChips();
   setupSnapshotsDialog();
+  // A dialog's form errors belong to one visit: closing it clears them.
+  document.addEventListener(
+    "close",
+    (e) => {
+      for (const el of e.target.querySelectorAll(".form-error")) clearFormError(el);
+    },
+    true,
+  );
   backfillLogs();
   // The topology canvas calls back to showComponent (from inspect.js)
   // / closePanel (from side-panel.js) on node click + canvas click,

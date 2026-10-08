@@ -354,6 +354,7 @@
           </label>
           <button type="submit" class="btn btn-primary">Save</button>
         </form>
+        <p id="snapshots-error" class="form-error" hidden></p>
         <ul id="snapshots-list">
           <li class="hint">No snapshots yet.</li>
         </ul>
@@ -382,6 +383,7 @@
           </label>
           <button type="submit" class="btn btn-primary">Load</button>
         </form>
+        <p id="load-script-error" class="form-error" hidden></p>
         <p class="hint">
           Evals <code>(load "…")</code> on the server. The browser and
           the typed path both resolve against the server's state dir.

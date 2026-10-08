@@ -3,9 +3,9 @@
 // - Side-panel toggles for Defaults and the live Scenario report.
 
 import { escapeHtml, mutate } from "./app.js";
-import { evalQuoted } from "./eval.js";
+import { evalText } from "./eval.js";
 import { bgFetch, getJson } from "./http.js";
-import { notify } from "./notices.js";
+import { clearFormError, notify, showFormError } from "./notices.js";
 import { currentMgEntry, mgJson, readSelectedMg, scenarioMgId } from "./routing.js";
 import { makeSidePanelToggle } from "./side-panel.js";
 import * as zone from "./zone.js";
@@ -36,6 +36,7 @@ export function setupSnapshotsDialog() {
   const input = document.getElementById("snapshot-name-input");
   const form = document.getElementById("snapshot-save-form");
   const hint = document.getElementById("snapshots-blocked");
+  const error = document.getElementById("snapshots-error");
   if (!dlg || !btn) return;
 
   // Why the dialog can't act, or null when it can.
@@ -72,10 +73,11 @@ export function setupSnapshotsDialog() {
         `;
         li.querySelector(".snapshot-load").addEventListener("click", async () => {
           if (!confirm(`Load snapshot "${name}"? Microgrid #${id}'s current file will be replaced.`)) return;
+          clearFormError(error);
           try {
             await mutate("POST", `/api/mg/${id}/snapshots/load`, { name });
           } catch (err) {
-            notify(`Load failed: ${err.message}`);
+            showFormError(error, `Load failed: ${err.message}`);
             return;
           }
           dlg.close();
@@ -100,10 +102,11 @@ export function setupSnapshotsDialog() {
     const id = readSelectedMg();
     const name = input.value.trim();
     if (!name || id == null) return;
+    clearFormError(error);
     try {
       await mutate("POST", `/api/mg/${id}/snapshots`, { name });
     } catch (err) {
-      notify(`Save failed: ${err.message}`);
+      showFormError(error, `Save failed: ${err.message}`);
       return;
     }
     input.value = "";
@@ -254,11 +257,14 @@ async function renderDefaults(contentEl) {
       <label>${e.var_name}</label>
       <textarea class="field" rows="${rows}" wrap="off" spellcheck="false">${escapeHtml(e.value)}</textarea>
       <button class="btn btn-sm">Save</button>
+      <p class="form-error" hidden></p>
     `;
     const ta = block.querySelector("textarea");
+    const error = block.querySelector(".form-error");
     block.querySelector("button").addEventListener("click", async () => {
-      const expr = `(setq ${e.var_name} (quote ${ta.value}))`;
-      await evalQuoted(expr);
+      clearFormError(error);
+      const result = await evalText(`(setq ${e.var_name} (quote ${ta.value}))`);
+      if (!result.ok) showFormError(error, `${e.var_name}: ${result.error}`);
     });
     list.appendChild(block);
   }

@@ -3403,6 +3403,85 @@ check(
   JSON.stringify({ metricsBannerUp, metricsBannerDown }),
 );
 
+// ── e2e: dialogs keep server errors inline ─────────────────────────
+// A failed load, snapshot save or Defaults save shows its error in place,
+// the dialog stays open and no toast is raised; trying again or reopening
+// clears the old error.
+const toastCount = () => page.evaluate(() => document.querySelectorAll("#toast-host .toast").length);
+const shownError = (sel) =>
+  page.evaluate((s) => {
+    const e = document.querySelector(s);
+    return e && !e.hidden && e.textContent ? e.textContent : null;
+  }, sel);
+await page.goto(`${BASE}/#microgrids`, { waitUntil: "networkidle" });
+await page.click("#mglist-load-btn");
+let toastsBefore = await toastCount();
+await page.fill("#load-script-path", "no/such/file.lisp");
+await page.click('#load-script-form button[type="submit"]');
+const loadError = await waitFor(() => shownError("#load-script-error"), 8000).catch(() => null);
+const loadState = {
+  error: loadError,
+  open: await page.evaluate(() => document.getElementById("load-script-dialog").open),
+  toasts: (await toastCount()) - toastsBefore,
+};
+check(
+  "e2e: a failed script load shows its error in the dialog, which stays open",
+  loadState.error?.startsWith("Load failed:") && loadState.open && loadState.toasts === 0,
+  JSON.stringify(loadState),
+);
+// A second try clears the old error while it waits for the answer.
+await page.route("**/api/load", async (r) => {
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  await r.continue();
+});
+await page.click('#load-script-form button[type="submit"]');
+const clearedOnRetry = (await shownError("#load-script-error")) === null;
+await waitFor(() => shownError("#load-script-error"), 8000).catch(() => null);
+await page.unroute("**/api/load");
+await page.keyboard.press("Escape");
+await page.click("#mglist-load-btn");
+const clearedOnReopen = (await shownError("#load-script-error")) === null;
+await page.keyboard.press("Escape");
+check("e2e: a retry or a reopened dialog clears the old error", clearedOnRetry && clearedOnReopen, JSON.stringify({ clearedOnRetry, clearedOnReopen }));
+await openDemoTopology();
+await page.route("**/api/mg/*/snapshots", (r) =>
+  r.request().method() === "POST"
+    ? r.fulfill({ status: 500, contentType: "application/json", body: '{"error":"disk full"}' })
+    : r.continue(),
+);
+await page.click("#snapshots-btn");
+toastsBefore = await toastCount();
+await page.fill("#snapshot-name-input", "smoke-x");
+await page.click('#snapshot-save-form button[type="submit"]');
+const snapError = await waitFor(() => shownError("#snapshots-error"), 8000).catch(() => null);
+const snapState = {
+  error: snapError,
+  open: await page.evaluate(() => document.getElementById("snapshots-dialog").open),
+  toasts: (await toastCount()) - toastsBefore,
+};
+await page.unroute("**/api/mg/*/snapshots");
+await page.keyboard.press("Escape");
+check(
+  "e2e: a failed snapshot save shows its error in the dialog, which stays open",
+  snapState.error === "Save failed: disk full" && snapState.open && snapState.toasts === 0,
+  JSON.stringify(snapState),
+);
+await page.route("**/eval", (r) => r.fulfill({ status: 400, contentType: "application/json", body: '{"error":"bad form"}' }));
+await page.click("#defaults-btn");
+await waitFor(() => page.evaluate(() => document.querySelector(".defaults-entry button") !== null), 8000).catch(() => null);
+toastsBefore = await toastCount();
+const defaultsVar = await page.evaluate(() => document.querySelector(".defaults-entry label").textContent);
+await page.click(".defaults-entry button");
+const defaultsError = await waitFor(() => shownError(".defaults-entry .form-error"), 8000).catch(() => null);
+const defaultsToasts = (await toastCount()) - toastsBefore;
+await page.unroute("**/eval");
+await page.click("#defaults-btn");
+check(
+  "e2e: a failed Defaults save shows its error under the entry",
+  defaultsError === `${defaultsVar}: bad form` && defaultsToasts === 0,
+  JSON.stringify({ defaultsError, defaultsVar, defaultsToasts }),
+);
+
 // ── e2e: the button kit ────────────────────────────────────────────
 // Header buttons are the secondary kind, the new-dispatch button the
 // primary one; a disabled kit button is dimmed and ignores hover.

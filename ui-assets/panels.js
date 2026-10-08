@@ -6,7 +6,7 @@ import { escapeHtml, mutate, selectMicrogrid } from "./app.js";
 import { refreshPaletteLock } from "./editor.js";
 import { bgFetch, errorText, getJson } from "./http.js";
 import { countText } from "./live.js";
-import { notify } from "./notices.js";
+import { clearFormError, notify, showFormError } from "./notices.js";
 import {
   publishMgFlags,
   readSelectedMg,
@@ -120,11 +120,12 @@ export const microgridsPanel = (() => {
   }
 
   // POST /api/load for a state-dir-relative (or absolute) path.
-  // Returns true when the file loaded. The one recoverable failure
-  // is a 409 collision — the file declares an id something else
-  // already loaded — which renders the offer bar instead of a toast.
+  // Returns true when the file loaded. A failure shows in the dialog's
+  // error line; a 409 collision — the file declares an id something
+  // else already loaded — renders the offer bar instead.
   async function loadScript(path) {
     collisionBar().hidden = true;
+    clearFormError(loadError());
     let res;
     try {
       res = await fetch("/api/load", {
@@ -133,7 +134,7 @@ export const microgridsPanel = (() => {
         body: JSON.stringify({ path }),
       });
     } catch (e) {
-      notify(`Load failed: ${e.message}`);
+      showFormError(loadError(), `Load failed: ${e.message}`);
       return false;
     }
     if (res.ok) {
@@ -161,11 +162,12 @@ export const microgridsPanel = (() => {
         return false;
       }
     }
-    notify(`Load failed: ${await errorText(res)}`);
+    showFormError(loadError(), `Load failed: ${await errorText(res)}`);
     return false;
   }
 
   const collisionBar = () => document.getElementById("load-script-collision");
+  const loadError = () => document.getElementById("load-script-error");
 
   // The collision offer. A managed file can be copied under a free
   // id mechanically (/api/load-as); a hand-written one can't — its
@@ -195,7 +197,7 @@ export const microgridsPanel = (() => {
         });
         resp = await res.json();
       } catch (e) {
-        notify(`Load failed: ${e.message}`);
+        showFormError(loadError(), `Load failed: ${e.message}`);
         btn.disabled = false;
         return;
       }
@@ -262,7 +264,7 @@ export const microgridsPanel = (() => {
       try {
         renderListing(await fetchListing(dir));
       } catch (e) {
-        notify(`Listing failed: ${e.message}`);
+        showFormError(loadError(), `Listing failed: ${e.message}`);
       }
     }
 
