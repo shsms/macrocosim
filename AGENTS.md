@@ -78,7 +78,10 @@ is wiring the topology + animating the environment.
   entry; `topology.js`, `live.js`, `metrics-store.js`,
   `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
   `dialogs.js`, `editor.js`, … own one concern each;
-  `http.js` the failed-response reader (`errorText`, `getJson`);
+  `http.js` the failed-response reader (`errorText`, `getJson`) and
+  `bgFetch`; `notices.js` toasts, form errors and the UI's log lines;
+  `connection.js` whether the server can be reached, and its banner;
+  `logs.js` the logs panel's rows; `storage.js` guarded localStorage;
   `zone.js` the display zone (the sim zone or UTC, from the pulse bar's
   zone chip) every shown time goes through: the formatters, `<time>`
   elements it re-formats on a switch, uPlot's `tzDate`, and the
@@ -386,6 +389,23 @@ one primary button. Toggles keep their own components (`.pill`, `.pulse-chip`,
 `aria-pressed` and has an accent border and text while its panel is open.
 `tools/controls-test.mjs` lists the allowed button classes and fails on a class
 the kit replaced.
+
+UI error convention: a form or dialog shows a server error in its own
+`.form-error` through `showFormError` (`notices.js`) and stays open; a new try
+clears it with `clearFormError`, and closing a dialog clears its errors. A
+form's own check of its input shows through `showInputError`, which does not
+log. Any other action the user triggered toasts with `notify`, and an error
+toast stays until it is closed; the REPL keeps its eval and format errors in its
+transcript. A background loop fetches through `bgFetch(source, …)` (`http.js`),
+or `getJson` / `mgFetch` given a source: a request that cannot reach the server
+raises the "server unreachable" banner (`connection.js`) until one gets through,
+and an HTTP error is logged once per failure streak of that source. A dropped
+WebSocket writes "disconnected" into the header status, which its reopen clears.
+Each of these reaches the logs panel as a `ui: ` line too, except the input
+checks and the REPL's eval and format answers (a REPL transport error is
+logged). localStorage is read and written through `storage.js`, which keeps
+values in memory when the browser blocks it; `theme.js`, which reads the window
+it is given, and the pre-paint script in `index.html` keep their own guards.
 
 Each registered microgrid binds its own gRPC port; the first
 defaults to `[::1]:8800` and subsequent microgrids step by ten

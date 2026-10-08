@@ -274,6 +274,15 @@ What to change in your own scripts:
 - The zone, theme and density chips in the pulse bar can be reached
   with Tab and used with Enter or Space. A control with keyboard focus
   shows an outline.
+- An error message now stays on screen until you close it, and it shows
+  above an open dialog. The same message twice shows once, with a count.
+- When the UI cannot reach the server, a banner under the pulse bar says
+  so. It goes away by itself once the server answers again.
+- A failed load or save now shows next to the form it came from, which
+  stays open so you can fix the input and try again. This covers the
+  Load script and Snapshots dialogs and the Defaults panel. A refused
+  import no longer closes the import dialog and opens it again.
+- The UI's own errors appear in the logs panel too, starting with `ui:`.
 
 ## Bug Fixes
 
@@ -285,3 +294,5 @@ What to change in your own scripts:
 - The dispatch form read its start time in the browser's zone, while
   the dispatch list shows it in the zone the zone chip picks. The form
   now reads it in that zone too, and names the zone next to the field.
+- The UI did not start in a browser that blocks site storage. It now
+  starts and works; it just does not remember your settings.
