@@ -309,8 +309,7 @@ function renderSegRow(knobKey, current, options) {
   const chips = options
     .map((o) => {
       const on = o === current;
-      const cls = on ? `seg-chip ${segTint(o)}` : "seg-chip";
-      return `<button type="button" class="${cls}" data-knob="${knobKey}" data-value="${escapeHtml(o)}">${escapeHtml(o)}</button>`;
+      return `<button type="button" class="seg-chip${on ? ` ${segTint(o)}` : ""}" data-knob="${knobKey}" data-value="${escapeHtml(o)}">${escapeHtml(o)}</button>`;
     })
     .join("");
   return `<div class="seg">${chips}</div>`;

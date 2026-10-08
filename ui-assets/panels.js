@@ -234,6 +234,7 @@ export const microgridsPanel = (() => {
         const li = document.createElement("li");
         const btn = document.createElement("button");
         btn.type = "button";
+        btn.className = "script-row";
         btn.textContent = label;
         btn.addEventListener("click", onClick);
         li.appendChild(btn);

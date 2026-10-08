@@ -937,7 +937,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-#load-script-list button {
+.script-row {
   display: block;
   width: 100%;
   text-align: left;
@@ -950,8 +950,8 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   font-family: var(--font-mono);
   font-size: var(--text-md);
 }
-#load-script-list li:last-child button { border-bottom: none; }
-#load-script-list button:hover {
+#load-script-list li:last-child .script-row { border-bottom: none; }
+.script-row:hover {
   background: var(--bg);
   color: var(--accent);
 }
