@@ -59,7 +59,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         defaults::defaults,
         dispatches::{dispatch_create, dispatch_delete, dispatch_set_active, dispatches},
         ev::ev,
-        eval::{eval, eval_for_mg, format},
+        eval::{eval, eval_for_mg, format, symbols},
         formula::formula,
         history::{history, setpoints},
         microgrid_data::{
@@ -114,6 +114,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .route("/assets/{*path}", get(asset))
         .route("/api/eval", post(eval))
         .route("/api/format", post(format))
+        .route("/api/symbols", get(symbols))
         .route("/api/defaults", get(defaults))
         .route("/api/logs", get(logs_backfill))
         .route("/api/clock", get(clock_info))

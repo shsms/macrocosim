@@ -313,7 +313,8 @@ UI").
 ## HTTP API
 
 - Whole-site routes live under `/api/` (microgrids, load, load-as,
-  import, eval, format, defaults, logs, clock, scripts, scenarios).
+  import, eval, format, symbols, defaults, logs, clock, scripts,
+  scenarios).
   `POST /api/eval` evaluates with no microgrid in scope.
 - Everything about one microgrid lives under `/api/mg/{mg}/`, served
   by one nested router; the `Mg` extractor resolves `{mg}` and

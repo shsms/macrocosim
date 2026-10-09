@@ -419,6 +419,15 @@ impl Config {
         self.ctx.clone()
     }
 
+    /// Every name the interpreter defines, with what tulisp's `describe` says
+    /// of it, in no particular order.
+    pub fn symbols(&self) -> Vec<(String, tulisp::symbols::SymbolInfo)> {
+        let ctx = self.ctx.borrow();
+        ctx.symbols()
+            .map(|(name, info)| (name.to_string(), info))
+            .collect()
+    }
+
     pub fn metadata(&self) -> Metadata {
         self.metadata.read().clone()
     }

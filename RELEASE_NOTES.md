@@ -310,6 +310,8 @@ What to change in your own scripts:
   parameters have names, so a function shows as
   `(set-meter-power ID POWER-W)` and says what it does. The `make-*`
   docstrings list every key they take.
+- `GET /api/symbols` lists every defined name with its kind, signature
+  and docstring.
 - macrocosim now uses tulisp 0.32, which adds many Emacs Lisp
   functions, among them `defconst`, `add-to-list`, `plist-put`,
   `substring`, `string-replace`, `seq-sort` and `read-from-string`.

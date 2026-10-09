@@ -506,6 +506,79 @@ async fn defaults_endpoint_shows_new_keyword_names() {
     assert!(!value.contains(":interval "), "{value}");
 }
 
+/// The REPL's completion list: every defined name, with its kind, signature
+/// (each parameter's range in the rendered text) and doc.
+#[tokio::test]
+async fn symbols_endpoint_describes_each_name() {
+    let (cfg, _dir) = config_with("").await;
+    cfg.eval("(defun sym-test-fn (a &optional b) \"Doc of the test fn.\" a)")
+        .unwrap();
+    cfg.eval("(defun größe (wert) wert)").unwrap();
+    let (status, body) = call_json(cfg, get("/api/symbols")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let symbols = v["symbols"].as_array().unwrap();
+    let find = |name: &str| {
+        symbols
+            .iter()
+            .find(|s| s["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is missing"))
+    };
+    let names: Vec<&str> = symbols
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert!(names.is_sorted(), "symbols are sorted by name");
+
+    let rust = find("set-meter-power");
+    assert_eq!(rust["kind"], "function");
+    let sig = &rust["signature"];
+    let text = sig["text"].as_str().unwrap();
+    assert_eq!(text, "(set-meter-power ID POWER-W)");
+    let labels: Vec<&str> = sig["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            assert_eq!(p["position"], "required");
+            let (start, end) = (p["start"].as_u64().unwrap(), p["end"].as_u64().unwrap());
+            assert_eq!(
+                &text[start as usize..end as usize],
+                p["label"].as_str().unwrap()
+            );
+            p["label"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(labels, ["ID", "POWER-W"]);
+    assert!(rust["doc"].as_str().unwrap().starts_with("Make meter ID"));
+
+    let lisp = find("sym-test-fn");
+    assert_eq!(lisp["signature"]["text"], "(sym-test-fn A &optional B)");
+    assert_eq!(lisp["signature"]["params"][1]["position"], "optional");
+    assert_eq!(lisp["doc"], "Doc of the test fn.");
+
+    // Offsets count UTF-16 code units: ö and ß are one unit each but two
+    // bytes, so WERT starts at 7, not at byte 9.
+    let wide = &find("größe")["signature"];
+    assert_eq!(wide["text"], "(größe WERT)");
+    assert_eq!(wide["params"][0]["start"], 7);
+    assert_eq!(wide["params"][0]["end"], 11);
+
+    assert_eq!(
+        find("make-battery")["signature"]["params"][0]["position"],
+        "rest"
+    );
+    assert_eq!(
+        find("define-scenario")["signature"]["params"][0]["position"],
+        "key"
+    );
+    assert_eq!(find("when")["kind"], "macro");
+    assert_eq!(find("if")["kind"], "special-form");
+    let var = find("battery-defaults");
+    assert_eq!(var["kind"], "variable");
+    assert!(var["signature"].is_null(), "{var}");
+}
+
 #[tokio::test]
 async fn format_endpoint_returns_400_on_parse_error() {
     let (cfg, _dir) = config_with("").await;

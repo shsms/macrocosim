@@ -1,7 +1,9 @@
-//! `/api/eval`, `/api/mg/{mg}/eval` and `/api/format` (tulisp-fmt).
+//! `/api/eval`, `/api/mg/{mg}/eval`, `/api/format` (tulisp-fmt) and
+//! `/api/symbols`.
 
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
+use tulisp::symbols::{ParamPosition, Signature, SymbolInfo, SymbolKind};
 
 use crate::lisp::Config;
 use crate::ui::api::{ApiError, Json, Mg, Query, Text};
@@ -71,4 +73,95 @@ pub(in crate::ui) async fn format(
     super::blocking(move || tulisp_fmt::format_with_width(&body, width))
         .await?
         .map_err(|e| ApiError::bad_request(e.to_string()))
+}
+
+#[derive(Serialize)]
+pub(in crate::ui) struct SymbolsResponse {
+    symbols: Vec<SymbolEntry>,
+}
+
+/// One name the interpreter defines, for the REPL's completion popup and
+/// signature hint.
+#[derive(Serialize)]
+pub(in crate::ui) struct SymbolEntry {
+    name: String,
+    /// `function`, `macro`, `special-form` or `variable`; `other` for a kind a
+    /// later tulisp adds.
+    kind: &'static str,
+    /// `None` when tulisp has no signature for the name, as for a variable.
+    signature: Option<SignatureEntry>,
+    doc: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SignatureEntry {
+    /// The signature as Emacs shows one: `(set-meter-power ID POWER-W)`.
+    text: String,
+    params: Vec<ParamEntry>,
+}
+
+#[derive(Serialize)]
+struct ParamEntry {
+    label: String,
+    /// `required`, `optional`, `rest` or `key`; `other` for a position a later
+    /// tulisp adds.
+    position: &'static str,
+    /// Where `label` is in `text`, in UTF-16 code units, as JavaScript indexes
+    /// a string.
+    start: usize,
+    end: usize,
+}
+
+/// Every name the interpreter defines, sorted by name: the functions, macros
+/// and special forms with their signatures, and the variables.  The list
+/// follows what is loaded, so a `defun` in an eval shows up on the next call.
+pub(in crate::ui) async fn symbols(
+    State(config): State<Config>,
+) -> Result<Json<SymbolsResponse>, ApiError> {
+    let described = super::blocking(move || config.symbols()).await?;
+    let mut symbols: Vec<SymbolEntry> = described
+        .into_iter()
+        .map(|(name, info)| symbol_entry(name, info))
+        .collect();
+    symbols.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(SymbolsResponse { symbols }))
+}
+
+fn symbol_entry(name: String, info: SymbolInfo) -> SymbolEntry {
+    let signature = info.signature.map(|s| signature_entry(&name, &s));
+    SymbolEntry {
+        name,
+        kind: match info.kind {
+            SymbolKind::Function => "function",
+            SymbolKind::Macro => "macro",
+            SymbolKind::SpecialForm => "special-form",
+            SymbolKind::Variable => "variable",
+            _ => "other",
+        },
+        signature,
+        doc: info.doc,
+    }
+}
+
+fn signature_entry(name: &str, signature: &Signature) -> SignatureEntry {
+    let (text, ranges) = signature.render_with_ranges(name);
+    let utf16 = |byte: usize| text[..byte].encode_utf16().count();
+    let params = signature
+        .params
+        .iter()
+        .zip(ranges)
+        .map(|(param, range)| ParamEntry {
+            label: param.label(),
+            position: match param.position {
+                ParamPosition::Required => "required",
+                ParamPosition::Optional => "optional",
+                ParamPosition::Rest => "rest",
+                ParamPosition::Keywords => "key",
+                _ => "other",
+            },
+            start: utf16(range.start),
+            end: utf16(range.end),
+        })
+        .collect();
+    SignatureEntry { text, params }
 }
