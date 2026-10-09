@@ -2117,16 +2117,21 @@ const definedNow = await waitFor(async () =>
   await page.evaluate(() => document.getElementById("repl-completions").textContent.includes("smoke-sym-fn") || null), 5000).catch(() => null);
 check("e2e: a function an eval defines shows up in completion", definedNow === true);
 await page.keyboard.press("Escape"); // dismisses the popup
-// A word already at the cursor opens no popup when the input gets focus.
-const focusRead = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/symbols");
+// A word already at the cursor opens no popup when the input gets focus, even
+// after typing before the input lost it. The hint line shows once the read
+// that the focus starts has ended.
+await page.type("#repl-input", "x");
 await page.evaluate(() => {
   const i = document.getElementById("repl-input");
-  i.value = "(make-";
+  i.value = "(set-meter-power";
+  document.getElementById("repl-hint").textContent = "";
   i.blur();
   i.focus();
 });
-await focusRead.catch(() => null);
-check("e2e: focusing the REPL input opens no popup for the word already there", (await page.evaluate(() => document.querySelectorAll("#repl-completions li").length)) === 0);
+const hinted = await waitFor(async () =>
+  await page.evaluate(() => document.getElementById("repl-hint").textContent.startsWith("(set-meter-power ID") || null), 5000).catch(() => null);
+const entries = await page.evaluate(() => document.querySelectorAll("#repl-completions li").length);
+check("e2e: focusing the REPL input opens no popup for the word already there", hinted === true && entries === 0, JSON.stringify({ hinted, entries }));
 await page.fill("#repl-input", "");
 await page.type("#repl-input", "(make-");
 const popup = await waitFor(async () =>
@@ -2142,7 +2147,8 @@ check("e2e: the completion popup fits inside the default-sized REPL card", popup
 await page.keyboard.press("Escape"); // dismisses the popup
 await page.fill("#repl-input", "");
 // The popup shows the selected name's signature and docstring, from
-// /api/symbols.
+// /api/symbols; after completing it, the hint line marks the argument the
+// cursor is on.
 await page.type("#repl-input", "(set-meter-po");
 const docPane = await waitFor(async () =>
   await page.evaluate(() => {
@@ -2160,6 +2166,17 @@ const afterClick = await page.evaluate(() => ({
   focused: document.activeElement?.id === "repl-input",
 }));
 check("e2e: a click on a completion picks it and keeps the focus in the input", afterClick.value === "(set-meter-power-factor)" && afterClick.focused, JSON.stringify(afterClick));
+await page.fill("#repl-input", "");
+await page.type("#repl-input", "(set-meter-po");
+await waitFor(async () =>
+  await page.evaluate(() => document.querySelectorAll("#repl-completions li").length > 0 || null), 5000).catch(() => null);
+await page.keyboard.press("Tab");
+await page.type("#repl-input", " 1001 ");
+const hintNow = await page.evaluate(() => ({
+  text: document.getElementById("repl-hint").textContent,
+  arg: document.querySelector("#repl-hint .repl-hint-arg")?.textContent ?? null,
+}));
+check("e2e: the hint line marks the argument the cursor is on, with the docstring's first line", hintNow.arg === "POWER-W" && hintNow.text.startsWith("(set-meter-power ID POWER-W)") && hintNow.text.includes("Make meter ID"), JSON.stringify(hintNow));
 await page.fill("#repl-input", "");
 await page.keyboard.press("Escape");
 check("e2e: Escape in the REPL input closes the panel", (await panelOpen("repl")) === false);

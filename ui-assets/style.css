@@ -1497,6 +1497,22 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-style: italic;
 }
 
+/* One line, kept when empty, so the input below never moves. A long signature
+   or docstring line ends in an ellipsis. */
+#repl-hint {
+  flex: 0 0 auto;
+  min-height: 1lh;
+  padding: var(--space-1) var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg);
+}
+.repl-hint-arg { color: var(--accent); font-weight: 600; }
+.repl-hint-doc { margin-left: var(--space-3); color: var(--muted); }
+
 .repl-entry { margin-bottom: var(--space-2); }
 .repl-entry pre { margin: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); border: none; background: transparent; }
 .repl-prompt   { color: var(--accent); }

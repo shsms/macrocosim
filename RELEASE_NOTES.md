@@ -315,6 +315,9 @@ What to change in your own scripts:
   eval defines completes at once.
   The completion popup shows the selected name's signature and
   docstring.
+  While you type a call, a line above the input shows its signature,
+  with the current argument marked, and the first line of its
+  docstring.
 - `GET /api/symbols` lists every defined name with its kind, signature
   and docstring.
 - macrocosim now uses tulisp 0.32, which adds many Emacs Lisp

@@ -12,7 +12,7 @@ import { inspectorLive, liveCharts } from "./inspect.js";
 import { appendLog } from "./logs.js";
 import { metricsStore } from "./metrics-store.js";
 import { logUi, notify } from "./notices.js";
-import { createSymbolStore } from "./repl-symbols.js";
+import { callAtCursor, createSymbolStore, hintHtml } from "./repl-symbols.js";
 import { indentForNewline, rainbowHighlight, wordAtCursor } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
 import { closePanel } from "./side-panel.js";
@@ -62,6 +62,7 @@ export function setupRepl() {
   const popup = document.getElementById("repl-popup");
   const completions = document.getElementById("repl-completions");
   const docPane = document.getElementById("repl-doc");
+  const hint = document.getElementById("repl-hint");
   let selectedIdx = 0;
   let active = []; // current list of candidates
   let filledAt = -1; // where the cursor was when `active` was filled
@@ -71,8 +72,11 @@ export function setupRepl() {
   const symbols = createSymbolStore(getJson);
   async function refreshSymbols() {
     await symbols.refresh();
-    // A word already at the cursor opens no popup until the user types.
-    if (document.activeElement === input && typed) refresh();
+    if (document.activeElement === input) {
+      // A word already at the cursor opens no popup until the user types.
+      if (typed) refresh();
+      updateHint();
+    }
   }
 
   // Electric-pair: typed open chars insert their close + leave the
@@ -133,6 +137,14 @@ export function setupRepl() {
     docPane.scrollTop = 0;
   }
 
+  // The hint line: the signature of the call the cursor is in.
+  function updateHint() {
+    const call = callAtCursor(input.value, input.selectionStart);
+    const sym = call && symbols.lookup(call.head);
+    hint.innerHTML = sym ? hintHtml(sym, call.argIndex) : "";
+    hint.title = hint.textContent;
+  }
+
   function refresh() {
     const { prefix } = wordAtCursor(input);
     active = symbols.complete(prefix);
@@ -157,6 +169,7 @@ export function setupRepl() {
     // Programmatic .value assignment doesn't fire `input`; nudge
     // the overlay (and other input listeners) explicitly.
     refreshOverlay();
+    updateHint();
   }
 
   // Send the current textarea contents through /api/format and
@@ -210,6 +223,7 @@ export function setupRepl() {
     input.value = formatted;
     input.setSelectionRange(newCursor, newCursor);
     refreshOverlay();
+    updateHint();
   }
 
   // A failed format gets a transcript entry of its own, like a failed eval.
@@ -252,6 +266,7 @@ export function setupRepl() {
     input.value = "";
     refreshOverlay();
     refresh();
+    updateHint();
     output.scrollTop = output.scrollHeight;
   }
 
@@ -263,6 +278,7 @@ export function setupRepl() {
     typed = true;
     refreshOverlay();
     refresh();
+    updateHint();
   });
   input.addEventListener("scroll", () => {
     overlay.scrollTop = input.scrollTop;
@@ -275,6 +291,7 @@ export function setupRepl() {
   // typed closer that steps over the one already there. An open popup then
   // follows the word at the new cursor; Up and Down move only the selection.
   function cursorMoved() {
+    updateHint();
     if (active.length && input.selectionStart !== filledAt) refresh();
   }
   input.addEventListener("keyup", cursorMoved);
