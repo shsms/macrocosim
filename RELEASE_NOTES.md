@@ -225,6 +225,15 @@ What to change in your own scripts:
   names with no old names: `:soc-pct`, `:target-soc-pct`,
   `:capacity-wh` (Wh, not kWh), `clear-sky-pct` and `sunlight-pct`.
   Update code that reads them.
+- macrocosim now uses tulisp 0.32, whose `format-seconds` follows
+  Emacs's rules: `(format-seconds "%m:%s" 3661)` is now `"61:1"`; it
+  was `"1:1"`. Check scripts that use it.
+- tulisp 0.32 changes, to match Emacs, what `time-add`,
+  `time-subtract`, `time-less-p` and `time-equal-p` give in some cases.
+  For example, `(time-add 1 2)` is now `3`; it was `(3 . 1)`.
+  `(time-add '(1500000000 . 1000000000) 1)` is now `(5 . 2)`; it was
+  `(2500000000 . 1000000000)`. `(time-less-p '(1 . 3) '(1 . 2))` is now
+  `t`; it was `nil`. Check scripts that use these functions.
 
 ## New Features
 
@@ -297,6 +306,12 @@ What to change in your own scripts:
   rows, and in a narrow window the panels docked on the right get
   narrower, down to their smallest width, so the canvas keeps about
   600px.
+- macrocosim now uses tulisp 0.32, which adds many Emacs Lisp
+  functions, among them `defconst`, `add-to-list`, `plist-put`,
+  `substring`, `string-replace`, `seq-sort` and `read-from-string`.
+  macrocosim keeps its own `floor`, `ceiling`, `sin`, `cos` and
+  `random`. `random` still takes only an optional integer limit, and
+  `set-random-seed` seeds it.
 
 ## Bug Fixes
 

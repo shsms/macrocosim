@@ -467,9 +467,9 @@ so construction + validation stay identical.
 
 ## Dependencies
 
-- `tulisp = { version = "0.31", features = ["sync", "etags"] }` — the
+- `tulisp = { version = "0.32", features = ["sync", "etags"] }` — the
   crates.io release.
-- `tulisp-async = "0.3"` — same-ctx timer primitives (`run-with-timer`, `cancel-timer`,
+- `tulisp-async = "0.4"` — same-ctx timer primitives (`run-with-timer`, `cancel-timer`,
   `sleep-for`). `TokioExecutor::new` calls `Handle::current()`, so
   `Config::new` must be invoked inside a running tokio runtime.
   `register` returns a `Handle`; the Lisp refresh loop owns one

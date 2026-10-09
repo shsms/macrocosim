@@ -97,6 +97,23 @@ fn time_to_secs(
 mod tests {
     use super::super::super::test_support::config_with;
 
+    /// tulisp's time functions give these values, as in Emacs; RELEASE_NOTES.md
+    /// gives them as examples of what changed with tulisp 0.32.
+    #[test]
+    fn tulisp_time_functions_work_as_in_emacs() {
+        let (cfg, _dir) = config_with("");
+        assert_eq!(cfg.eval("(time-add 1 2)").unwrap(), "3");
+        assert_eq!(
+            cfg.eval("(time-add '(1500000000 . 1000000000) 1)").unwrap(),
+            "(5 . 2)"
+        );
+        assert_eq!(cfg.eval("(time-less-p '(1 . 3) '(1 . 2))").unwrap(), "t");
+        assert_eq!(
+            cfg.eval("(format-seconds \"%m:%s\" 3661)").unwrap(),
+            "\"61:1\""
+        );
+    }
+
     fn secs(cfg: &crate::lisp::Config, expr: &str) -> f64 {
         cfg.eval(expr).unwrap().parse().unwrap()
     }
