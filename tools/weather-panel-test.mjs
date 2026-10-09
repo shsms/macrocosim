@@ -4,27 +4,28 @@
 // The panel's arithmetic — the day curve and the cloud list — is pure
 // over one payload, but the module itself imports four browser-bound
 // siblings (routing.js reaches the whole SPA graph). So rather than a
-// DOM shim, the import lines are swapped for local stubs (zone.js and
-// theme.js, which are DOM-free, for the real modules) and the internals
-// under test are
-// re-exported, and the result is imported as a data: URL. Nothing
-// inside the functions is touched: this reads the real source, and a
-// rename here fails loudly rather than silently testing a copy. The
-// field helpers look their inputs up by id, so a stand-in `document`
-// hands them plain objects, and the `mgFetch` stub records each request.
+// DOM shim, the import lines are swapped for local stubs (zone.js,
+// theme.js and html.js, which are DOM-free, for the real modules) and
+// the internals under test are re-exported, and the result is imported
+// as a data: URL. Nothing inside the functions is touched: this reads
+// the real source, and a rename here fails loudly rather than silently
+// testing a copy. The field helpers look their inputs up by id, so a
+// stand-in `document` hands them plain objects, and the `mgFetch` stub
+// records each request.
 import { readFileSync } from "node:fs";
 import * as zone from "../ui-assets/zone.js";
 
 const SRC = new URL("../ui-assets/weather-panel.js", import.meta.url);
 const ZONE = new URL("../ui-assets/zone.js", import.meta.url);
 const THEME = new URL("../ui-assets/theme.js", import.meta.url);
+const HTML = new URL("../ui-assets/html.js", import.meta.url);
 const IMPORT_LINE = /^import .*$/gm;
 const raw = readFileSync(SRC, "utf8");
 const stripped = raw.replace(IMPORT_LINE, "");
 const removed = (raw.match(IMPORT_LINE) || []).length;
-if (removed !== 6) {
+if (removed !== 7) {
   console.error(
-    `weather-panel-test: expected 6 single-line imports to stub, found ${removed} — ` +
+    `weather-panel-test: expected 7 single-line imports to stub, found ${removed} — ` +
       "the stubs below no longer cover what weather-panel.js imports",
   );
   process.exit(1);
@@ -54,6 +55,7 @@ const shimmed = [
   "const makeSidePanelToggle = () => {};",
   'const setFormError = (el, message) => { el.textContent = message ?? ""; el.hidden = !message; };',
   "const showInputError = (el, message) => { el.textContent = message; el.hidden = false; };",
+  `import { escapeHtml } from "${HTML.href}";`,
   `import * as theme from "${THEME.href}";`,
   `import * as zone from "${ZONE.href}";`,
   stripped,

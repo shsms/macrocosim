@@ -3,6 +3,8 @@
 // uses. Pure data + string transforms — no DOM, no async, no app-state
 // coupling. Imported by repl.js's setupRepl.
 
+import { escapeHtml } from "./html.js";
+
 // Locate the Lisp identifier the cursor is inside (or just past), returning its
 // substring start / end indices for replacement and the prefix typed so far.
 // Used by Tab-completion to know what to complete.
@@ -37,13 +39,6 @@ const SPECIAL_FORMS = new Set([
   "if-let", "when-let", "while-let",
   "save-excursion", "save-restriction", "with-current-buffer",
 ]);
-
-function escapeHtml(s) {
-  return String(s).replace(
-    /[<>&"']/g,
-    (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c],
-  );
-}
 
 // Render `src` as HTML with paren depth highlighting + simple
 // string / comment colouring. Walks character-by-character so we

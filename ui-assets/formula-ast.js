@@ -2,13 +2,9 @@
 // like `MAX(#2 - COALESCE(#1002, #1001, 0.0), 0.0)`. Used by the
 // formula explorer panel. DOM-free on purpose:
 // tools/formula-ast-test.mjs imports it under plain node, so it must
-// not touch document/window (that is also why it carries its own
-// escapeHtml instead of app.js's).
-const escapeHtml = (s) =>
-  String(s).replace(
-    /[<>&"']/g,
-    (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c],
-  );
+// not touch document/window.
+
+import { escapeHtml } from "./html.js";
 
 // Parses a formula into an AST: { kind: "op" | "call" | "ref" |
 // "num", ... }. Hand-rolled recursive descent — the grammar is tiny

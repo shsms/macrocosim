@@ -3,9 +3,10 @@
 // /ws/events frames to liveCharts / the metrics store / pulseBar /
 // the log panel.
 
-import { dispatchesPanel, escapeHtml, setStatus } from "./app.js";
+import { dispatchesPanel, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
 import { onReachedAgain } from "./connection.js";
+import { escapeHtml } from "./html.js";
 import { errorText, getJson } from "./http.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
 import { appendLog } from "./logs.js";

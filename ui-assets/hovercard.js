@@ -2,6 +2,7 @@
 // a DOM widget (further down) that shows it beside a pill. Read-only
 // — every action stays in the inspector.
 
+import { escapeHtml } from "./html.js";
 import { formatScaled } from "./live.js";
 import { frequencyReadout, powerColor, reactiveColor } from "./pill.js";
 
@@ -115,19 +116,15 @@ export function hoverCardModel({ component: c, live, parents, children, lastComm
 
 // ── widget ──────────────────────────────────────────────────────
 
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
-}
-
 function envelopeBar(section, unit = "W") {
   if (!section) return "";
   let marker = "";
   if (section.lo != null && section.hi != null && section.hi > section.lo) {
     const pct = Math.max(0, Math.min(100, ((section.value - section.lo) / (section.hi - section.lo)) * 100));
     marker = `<div class="hc-bar"><div class="hc-bar-marker" style="left:${pct.toFixed(1)}%;background:${section.color}"></div></div>
-      <div class="hc-bar-ends"><span>${esc(formatScaled(section.lo, unit))}</span><span>${esc(formatScaled(section.hi, unit))}</span></div>`;
+      <div class="hc-bar-ends"><span>${escapeHtml(formatScaled(section.lo, unit))}</span><span>${escapeHtml(formatScaled(section.hi, unit))}</span></div>`;
   }
-  return `<div class="hc-row"><span class="hc-label">${esc(section.label)}</span><span class="hc-value" style="color:${section.color}">${esc(section.text)}</span></div>${marker}`;
+  return `<div class="hc-row"><span class="hc-label">${escapeHtml(section.label)}</span><span class="hc-value" style="color:${section.color}">${escapeHtml(section.text)}</span></div>${marker}`;
 }
 
 function sparkSvg(points) {
@@ -151,23 +148,23 @@ function sparkSvg(points) {
 }
 
 function render(m) {
-  const healthChip = m.health === "ok" ? "" : `<span class="hc-chip hc-chip-${esc(m.health)}">${esc(m.health)}</span>`;
+  const healthChip = m.health === "ok" ? "" : `<span class="hc-chip hc-chip-${escapeHtml(m.health)}">${escapeHtml(m.health)}</span>`;
   const soc = m.soc
-    ? `<div class="hc-row"><span class="hc-label">SoC</span><span class="hc-value">${esc(m.soc.text)}</span></div>
+    ? `<div class="hc-row"><span class="hc-label">SoC</span><span class="hc-value">${escapeHtml(m.soc.text)}</span></div>
        <div class="hc-bar hc-soc"><div class="hc-soc-fill" style="width:${m.soc.pct}%"></div></div>`
     : "";
-  const noEv = m.noEv ? `<div class="hc-row"><span class="hc-value">${esc(m.noEv.text)}</span></div>` : "";
+  const noEv = m.noEv ? `<div class="hc-row"><span class="hc-value">${escapeHtml(m.noEv.text)}</span></div>` : "";
   const pressure = m.pressure
-    ? `<div class="hc-row"><span class="hc-label">Pressure</span><span class="hc-value">${esc(m.pressure.text)}</span></div>`
+    ? `<div class="hc-row"><span class="hc-label">Pressure</span><span class="hc-value">${escapeHtml(m.pressure.text)}</span></div>`
     : "";
-  const row = (label, value, cls = "") => `<div class="hc-row"><span class="hc-label">${esc(label)}</span><span class="hc-value ${cls}">${esc(value)}</span></div>`;
+  const row = (label, value, cls = "") => `<div class="hc-row"><span class="hc-label">${escapeHtml(label)}</span><span class="hc-value ${cls}">${escapeHtml(value)}</span></div>`;
   return `
-    <div class="hc-head"><span class="hc-title">${esc(m.title)}</span>${healthChip}</div>
-    <div class="hc-id">${esc(m.idLine)}</div>
+    <div class="hc-head"><span class="hc-title">${escapeHtml(m.title)}</span>${healthChip}</div>
+    <div class="hc-id">${escapeHtml(m.idLine)}</div>
     ${sparkSvg(m.spark)}
     ${envelopeBar(m.power)}${envelopeBar(m.dc)}
     ${envelopeBar(m.reactive, "VAr")}${envelopeBar(m.frequency)}
-    ${m.pf ? `<div class="hc-row hc-pf">${esc(m.pf.text)}</div>` : ""}
+    ${m.pf ? `<div class="hc-row hc-pf">${escapeHtml(m.pf.text)}</div>` : ""}
     ${soc}
     ${noEv}
     ${pressure}
@@ -175,7 +172,7 @@ function render(m) {
     ${m.lastCommand ? row("Last command", m.lastCommand.text, "hc-cmd") : ""}
     ${row("Parents", m.wiring.parents)}
     ${row("Children", m.wiring.children)}
-    <div class="hc-foot"><span class="${m.freshness.stale ? "hc-stale" : ""}">${esc(m.freshness.text)}</span><span>click for inspector</span></div>`;
+    <div class="hc-foot"><span class="${m.freshness.stale ? "hc-stale" : ""}">${escapeHtml(m.freshness.text)}</span><span>click for inspector</span></div>`;
 }
 
 // One card per canvas, appended lazily. `anchor` is the pill's rect

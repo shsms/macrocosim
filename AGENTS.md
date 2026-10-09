@@ -82,7 +82,9 @@ is wiring the topology + animating the environment.
   kind, signature and docstring),
   `dialogs.js`, `editor.js`, … own one concern each;
   `http.js` the failed-response reader (`errorText`, `getJson`) and
-  `bgFetch`; `notices.js` toasts, form errors and the UI's log lines;
+  `bgFetch`; `html.js` `escapeHtml`, with no DOM so the node tests can
+  import it (`app.js` re-exports it);
+  `notices.js` toasts, form errors and the UI's log lines;
   `connection.js` whether the server can be reached, and its banner;
   `logs.js` the logs panel's rows; `storage.js` guarded localStorage;
   `zone.js` the display zone (the sim zone or UTC, from the top bar's

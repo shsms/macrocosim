@@ -19,6 +19,7 @@
 // when the config does.
 
 import { chartAxis, chartColors, requireUplot } from "./chart-lib.js";
+import { escapeHtml } from "./html.js";
 import { setFormError, showInputError } from "./notices.js";
 import { mgFetch } from "./routing.js";
 import { isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
@@ -65,12 +66,6 @@ let lastWeather = null;
 // Either one draws the would-be cloud; firing clears both.
 let ghostFocused = false;
 let ghostEdited = false;
-
-const escapeHtml = (s) =>
-  String(s).replace(
-    /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
-  );
 
 const cssColor = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 

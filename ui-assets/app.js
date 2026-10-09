@@ -28,6 +28,7 @@ import {
   refreshFormula,
   setupFormulaToggle,
 } from "./formula-panel.js";
+import { escapeHtml } from "./html.js";
 import { errorText } from "./http.js";
 import { setupInspectorChips, showComponent } from "./inspect.js";
 import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
@@ -53,10 +54,11 @@ import { topology } from "./topology.js";
 import { setupWeatherPanel } from "./weather-panel.js";
 import * as zone from "./zone.js";
 
-// Re-export the routing helpers that other modules still pull
+// Re-export the routing helpers and escapeHtml that other modules still pull
 // via `./app.js` so consumers (panels / chrome / the metrics and
 // formula panels) keep working without rewiring every import site.
 export {
+  escapeHtml,
   jumpToTopology,
   navigateTo,
   refreshTopology,
@@ -130,13 +132,6 @@ export function setupCanvasControls(stripId, canvas) {
       canvas.setValues(valuesBtn.classList.contains("active"));
     }
   });
-}
-
-export function escapeHtml(s) {
-  return String(s).replace(
-    /[<>&"']/g,
-    (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" })[c],
-  );
 }
 
 // Wire the floating panels' chrome: the inspector's × (close +
