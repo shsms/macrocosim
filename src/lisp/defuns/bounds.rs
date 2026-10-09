@@ -127,13 +127,42 @@ pub(super) fn register(
     router: SharedSiteRouter,
     metadata: Arc<RwLock<Metadata>>,
 ) {
-    for (name, axis) in [
-        ("augment-active-bounds", SetpointAxis::Active),
-        ("augment-reactive-bounds", SetpointAxis::Reactive),
+    for (name, axis, kind) in [
+        ("augment-active-bounds", SetpointAxis::Active, "active"),
+        (
+            "augment-reactive-bounds",
+            SetpointAxis::Reactive,
+            "reactive",
+        ),
     ] {
         let (r, m) = (router.clone(), metadata.clone());
+        let unit = axis.unit();
+        let doc = format!(
+            "Narrow the {kind}-power bounds of component ID for a limited time.\n\n\
+             BOUNDS is one (LOWER UPPER) band in {unit}, or a list of bands. \
+             Two bands, such as '((-10000 -1000) (1000 10000)), leave a gap \
+             around zero. A nil edge means no limit on that side. The \
+             augmentation combines with the bounds of the component and \
+             with every other live augmentation.\n\n\
+             Keys:\n  \
+             :lifetime-s  seconds the augmentation lasts \
+             (default: set-default-augment-lifetime-s)\n\n\
+             A number in place of the key is the deprecated LIFETIME-MS \
+             form, in milliseconds; it logs a warning.\n\n\
+             This works like the gRPC AugmentElectricalComponentBounds \
+             request and checks BOUNDS the same way. It does not check the \
+             health or command mode, it has no 5 s to 15 min limit on the \
+             lifetime, and it writes nothing to the setpoint journal. The \
+             lifetime counts on the clock of the microgrid, so in a \
+             headless run it counts simulated time.\n\n\
+             Return t. Signal an error if the component does not exist or \
+             takes no augmentation on this axis, if BOUNDS is malformed or \
+             a band is inverted, if BOUNDS has no overlap with the current \
+             bounds of the component, or if :lifetime-s is negative or not \
+             finite."
+        );
         ctx.defun(
-            name,
+            (name, ["id", "bounds", "args"], doc),
             move |id: i64, bounds: TulispObject, rest: Rest<TulispObject>| {
                 let rest = rest.into_iter().collect::<Vec<TulispObject>>();
                 augment(&r, &m, name, axis, id, &bounds, rest)

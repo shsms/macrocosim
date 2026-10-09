@@ -17,7 +17,27 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // its own name onto their message.
     let r = router.clone();
     ctx.defun(
-        "set-component-health",
+        (
+            "set-component-health",
+            ["id", "health"],
+            "Set the health of component ID to HEALTH.\n\n\
+             HEALTH is one of these symbols:\n  \
+             ok  the component works normally\n  \
+             error  the component reports an error state\n  \
+             standby  the component reports a standby state\n\n\
+             While HEALTH is not ok, gRPC refuses setpoint and bounds \
+             requests for the component. If the component takes setpoints, \
+             the gateway also holds its power at 0 and drops its setpoint. A \
+             solar inverter keeps its active-power setpoint, and so does an \
+             EV charger with :resume-on-recovery.\n\n\
+             Setting error also sets the command mode to error. Setting ok \
+             sets the command mode back to normal, or to error when the \
+             operational mode accepts no commands; this replaces a timeout \
+             or over-bound command mode. Setting standby leaves the command \
+             mode as it is.\n\n\
+             Return t. Signal an error if ID is not a component of the \
+             current microgrid.",
+        ),
         move |id: i64, h: Health| -> Result<bool, tulisp::Error> {
             let w = r.site();
             w.set_health(id as u64, h).map_err(|e| {
@@ -29,7 +49,20 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 
     let r = router.clone();
     ctx.defun(
-        "set-component-telemetry-mode",
+        (
+            "set-component-telemetry-mode",
+            ["id", "mode"],
+            "Set how component ID sends its gRPC telemetry stream.\n\n\
+             MODE is one of these symbols:\n  \
+             normal  send samples at the stream interval\n  \
+             silent  keep the stream open, but send no samples\n  \
+             closed  end open streams; new streams end at once\n  \
+             error-empty  send samples with no metrics and an error state\n  \
+             not-found  end open streams and refuse new ones with NOT_FOUND\n\n\
+             Return t. Signal an error if ID is not a component of the \
+             current microgrid, or if MODE is normal and the operational \
+             mode of the component streams no telemetry.",
+        ),
         move |id: i64, m: TelemetryMode| -> Result<bool, tulisp::Error> {
             let w = r.site();
             w.set_telemetry_mode(id as u64, m).map_err(|e| {
@@ -41,7 +74,26 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 
     let r = router.clone();
     ctx.defun(
-        "set-component-command-mode",
+        (
+            "set-component-command-mode",
+            ["id", "mode"],
+            "Set how component ID answers gRPC setpoint and bounds requests.\n\n\
+             MODE is one of these symbols:\n  \
+             normal  check each request and apply it\n  \
+             timeout  never answer, so the client times out\n  \
+             error  answer at once with UNAVAILABLE\n  \
+             over-bound  at times refuse a non-zero setpoint inside the \
+             bounds, with INVALID_ARGUMENT\n\n\
+             In over-bound mode, each component refuses for about one second \
+             in every minute, at a second picked from its id. A setpoint \
+             of 0 is still accepted. The mode \
+             does not change set-active-power and the other Lisp \
+             commands.\n\n\
+             Return t. Signal an error if ID is not a component of the \
+             current microgrid. Also signal an error if MODE is normal and \
+             the operational mode accepts no commands, or the health of the \
+             component is error.",
+        ),
         move |id: i64, m: CommandMode| -> Result<bool, tulisp::Error> {
             let w = r.site();
             w.set_command_mode(id as u64, m).map_err(|e| {
@@ -59,7 +111,25 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // managed file (`:operational-mode` in the generated block).
     let r = router.clone();
     ctx.defun(
-        "set-component-operational-mode",
+        (
+            "set-component-operational-mode",
+            ["id", "mode"],
+            "Declare whether component ID streams telemetry and accepts commands.\n\n\
+             MODE is one of these symbols:\n  \
+             unspecified  not declared; works like control-and-telemetry\n  \
+             inactive  no telemetry and no commands\n  \
+             telemetry-only  telemetry, but no commands\n  \
+             control-only  commands, but no telemetry\n  \
+             control-and-telemetry  telemetry and commands\n\n\
+             The operational mode is part of the configuration, so a \
+             managed microgrid file saves it. It also sets the runtime \
+             modes. The telemetry mode becomes normal, or silent when MODE \
+             has no telemetry. The command mode becomes normal, or error \
+             when MODE has no commands or the health is error. This \
+             replaces a fault mode you set before.\n\n\
+             Return t. Signal an error if ID is not a component of the \
+             current microgrid.",
+        ),
         move |id: i64, m: crate::sim::component::OperationalMode| -> Result<bool, tulisp::Error> {
             let w = r.site();
             w.set_operational_mode(id as u64, m)
@@ -69,18 +139,36 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     );
 
     let r = router.clone();
-    ctx.defun("cancel-all-streams", move || -> bool {
-        // Server-side graceful cancel of every active stream. Each
-        // streaming task sees the epoch bump on its next iteration and
-        // exits, sending the client an EOF/CANCELLED. Clients reconnect
-        // and resume on fresh streams.
-        r.site().cancel_all_streams();
-        true
-    });
+    ctx.defun(
+        (
+            "cancel-all-streams",
+            "End every open gRPC telemetry stream of the current microgrid.\n\n\
+             Each stream ends at its next sample time, about one stream \
+             interval later, with the gRPC status CANCELLED. Clients can \
+             connect again and get new streams. Return t.",
+        ),
+        move || -> bool {
+            // Server-side graceful cancel of every active stream. Each
+            // streaming task sees the epoch bump on its next iteration and
+            // exits, sending the client an EOF/CANCELLED. Clients reconnect
+            // and resume on fresh streams.
+            r.site().cancel_all_streams();
+            true
+        },
+    );
 
     let r2 = router.clone();
     ctx.defun(
-        "set-sample-lag-s",
+        (
+            "set-sample-lag-s",
+            ["lag-s"],
+            "Shift telemetry sample timestamps LAG-S seconds into the past.\n\n\
+             This shifts the samples of every gRPC telemetry stream of the \
+             current microgrid. Use it to test how a client copes with late \
+             data. 0 turns the lag off. LAG-S is rounded down to whole \
+             milliseconds.\n\n\
+             Return t. Signal an error if LAG-S is negative or not finite.",
+        ),
         move |secs: f64| -> Result<bool, tulisp::Error> {
             // Shift every outgoing telemetry sample's timestamp into
             // the past by SECS seconds. Models a server that delivers
@@ -93,11 +181,24 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     );
 
     let r = router;
-    ctx.defun("set-sample-lag-ms", move |ms: i64| -> bool {
-        super::super::renames::warn_renamed("set-sample-lag-ms", "set-sample-lag-s", " (seconds)");
-        r.site().set_sample_lag_ms(ms.max(0) as u64);
-        true
-    });
+    ctx.defun(
+        (
+            "set-sample-lag-ms",
+            ["lag-ms"],
+            "Deprecated: use set-sample-lag-s, which takes seconds.\n\n\
+             Shift telemetry sample timestamps LAG-MS milliseconds into the \
+             past. A negative LAG-MS counts as 0. Return t.",
+        ),
+        move |ms: i64| -> bool {
+            super::super::renames::warn_renamed(
+                "set-sample-lag-ms",
+                "set-sample-lag-s",
+                " (seconds)",
+            );
+            r.site().set_sample_lag_ms(ms.max(0) as u64);
+            true
+        },
+    );
 }
 
 #[cfg(test)]

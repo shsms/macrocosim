@@ -76,8 +76,8 @@ names.
 | Quantity | Lisp | HTTP / JSON | macroctl | Python | Unit |
 |---|---|---|---|---|---|
 | Rated band | `:rated-lower-w`, `:rated-upper-w` | | `list` columns `rated_lower_w`, `rated_upper_w` | `rated=(Power, Power)` | W |
-| Meter power | `:power-w` (number, lambda or symbol), `(set-meter-power ID W)` | `power_w` in `drive`; knob `meter-power` | | `power: Power` | W |
-| Setpoint | `(set-active-power ID W)` | `setpoints` entries carry `value` and `unit` | `set-power ID POWER_W` | `set_active_power(power: Power)` | W |
+| Meter power | `:power-w` (number, lambda or symbol), `(set-meter-power ID POWER-W)` | `power_w` in `drive`; knob `meter-power` | | `power: Power` | W |
+| Setpoint | `(set-active-power ID POWER-W)` | `setpoints` entries carry `value` and `unit` | `set-power ID POWER_W` | `set_active_power(power: Power)` | W |
 | Bounds | `(augment-active-bounds ID BOUNDS)` | `envelope.active_w` as `[lower, upper]` | `augment-bounds --lower-w --upper-w` | `bounds=(Power, Power)` | W |
 | PV array size | `:array-peak-w` | | | | W |
 | Scenario peak | | `peak_grid_w` in the report | | | W |
@@ -98,8 +98,8 @@ names.
 
 | Quantity | Lisp | HTTP / JSON | macroctl | Python | Unit |
 |---|---|---|---|---|---|
-| Meter reactive power | `:reactive-power-var`, `(set-meter-reactive-power ID VAR)` | `reactive_power_var` in `drive` | | `reactive_power: ReactivePower` | VAr |
-| Reactive setpoint | `(set-reactive-power ID VAR)` | `setpoints` entries | `set-reactive-power ID POWER_VAR` | | VAr |
+| Meter reactive power | `:reactive-power-var`, `(set-meter-reactive-power ID REACTIVE-POWER-VAR)` | `reactive_power_var` in `drive` | | `reactive_power: ReactivePower` | VAr |
+| Reactive setpoint | `(set-reactive-power ID REACTIVE-POWER-VAR)` | `setpoints` entries | `set-reactive-power ID POWER_VAR` | | VAr |
 | Reactive bounds | `(augment-reactive-bounds ID BOUNDS)` | `envelope.reactive_var` | `augment-reactive-bounds --lower-var --upper-var` | | VAr |
 | Apparent-power cap | `:reactive-apparent-va` | knob `reactive-apparent-va` (unit `"VA"`) | | `reactive_apparent: ApparentPower` | VA |
 | Reactive cap as a ratio | `:reactive-pf-limit` | knob `reactive-pf-limit` | | `reactive_pf_limit` (float) | none |
@@ -123,10 +123,10 @@ names.
 |---|---|---|---|---|---|
 | Initial SoC | `:initial-soc-pct` | | | `initial_soc: Percentage` | % |
 | SoC window | `:soc-lower-pct`, `:soc-upper-pct`, `:soc-protect-margin-pct` | | | `soc_lower`, `soc_upper`, `soc_protect_margin` (`Percentage`) | % |
-| SoC now | `(set-battery-soc ID PCT)` | `soc_pct` in `drive` | | `soc` signal returns `Percentage` | % |
+| SoC now | `(set-battery-soc ID SOC-PCT)` | `soc_pct` in `drive` | | `soc` signal returns `Percentage` | % |
 | Car SoC | `:soc-pct`, `:target-soc-pct` | `soc_pct`, `target_soc_pct` in `.../ev` | | `plug_ev(soc, target_soc: Percentage)` | % |
 | Car taper | `:taper-start-pct`, `:taper-floor-pct` | | | `plug_ev(taper_start, taper_floor: Percentage)` | % |
-| Sunlight | `:sunlight-pct` (number, lambda or symbol), `(set-solar-sunlight ID PCT)` | `sunlight_pct` | | `sunlight: Percentage`, or `raw(...)` for a lambda | % |
+| Sunlight | `:sunlight-pct` (number, lambda or symbol), `(set-solar-sunlight ID SUNLIGHT-PCT)` | `sunlight_pct` | | `sunlight: Percentage`, or `raw(...)` for a lambda | % |
 | Weather peak | `:peak-pct` | `peak_pct` | | | % |
 | Cloud depth | `:cloud-depth-pct`, `(pass-cloud DEPTH-PCT DURATION-S [RAMP-S])` | `cloud_depth_pct`, `depth_pct` | | | % |
 | Clear-sky level | `clear-sky-pct` in `(weather-status)` | `clear_sky_pct` | | | % |
@@ -141,14 +141,14 @@ names.
 | Command delay | `:command-delay-s`, `:reactive-command-delay-s` | | | `command_delay`, `reactive_command_delay` (`timedelta`) | s |
 | Device delay | `:device-delay-s` | | | | s |
 | Request lifetime | `:lifetime-s` on `set-active-power`, `set-reactive-power`, `augment-active-bounds`, `augment-reactive-bounds` | `ttl_s` in setpoint events, `remaining_s` in the component state's `setpoints[]` | `--lifetime-s` (whole seconds) | `lifetime: timedelta` | s |
-| Default lifetimes | `(set-default-request-lifetime-s S)`, `(set-default-augment-lifetime-s S)` | | | | s |
-| Physics tick and sample lag | `(set-physics-tick-s S)`, `(set-sample-lag-s S)` | | | | s |
+| Default lifetimes | `(set-default-request-lifetime-s LIFETIME-S)`, `(set-default-augment-lifetime-s LIFETIME-S)` | | | | s |
+| Physics tick and sample lag | `(set-physics-tick-s TICK-S)`, `(set-sample-lag-s LAG-S)` | | | | s |
 | PV weather lag | `:weather-lag-s` | | | | s |
 | Cloud timing | `:cloud-mean-gap-s` (0 means no ambient clouds), `:cloud-duration-s`, `:cloud-ramp-s` | `cloud_mean_gap_s`, `cloud_duration_s`, `cloud_ramp_s`, `duration_s`, `ramp_s` | | | s |
 | Timers | `(every :interval-s S :call F)`, `(define-controller :every-s S)` | | | | s |
 | Random outages | `random-outage :min-every-s :max-every-s :min-duration-s :max-duration-s` | | | | s |
 | Timeline segments | `(hold V :for-s S)`, `(ramp :to V :over-s S)` | | | | s |
-| Scenario end | `(scenario-end-after-s S)` | `scenario_elapsed_s` in the report | | | s |
+| Scenario end | `(scenario-end-after-s SECONDS)` | `scenario_elapsed_s` in the report | | | s |
 | Dispatch duration | | `duration_s` | `dispatch create --duration-s` | | s |
 | History window | | `window_s` (query) | | | s |
 | Polling | | | `dashboard --interval-s` | `timeout`, `poll`, `for_` (`timedelta`) | s |
@@ -181,7 +181,7 @@ number of seconds, a string such as `"4min"`, or a clock time (rule 8).
 
 | Quantity | Lisp | HTTP / JSON | macroctl | Python | Unit |
 |---|---|---|---|---|---|
-| Steam demand | `:demand-kg-per-s`, `(set-boiler-demand-kg-per-s ID KG-S)`, `(drive-boiler-kg-per-s ID SOURCE)` | `steam_demand_kg_per_s` in `drive`; knob `boiler-demand` (unit `"kg/s"`) | | `demand_kg_per_s` (float) | kg/s |
+| Steam demand | `:demand-kg-per-s`, `(set-boiler-demand-kg-per-s ID DEMAND-KG-PER-S)`, `(drive-boiler-kg-per-s ID SOURCE)` | `steam_demand_kg_per_s` in `drive`; knob `boiler-demand` (unit `"kg/s"`) | | `demand_kg_per_s` (float) | kg/s |
 | Pressure | `:target-bar`, `:max-bar`, `:initial-bar` | `pressure_bar` in `drive`, `pressure_target_bar`; knob `boiler-pressure` (unit `"bar"`) | | `target_bar`, `max_bar`, `initial_bar` (floats) | bar |
 
 ## Ids
@@ -265,7 +265,7 @@ Functions and forms:
 | `set-physics-tick-ms` | `set-physics-tick-s` |
 | `set-sample-lag-ms` | `set-sample-lag-s` |
 | `(scenario-end-after MINUTES)` | `(scenario-end-after-s SECONDS)` |
-| `(set-boiler-demand ID KG-H)` | `(set-boiler-demand-kg-per-s ID KG-S)` |
+| `(set-boiler-demand ID DEMAND-KG-PER-H)` | `(set-boiler-demand-kg-per-s ID DEMAND-KG-PER-S)` |
 | `(drive-boiler ID SOURCE)` with kg/h | `(drive-boiler-kg-per-s ID SOURCE)` |
 
 The old defuns keep their old units. `(ev-info ID)`, `(ev-presets)`

@@ -164,13 +164,62 @@ pub(super) fn register(
     router: SharedSiteRouter,
     metadata: Arc<RwLock<Metadata>>,
 ) {
-    for (name, axis) in [
-        ("set-active-power", SetpointAxis::Active),
-        ("set-reactive-power", SetpointAxis::Reactive),
+    for (name, axis, param, kind, envelope, kept_by) in [
+        (
+            "set-active-power",
+            SetpointAxis::Active,
+            "power-w",
+            "active",
+            "the rated bounds of the component and its live augmentations, \
+             narrowed by the bounds its children report",
+            " A solar inverter, and an EV charger with :resume-on-recovery, \
+             keep it.",
+        ),
+        (
+            "set-reactive-power",
+            SetpointAxis::Reactive,
+            "reactive-power-var",
+            "reactive",
+            "the reactive band of the component at its current active power \
+             (from its :reactive-pf-limit and :reactive-apparent-va limits) and its live \
+             augmentations, narrowed by the reactive bounds its children \
+             report",
+            "",
+        ),
     ] {
         let (r, m) = (router.clone(), metadata.clone());
+        let arg = param.to_uppercase();
+        let doc = format!(
+            "Set the {kind} power of component ID to {arg}.\n\n\
+             The command goes through the gateway of the microgrid, like a \
+             gRPC SetElectricalComponentPower request. It holds for its \
+             request lifetime. When the lifetime ends, the setpoint expires \
+             and the axis goes back to idle.\n\n\
+             Keys:\n  \
+             :lifetime-s  seconds the setpoint holds \
+             (default: set-default-request-lifetime-s)\n  \
+             :clamp  if non-nil, move a value outside the envelope into it \
+             (default nil)\n\n\
+             A :lifetime-s of 0 ends the setpoint at once. Any other value \
+             below 0.15 counts as 0.15.\n\n\
+             The envelope is {envelope}. Without :clamp, a value outside \
+             the envelope is refused. With :clamp, an empty envelope gives \
+             0, and the envelope of a steam boiler also stops at its current \
+             heat need. A value of 0 always passes the envelope check.\n\n\
+             Numbers in place of the keys are the deprecated \
+             LIFETIME-MS [CLAMP] form, with the lifetime in milliseconds; it \
+             logs a warning.\n\n\
+             Unlike gRPC, it does not check the health or command mode, it \
+             has no 10 s to 15 min limit on the lifetime, and it writes \
+             nothing to the setpoint journal. While the health of the \
+             component is not ok, the gateway holds its {kind} power at 0 \
+             and drops the setpoint at the next physics step.{kept_by}\n\n\
+             Return t. Signal an error if the component does not exist or \
+             takes no {kind} setpoint, if {arg} is not finite or is \
+             refused, or if :lifetime-s is negative or not finite."
+        );
         ctx.defun(
-            name,
+            (name, ["id", param, "args"], doc),
             move |id: i64, value: f64, rest: Rest<TulispObject>| -> Result<bool, Error> {
                 let rest = rest.into_iter().collect::<Vec<TulispObject>>();
                 set_power(&r, &m, name, axis, id, value, rest)

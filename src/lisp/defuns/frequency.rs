@@ -63,22 +63,53 @@ pub(in crate::lisp) fn register(
     }
 
     let s = state.clone();
-    ctx.defun("set-frequency", move |hz: f64| -> Result<bool, Error> {
-        // A NaN/Inf here would poison the shared OU state permanently
-        // (`step()` integrates `current_hz += …`, so non-finite never
-        // recovers) — and the state is shared by EVERY microgrid.
-        if !hz.is_finite() {
-            return Err(Error::invalid_argument(format!(
-                "set-frequency: hz must be finite, got {hz}"
-            )));
-        }
-        s.write().current_hz = hz as f32;
-        Ok(true)
-    });
+    ctx.defun(
+        (
+            "set-frequency",
+            ["hz"],
+            "Set the grid frequency to HZ now.\n\n\
+             One grid frequency is shared by every microgrid. In a run on \
+             the wall clock, the frequency model takes a step every 200 ms, \
+             so the frequency moves away from HZ again. In a headless run \
+             the model does not step, so the frequency stays at HZ. Use this \
+             for a start value or in tests.\n\n\
+             Return t. Signal an error if HZ is not finite.",
+        ),
+        move |hz: f64| -> Result<bool, Error> {
+            // A NaN/Inf here would poison the shared OU state permanently
+            // (`step()` integrates `current_hz += …`, so non-finite never
+            // recovers) — and the state is shared by EVERY microgrid.
+            if !hz.is_finite() {
+                return Err(Error::invalid_argument(format!(
+                    "set-frequency: hz must be finite, got {hz}"
+                )));
+            }
+            s.write().current_hz = hz as f32;
+            Ok(true)
+        },
+    );
 
     let s = state.clone();
     ctx.defun(
-        "set-frequency-model",
+        (
+            "set-frequency-model",
+            ["args"],
+            "Change the base model that drives the shared grid frequency.\n\n\
+             The model pulls the frequency toward a nominal value and adds \
+             random noise. One model is shared by every microgrid. Only \
+             the keys you pass change; the others keep their values. While \
+             an override from override-frequency-model is set, the \
+             override drives the frequency instead.\n\n\
+             Keys:\n  \
+             :nominal-hz  the value the frequency is pulled toward \
+             (starts at 50)\n  \
+             :mean-rev-rate  how fast it is pulled back, in 1/s \
+             (starts at 0.05)\n  \
+             :sigma  the size of the noise, in Hz/sqrt(s) \
+             (starts at 0.015)\n\n\
+             A negative :mean-rev-rate or :sigma counts as 0. The \
+             deprecated key :nominal is read as :nominal-hz. Return t.",
+        ),
         move |args: tulisp::Plist<Renamed<FrequencyModelArgs>>| -> Result<bool, Error> {
             let a = args.into_inner().0;
             apply_overrides(&mut s.write().base, &a);
@@ -88,7 +119,22 @@ pub(in crate::lisp) fn register(
 
     let s = state.clone();
     ctx.defun(
-        "override-frequency-model",
+        (
+            "override-frequency-model",
+            ["args"],
+            "Drive the grid frequency with another model until it is cleared.\n\n\
+             The frequency keeps its current value and moves on under the \
+             new model. A key you leave out takes its value from the model \
+             in use: the override if one is set, else the base model. So a \
+             second call changes only the keys it passes. \
+             clear-frequency-override goes back to the base model.\n\n\
+             Keys:\n  \
+             :nominal-hz  the value the frequency is pulled toward\n  \
+             :mean-rev-rate  how fast it is pulled back, in 1/s\n  \
+             :sigma  the size of the noise, in Hz/sqrt(s)\n\n\
+             A negative :mean-rev-rate or :sigma counts as 0. The \
+             deprecated key :nominal is read as :nominal-hz. Return t.",
+        ),
         move |args: tulisp::Plist<Renamed<FrequencyModelArgs>>| -> Result<bool, Error> {
             let a = args.into_inner().0;
             let mut g = s.write();
@@ -105,7 +151,12 @@ pub(in crate::lisp) fn register(
 
     let s = state.clone();
     ctx.defun(
-        "clear-frequency-override",
+        (
+            "clear-frequency-override",
+            "Remove the frequency override and use the base model again.\n\n\
+             The frequency keeps its current value and moves on under the \
+             base model. Return t.",
+        ),
         move || -> Result<bool, Error> {
             s.write().override_model = None;
             Ok(true)
@@ -113,9 +164,14 @@ pub(in crate::lisp) fn register(
     );
 
     let s = state;
-    ctx.defun("current-frequency", move || -> Result<f64, Error> {
-        Ok(s.read().read_hz() as f64)
-    });
+    ctx.defun(
+        (
+            "current-frequency",
+            "Return the current grid frequency in Hz.\n\n\
+             One grid frequency is shared by every microgrid.",
+        ),
+        move || -> Result<f64, Error> { Ok(s.read().read_hz() as f64) },
+    );
 }
 
 #[cfg(test)]
