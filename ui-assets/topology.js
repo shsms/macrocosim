@@ -216,6 +216,15 @@ export function createGraphCanvas(containerId, adapter = {}) {
   let onSelect = null;
   let onDeselect = null;
   let selectionAtMousedown = [];
+  // The last tap that repeated none before it: the node it hit (null for empty
+  // canvas), where it landed (client px) and when. A tap that opens or closes
+  // the docked inspector resizes the canvas, and the graph moves under a
+  // pointer that stayed put; a second tap inside a double-tap's reach
+  // (vis-network's: 300ms, 10px) counts on what the first one hit, not on
+  // whatever the move put there.
+  let lastTap = null;
+  const REPEAT_TAP_MS = 300;
+  const REPEAT_TAP_PX = 10;
   // Selection saved while an explanation hover borrows the highlight.
   let highlightStash = null;
   // Nodes whose highlight colour was flipped to red (subtracted terms),
@@ -382,6 +391,26 @@ export function createGraphCanvas(containerId, adapter = {}) {
     const br = network.canvasToDOM({ x: pos.x + halfW, y: pos.y + halfH });
     const host = container().getBoundingClientRect();
     return { x: host.left + tl.x, y: host.top + tl.y, width: br.x - tl.x, height: br.y - tl.y };
+  }
+
+  // Where a vis event's pointer is, in client px.
+  function tapPoint(params) {
+    const src = params.event?.srcEvent;
+    if (Number.isFinite(src?.clientX)) return { x: src.clientX, y: src.clientY };
+    const host = container().getBoundingClientRect();
+    return { x: host.left + params.pointer.DOM.x, y: host.top + params.pointer.DOM.y };
+  }
+  // Remembers a tap that repeats none (lastTap).
+  function noteTap(params) {
+    lastTap = { id: network.getNodeAt(params.pointer.DOM), ...tapPoint(params), t: Date.now() };
+  }
+  // The tap this one repeats (lastTap), or null.
+  function repeatTap(params) {
+    if (!lastTap || Date.now() - lastTap.t > REPEAT_TAP_MS) return null;
+    const p = tapPoint(params);
+    if (Math.hypot(p.x - lastTap.x, p.y - lastTap.y) > REPEAT_TAP_PX) return null;
+    if (lastTap.id != null && !componentById.has(lastTap.id)) return null;
+    return lastTap;
   }
 
   function hideHover() {
@@ -898,8 +927,17 @@ export function createGraphCanvas(containerId, adapter = {}) {
       }
       network.on("click", (params) => {
         const shiftKey = params.event?.srcEvent?.shiftKey;
-        if (params.nodes.length) {
-          const id = params.nodes[0];
+        let nodes = params.nodes;
+        const prior = repeatTap(params);
+        if (!prior) noteTap(params);
+        else {
+          // vis-network has selected whatever the move put under the pointer;
+          // put back what this tap means.
+          nodes = prior.id == null ? [] : [prior.id];
+          network.selectNodes(shiftKey ? selectionAtMousedown : nodes);
+        }
+        if (nodes.length) {
+          const id = nodes[0];
           if (shiftKey) {
             // Shift-click toggles this node in / out of the selection
             // that existed when the mousedown landed. Reading
@@ -917,7 +955,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         } else {
           network.unselectAll();
         }
-        notifySelection(params.nodes.length ? params.nodes[0] : undefined);
+        notifySelection(nodes.length ? nodes[0] : undefined);
       });
       // Double-click selects the node together with everything it
       // feeds (its whole subtree), e.g. a meter with its inverters
@@ -927,7 +965,8 @@ export function createGraphCanvas(containerId, adapter = {}) {
         // The event's `nodes` hold the selection, not the node under
         // the cursor — and a shift-double-click's own shift-clicks
         // leave the selection elsewhere. Resolve the node by position.
-        const root = network.getNodeAt(params.pointer.DOM);
+        const prior = repeatTap(params);
+        const root = prior ? prior.id : network.getNodeAt(params.pointer.DOM);
         if (root == null) return;
         const succs = new Map();
         for (const e of edgesDS.get()) {

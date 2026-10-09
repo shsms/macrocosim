@@ -3035,10 +3035,10 @@ await waitFor(async () => page.evaluate(() => document.body.dataset.mgView === "
 // which sets larger text and a taller top bar, and back. The old stored
 // value "normal" reads as comfortable.
 // The checks from here on drive the starter site's topology directly.
-async function openDemoTopology() {
-  await page.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
+async function openDemoTopology(pg = page) {
+  await pg.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
   await waitFor(
-    async () => page.evaluate(async () => (await import("/assets/topology.js")).topology.debugNodeScreenRect(1) != null),
+    async () => pg.evaluate(async () => (await import("/assets/topology.js")).topology.debugNodeScreenRect(1) != null),
     8000,
   ).catch(() => null);
 }
@@ -3925,6 +3925,134 @@ check(
   zoomedRect && resizedRect && fittedRect && Math.abs(resizedRect.width - fittedRect.width) > 5,
   JSON.stringify({ zoomedRect, resizedRect, fittedRect }),
 );
+
+// ── e2e: a double-click while the inspector docks ──────────────────
+// The first tap opens the inspector docked on the right, the strip
+// appears, and the canvas narrows under a pointer that has not moved:
+// the second tap still counts on the node, and the double-click selects
+// its subtree. In a context of its own, with the inspector's dock
+// stored, so nothing else is open.
+{
+  const ctx = await browser.newContext(CONTEXT);
+  const p = await ctx.newPage();
+  await p.goto(BASE, { waitUntil: "networkidle" });
+  await p.evaluate(() => localStorage.setItem("mc-panel-dock-node", JSON.stringify({ mode: "right" })));
+  await p.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
+  const ROOT = 2;
+  const rectOf = (id) => p.evaluate(async (n) => (await import("/assets/topology.js")).topology.debugNodeScreenRect(n), id);
+  const centre = (r) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+  const rect = await waitFor(() => rectOf(ROOT), 8000).catch(() => null);
+  // The node and everything it feeds, from the server's own topology.
+  const subtree = await p.evaluate(async (root) => {
+    const t = await (await fetch("/api/mg/2200/topology")).json();
+    const kids = new Map();
+    for (const [from, to] of [...t.connections, ...(t.hidden_connections ?? [])]) {
+      kids.set(from, [...(kids.get(from) ?? []), to]);
+    }
+    const seen = new Set();
+    const queue = [root];
+    while (queue.length) {
+      const id = queue.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      queue.push(...(kids.get(id) ?? []));
+    }
+    const shown = new Set((await import("/assets/topology.js")).topology.allIds());
+    return [...seen].filter((id) => shown.has(id)).sort((a, b) => a - b);
+  }, ROOT);
+  const selection = () =>
+    p.evaluate(async () => ({
+      docked: document.body.classList.contains("has-right-dock"),
+      selected: (await import("/assets/topology.js")).topology.selectedIds().sort((a, b) => a - b),
+    }));
+  const docked = (want) =>
+    waitFor(() => p.evaluate((w) => document.body.classList.contains("has-right-dock") === w, want), 2000).catch(() => false);
+  if (rect === null) {
+    check("e2e: a double-click on a node selects its subtree while the inspector docks", false, `node ${ROOT} has no rect`);
+  } else {
+    // Two taps as a hand makes them, the second once the strip has landed; the
+    // gap is reported, as a double-tap must fit in 300ms.
+    const { x, y } = centre(rect);
+    await p.mouse.click(x, y);
+    const t0 = Date.now();
+    await docked(true);
+    await p.mouse.click(x, y);
+    const gap = Date.now() - t0;
+    const after =
+      (await waitFor(async () => {
+        const s = await selection();
+        return s.docked && s.selected.length > 1 ? s : null;
+      }, 3000).catch(() => null)) ?? (await selection());
+    check(
+      "e2e: a double-click on a node selects its subtree while the inspector docks",
+      gap < 300 && after.docked && subtree.length > 1 && JSON.stringify(after.selected) === JSON.stringify(subtree),
+      JSON.stringify({ gap, after, subtree }),
+    );
+  }
+  // A quick click on another node, further than a double-tap's reach from the
+  // first, selects that node.
+  await new Promise((r) => setTimeout(r, 400));
+  const ra = await rectOf(1);
+  const rb = await rectOf(1000);
+  if (ra && rb) {
+    await p.mouse.click(centre(ra).x, centre(ra).y);
+    await p.mouse.click(centre(rb).x, centre(rb).y);
+  }
+  const quick = await selection();
+  check(
+    "e2e: a quick click on another node selects that node",
+    JSON.stringify(quick.selected) === "[1000]",
+    JSON.stringify({ quick, rects: Boolean(ra && rb) }),
+  );
+  // A double-click on empty canvas while the inspector is open: the first tap
+  // closes it, the strip goes and the canvas widens, so a node can slide under
+  // the pointer. The second tap counts as empty canvas too, and nothing is
+  // selected. The point is where a node sits with the strip closed, and is
+  // empty with it open.
+  await p.keyboard.press("Escape");
+  await docked(false);
+  await new Promise((r) => setTimeout(r, 400));
+  // Every node's rect, as the canvas shows it now.
+  const allRects = () =>
+    p.evaluate(async () => {
+      const { topology } = await import("/assets/topology.js");
+      return topology.allIds().map((id) => ({ id, r: topology.debugNodeScreenRect(id) }));
+    });
+  const closed = await allRects();
+  await p.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
+  await docked(true);
+  await new Promise((r) => setTimeout(r, 400));
+  const open = (await allRects()).map((n) => n.r);
+  const target = await p.evaluate(
+    ({ closed, open }) => {
+      const c = document.getElementById("topology").getBoundingClientRect();
+      const blocked = [...document.querySelectorAll("#topology-controls, #add-toggle")].map((el) => el.getBoundingClientRect());
+      const near = (r, x, y, m) => r && x > r.x - m && x < r.x + r.width + m && y > r.y - m && y < r.y + r.height + m;
+      for (const { id, r } of closed) {
+        if (!r) continue;
+        const x = r.x + r.width / 2;
+        const y = r.y + r.height / 2;
+        const inCanvas = x > c.left + 20 && x < c.right - 20 && y > c.top + 20 && y < c.bottom - 20;
+        if (inCanvas && !open.some((o) => near(o, x, y, 12)) && !blocked.some((b) => near(b, x, y, 12))) return { id, x, y };
+      }
+      return null;
+    },
+    { closed, open },
+  );
+  if (target) {
+    await p.mouse.click(target.x, target.y);
+    await docked(false);
+    await p.mouse.click(target.x, target.y);
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  const emptyDouble = await selection();
+  check(
+    "e2e: a double-click on empty canvas selects nothing while the strip closes under it",
+    target !== null && emptyDouble.selected.length === 0 && !emptyDouble.docked,
+    JSON.stringify({ target, emptyDouble }),
+  );
+  await ctx.close();
+}
 
 // ── e2e: the canvas selection shortcuts ──────────────────────────
 // Copy, cut, paste, select all and delete act only while the last
