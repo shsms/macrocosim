@@ -82,13 +82,13 @@ is wiring the topology + animating the environment.
   `bgFetch`; `notices.js` toasts, form errors and the UI's log lines;
   `connection.js` whether the server can be reached, and its banner;
   `logs.js` the logs panel's rows; `storage.js` guarded localStorage;
-  `zone.js` the display zone (the sim zone or UTC, from the pulse bar's
+  `zone.js` the display zone (the sim zone or UTC, from the top bar's
   zone chip) every shown time goes through: the formatters, `<time>`
   elements it re-formats on a switch, uPlot's `tzDate`, and the
   wall-time conversion for `datetime-local` fields; imported as
   `* as zone`, so call sites read `zone.fmtTime`, `zone.tzDate`;
   `theme.js` the colour theme (auto follows the OS, or light or dark
-  from the pulse bar's theme chip), set as `data-theme` on `<html>`;
+  from the top bar's theme chip), set as `data-theme` on `<html>`;
   code that draws with colours read from the tokens (the canvas, the
   charts) re-reads them in a `theme.onChange` listener;
   `paste-forms.js` the DOM-free let* builder the editor's paste
@@ -102,12 +102,16 @@ is wiring the topology + animating the environment.
   owns the node model and canvas renderer both graph canvases draw
   with, and the zoom tiers (full / hero / marker); `hovercard.js`
   the node hover card (pure model + DOM widget); `side-panel.js` the
-  floating-card shell every panel (inspector, formulas, metrics,
-  weather, REPL, logs, Defaults, Report) opens in — static-markup
-  cards are listed in its `STATIC_PANELS`, per-panel width and spawn
-  corner in `PANEL_DEFAULTS`; any card docks into the bottom or right
-  strip (`#dock-bottom`, `#dock-right`; `STRIPS` holds each strip's
-  ids, axis and sizes; `dockPanel(name, edge)` / `floatPanel` /
+  card shell every panel (inspector, formulas, metrics, weather, REPL,
+  logs, Defaults, Report) opens in — static-markup cards are listed in
+  its `STATIC_PANELS` with their scroll band, which a card's measured
+  floor (`floorOf`) holds at its min-height; per-panel width, spawn
+  corner and first dock edge in `PANEL_DEFAULTS`; a card docks into the
+  bottom or right strip (`#dock-bottom`, `#dock-right`) the first time it
+  opens (the REPL and logs at the bottom, the rest on the right) and
+  keeps the user's own dock or float choice after that
+  (`STRIPS` holds each strip's ids, axis, sizes and the room it leaves
+  the rest of main; `dockPanel(name, edge)` / `floatPanel` /
   `layoutStrip(edge)`; persisted under `mc-panel-dock-<name>` and
   `mc-strip-<edge>`);
   `splitter.js` the drag-to-resize
@@ -385,10 +389,19 @@ the small size and `.btn-icon` for a glyph-only one (×, ⤓, ✕); a field is
 panel rows and the dispatch dialog's inline choices; `.field-num` for a short
 number); a form's inline error is `.form-error`. A form or dialog has at most
 one primary button. Toggles keep their own components (`.pill`, `.pulse-chip`,
-`.mode-btn`, …). A panel's toggle, a header button or a canvas pill, carries
+`.mode-btn`, …). A panel's toggle, a button in one of the bars, carries
 `aria-pressed` and has an accent border and text while its panel is open.
 `tools/controls-test.mjs` lists the allowed button classes and fails on a class
 the kit replaced.
+
+UI layout convention: two bars sit above main, by scope. The top bar
+(`body > header`) holds what is site-wide: the modes, the running chip, the
+system pulse (`#pulse`), the REPL, Logs, Defaults, Report and help buttons, and
+the theme, density and zone chips. The microgrid bar (`#mg-header`, hidden on
+the list and in Scenarios) holds what belongs to the selected microgrid, its
+panel buttons and Snapshots included. The canvas strip (`#topology-controls`)
+holds only the canvas's own controls. Both bars wrap in a narrow window; the
+smoke checks the layout at 1024px wide.
 
 UI error convention: a form or dialog shows a server error in its own
 `.form-error` through `showFormError` (`notices.js`) and stays open; a new try

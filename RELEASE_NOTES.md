@@ -242,7 +242,7 @@ What to change in your own scripts:
   component and 400 for one that is not a charger.
 - The error of a timer body that fails goes to the log, so the UI's log
   shows it. It was printed to stderr only.
-- Every time the UI shows uses the zone the zone chip in the pulse bar
+- Every time the UI shows uses the zone the zone chip in the top bar
   picks: the simulation's zone (set with `set-timezone`), or UTC. This
   covers the charts, the log tail, the inspector's setpoints, the
   weather chart and cloud list, the scenario report and the dispatches.
@@ -255,34 +255,48 @@ What to change in your own scripts:
   are hidden, for example `12 components (1 hidden)`. The header left
   them out while the microgrid card counted them. The header's
   connection count includes the hidden components' connections too.
-  The loopback pill in the pulse bar shows `✓ connected` and no longer
+  The loopback pill in the top bar shows `✓ connected` and no longer
   a count.
 - Each `GET /api/microgrids` entry has `hidden_component_count`, the
   number of its components that are hidden.
 - The UI has a light theme. By default it follows the OS setting. The
-  theme chip in the pulse bar picks auto, light or dark, and the
+  theme chip in the top bar picks auto, light or dark, and the
   browser remembers the choice.
 - The UI is set in IBM Plex: IBM Plex Mono where it used a monospace
   font, IBM Plex Sans for the rest. Chart axes show their numbers in
   IBM Plex Mono. Numbers line up in columns.
 - The UI is compact by default, with 13px text. The density chip in
-  the pulse bar switches to comfortable, with larger text and more
+  the top bar switches to comfortable, with larger text and more
   space, and the browser remembers the choice. If you had turned
   compact off with the old chip, the UI opens comfortable.
 - Buttons and fields share one look across the UI. A dispatch's Delete
   button is red.
-- The zone, theme and density chips in the pulse bar can be reached
+- The zone, theme and density chips in the top bar can be reached
   with Tab and used with Enter or Space. A control with keyboard focus
   shows an outline.
 - An error message now stays on screen until you close it, and it shows
   above an open dialog. The same message twice shows once, with a count.
-- When the UI cannot reach the server, a banner under the pulse bar says
+- When the UI cannot reach the server, a banner under the top bar says
   so. It goes away by itself once the server answers again.
 - A failed load or save now shows next to the form it came from, which
   stays open so you can fix the input and try again. This covers the
   Load script and Snapshots dialogs and the Defaults panel. A refused
   import no longer closes the import dialog and opens it again.
 - The UI's own errors appear in the logs panel too, starting with `ui:`.
+- The top of the UI has two bars. The top bar is for the whole site:
+  the modes, the system status, the REPL, Logs, Defaults, Report and
+  help buttons, and the theme, density and zone chips. The bar under it
+  is for the microgrid you opened: Topology and Dispatches, and the
+  Metrics, Formulas, Weather and Snapshots buttons. The REPL and Logs
+  buttons are on every view, the microgrid list and Scenarios included.
+- A panel opens docked unless you have floated it out of a strip: the
+  REPL and the logs along the bottom, the other panels down the right,
+  and the canvas narrows to make room. Float a docked panel with its ⤒
+  button and it opens floating from then on.
+- The UI works in a window down to 1024px wide. The bars wrap onto more
+  rows, and in a narrow window the panels docked on the right get
+  narrower, down to their smallest width, so the canvas keeps about
+  600px.
 
 ## Bug Fixes
 
