@@ -206,7 +206,7 @@ function writeRouteToStorage({ mode, selectedMg, subview }) {
   if (subview) writeStorage(MG_SUBVIEW_KEY, subview);
 }
 
-export function navigateTo(next) {
+export function navigateTo(next, { keepPanels = false } = {}) {
   const cur = currentRoute();
   const merged = { ...cur, ...next };
   writeRouteToStorage(merged);
@@ -214,7 +214,7 @@ export function navigateTo(next) {
   if (location.hash !== hash) {
     history.pushState(merged, "", hash);
   }
-  applyMode(merged.mode);
+  applyMode(merged.mode, keepPanels);
 }
 
 function setupRouterPopstate() {
@@ -250,16 +250,17 @@ function applyInitialRoute() {
 let lastAppliedRoute = null;
 
 // Applies the stored route, then refreshes the mode's panel.
-function applyMode(mode) {
-  mode = applyRoute(mode);
+function applyMode(mode, keepPanels = false) {
+  mode = applyRoute(mode, keepPanels);
   if (mode === "microgrids") microgridsPanel.refresh();
   if (mode === "scenarios") scenariosPanel.refresh();
 }
 
 // Puts the stored (mode, mg, subview) on the DOM — body flags, toggle
 // buttons, panel dismissal, canvas nudges — without touching any
-// panel's data. Returns the mode it applied.
-function applyRoute(mode) {
+// panel's data. Returns the mode it applied. `keepPanels` leaves the
+// open panels open across a real navigation.
+function applyRoute(mode, keepPanels = false) {
   if (!VALID_MODES.has(mode)) mode = "microgrids";
   const selected = readSelectedMg();
   const subview = readSubview();
@@ -284,7 +285,7 @@ function applyRoute(mode) {
   // dismiss the very panel the user clicked from (the formula
   // explorer's #N links).
   if (routeChanged) {
-    closeAllPanels();
+    if (!keepPanels) closeAllPanels();
     topology.resetNotify();
     document.getElementById("add-panel").classList.remove("open");
   }
@@ -320,7 +321,9 @@ function applyRoute(mode) {
 // Pushes a history entry so the back button returns the user to
 // where they clicked from.
 export function jumpToTopology(id) {
-  navigateTo({ subview: "topology" });
+  // From Dispatches too, through the microgrid bar's Formulas, so the panel the
+  // link was in stays open.
+  navigateTo({ subview: "topology" }, { keepPanels: true });
   // An explicit jump always notifies, even when it lands on the node
   // that is already selected. notifySelection() dedups on the
   // selection set, so without this a repeat jump to the same id would

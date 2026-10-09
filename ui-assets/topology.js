@@ -1442,7 +1442,9 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// Nodes in `subtractedIds` highlight red instead of blue — they
     /// are the terms a formula subtracts.
     highlight(ids, subtractedIds = []) {
-      if (!network) return;
+      // A hidden canvas shows no highlight, and its unhighlight would report
+      // the selection to the inspector over another view.
+      if (!network || container().offsetParent === null) return;
       if (highlightStash === null) highlightStash = network.getSelectedNodes();
       // Hovers can follow each other without an unhighlight between
       // (mouseover fires per row); restore the previous red set first

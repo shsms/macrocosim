@@ -3828,6 +3828,30 @@ const metricsFromDispatches = await page.evaluate(
 await page.click("#metrics-btn");
 await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
 check("e2e: Metrics opens from the Dispatches sub-view", metricsFromDispatches);
+// Formulas on Dispatches: hovering a term leaves the hidden canvas and the
+// inspector alone, and a #N link keeps the panel open as it goes to the node. A
+// node is selected first, as the hover borrows the selection.
+await page.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
+await page.click('#mg-subtoggle .mode-btn[data-subview="dispatches"]');
+await page.click("#formula-btn");
+await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  topology.highlight([1]);
+  topology.unhighlight();
+});
+const inspectorAfterHover = await page.evaluate(() => document.getElementById("inspector").classList.contains("open"));
+check("e2e: a formula hover on Dispatches leaves the inspector closed", !inspectorAfterHover);
+await page.evaluate(async () => (await import("/assets/routing.js")).jumpToTopology(1000));
+const afterJump = await page.evaluate(() => ({
+  subview: document.body.dataset.subview,
+  formulas: document.getElementById("panel-formula-btn")?.classList.contains("open") === true,
+}));
+check(
+  "e2e: a #N jump from Dispatches keeps the formula panel open",
+  afterJump.subview === "topology" && afterJump.formulas,
+  JSON.stringify(afterJump),
+);
+await page.click("#formula-btn");
 const mgBarHeight = () => page.evaluate(() => document.getElementById("mg-header").getBoundingClientRect().height);
 await page.click("#mg-back");
 const onListHeight = await mgBarHeight();
