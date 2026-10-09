@@ -44,32 +44,98 @@ fn random_draw(limit: Option<i64>) -> i64 {
 }
 
 pub(super) fn register(ctx: &mut TulispContext) {
-    ctx.defun("log.info", |msg: String| log::info!("{msg}"))
-        .defun("log.warn", |msg: String| log::warn!("{msg}"))
-        .defun("log.error", |msg: String| log::error!("{msg}"))
-        .defun("log.debug", |msg: String| log::debug!("{msg}"))
-        .defun("log.trace", |msg: String| log::trace!("{msg}"))
-        // Math + RNG helpers used by ported microsim configs.
-        .defun("ceiling", |n: f64| n.ceil() as i64)
-        .defun("floor", |n: f64| n.floor() as i64)
-        .defun("sin", |n: f64| n.sin())
-        .defun("cos", |n: f64| n.cos())
-        .defun("random", |limit: Option<i64>| random_draw(limit))
-        // Seed the generator for a reproducible run; `(clear-random-seed)`
-        // reverts to the OS RNG.
-        .defun("set-random-seed", |seed: i64| {
+    for (name, level) in [
+        ("log.info", log::Level::Info),
+        ("log.warn", log::Level::Warn),
+        ("log.error", log::Level::Error),
+        ("log.debug", log::Level::Debug),
+        ("log.trace", log::Level::Trace),
+    ] {
+        let doc = format!(
+            "Write MSG to the log at the {} level.",
+            level.as_str().to_lowercase()
+        );
+        ctx.defun((name, ["msg"], doc), move |msg: String| {
+            log::log!(level, "{msg}")
+        });
+    }
+    // Math + RNG helpers used by ported microsim configs.
+    ctx.defun(
+        (
+            "ceiling",
+            ["n"],
+            "Return the smallest integer not less than N.",
+        ),
+        |n: f64| n.ceil() as i64,
+    )
+    .defun(
+        (
+            "floor",
+            ["n"],
+            "Return the largest integer not greater than N.",
+        ),
+        |n: f64| n.floor() as i64,
+    )
+    .defun(
+        ("sin", ["n"], "Return the sine of N, an angle in radians."),
+        |n: f64| n.sin(),
+    )
+    .defun(
+        ("cos", ["n"], "Return the cosine of N, an angle in radians."),
+        |n: f64| n.cos(),
+    )
+    .defun(
+        (
+            "random",
+            ["limit"],
+            "Return a random integer, from 0 to LIMIT - 1.\n\n\
+             A LIMIT of 0 or less counts as 1. Without LIMIT, the integer \
+             can be any integer. After set-random-seed, the integers are \
+             the same in every run.",
+        ),
+        |limit: Option<i64>| random_draw(limit),
+    )
+    .defun(
+        (
+            "set-random-seed",
+            ["seed"],
+            "Seed random with SEED, so it returns the same integers in every run.\n\n\
+             The seed holds for the whole process, every microgrid included. \
+             Return t.",
+        ),
+        |seed: i64| {
             *SEEDED_RNG.lock().expect("rng mutex") = Some(SplitMix64(seed as u64));
             true
-        })
-        .defun("clear-random-seed", || {
+        },
+    )
+    .defun(
+        (
+            "clear-random-seed",
+            "Make random draw from the system's random numbers again.\n\n\
+             This undoes set-random-seed. Return t.",
+        ),
+        || {
             *SEEDED_RNG.lock().expect("rng mutex") = None;
             true
-        });
+        },
+    );
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::test_support::config_with;
     use super::SplitMix64;
+
+    /// macrocosim's `random` replaces the one tulisp adds, which refuses a
+    /// LIMIT of 0 and takes t: macrocosim's counts 0 as 1 and takes only an
+    /// integer. The test sets no seed, since the seed is shared by every test
+    /// in the process.
+    #[test]
+    fn random_is_macrocosims() {
+        let (cfg, _dir) = config_with("nil");
+        assert_eq!(cfg.eval("(random 0)").unwrap(), "0");
+        assert!(cfg.eval("(random t)").is_err());
+    }
 
     /// Same seed → same stream; different seeds diverge. This is the
     /// property the scenario-reproducibility story rests on.

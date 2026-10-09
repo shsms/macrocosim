@@ -17,7 +17,15 @@ use crate::sim::microgrids::SharedSiteRouter;
 pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     let r = router.clone();
     ctx.defun(
-        "connect",
+        (
+            "connect",
+            ["parent", "child"],
+            "Connect component CHILD below component PARENT. Return t.\n\n\
+             PARENT and CHILD are each an integer component id or a component \
+             handle. Signal an error when either is not a component of the \
+             current microgrid, or when the new edge would make a cycle. A \
+             component connected to itself counts as a cycle.",
+        ),
         move |parent: TulispObject, child: TulispObject| -> Result<bool, Error> {
             let parent = arg_to_component_id(&parent)?;
             let child = arg_to_component_id(&child)?;
@@ -45,7 +53,14 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     );
     let r = router.clone();
     ctx.defun(
-        "remove-component",
+        (
+            "remove-component",
+            ["id"],
+            "Remove component ID and every edge to or from it.\n\n\
+             ID is an integer component id or a component handle. Return t \
+             when the current microgrid had the component, and nil when it \
+             did not.",
+        ),
         move |id: TulispObject| -> Result<bool, Error> {
             let id = arg_to_component_id(&id)?;
             Ok(r.site().remove_component(id))
@@ -53,7 +68,14 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     );
     let r = router.clone();
     ctx.defun(
-        "disconnect",
+        (
+            "disconnect",
+            ["parent", "child"],
+            "Remove the edge from component PARENT to component CHILD.\n\n\
+             PARENT and CHILD are each an integer component id or a component \
+             handle. Both components stay in the microgrid. Return t when an \
+             edge was removed, and nil when there was no such edge.",
+        ),
         move |parent: TulispObject, child: TulispObject| -> Result<bool, Error> {
             let parent = arg_to_component_id(&parent)?;
             let child = arg_to_component_id(&child)?;
@@ -62,7 +84,15 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     );
     let r = router;
     ctx.defun(
-        "rename-component",
+        (
+            "rename-component",
+            ["id", "name"],
+            "Set the display name of component ID to NAME. Return t.\n\n\
+             ID is an integer component id or a component handle. The UI and \
+             the gRPC API show this name, and a managed microgrid file saves \
+             it as the component's :name. ID is not checked: renaming an id \
+             that no component has still returns t.",
+        ),
         move |id: TulispObject, name: String| -> Result<bool, Error> {
             let id = arg_to_component_id(&id)?;
             r.site().rename(id, name);

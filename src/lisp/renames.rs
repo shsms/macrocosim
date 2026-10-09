@@ -370,12 +370,31 @@ impl<T: Plistable> Plistable for Renamed<T> {
 /// `(%kg-per-h-to-kg-per-s V)`, the per-hour to per-second conversion
 /// of [`Convert::PerHourToPerSecond`] (`nil` stays `nil`).
 pub(crate) fn register(ctx: &mut TulispContext) {
-    ctx.defun("%warn-renamed", |old: String, new: String, note: String| {
-        warn_renamed(&old, &new, &note);
-        true
-    });
     ctx.defun(
-        "%kg-per-h-to-kg-per-s",
+        (
+            "%warn-renamed",
+            ["old", "new", "note"],
+            "Log a warning that OLD is deprecated and NEW replaces it. Return t.\n\n\
+             The warning reads \"OLD is deprecated; use NEW\" with NOTE added \
+             at the end. NOTE is a unit note such as \" (seconds)\", or \"\". \
+             The warning is logged only the first time OLD is seen in the \
+             process. This is an internal helper.",
+        ),
+        |old: String, new: String, note: String| {
+            warn_renamed(&old, &new, &note);
+            true
+        },
+    );
+    ctx.defun(
+        (
+            "%kg-per-h-to-kg-per-s",
+            ["v"],
+            "Convert V from kilograms per hour to kilograms per second.\n\n\
+             A number is divided by 3600, and nil stays nil. A symbol or a \
+             form becomes the form (/ V 3600.0). A function becomes a lambda \
+             that calls it and divides the result by 3600. This is an \
+             internal helper.",
+        ),
         |ctx: &mut TulispContext, v: TulispObject| -> Result<TulispObject, Error> {
             Convert::PerHourToPerSecond.apply(ctx, "%kg-per-h-to-kg-per-s", &v)
         },

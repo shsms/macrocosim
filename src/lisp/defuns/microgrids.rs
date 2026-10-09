@@ -64,7 +64,13 @@ pub(in crate::lisp) fn register(
     {
         let slot = loading.clone();
         ctx.defun(
-            "current-source-file",
+            (
+                "current-source-file",
+                "Return the path of the file being loaded, or nil outside a load.\n\n\
+                 The path is absolute. A script can use it to find files next to \
+                 itself, or to tell a load from a form typed at the REPL, where \
+                 the value is nil.",
+            ),
             move || -> Result<TulispObject, tulisp::Error> {
                 Ok(match slot.lock().as_ref() {
                     Some(f) => TulispObject::from(f.path.display().to_string()),
@@ -82,7 +88,14 @@ pub(in crate::lisp) fn register(
         let cur = current.clone();
         let reg = registry.clone();
         ctx.defun(
-            "current-microgrid-id",
+            (
+                "current-microgrid-id",
+                "Return the id of the current microgrid.\n\n\
+                 Inside a :topology lambda, a managed file's script section or a \
+                 per-microgrid eval, this is the microgrid they belong to. \
+                 Outside any microgrid, as in a POST /api/eval, return the lowest \
+                 registered id, or 0 when no microgrid is registered.",
+            ),
             move || -> Result<i64, tulisp::Error> {
                 if let Some(id) = *cur.read() {
                     return Ok(id as i64);
@@ -96,7 +109,13 @@ pub(in crate::lisp) fn register(
         let cur = current.clone();
         let reg = registry.clone();
         ctx.defun(
-            "microgrid-name",
+            (
+                "microgrid-name",
+                "Return the name of the current microgrid.\n\n\
+                 Outside any microgrid, return the name of the microgrid with \
+                 the lowest id, or \"\" when no microgrid is registered. See \
+                 current-microgrid-id for which microgrid is current.",
+            ),
             move || -> Result<String, tulisp::Error> {
                 let id_opt = *cur.read();
                 let r = reg.lock();
@@ -120,7 +139,14 @@ pub(in crate::lisp) fn register(
     {
         let reg = registry.clone();
         ctx.defun(
-            "set-microgrid-name",
+            (
+                "set-microgrid-name",
+                ["id", "name"],
+                "Set the name of microgrid ID to NAME. Return t.\n\n\
+                 When the microgrid has a managed file, the new name is saved in \
+                 the (make-microgrid ...) form of that file. Signal an error when \
+                 no microgrid has the id ID.",
+            ),
             move |id: i64, name: String| -> Result<bool, tulisp::Error> {
                 let mut r = reg.lock();
                 let entry = r.get_mut(&(id as u64)).ok_or_else(|| {
@@ -137,7 +163,16 @@ pub(in crate::lisp) fn register(
     {
         let reg = registry.clone();
         ctx.defun(
-            "set-microgrid-tso",
+            (
+                "set-microgrid-tso",
+                ["id", "tso"],
+                "Set the TSO zone label of microgrid ID to TSO. Return t.\n\n\
+                 TSO is a string, or nil to remove the label. The label is free \
+                 text and changes nothing in the simulation. When the microgrid \
+                 has a managed file, the label is saved in the (make-microgrid \
+                 ...) form of that file. Signal an error when no microgrid has \
+                 the id ID.",
+            ),
             move |id: i64, tso: TulispObject| -> Result<bool, tulisp::Error> {
                 // nil clears the label; anything else must be a
                 // string (the TSO zone is free-form text).
@@ -163,7 +198,33 @@ pub(in crate::lisp) fn register(
         next_free_port_in, with_microgrid,
     };
     ctx.defun(
-        "make-microgrid",
+        (
+            "make-microgrid",
+            ["args"],
+            "Create a microgrid, build its components, and return its id.\n\n\
+             Keys:\n  \
+               :id  the microgrid id; default the lowest free id from 2200\n  \
+               :name  the display name; default \"default\"\n  \
+               :grpc-port  the gRPC server port; default a free one from 8800\n  \
+               :tso  a TSO zone label (free text); default none\n  \
+               :topology  a lambda with no arguments that builds the components\n\n\
+             An :id of 0 also picks the lowest free id. Free ports go up in \
+             steps of 10. Without :topology, the microgrid is empty.\n\n\
+             The :topology lambda runs with the new microgrid current, so \
+             the make-* calls in it add their components to this microgrid. \
+             When the lambda signals an error, a microgrid that this call \
+             created is removed again.\n\n\
+             Loading the same file again reuses its live microgrid, so its \
+             simulation and gRPC server keep running. The microgrid is \
+             cleared and built again in place, and takes the new :name and \
+             :tso. While its gRPC server holds a port, a different \
+             :grpc-port is ignored with a warning.\n\n\
+             Signal an error when the id belongs to a microgrid from another \
+             file or from the REPL. Also signal an error for a negative :id, \
+             for a :grpc-port outside 1 to 65535, and for a :grpc-port that \
+             another microgrid, the assets server or the dispatch server \
+             uses.",
+        ),
         move |ctx: &mut TulispContext,
               args: tulisp::Plist<Renamed<MakeMicrogridArgs>>|
               -> Result<i64, tulisp::Error> {

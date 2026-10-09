@@ -86,7 +86,16 @@ fn reactive_bound_edge(router: &SharedSiteRouter, id: i64, edge: Edge) -> Result
 pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     let r = router.clone();
     ctx.defun(
-        "component-active-power",
+        (
+            "component-active-power",
+            ["id"],
+            "Return the active power of component ID now, in watts.\n\n\
+             ID is the integer id of a component in the current microgrid. \
+             A meter with no power source of its own (such as :power-w), and \
+             a marker such as a CHP, return the sum of the components below \
+             them. The grid connection point always returns 0. Signal an \
+             error when no component has the id ID.",
+        ),
         move |id: i64| -> Result<f64, Error> {
             let w = r.site();
             let c = w.get(id as u64).ok_or_else(|| {
@@ -98,19 +107,50 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 
     let r = router.clone();
     ctx.defun(
-        "component-bound-lower",
+        (
+            "component-bound-lower",
+            ["id"],
+            "Return the lower edge of component ID's active power bounds, in watts.\n\n\
+             ID is the integer id of a component in the current microgrid. \
+             The bounds are the ones the component reports in its telemetry, \
+             live augmentations included. When the bounds have several bands, \
+             return the lowest finite lower edge. Signal an error when no component \
+             has the id ID, when it has no active power bounds, or when its \
+             bounds have no finite lower edge.",
+        ),
         move |id: i64| -> Result<f64, Error> { bound_edge(&r, id, Edge::Lower) },
     );
 
     let r = router.clone();
     ctx.defun(
-        "component-bound-upper",
+        (
+            "component-bound-upper",
+            ["id"],
+            "Return the upper edge of component ID's active power bounds, in watts.\n\n\
+             ID is the integer id of a component in the current microgrid. \
+             The bounds are the ones the component reports in its telemetry, \
+             live augmentations included. When the bounds have several bands, \
+             return the highest finite upper edge. Signal an error when no component \
+             has the id ID, when it has no active power bounds, or when its \
+             bounds have no finite upper edge.",
+        ),
         move |id: i64| -> Result<f64, Error> { bound_edge(&r, id, Edge::Upper) },
     );
 
     let r = router.clone();
     ctx.defun(
-        "component-reactive-power",
+        (
+            "component-reactive-power",
+            ["id"],
+            "Return the reactive power of component ID now, in VAr.\n\n\
+             ID is the integer id of a component in the current microgrid. \
+             A meter with no reactive source of its own (such as \
+             :reactive-power-var or :power-factor), and a marker such as a \
+             CHP, return the sum of the components below them. A component \
+             with no reactive power, such as a battery or the grid connection \
+             point, returns 0. Signal an error when no component has the id \
+             ID.",
+        ),
         move |id: i64| -> Result<f64, Error> {
             let w = r.site();
             let c = w.get(id as u64).ok_or_else(|| {
@@ -124,13 +164,33 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 
     let r = router.clone();
     ctx.defun(
-        "component-reactive-bound-lower",
+        (
+            "component-reactive-bound-lower",
+            ["id"],
+            "Return the lower edge of component ID's reactive power bounds, in VAr.\n\n\
+             ID is the integer id of a component in the current microgrid. \
+             The bounds are the ones the component reports in its telemetry, \
+             live augmentations included. When the bounds have several bands, \
+             return the lowest finite lower edge. Signal an error when no component \
+             has the id ID, when it has no reactive power bounds (a battery, \
+             for example), or when its bounds have no finite lower edge.",
+        ),
         move |id: i64| -> Result<f64, Error> { reactive_bound_edge(&r, id, Edge::Lower) },
     );
 
     let r = router;
     ctx.defun(
-        "component-reactive-bound-upper",
+        (
+            "component-reactive-bound-upper",
+            ["id"],
+            "Return the upper edge of component ID's reactive power bounds, in VAr.\n\n\
+             ID is the integer id of a component in the current microgrid. \
+             The bounds are the ones the component reports in its telemetry, \
+             live augmentations included. When the bounds have several bands, \
+             return the highest finite upper edge. Signal an error when no component \
+             has the id ID, when it has no reactive power bounds (a battery, \
+             for example), or when its bounds have no finite upper edge.",
+        ),
         move |id: i64| -> Result<f64, Error> { reactive_bound_edge(&r, id, Edge::Upper) },
     );
 }
