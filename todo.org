@@ -2612,3 +2612,171 @@ timer drives the other microgrid, and its scenarios' =(set-meter-power 100
 …)= fail with "component 100 not found". Capture the scope where the
 deferred code is created (the timer, the cue, the source) and restore it
 when it runs. Related: D7.
+
+* Review backlog — 2026-10-09
+** TODO Scenario clock times count from the run's start           :scenarios:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 20:38]
+:END:
+
+Found while writing docstrings for tulisp 0.32. =resolve-time= reads
+"02:00" as 7200 seconds, and =scenario--at= passes that to
+=run-with-timer=, so an =at=, =check= or =controller= time of ="HH:MM"=
+fires two hours after the run starts, not at 02:00. The run never
+reads =:schedule=, =:clock= or =:date= (only the scenario list in
+=panels.js= and =macroctl= show them), so =:schedule 'absolute= with a
+=:date= changes nothing.
+
+Decide whether an absolute schedule should fire at the clock time (in
+the sim zone), or whether the three keys go. The define-scenario
+docstring states the current behavior; update it with the fix.
+
+** TODO A live scenario run does not stop at :length              :scenarios:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 20:38]
+:END:
+
+A run started from the UI or =macroctl scenario run= without
+=--stepped= or =--wait= keeps going past =:length= until something
+calls =scenario-stop=. Only a stepped run, =--wait= and the UI's
+progress bar use the length. Decide whether a live run should stop
+itself at =:length= (a timer armed by =scenario--run=), and update
+the define-scenario docstring to match.
+
+** TODO scenario-record-csv resolves a relative directory from the working directory :lisp:scenarios:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 20:38]
+:END:
+
+=scenario-record-csv= builds its directory with =PathBuf::from(dir)=,
+so a relative DIR (and =:record 'csv=, which writes =scenario-NAME/=)
+lands under the process's working directory. =csv-load=,
+=file-exists-p=, =watch-file= and =load= resolve relative paths from
+the state directory. Resolve it the same way, and drop the sentence
+about it from the docstring.
+
+** TODO Component queries take only an integer id                      :lisp:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 20:38]
+:END:
+
+=component-active-power=, =component-reactive-power= and the four
+=component-*-bound-*= queries (=src/lisp/defuns/queries.rs=) take
+=id: i64=, so a component handle fails with a type error, while
+=connect=, =disconnect=, =remove-component= and =rename-component=
+take either. A negative id is cast with =as u64= and comes back as
+"not found" instead of a clear error. Take an id or a handle, as
+=world_ops.rs= does, and update the docstrings.
+
+Related: when the current-microgrid pointer names an id that no
+registered microgrid has, =current-microgrid-id= returns that id, while
+=microgrid-name= falls back to the lowest-id microgrid. Pick one rule.
+
+** TODO rename-component accepts an id no component has                :lisp:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 20:38]
+:END:
+
+=MicrogridSite::rename= stores the name and bumps the structural
+version without checking that the id exists, and the defun returns t.
+The name then sits in the site's name map for no component. Signal an
+error for an unknown id (=remove-component= returns nil for one), and
+update the docstring.
+
+** TODO battery-inverter-defaults turns the reactive PF limit off :lisp:design:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 20:38]
+:END:
+
+=sim/defaults.lisp= sets =:reactive-pf-limit 0.0= in
+=battery-inverter-defaults=, which turns the |Q| <= k * |P| limit off,
+while =%make-battery-inverter='s built-in value is 0.35. So
+=make-battery-inverter= and =%make-battery-inverter= give different
+reactive envelopes. Decide which one is meant, and make the default
+plist and the built-in value agree or say why they differ.
+
+** TODO Lisp helpers shadow tulisp's floor, ceiling, sin, cos and random :lisp:cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 20:38]
+:END:
+
+=src/lisp/defuns/log.rs= defines =floor=, =ceiling=, =sin=, =cos= and
+=random=. tulisp 0.31 already had =floor= and =ceiling= (with an
+optional DIVISOR), and 0.32 adds =sin=, =cos= and an Emacs-style
+=random= (per context, seeded by a string or t). macrocosim's versions
+replace them.
+
+=sin=, =cos=, =floor= and =ceiling= can likely go: tulisp's take the
+same one-argument calls. =random= differs: macrocosim's clamps a LIMIT
+of 0 or less to 1 and is seeded by =set-random-seed= for the whole
+process, while tulisp's raises =args-out-of-range=. Keep it unless the
+seeding moves to tulisp's =(random "seed")=.
+
+** TODO Stale comments around the Lisp defuns                       :cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 20:38]
+:END:
+
+Seen while writing docstrings; the docstrings themselves are right.
+
+- =src/lisp/defuns/watches.rs=: the comment above =register= says a
+  =watch-file= call after a reload is not honoured until a restart,
+  but =rearm_watches= re-reads =extra_watches= after each batch of
+  file events.
+- =src/lisp/defuns/runtime_modes.rs=: the module comment calls the
+  stream settings site-wide; they act on one microgrid.
+- =src/lisp/defuns/load_drivers.rs=: the module comment mentions a
+  =(plug-ev)= defun; it lives in =sim/common.lisp= and wraps =%plug-ev=.
+- =src/lisp/handle.rs=: the comment above =register= is out of date.
+- =src/lisp/defuns/bounds.rs=, =setpoints.rs=: the =///= comments above
+  =register= now repeat the docstrings.
+- =src/lisp/defuns/microgrids.rs= (~line 110): the "no =:grpc-port=
+  setter … a later sub-project" comment narrates history.
+
+- =src/sim/microgrid_site/mod.rs=: the doc comment on
+  =MicrogridSite::reset= says it resets the id allocator; the body
+  keeps it, as the =reset-microgrid= docstring says.
+
+** TODO REPL and docstring follow-ups                               :ui:lisp:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 21:30]
+:END:
+
+Left from the review of the docstrings and the REPL completion.
+
+- The =make-*= docstrings in =sim/defaults.lisp= list each key by hand,
+  apart from the =AsList!= structs in =src/lisp/make.rs= that define
+  the keys. A new or renamed key leaves the list stale, and no test
+  sees it. Build the list from the struct (it needs a doc per field
+  in tulisp's =AsList!=), or test that every listed key is one the
+  =%make-*= accepts. The mode setters list their symbols by hand too.
+- =SPECIAL_FORMS= in =ui-assets/repl-syntax.js= is a hand-kept list
+  that colours a form's head: it names functions tulisp lacks
+  (=pcase=, =save-excursion=) and colours a prelude macro as a call.
+  Colour by the kind =/api/symbols= reports.
+- =callAtCursor=, =rainbowHighlight= and =indentForNewline= each scan
+  strings, comments and parens on their own. One tokenizer in
+  =repl-syntax.js= would serve all three.
+- The REPL reads all of =/api/symbols= (about 170 KB) on every focus
+  and after every eval, even when nothing changed. An ETag would let
+  an unchanged list answer 304.
+
+- =callAtCursor= reads =?(=, =?)= and =?"= as parens and quotes, not as
+  character literals, and counts =(a)(b)= as one argument. Both fold
+  into the shared tokenizer above.
+- Hovering a name in the completion list highlights it like the
+  selected one, while the doc pane follows only the selection. Give
+  hover its own style, or move the selection on hover.
+
+** TODO set-frequency-model takes a NaN :nominal-hz                    :lisp:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-09 Fr 21:46]
+:END:
+
+=set-frequency= refuses a value that is not finite, because NaN in the
+shared frequency state never recovers. =set-frequency-model= and
+=override-frequency-model= do not check =:nominal-hz= (=apply_overrides=
+in =src/lisp/defuns/frequency.rs=), and =step()= then pulls the
+frequency to the NaN nominal for every microgrid
+(=src/sim/frequency.rs=). Refuse a nominal that is not finite. (A NaN =:mean-rev-rate= or
+=:sigma= already becomes 0 through =max(0.0)=.)
