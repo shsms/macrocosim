@@ -1150,23 +1150,6 @@ check(
   [compactFloat, comfortableFloat].every((h) => h.contentTop >= h.buttonsBottom),
   JSON.stringify({ compactFloat, comfortableFloat }),
 );
-// The REPL's and logs card's floors grow with the card head (measured on the
-// open metrics card), so a taller head takes no room from what the floor holds
-// below it.
-const cardFloors = () =>
-  page.evaluate(() => {
-    const head = document.querySelector("#panel-metrics-btn .panel-drag").getBoundingClientRect().height;
-    const floor = (id) => Number.parseFloat(getComputedStyle(document.getElementById(id)).minHeight) - head;
-    return { head, repl: floor("repl"), logs: floor("logs-panel") };
-  });
-const [compactFloors, comfortableFloors] = await inBothDensities(cardFloors);
-check(
-  "e2e: the REPL and logs cards' floors grow with the card head",
-  compactFloors.head < comfortableFloors.head &&
-    compactFloors.repl === comfortableFloors.repl &&
-    compactFloors.logs === comfortableFloors.logs,
-  JSON.stringify({ compactFloors, comfortableFloors }),
-);
 await page.click("#panel-metrics-btn .float-close");
 await page.evaluate(() => localStorage.removeItem("mc-panel-pos-metrics-btn"));
 
@@ -2157,6 +2140,33 @@ await page.keyboard.press("Escape"); // dismisses the popup
 await page.fill("#repl-input", "");
 await page.keyboard.press("Escape");
 check("e2e: Escape in the REPL input closes the panel", (await panelOpen("repl")) === false);
+// A card capped below what it holds stops at a floor its content sets: the card
+// head, the scroll band at its own min-height and the rest of the content, at
+// whatever height the density gives them.
+await page.click("#logs-btn");
+await page.evaluate(() => {
+  for (const n of ["repl-btn", "logs-btn"]) localStorage.setItem(`mc-panel-size-${n}`, JSON.stringify({ h: 1 }));
+});
+await page.click("#repl-btn");
+await page.click("#logs-btn");
+const floors = await inBothDensities(() =>
+  page.evaluate(() => {
+    const bottom = (sel) => document.querySelector(sel).getBoundingClientRect().bottom;
+    return {
+      evalOver: bottom('#repl-form button[type="submit"]') - bottom("#repl"),
+      tailOver: bottom("#logs") - bottom("#logs-panel"),
+    };
+  }),
+);
+check(
+  "e2e: capped REPL and logs cards hold the Eval button and the tail, in both densities",
+  floors.every((f) => f.evalOver <= 0.5 && f.tailOver <= 0.5),
+  JSON.stringify(floors),
+);
+await page.click("#repl-btn");
+await page.evaluate(() => {
+  for (const n of ["repl-btn", "logs-btn"]) localStorage.removeItem(`mc-panel-size-${n}`);
+});
 await page.click("#logs-btn");
 check("e2e: the logs pill closes the Logs panel", (await panelOpen("logs-panel")) === false);
 // Off the Topology subview there is no pill; the backtick still works.

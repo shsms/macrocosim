@@ -20,8 +20,9 @@ import { makeSplitter } from "./splitter.js";
 import { readStorage, writeStorage } from "./storage.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
-// name → { el, contentEl, teardown, pos, shown, cascade, isStatic,
+// name → { el, contentEl, band, teardown, pos, shown, cascade, isStatic,
 // refitTimer, resizeTimer, dock, floatStyle, dragging }
+// band is the static card's scroll band (STATIC_PANELS), or null.
 // dock is the edge the card is docked to, or null while it floats;
 // floatStyle parks the card's inline float geometry while it is
 // docked.
@@ -82,11 +83,14 @@ const PANEL_DEFAULTS = {
   "logs-btn": { width: 720, spawn: "bottom-left" },
 };
 // Panels whose markup is static in index.html, so a module can keep
-// addressing their elements by id: name → [card id, content id].
+// addressing their elements by id: name → [card id, content id, scroll
+// band id]. The band is the part of the content that scrolls; the
+// card's floor holds the rest of the content with the band at its own
+// min-height (floorOf).
 const STATIC_PANELS = {
   node: ["inspector", "inspect"],
-  "repl-btn": ["repl", "repl-body"],
-  "logs-btn": ["logs-panel", "logs-body"],
+  "repl-btn": ["repl", "repl-body", "repl-output"],
+  "logs-btn": ["logs-panel", "logs-body", "logs"],
 };
 // A bottom-left card sits this far in from the dock's left and
 // bottom edges; further bottom-left cards line up to its right with
@@ -156,10 +160,12 @@ function ensurePanel(name) {
   const isStatic = name in STATIC_PANELS;
   let el;
   let contentEl;
+  let band = null;
   if (isStatic) {
-    const [cardId, contentId] = STATIC_PANELS[name];
+    const [cardId, contentId, bandId] = STATIC_PANELS[name];
     el = document.getElementById(cardId);
     contentEl = document.getElementById(contentId);
+    if (bandId) band = document.getElementById(bandId);
     // The inspector wires its own close button (app.js, it also
     // deselects the node); every other static card uses the shared
     // one.
@@ -220,6 +226,7 @@ function ensurePanel(name) {
   p = {
     el,
     contentEl,
+    band,
     teardown: null,
     pos: stored ?? { dx: 0, dy: 0, bottom: bottomAnchored },
     shown: null,
@@ -510,8 +517,27 @@ function reorderDrag(el, head, edge, name, p, pointerId) {
 // itself, and the user's drag only says how far that may go. Dragging
 // past the content therefore leaves no dead space — the card snaps
 // back to its content once the gesture ends.
-const capOf = (el, h) =>
-  Math.max(MIN_HEIGHT, Math.min(h, el.parentElement?.clientHeight ?? window.innerHeight));
+const capOf = (el, h, floor) => Math.max(floor, Math.min(h, el.parentElement?.clientHeight ?? window.innerHeight));
+
+// The lowest a card can go and still hold its content: its chrome (the head,
+// the borders) plus its content with the scroll band at the band's own
+// min-height. Measured, so it follows the height the density gives the rest of
+// the content; read on a visible card. A card with no band has MIN_HEIGHT.
+function floorOf(p) {
+  const { el, contentEl, band } = p;
+  if (!band) return MIN_HEIGHT;
+  const chrome = el.offsetHeight - contentEl.clientHeight;
+  const rest = contentEl.scrollHeight - band.offsetHeight;
+  const s = getComputedStyle(band);
+  const px = (v) => Number.parseFloat(v) || 0;
+  // The band's smallest box: a content-box min-height leaves out its padding
+  // and border.
+  let bandMin = px(s.minHeight);
+  if (s.boxSizing !== "border-box") {
+    bandMin += px(s.paddingTop) + px(s.paddingBottom) + px(s.borderTopWidth) + px(s.borderBottomWidth);
+  }
+  return Math.max(MIN_HEIGHT, Math.ceil(chrome + rest + bandMin));
+}
 
 // `min(cap, 100% - CASCADE_BASE)` rather than the bare cap: the
 // dock's own bound has to keep winning as the window resizes, and an
@@ -558,7 +584,7 @@ function settleResize(p, name) {
   const h = Number.parseFloat(el.style.height);
   el.style.height = "";
   if (!h || p.dock || !el.classList.contains("open")) return;
-  const cap = capOf(el, h);
+  const cap = capOf(el, h, floorOf(p));
   applyCap(el, cap);
   saveSize(name, cap);
 }
@@ -619,9 +645,12 @@ function sanitizePanel(p, name, persist = true) {
   // observer.
   if (p.dock || p.dragging) return;
   const { el } = p;
+  // The floor as min-height too, so a gripper drag stops at it.
+  const floor = floorOf(p);
+  if (p.band) el.style.minHeight = `${floor}px`;
   const stored = loadSize(name);
   if (stored != null) {
-    const cap = capOf(el, stored);
+    const cap = capOf(el, stored, floor);
     applyCap(el, cap);
     if (persist && cap !== stored) saveSize(name, cap);
   }
@@ -1028,6 +1057,12 @@ window.addEventListener("resize", () => {
       if (stripEl(edge)?.querySelector(".float-panel.open")) layoutStrip(edge);
     }
   }, REFIT_SETTLE);
+});
+// A density switch changes how tall the cards' content is, so their
+// floors and caps are measured again.
+new MutationObserver(refitFloating).observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ["data-density"],
 });
 
 // The matching chrome toggle is pressed (and lit) while its panel is open,

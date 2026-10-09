@@ -1264,9 +1264,8 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   box-shadow: none;
 }
 .float-panel.docked:last-child { border-right: none; }
-/* The two static cards with a floating floor give it up as tiles. */
-#repl.docked, #logs-panel.docked { min-height: 0; }
-/* And so do the bands inside them, or they clip the tile's own floor. */
+/* The scroll bands of the REPL and logs give up their floors as tiles, or they
+   clip the tile's own floor. */
 #repl.docked #repl-output, #logs-panel.docked #logs { min-height: 0; }
 /* The tile head: the grab strip grows a title (the card's landmark
    label) and room for its buttons; the grip stays as the handle. The
@@ -1412,14 +1411,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   display: block;
 }
 
-/* REPL panel: eval output over the input row. The card hugs its
-   content up to the gripper's cap or the dock bound; the output
-   band's floor leaves room for the completion popup
-   (#repl-completions, 220px) above the input. The card's own floor
-   has to hold the card head, that 240px output floor and the input
-   form, or a cap dragged (or restored) below it would squeeze the
-   form out of the card and leave the REPL unusable. */
-#repl { min-height: calc(var(--card-head-height) + 322px); }
+/* REPL panel: eval output over the input row. The card hugs its content up to
+   the gripper's cap or the dock bound; the output band's floor leaves room for
+   the completion popup (#repl-completions, 220px) above the input. The card's
+   own floor, measured by side-panel.js (floorOf), holds the card head, that
+   floor and the input form. */
 #repl-body {
   display: flex;
   flex-direction: column;
@@ -1429,10 +1425,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-size: var(--text-lg);
 }
 
-/* Logs panel: the tail scrolls inside the card. Its floor holds the
-   card head, the head row and the tail's own 160px floor, so a cap
-   below it cannot squeeze the head away. */
-#logs-panel { min-height: calc(var(--card-head-height) + 222px); }
+/* Logs panel: the tail scrolls inside the card, above its own 160px floor; the
+   card's measured floor holds the head row as well. */
 #logs-body {
   display: flex;
   flex-direction: column;
