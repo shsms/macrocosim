@@ -3,7 +3,7 @@
 // hash, and the keyboard / button hooks that drive transitions.
 // Owns mgPath / mgFetch (per-microgrid URL helpers), the density
 // toggle, and the refreshTopology fetch that ferries the selected
-// microgrid's topology into the canvas + chrome pulse bar.
+// microgrid's topology into the canvas + the system pulse.
 
 import { dispatchesPanel, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
@@ -471,7 +471,7 @@ export async function refreshTopology() {
     // repaint every panel with the old site's data.
     if (readSelectedMg() !== mg) return;
     topology.apply(data);
-    // Pulse bar's health counters + graph pill read from the
+    // The system pulse's health counters + graph pill read from the
     // same topology fetch — one round-trip carries both
     // signals + a hot-reload's WS topology_changed nudge
     // already drives a refresh.

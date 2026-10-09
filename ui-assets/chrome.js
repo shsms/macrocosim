@@ -1,5 +1,5 @@
 // Chrome around the SPA's main views: the configurable-zone clock
-// and the always-on pulse bar.
+// and the system pulse in the top bar.
 
 import { mgFetch, setupDensityToggle } from "./routing.js";
 import * as theme from "./theme.js";
@@ -45,9 +45,9 @@ export function setupThemeChip() {
   paint();
 }
 
-// ─── Pulse bar ─────────────────────────────────────────────────────────────
+// ─── System pulse ──────────────────────────────────────────────────────────
 //
-// Always-on system pulse strip. The live sources:
+// The always-on system pulse group. The live sources:
 //   - Setpoint sparkbar: rate of /ws/events kind="setpoint" frames,
 //     bucketed into 12 × 5 s windows over the last minute.
 //   - Health pill: rolling counters from the topology route's health

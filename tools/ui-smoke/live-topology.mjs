@@ -530,8 +530,7 @@ check(
 // It also stops at the dialog: app.js's global Esc bails out while a
 // `dialog[open]` is up, so the cancel must not peel a floating panel
 // off the dock behind it. The REPL is the panel to prove that with
-// here — the panel pills live on a microgrid's Topology view and this
-// section runs on the list, but a backtick opens the REPL anywhere.
+// here, opened with a backtick, which works anywhere.
 const idsBeforeCancel = (await mgIds()).length;
 // Back to the list BEFORE the panel opens: a real route change
 // dismisses every floating card (routing.js), and the import that just
@@ -2026,9 +2025,8 @@ check("e2e: a drag taller than the cap grows the panel and re-caps it", grown !=
 await page.click("#metrics-btn");
 
 // ── e2e: the REPL and Logs panels ────────────────────────────────
-// Static-markup floating panels off the PANELS pills, closed by
-// default. The REPL also answers a backtick from anywhere, since its
-// pill only shows on the Topology subview.
+// Static-markup floating panels off the top bar's buttons, closed by
+// default. The REPL also answers a backtick from anywhere.
 // null, not false, when the card is missing: "closed" is asserted as
 // `=== false` below, so a renamed or deleted card fails here instead
 // of passing as a panel that is merely not open.
@@ -2048,7 +2046,7 @@ check(
   }),
 );
 await page.click("#logs-btn");
-check("e2e: the logs pill opens the Logs panel", await panelOpen("logs-panel"));
+check("e2e: the logs button opens the Logs panel", await panelOpen("logs-panel"));
 const logsBox = await page.evaluate(() => {
   const r = document.getElementById("logs-panel").getBoundingClientRect();
   const d = document.getElementById("panel-dock").getBoundingClientRect();
@@ -2168,8 +2166,8 @@ await page.evaluate(() => {
   for (const n of ["repl-btn", "logs-btn"]) localStorage.removeItem(`mc-panel-size-${n}`);
 });
 await page.click("#logs-btn");
-check("e2e: the logs pill closes the Logs panel", (await panelOpen("logs-panel")) === false);
-// Off the Topology subview there is no pill; the backtick still works.
+check("e2e: the logs button closes the Logs panel", (await panelOpen("logs-panel")) === false);
+// In Scenarios the backtick works too.
 await page.keyboard.press("2");
 await page.keyboard.press("`");
 // The card has to be on screen there, not just carrying the class:
@@ -3059,8 +3057,8 @@ await page.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" 
 await waitFor(async () => page.evaluate(() => document.body.dataset.mgView === "selected"), 10000).catch(() => null);
 
 // ── e2e: density ───────────────────────────────────────────────────
-// Compact is the default; the pulse-bar chip switches to comfortable,
-// which sets larger text and a taller pulse bar, and back. The old stored
+// Compact is the default; the density chip switches to comfortable,
+// which sets larger text and a taller top bar, and back. The old stored
 // value "normal" reads as comfortable.
 // The checks from here on drive the starter site's topology directly.
 async function openDemoTopology() {
@@ -3077,7 +3075,7 @@ const densityState = () =>
     density: document.documentElement.dataset.density,
     chip: document.getElementById("density-toggle").textContent,
     text: getComputedStyle(document.body).fontSize,
-    pulse: document.getElementById("pulse").getBoundingClientRect().height,
+    bar: document.querySelector("body > header").getBoundingClientRect().height,
   }));
 const compactState = await densityState();
 await page.click("#density-toggle");
@@ -3091,10 +3089,10 @@ check(
 );
 check(
   "e2e: the density chip switches to comfortable",
-  comfortableState.density === "comfortable" && comfortableState.text === "14px" && comfortableState.pulse > compactState.pulse,
+  comfortableState.density === "comfortable" && comfortableState.text === "14px" && comfortableState.bar > compactState.bar,
   JSON.stringify({ compactState, comfortableState }),
 );
-check("e2e: the density chip switches back", compactAgain.density === "compact" && compactAgain.pulse === compactState.pulse, JSON.stringify(compactAgain));
+check("e2e: the density chip switches back", compactAgain.density === "compact" && compactAgain.bar === compactState.bar, JSON.stringify(compactAgain));
 // A reload, not openDemoTopology: a goto to the same hash reloads nothing.
 await page.evaluate(() => localStorage.setItem("macrocosim-density", "normal"));
 await page.reload({ waitUntil: "networkidle" });
@@ -3308,12 +3306,12 @@ const fonts = await page.evaluate(() => {
 });
 check("e2e: page text is IBM Plex Sans and the header buttons IBM Plex Mono", /^"IBM Plex Sans"/.test(fonts.body) && /^"IBM Plex Mono"/.test(fonts.button), JSON.stringify(fonts));
 check("e2e: the clock is mono with tabular figures", /^"IBM Plex Mono"/.test(fonts.clock) && fonts.numerals === "tabular-nums", JSON.stringify(fonts));
-// ── e2e: the pulse-bar chips work from the keyboard ─────────────────
-// Tab reaches the theme chip from the zone chip, so :focus-visible
+// ── e2e: the top bar's chips work from the keyboard ─────────────────
+// Tab reaches the theme chip from the help button, so :focus-visible
 // applies; Enter cycles it.
 const accent = await tokenColour("--accent");
 const chipTag = await page.evaluate(() => document.getElementById("theme-toggle").tagName);
-await page.focus("#tz-toggle");
+await page.focus("#help-btn");
 await page.keyboard.press("Tab");
 const chipRing = await page.evaluate(() => {
   const s = getComputedStyle(document.activeElement);
@@ -3506,9 +3504,9 @@ check(
   );
 }
 // Every background loop reports: with only the metrics panel's polls cut off
-// (the pulse bar's metrics/status poll still gets through), the banner still
-// comes up. Closing the panel stops those polls, and the banner still clears
-// once the other loops get through.
+// (the loopback pill's metrics/status poll still gets through), the banner
+// still comes up. Closing the panel stops those polls, and the banner still
+// clears once the other loops get through.
 const metricsPolls = /\/metrics\/(latest|history)/;
 await openDemoTopology();
 await page.click("#metrics-btn");
@@ -3736,9 +3734,87 @@ check(
 );
 await openDemoTopology();
 
+// ── e2e: the top bar ───────────────────────────────────────────────
+// One bar for the whole site, in this order, with the system pulse as a group
+// inside it.
+const TOP_BAR = [
+  "status",
+  "mode-toggle",
+  "active-scenarios",
+  "pulse",
+  "repl-btn",
+  "logs-btn",
+  "defaults-btn",
+  "scenario-report-btn",
+  "help-btn",
+  "theme-toggle",
+  "density-toggle",
+  "tz-toggle",
+  "pulse-clock",
+];
+// Whether the elements with `ids` all sit inside `bar`, in that order.
+const inOrder = (bar, ids) =>
+  page.evaluate(
+    ([b, list]) => {
+      const host = document.querySelector(b);
+      const els = list.map((id) => document.getElementById(id));
+      const follows = (a, z) => Boolean(a.compareDocumentPosition(z) & Node.DOCUMENT_POSITION_FOLLOWING);
+      return els.every((e) => e && host.contains(e)) && els.every((e, i) => i === 0 || follows(els[i - 1], e));
+    },
+    [bar, ids],
+  );
+check("e2e: the top bar holds the site's controls in order", await inOrder("body > header", TOP_BAR));
+check("e2e: there is no pulse bar of its own", await page.evaluate(() => document.querySelector("body > #pulse") === null));
+// The REPL and the logs are the site's: their buttons open them on the list and
+// in Scenarios too.
+const MODE_BTN = (m) => `#mode-toggle .mode-btn[data-mode="${m}"]`;
+await page.click("#mg-back");
+for (const [btn, card] of [
+  ["#repl-btn", "repl"],
+  ["#logs-btn", "logs-panel"],
+]) {
+  const shown = () => page.evaluate((c) => document.getElementById(c).getBoundingClientRect().height > 0, card);
+  await page.click(btn);
+  const onList = await shown();
+  await page.click(btn);
+  await page.click(MODE_BTN("scenarios"));
+  await page.click(btn);
+  const inScenarios = await shown();
+  await page.click(btn);
+  await page.click(MODE_BTN("microgrids"));
+  check(`e2e: ${btn} opens its panel on the list and in Scenarios`, onList && inScenarios, JSON.stringify({ onList, inScenarios }));
+}
+await openDemoTopology();
+// The controls of `bar` that lie outside it or the window, and a note
+// when the bar scrolls sideways: empty when the bar holds them all.
+const barOverflow = (bar) =>
+  page.evaluate((b) => {
+    const host = document.querySelector(b);
+    const hr = host.getBoundingClientRect();
+    const right = Math.min(window.innerWidth, hr.right);
+    const out = [];
+    for (const el of host.querySelectorAll("*")) {
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      if (r.left < hr.left - 0.5 || r.right > right + 0.5 || r.bottom > hr.bottom + 0.5) {
+        out.push(el.id || String(el.className?.baseVal ?? el.className) || el.tagName);
+      }
+    }
+    if (host.scrollWidth > host.clientWidth) out.push(`scrollWidth ${host.scrollWidth} > ${host.clientWidth}`);
+    return out;
+  }, bar);
+await page.setViewportSize({ width: 1024, height: 768 });
+const topOverflow = await inBothDensities(() => barOverflow("body > header"));
+await page.setViewportSize(CONTEXT.viewport);
+check(
+  "e2e: at 1024px the top bar wraps instead of clipping, in both densities",
+  topOverflow.every((o) => o.length === 0),
+  JSON.stringify(topOverflow),
+);
+
 // ── e2e: main fills the window ─────────────────────────────────────
-// Header, pulse bar and main fill the window exactly: main's height
-// is what is left, not a sum that assumes a header height.
+// The bars and main fill the window exactly: main's height is what is left, not
+// a sum that assumes a bar's height.
 const fill = await page.evaluate(() => ({
   mainBottom: Math.round(document.querySelector("main").getBoundingClientRect().bottom),
   scrollHeight: document.documentElement.scrollHeight,

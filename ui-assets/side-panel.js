@@ -283,7 +283,7 @@ function anchorOf(el, pos) {
 // Keep a drag offset reachable: the grab strip may not slide up under
 // the chrome, nor off the other three edges. The floor is the dock's
 // own top edge, measured live — the dock starts below every piece of
-// chrome (header, pulse bar, microgrid header) by construction, so
+// chrome (the top bar, the microgrid bar) by construction, so
 // there is nothing left to measure or hardcode separately. That edge
 // is level with the canvas controls row, so a card can be dragged up
 // beside (and over) the controls, which is as high as it goes.

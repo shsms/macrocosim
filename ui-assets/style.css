@@ -78,7 +78,6 @@
   --text-md: 13px;
   --text-lg: 15px;
   --text-xl: 18px;
-  --pulse-height: 24px;
   --pulse-spark-width: 64px;
   --pulse-spark-height: 12px;
   /* The square of a glyph-only button (×, ⤓, ✕). */
@@ -139,7 +138,6 @@
   --text-md: 14px;
   --text-lg: 16px;
   --text-xl: 20px;
-  --pulse-height: 28px;
   --pulse-spark-width: 80px;
   --pulse-spark-height: 16px;
   --icon-btn-size: 24px;
@@ -332,14 +330,13 @@ button:focus-visible {
 /* An error a form shows under itself. */
 .form-error { margin: var(--space-2) 0 0; font-size: var(--text-md); color: var(--bad); }
 
-/* Header, pulse bar, then main taking whatever height is left, so
-   main fits the window whatever the header and pulse bar measure. */
+/* The top bar, then main taking whatever height is left, so main fits the
+   window however tall the bar wraps. */
 body {
   display: flex;
   flex-direction: column;
 }
 body > header,
-#pulse,
 #server-banner { flex: none; }
 /* Shown while background requests cannot reach the server (connection.js). */
 #server-banner {
@@ -357,6 +354,13 @@ header {
   padding: var(--space-2) var(--space-4);
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
+}
+
+/* The top bar holds the site-wide controls and wraps onto more rows in a narrow
+   window rather than clipping them. */
+body > header {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
 }
 
 header strong {
@@ -542,30 +546,21 @@ dialog header h3 {
 .toast-error { border-color: var(--cat-grid); }
 .toast-success { border-color: var(--accent); }
 
-/* Pulse bar: persistent, --pulse-height tall. Lives between the header and the
-   main grid so it stays visible across mode switches. Carries compact content —
-   setpoint sparkbar, health counters, loopback pill, the zone, theme and
-   density chips, clock. Mirrors tradingsim's `.pulse` section shape. */
+/* The system pulse: a group in the top bar with the setpoint sparkbar, the
+   health counters, the graph and loopback pills. */
 #pulse {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
   font-size: var(--text-md);
   color: var(--muted);
-  height: var(--pulse-height);
-  box-sizing: border-box;
-  overflow: hidden;
   white-space: nowrap;
 }
 .pulse-group { display: inline-flex; align-items: center; gap: var(--space-2); }
 .pulse-sep   { width: 1px; align-self: stretch; background: var(--border); margin: 0 var(--space-0); }
-.pulse-spacer { flex: 1; }
 .pulse-label { color: var(--muted); }
-.pulse-clock { color: var(--muted); }
+.pulse-clock { color: var(--muted); font-family: var(--font-mono); font-size: var(--text-md); }
 .pulse-pill  {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -576,7 +571,8 @@ dialog header h3 {
 .pulse-pill.warn { color: var(--warn-strong); border-color: var(--warn-strong); }
 .pulse-pill.bad  { color: var(--bad); border-color: var(--bad); }
 .pulse-chip {
-  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
   background: transparent;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

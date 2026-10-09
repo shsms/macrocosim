@@ -1,5 +1,5 @@
 // The display zone, which every displayed time is shown in: the simulation's
-// (enterprise) zone, from /api/clock, or UTC when the pulse bar's zone chip
+// (enterprise) zone, from /api/clock, or UTC when the top bar's zone chip
 // says so. Times on the wire stay UTC; only display goes through here.
 
 import { getJson } from "./http.js";
