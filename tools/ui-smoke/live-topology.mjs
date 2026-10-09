@@ -3770,8 +3770,8 @@ for (const [btn, card] of [
 await openDemoTopology();
 // The controls of `bar` that lie outside it or the window, and a note
 // when the bar scrolls sideways: empty when the bar holds them all.
-const barOverflow = (bar) =>
-  page.evaluate((b) => {
+const barOverflow = (bar, pg = page) =>
+  pg.evaluate((b) => {
     const host = document.querySelector(b);
     const hr = host.getBoundingClientRect();
     const right = Math.min(window.innerWidth, hr.right);
@@ -4203,6 +4203,55 @@ check(
     replFits.every((f) => f.docked && f.strip < 260 && f.over <= 0.5),
     JSON.stringify(replFits),
   );
+  await ctx.close();
+}
+
+// ── e2e: the layout at 1024 pixels wide ─────────────────────────
+// On every view, in both densities, with a strip open on each side of the
+// topology: no control of the bars or the canvas strip lies outside the window
+// or its bar, and the canvas strip lies inside the canvas.
+{
+  const ctx = await browser.newContext({ ...CONTEXT, viewport: { width: 1024, height: 768 } });
+  const p = await ctx.newPage();
+  await p.goto(BASE, { waitUntil: "networkidle" });
+  const found = {};
+  const measure = async (view, bars) => {
+    for (const bar of bars) {
+      const out = await barOverflow(bar, p);
+      if (out.length) found[`${view} ${bar}`] = out;
+    }
+  };
+  await inBothDensities(async () => {
+    const density = await p.evaluate(() => document.documentElement.dataset.density);
+    await measure(`${density} list`, ["body > header"]);
+    await p.click(DEMO_CARD);
+    await waitFor(
+      () => p.evaluate(async () => (await import("/assets/topology.js")).topology.debugNodeScreenRect(1) != null),
+      8000,
+    ).catch(() => null);
+    await p.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
+    await p.click("#repl-btn");
+    const strips = await waitFor(
+      () => p.evaluate(() => document.body.classList.contains("has-right-dock") && document.querySelector("#dock-bottom #repl.open") !== null),
+      3000,
+    ).catch(() => false);
+    if (!strips) found[`${density} topology strips`] = ["the inspector or the REPL did not dock"];
+    await measure(`${density} topology`, ["body > header", "#mg-header", "#topology-controls"]);
+    const stripInCanvas = await p.evaluate(() => {
+      const s = document.getElementById("topology-controls").getBoundingClientRect();
+      const c = document.getElementById("topology").getBoundingClientRect();
+      return s.left >= c.left - 0.5 && s.right <= c.right + 0.5 && s.top >= c.top - 0.5 && s.bottom <= c.bottom + 0.5;
+    });
+    if (!stripInCanvas) found[`${density} topology`] = ["the canvas strip leaves the canvas"];
+    await p.click('#mg-subtoggle .mode-btn[data-subview="dispatches"]');
+    await measure(`${density} dispatches`, ["body > header", "#mg-header"]);
+    await p.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+    await p.click(MODE_BTN("scenarios"));
+    await measure(`${density} scenarios`, ["body > header"]);
+    await p.click(MODE_BTN("microgrids"));
+    if (await p.locator("#mg-back").isVisible()) await p.click("#mg-back");
+  }, p);
+  check("e2e: at 1024px no control leaves the window or its bar, on any view or density", Object.keys(found).length === 0, JSON.stringify(found));
   await ctx.close();
 }
 
