@@ -4099,11 +4099,76 @@ check(
     JSON.stringify(placed),
   );
   check("e2e: the canvas narrows when the right strip appears", narrow < wide - 100, JSON.stringify({ wide, narrow }));
+  // The docked REPL's completion popup fits above its input, inside the body
+  // that clips it, scrolling what does not fit.
+  await p.click("#repl-input");
+  await p.keyboard.type("(make-");
+  const dockedPopup = await waitFor(
+    () =>
+      p.evaluate(() => {
+        const ul = document.getElementById("repl-completions");
+        if (ul.hidden || ul.children.length === 0) return null;
+        return {
+          entries: ul.children.length,
+          over: document.getElementById("repl-body").getBoundingClientRect().top - ul.getBoundingClientRect().top,
+        };
+      }),
+    5000,
+  ).catch(() => null);
+  check(
+    "e2e: the docked REPL's completion popup fits inside its tile",
+    dockedPopup !== null && dockedPopup.entries > 5 && dockedPopup.over <= 0.5,
+    JSON.stringify(dockedPopup),
+  );
+  await p.keyboard.press("Escape");
+  // A jump to a node (the formula explorer's #N links) centres it in the part
+  // of the canvas the inspector does not cover: all of it when the inspector
+  // is docked, beside or below the canvas. How far node 1000 sits from that
+  // centre, and how much of the canvas the inspector covers:
+  const offCentre = () =>
+    p.evaluate(async () => {
+      const r = (await import("/assets/topology.js")).topology.debugNodeScreenRect(1000);
+      const c = document.getElementById("topology").getBoundingClientRect();
+      const i = document.getElementById("inspector").getBoundingClientRect();
+      const over = i.bottom > c.top && i.top < c.bottom;
+      const covered = over ? Math.max(0, Math.min(c.right, i.right) - Math.max(c.left, i.left)) : 0;
+      return { off: r ? r.x + r.width / 2 - (c.left + (c.width - covered) / 2) : Number.POSITIVE_INFINITY, covered };
+    });
+  const jumpAndSettle = async () => {
+    await p.evaluate(async () => (await import("/assets/routing.js")).jumpToTopology(1000));
+    return (
+      (await waitFor(async () => {
+        const j = await offCentre();
+        return Math.abs(j.off) <= 20 ? j : null;
+      }, 3000).catch(() => null)) ?? (await offCentre())
+    );
+  };
+  const jumped = await jumpAndSettle();
+  check(
+    "e2e: a jump centres the node beside the docked inspector",
+    jumped.covered === 0 && Math.abs(jumped.off) <= 20,
+    JSON.stringify(jumped),
+  );
   // A tile's own button floats it, and that choice is stored.
   await p.click("#panel-metrics-btn .float-dock");
   await p.reload({ waitUntil: "networkidle" });
   await p.click("#metrics-btn");
   check("e2e: a panel the user floated opens floating after a reload", (await where("#panel-metrics-btn")) === "float");
+  // Docked at the bottom, the inspector covers none of the canvas either;
+  // floating, it covers the canvas's right side.
+  for (const [mode, label] of [
+    ["bottom", "above the inspector docked at the bottom"],
+    ["float", "beside the floating inspector"],
+  ]) {
+    await p.evaluate((m) => localStorage.setItem("mc-panel-dock-node", JSON.stringify({ mode: m })), mode);
+    await p.reload({ waitUntil: "networkidle" });
+    await openDemoTopology(p);
+    const j = await jumpAndSettle();
+    const placed = await where("#inspector");
+    const covers = mode === "float" ? j.covered > 100 : j.covered === 0;
+    check(`e2e: a jump centres the node ${label}`, placed === mode && covers && Math.abs(j.off) <= 20, JSON.stringify({ placed, j }));
+  }
+  await p.evaluate(() => localStorage.removeItem("mc-panel-dock-node"));
   await ctx.close();
 }
 

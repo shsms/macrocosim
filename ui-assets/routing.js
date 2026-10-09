@@ -340,9 +340,13 @@ export function jumpToTopology(id) {
   if (c) showComponent(c);
   // Center the node in the part of the canvas the inspector isn't
   // covering — a fit alone can leave the jumped-to node hidden
-  // behind the panel.
-  const inspector = document.getElementById("inspector");
-  topology.reveal(id, inspector ? inspector.getBoundingClientRect().width : 0);
+  // behind a floating inspector. A docked one sits beside or below the
+  // canvas and covers none of it.
+  const inspector = document.getElementById("inspector")?.getBoundingClientRect();
+  const canvas = document.getElementById("topology").getBoundingClientRect();
+  const over = inspector && inspector.bottom > canvas.top && inspector.top < canvas.bottom;
+  const covered = over ? Math.min(canvas.right, inspector.right) - Math.max(canvas.left, inspector.left) : 0;
+  topology.reveal(id, Math.max(0, covered));
 }
 
 // The selection must name a microgrid the server has. The list panel

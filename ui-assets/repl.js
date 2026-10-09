@@ -103,6 +103,16 @@ export function setupRepl() {
         applyCompletion();
       });
     }
+    // The popup opens upward from the input, and the REPL's body clips what
+    // overhangs it, which a docked tile's short height would. So it is no
+    // taller than the room above the input, and scrolls the rest.
+    completions.style.maxHeight = "";
+    const s = getComputedStyle(completions);
+    const top = document.getElementById("repl-body").getBoundingClientRect().top;
+    const inputTop = document.getElementById("repl-input-wrap").getBoundingClientRect().top;
+    const room = inputTop - Number.parseFloat(s.marginBottom) - top;
+    completions.style.maxHeight = `${Math.max(0, Math.min(Number.parseFloat(s.maxHeight), Math.floor(room)))}px`;
+    completions.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
   }
 
   function refresh() {

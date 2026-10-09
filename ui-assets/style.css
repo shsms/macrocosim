@@ -1585,6 +1585,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-family: var(--font-mono);
   font-size: var(--text-md);
   min-width: 240px;
+  /* border-box, so the height repl.js caps it to is the whole popup's. */
+  box-sizing: border-box;
   max-height: 220px;
   overflow-y: auto;
   z-index: var(--z-popover);
