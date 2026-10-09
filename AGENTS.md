@@ -502,11 +502,13 @@ so construction + validation stay identical.
 3. Add a `%make-foo` defun in `src/lisp/make.rs` with `AsList!`-derived
    args, calling `site.register(...)`. Note the leading `%` —
    user-facing topology code calls `make-foo`, which dispatches here.
+   Register it as `("%make-foo", ["args"], primitive_doc(…))`.
 4. Add a `foo-defaults` plist + `(defun make-foo …)` wrapper to
    `sim/defaults.lisp`. The wrapper `apply`s `%make-foo` to the
    caller's args with the defaults plist `append`-ed after them; the
    first occurrence of a key wins, so per-component plist values
-   override the defaults.
+   override the defaults. Give the wrapper a docstring with a `Keys:`
+   list.
 5. (Optional) Override `subtype()` if proto needs `InverterType::Foo` / etc.
 6. Add the category to `COMPONENT_MAKE_FNS` in
    `src/lisp/microgrid_file.rs` — the closed set "load as N" uses to
@@ -592,6 +594,9 @@ rebuild; a script that wants live defaults-editing can still
 2. (If runtime-mutable) a method on the matching capability trait,
    and a Lisp defun in the matching `src/lisp/defuns/` file that
    reaches it through the accessor and broadcasts `note_knob_changed`.
+   Every defun passes a docstring, as `(name, [params], doc)`, or
+   `(name, doc)` for one with no parameters:
+   `every_function_has_a_docstring` fails on one without a docstring.
    A knob a scenario can displace also first calls
    `scenario_snapshot_knob` with the `KnobKind` of the slot it writes;
    a new slot needs a new variant, with arms in `snapshot_knob` /

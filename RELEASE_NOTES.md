@@ -306,6 +306,10 @@ What to change in your own scripts:
   rows, and in a narrow window the panels docked on the right get
   narrower, down to their smallest width, so the canvas keeps about
   600px.
+- Every Lisp function macrocosim defines has a docstring, and its
+  parameters have names, so a function shows as
+  `(set-meter-power ID POWER-W)` and says what it does. The `make-*`
+  docstrings list every key they take.
 - macrocosim now uses tulisp 0.32, which adds many Emacs Lisp
   functions, among them `defconst`, `add-to-list`, `plist-put`,
   `substring`, `string-replace`, `seq-sort` and `read-from-string`.

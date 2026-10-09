@@ -1624,6 +1624,18 @@ mod tests {
         (cfg, dir)
     }
 
+    /// Boot a `Config` with no scripts in a fresh temp dir, named after `tag`.
+    /// Dropping the returned dir removes it.
+    fn bare_config(tag: &str) -> (Config, TestDir) {
+        let dir = TestDir::new(&format!("macrocosim-{tag}-"));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let cfg = rt
+            .block_on(async { Config::new_with(&[], Some(dir.to_path_buf())) })
+            .expect("bare boot must succeed");
+        std::mem::forget(rt);
+        (cfg, dir)
+    }
+
     /// The id in a collision message survives being wrapped in
     /// tulisp's trace formatting — that number is what the load
     /// endpoint offers a free id against.
@@ -1644,12 +1656,7 @@ mod tests {
     /// registry, DSL live, topologies arrive on demand.
     #[test]
     fn bare_boot_has_empty_registry() {
-        let dir = TestDir::new("macrocosim-bare-");
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let cfg = rt
-            .block_on(async { Config::new_with(&[], Some(dir.to_path_buf())) })
-            .expect("bare boot must succeed");
-        std::mem::forget(rt);
+        let (cfg, _dir) = bare_config("bare");
         assert!(cfg.microgrids().lock().is_empty());
         // The DSL is live: a runtime eval can still build a world.
         let out = cfg
@@ -1657,6 +1664,22 @@ mod tests {
             .expect("runtime make-microgrid");
         assert!(!out.is_empty());
         assert!(cfg.microgrids().lock().contains_key(&7));
+    }
+
+    /// Every function a boot defines has a docstring, so the REPL and an editor
+    /// can say what each one does.
+    #[test]
+    fn every_function_has_a_docstring() {
+        let (cfg, _dir) = bare_config("docs");
+        let ctx = cfg.ctx.borrow();
+        let mut missing: Vec<&str> = ctx
+            .symbols()
+            .filter(|(_, info)| info.kind != tulisp::symbols::SymbolKind::Variable)
+            .filter(|(_, info)| info.doc.is_none())
+            .map(|(name, _)| name)
+            .collect();
+        missing.sort_unstable();
+        assert!(missing.is_empty(), "no docstring: {missing:?}");
     }
 
     /// Reload replays every file a live microgrid came from, so a
