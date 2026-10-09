@@ -81,8 +81,8 @@ export function setStatus(text, klass) {
 }
 
 // Whether the strip's layout / drag / show groups are folded away
-// behind the chevron, leaving the `panels` pills. Persisted like the
-// other UI preferences, and expanded when nothing is stored.
+// behind the chevron. Persisted like the other UI preferences, and
+// expanded when nothing is stored.
 const CTL_COLLAPSED_KEY = "mc-controls-collapsed";
 const loadCtlCollapsed = () => readStorage(CTL_COLLAPSED_KEY) === "1";
 const saveCtlCollapsed = (collapsed) => writeStorage(CTL_COLLAPSED_KEY, collapsed ? "1" : "0");
@@ -102,7 +102,7 @@ function applyCtlCollapsed(strip, collapsed) {
 // arrangement); clicking the active one re-runs it. The snap toggle
 // is the magnetic grid for node drags; Alt-drag locks the movement
 // to one axis, with snap on or off. The chevron folds those three
-// groups away; the `panels` pills stay put in either state.
+// groups away.
 export function setupCanvasControls(stripId, canvas) {
   const strip = document.getElementById(stripId);
   applyCtlCollapsed(strip, loadCtlCollapsed());

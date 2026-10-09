@@ -976,7 +976,7 @@ await waitFor(async () => {
 
 // ── e2e: the metrics panel ───────────────────────────────────────
 // Took over the Dashboard subview's job as a floating panel instead
-// of a subview: open via the chrome pill, values stream in off the
+// of a subview: open via the Metrics button, values stream in off the
 // loopback's aggregate streams, and a uPlot chart mounts on the
 // Power card (open by default). The reactive card is folded by
 // default, but its fold-summary keeps repainting off the store while
@@ -1078,9 +1078,6 @@ check(
   stripTop >= dockTop - 1,
   `strip ${stripTop} vs dock ${dockTop}`,
 );
-// Closed by its own ×, not the chrome pill: the dock's top edge is
-// level with the canvas controls now, so a card healed all the way up
-// to the floor sits over that strip and swallows the pill's clicks.
 await page.click("#panel-metrics-btn .float-close");
 await page.evaluate(() => localStorage.removeItem("mc-panel-pos-metrics-btn"));
 
@@ -1154,22 +1151,20 @@ await page.evaluate(() => localStorage.removeItem("mc-panel-pos-metrics-btn"));
 
 // ── e2e: the canvas controls collapse ─────────────────────────────
 // The chevron folds the layout / drag / show groups away so the strip
-// stops eating the canvas's top-right corner. The `panels` pills are
-// deliberately outside the fold — collapsed still opens the metrics
-// and formula panels — and the choice persists like the other UI
-// preferences (localStorage, read back on the next load).
+// stops eating the canvas's top-right corner, leaving the chevron
+// alone; the choice persists like the other UI preferences
+// (localStorage, read back on the next load).
+const shownInStrip = () =>
+  page.evaluate(() =>
+    [...document.querySelectorAll("#topology-controls button")].filter((b) => b.offsetParent !== null).map((b) => b.id || b.className),
+  );
 await page.click("#ctl-collapse");
+const collapsedShown = await shownInStrip();
 check(
-  "e2e: the chevron collapses the canvas controls",
-  await page.evaluate(() => {
-    const strip = document.getElementById("topology-controls");
-    const layout = document.querySelector(".layout-btn");
-    return (
-      strip.classList.contains("collapsed") &&
-      layout.offsetParent === null &&
-      document.getElementById("metrics-btn").offsetParent !== null
-    );
-  }),
+  "e2e: the chevron collapses the canvas controls to itself",
+  (await page.evaluate(() => document.getElementById("topology-controls").classList.contains("collapsed"))) &&
+    JSON.stringify(collapsedShown) === JSON.stringify(["ctl-collapse"]),
+  JSON.stringify(collapsedShown),
 );
 await page.reload({ waitUntil: "networkidle" });
 await page.click(DEMO_CARD).catch(() => {});
@@ -1181,31 +1176,6 @@ check(
       document.querySelector(".layout-btn").offsetParent === null,
   ),
 );
-// Collapsed is not a dead strip: the panel pills still toggle their
-// panels and light up (side-panel.js's syncButton sets aria-pressed). The
-// pointer moves off first: hover draws the accent border too.
-await page.click("#metrics-btn");
-await page.mouse.move(5, 5);
-const collapsedPill = await page.evaluate(() => {
-  const pill = document.getElementById("metrics-btn");
-  const s = getComputedStyle(pill);
-  return {
-    open: document.getElementById("panel-metrics-btn")?.classList.contains("open") === true,
-    pressed: pill.getAttribute("aria-pressed"),
-    border: s.borderTopColor,
-    colour: s.color,
-  };
-});
-const pillAccent = await tokenColour("--accent");
-check(
-  "e2e: the metrics pill still works while collapsed",
-  collapsedPill.open &&
-    collapsedPill.pressed === "true" &&
-    collapsedPill.border === pillAccent &&
-    collapsedPill.colour === pillAccent,
-  JSON.stringify({ collapsedPill, pillAccent }),
-);
-await page.click("#metrics-btn");
 await page.click("#ctl-collapse");
 check(
   "e2e: the chevron expands the canvas controls again",
@@ -1215,6 +1185,10 @@ check(
       document.querySelector(".layout-btn").offsetParent !== null,
   ),
 );
+// The strip holds the canvas's own controls only; the panels open from the
+// bars.
+const stripToggles = await page.evaluate(() => [...document.querySelectorAll("#topology-controls [id$='-btn']")].map((b) => b.id));
+check("e2e: the canvas strip holds no panel button", stripToggles.length === 0, JSON.stringify(stripToggles));
 
 // ── e2e: the GCP inspector slims to Charts + Connections ───────────
 // The grid connection point (id 1 in the starter site) takes no knobs,
@@ -2453,7 +2427,7 @@ const stripState = async () =>
 // Escape that closed the REPL above leaves its textarea focused for a
 // beat, so the mode chord before this can be swallowed — click the
 // chrome buttons instead, which lands on a selected microgrid's
-// Topology either way (that is where the panel pills live).
+// Topology either way.
 await page.click('.mode-btn[data-mode="microgrids"]');
 await page.click(DEMO_CARD);
 if (!(await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open")))) await page.click("#metrics-btn");
@@ -3810,6 +3784,87 @@ check(
   "e2e: at 1024px the top bar wraps instead of clipping, in both densities",
   topOverflow.every((o) => o.length === 0),
   JSON.stringify(topOverflow),
+);
+
+// ── e2e: the microgrid bar ─────────────────────────────────────────
+// One microgrid's controls, in this order, under the top bar.
+const MG_BAR = [
+  "mg-back",
+  "mg-breadcrumb-name",
+  "mg-breadcrumb-tso",
+  "mg-file-chips",
+  "mg-adopt-btn",
+  "mg-subtoggle",
+  "metrics-btn",
+  "formula-btn",
+  "weather-btn",
+  "snapshots-btn",
+];
+check("e2e: the microgrid bar holds the microgrid's controls in order", await inOrder("#mg-header", MG_BAR));
+// A panel's button lights while its panel is open (side-panel.js's syncButton
+// sets aria-pressed). The pointer moves off first: hover draws the accent
+// border too.
+await page.click("#metrics-btn");
+await page.mouse.move(5, 5);
+const litButton = await page.evaluate(() => {
+  const btn = document.getElementById("metrics-btn");
+  const s = getComputedStyle(btn);
+  return { pressed: btn.getAttribute("aria-pressed"), border: s.borderTopColor, colour: s.color };
+});
+const litAccent = await tokenColour("--accent");
+check(
+  "e2e: the Metrics button lights while its panel is open",
+  litButton.pressed === "true" && litButton.border === litAccent && litButton.colour === litAccent,
+  JSON.stringify({ litButton, litAccent }),
+);
+await page.click("#metrics-btn");
+// The bar is the microgrid's on both sub-views: Metrics opens from Dispatches
+// too.
+await page.click('#mg-subtoggle .mode-btn[data-subview="dispatches"]');
+await page.click("#metrics-btn");
+const metricsFromDispatches = await page.evaluate(
+  () => (document.getElementById("panel-metrics-btn")?.getBoundingClientRect().height ?? 0) > 0,
+);
+await page.click("#metrics-btn");
+await page.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
+check("e2e: Metrics opens from the Dispatches sub-view", metricsFromDispatches);
+const mgBarHeight = () => page.evaluate(() => document.getElementById("mg-header").getBoundingClientRect().height);
+await page.click("#mg-back");
+const onListHeight = await mgBarHeight();
+await page.click(MODE_BTN("scenarios"));
+const inScenariosHeight = await mgBarHeight();
+await page.click(MODE_BTN("microgrids"));
+check(
+  "e2e: the microgrid bar is hidden on the list and in Scenarios",
+  onListHeight === 0 && inScenariosHeight === 0,
+  JSON.stringify({ onListHeight, inScenariosHeight }),
+);
+await openDemoTopology();
+await page.setViewportSize({ width: 1024, height: 768 });
+// A long name, so the bar's controls cannot all fit on one row: they go to a
+// second row, and none lies outside the bar.
+const shownName = await page.textContent("#mg-breadcrumb-name");
+const mgOverflow = await inBothDensities(async () => {
+  await page.evaluate(() => {
+    document.getElementById("mg-breadcrumb-name").textContent = "A starter site with a name long enough to need a second row";
+  });
+  const wrapped = await page.evaluate(
+    () =>
+      document.getElementById("snapshots-btn").getBoundingClientRect().top >=
+      document.getElementById("mg-back").getBoundingClientRect().bottom,
+  );
+  const issues = await barOverflow("#mg-header");
+  if (!wrapped) issues.push("one row");
+  return issues;
+});
+await page.evaluate((n) => {
+  document.getElementById("mg-breadcrumb-name").textContent = n;
+}, shownName);
+await page.setViewportSize(CONTEXT.viewport);
+check(
+  "e2e: at 1024px the microgrid bar wraps instead of clipping, in both densities",
+  mgOverflow.every((o) => o.length === 0),
+  JSON.stringify(mgOverflow),
 );
 
 // ── e2e: main fills the window ─────────────────────────────────────

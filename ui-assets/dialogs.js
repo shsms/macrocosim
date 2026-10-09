@@ -24,10 +24,9 @@ export function setupHelpButton() {
   });
 }
 
-// Snapshots are copies of one microgrid's managed file, so the
-// dialog only works on a selected, managed microgrid. With none, it
-// still opens (the button is always in the chrome) but says why it
-// can do nothing rather than firing at an /api/mg/null/… URL.
+// Snapshots are copies of one microgrid's managed file. The button is in the
+// microgrid bar, so a microgrid is selected; on an unmanaged one the dialog
+// says why it can do nothing.
 export function setupSnapshotsDialog() {
   const dlg = document.getElementById("snapshots-dialog");
   const btn = document.getElementById("snapshots-btn");
@@ -41,11 +40,9 @@ export function setupSnapshotsDialog() {
 
   // Why the dialog can't act, or null when it can.
   function blockedReason() {
-    const id = readSelectedMg();
-    if (id == null) return "Select a microgrid first — snapshots are per microgrid.";
     const entry = currentMgEntry();
     if (entry && !entry.managed) {
-      return `Microgrid #${id} is an unmanaged file — Adopt it to snapshot its structure.`;
+      return `Microgrid #${readSelectedMg()} is an unmanaged file — Adopt it to snapshot its structure.`;
     }
     return null;
   }
@@ -101,7 +98,7 @@ export function setupSnapshotsDialog() {
     ev.preventDefault();
     const id = readSelectedMg();
     const name = input.value.trim();
-    if (!name || id == null) return;
+    if (!name) return;
     clearFormError(error);
     try {
       await mutate("POST", `/api/mg/${id}/snapshots`, { name });
