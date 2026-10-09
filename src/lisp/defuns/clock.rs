@@ -10,7 +10,17 @@ use tulisp::TulispContext;
 /// new zone on its next /api/clock poll.
 pub(in crate::lisp) fn register(ctx: &mut TulispContext, clock: crate::sim::clock::SharedClock) {
     ctx.defun(
-        "set-timezone",
+        (
+            "set-timezone",
+            ["name"],
+            "Set the time zone the UI shows times in to NAME.\n\n\
+             NAME is an IANA zone name such as \"Europe/Berlin\", which is \
+             also the default. The UI's zone chip switches between this zone \
+             and UTC. gRPC and the simulation keep their times in UTC. When \
+             an eval, such as one from the REPL, calls this at the top level, \
+             the zone is saved in enterprise.lisp. Signal an error for an \
+             unknown zone. Return NAME.",
+        ),
         move |name: String| -> Result<String, tulisp::Error> {
             let tz: chrono_tz::Tz = name
                 .parse()

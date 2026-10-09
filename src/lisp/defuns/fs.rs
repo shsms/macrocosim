@@ -12,13 +12,22 @@ pub(super) fn register(ctx: &mut TulispContext, load_dir: PathBuf) {
     // the base path is the point — a script that guards a `(load …)`
     // with `(file-exists-p …)` must have both calls looking at the
     // same file regardless of the process CWD.
-    ctx.defun("file-exists-p", move |path: String| -> bool {
-        let p = Path::new(&path);
-        let resolved = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            load_dir.join(p)
-        };
-        resolved.exists()
-    });
+    ctx.defun(
+        (
+            "file-exists-p",
+            ["path"],
+            "Return t if a file or directory exists at PATH, else nil.\n\n\
+             A relative PATH is taken from the state directory, the same \
+             place load looks. Use it to load a file only when it is there.",
+        ),
+        move |path: String| -> bool {
+            let p = Path::new(&path);
+            let resolved = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                load_dir.join(p)
+            };
+            resolved.exists()
+        },
+    );
 }

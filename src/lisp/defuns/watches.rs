@@ -22,26 +22,39 @@ pub(in crate::lisp) fn register(
     load_dir: PathBuf,
     extra_watches: Arc<Mutex<HashSet<PathBuf>>>,
 ) {
-    ctx.defun("watch-file", move |path: String| -> Result<bool, Error> {
-        let p = Path::new(&path);
-        let resolved = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            load_dir.join(p)
-        };
-        // Canonicalize so dedup works regardless of how the user
-        // wrote the path. Failing canonicalize == file doesn't
-        // exist; surface that as an error so a typo doesn't
-        // silently no-op.
-        let canonical = resolved.canonicalize().map_err(|e| {
-            Error::invalid_argument(format!(
-                "watch-file {}: {} ({})",
-                resolved.display(),
-                e,
-                "file does not exist or is unreadable"
-            ))
-        })?;
-        extra_watches.lock().insert(canonical);
-        Ok(true)
-    });
+    ctx.defun(
+        (
+            "watch-file",
+            ["path"],
+            "Watch the file at PATH, and reload when it changes.\n\n\
+             A relative PATH is taken from the state directory. Files that \
+             were loaded, and enterprise.lisp, are watched already. After an \
+             edit, a loaded file reloads by itself, and enterprise.lisp \
+             applies its settings again. Any other watched file reloads every \
+             microgrid. Signal an error when PATH \
+             does not exist. Return t.",
+        ),
+        move |path: String| -> Result<bool, Error> {
+            let p = Path::new(&path);
+            let resolved = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                load_dir.join(p)
+            };
+            // Canonicalize so dedup works regardless of how the user
+            // wrote the path. Failing canonicalize == file doesn't
+            // exist; surface that as an error so a typo doesn't
+            // silently no-op.
+            let canonical = resolved.canonicalize().map_err(|e| {
+                Error::invalid_argument(format!(
+                    "watch-file {}: {} ({})",
+                    resolved.display(),
+                    e,
+                    "file does not exist or is unreadable"
+                ))
+            })?;
+            extra_watches.lock().insert(canonical);
+            Ok(true)
+        },
+    );
 }

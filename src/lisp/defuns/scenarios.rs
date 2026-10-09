@@ -78,7 +78,45 @@ pub(in crate::lisp) fn register_registry(
     use crate::sim::scenarios::{ClockDriver, ScenarioDef, Schedule};
     use crate::sim::sim_clock::parse_offset;
     ctx.defun(
-        "define-scenario",
+        (
+            "define-scenario",
+            ["args"],
+            "Register a named scenario that the UI and macroctl can run.\n\n\
+             A run calls scenario-start, which stops a scenario that is still \
+             running. Then it sets the seed, calls :setup, installs :drive and \
+             :agents, arms timers for :cues and :expect, and starts :record. \
+             A second define-scenario with the same :name replaces the first. \
+             Return the name.\n\n\
+             Keys:\n  \
+             :name  the scenario's name, a string; required\n  \
+             :description  one line for the scenario list\n  \
+             :length  run length: seconds, or a string like \"4min\"\n  \
+             :seed  seed for random at the start, as set-random-seed\n  \
+             :setup  a function with no arguments, called once at the start\n  \
+             :drive  a list of drive-meter, drive-solar, drive-meter-reactive, \
+             drive-meter-pf or drive-boiler-kg-per-s items\n  \
+             :agents  a list of (controller ID :every TIME FUNCTION) items; \
+             :every defaults to \"100ms\"\n  \
+             :cues  a list of (at TIME ACTION) items\n  \
+             :expect  a list of (check TIME KEYS...) items, with the keys of \
+             scenario-expect\n  \
+             :record  'csv for the directory scenario-NAME, or a directory \
+             string; see scenario-record-csv\n  \
+             :schedule  'relative (default) or 'absolute\n  \
+             :clock  'real (default) or 'stepped\n  \
+             :date  a date \"YYYY-MM-DD\" for an absolute schedule\n\n\
+             TIME in at, check and controller is seconds, a string like \
+             \"500ms\", \"60s\" or \"3min\", or a clock time \"HH:MM\" (see \
+             resolve-time). Each cue and check time counts from the start of \
+             the run. A clock time counts from the start too, so \"14:00\" \
+             runs 14 hours into the run, not at 14:00.\n\n\
+             A run does not stop by itself at :length. macroctl scenario run \
+             --stepped or --wait runs the scenario for :length, or for \
+             --until-s when given, then stops it. The scenario list carries \
+             :schedule, :clock and :date; the run does not use them.\n\n\
+             Signal an error when :name is missing, or when :schedule, \
+             :clock, :length or :date has a bad value.",
+        ),
         move |_ctx: &mut TulispContext,
               args: tulisp::Plist<Renamed<DefineScenarioArgs>>|
               -> Result<String, tulisp::Error> {
@@ -287,7 +325,19 @@ pub(super) fn register_lifecycle(
     let r = router.clone();
     let nowsrc = now.clone();
     ctx.defun(
-        "scenario-start",
+        (
+            "scenario-start",
+            ["name"],
+            "Start a scenario named NAME in the journal of every microgrid.\n\n\
+             If a scenario is still running, this calls scenario-stop first. \
+             Each journal starts fresh: no events, no checks and an empty \
+             report. scenario-elapsed counts from now. While it runs, the \
+             first change to a meter, solar, boiler or charger drive, such as \
+             set-meter-power, is recorded, so that scenario-stop can put it \
+             back. This does not run the sections of a \
+             define-scenario; the UI and macroctl scenario run do that. \
+             Return t.",
+        ),
         move |ctx: &mut TulispContext, name: String| -> Result<bool, Error> {
             let now = nowsrc.now();
             let sites: Vec<_> = reg.lock().values().map(|e| e.site.clone()).collect();
@@ -345,7 +395,19 @@ pub(super) fn register_lifecycle(
     let r = router.clone();
     let nowsrc = now.clone();
     ctx.defun(
-        "scenario-stop",
+        (
+            "scenario-stop",
+            "Stop the running scenario in every microgrid, and put its drives back.\n\n\
+             Cancel the timers of the scenario's agents, cues and checks. \
+             Close its CSV files. Put back the value each of these had before \
+             the run first changed it: a meter's power, reactive power or \
+             power factor, a solar inverter's sunlight, a boiler's steam \
+             demand, and a charger's car. A change made by hand during the \
+             run is undone too. Other changes stay, such as setpoints, \
+             health, frequency and weather.\n\n\
+             scenario-elapsed, and the report's peaks and energy totals, stop \
+             changing. Return t.",
+        ),
         move |ctx: &mut TulispContext| -> Result<bool, Error> {
             // Cancel the scenario's OWN agent/cue/check timers (see
             // `scenario--cancel-timers` in sim/scenarios.lisp) BEFORE
@@ -384,7 +446,15 @@ pub(super) fn register_lifecycle(
     let r = router.clone();
     let nowsrc = now.clone();
     ctx.defun(
-        "scenario-event",
+        (
+            "scenario-event",
+            ["kind", "payload"],
+            "Add an event of KIND with PAYLOAD to the scenario journal.\n\n\
+             The event goes to the journal of the current microgrid. KIND is \
+             a string or a symbol. PAYLOAD can be any value; the journal keeps \
+             its printed form. The UI and macroctl scenario events show the \
+             events. Return the event's id, a number.",
+        ),
         move |kind: TulispObject, payload: TulispObject| -> Result<i64, Error> {
             let w = r.site();
             // Accept either a string or a symbol for `kind` so
@@ -408,7 +478,31 @@ pub(super) fn register_lifecycle(
     let r = router.clone();
     let nowsrc = now.clone();
     ctx.defun(
-        "scenario-expect",
+        (
+            "scenario-expect",
+            ["args"],
+            "Check a metric of a component now, and record the result.\n\n\
+             The check goes to the report of the current microgrid. Give \
+             :approx (with an optional :tol), or :min, :max or both. Return t \
+             when the check passes, nil when it fails.\n\n\
+             Keys:\n  \
+             :component-id  the id of the component; required\n  \
+             :metric  the metric to read, a symbol or a string; required\n  \
+             :approx  pass when the value is within :tol of this\n  \
+             :tol  the distance allowed from :approx; default 0.001\n  \
+             :min  pass when the value is at least this\n  \
+             :max  pass when the value is at most this\n\n\
+             Short metric names are soc, active-power, reactive-power, \
+             dc-power, energy, frequency, active-power-bounds-lower, \
+             active-power-bounds-upper, reactive-power-bounds-lower and \
+             reactive-power-bounds-upper. Full names such as soc-pct, \
+             active-power-w or pressure-bar work too. Dashes and underscores \
+             are the same. energy is the energy in Wh since scenario-start.\n\n\
+             A missing component, or a metric it does not report, records a \
+             fail. Signal an error for a missing :component-id or :metric, \
+             an unknown metric, a negative :component-id, :approx together with :min or :max, :tol without \
+             :approx, or a call with none of :approx, :min and :max.",
+        ),
         move |_ctx: &mut TulispContext,
               args: tulisp::Plist<Renamed<ScenarioExpectArgs>>|
               -> Result<bool, Error> {
@@ -484,7 +578,22 @@ pub(super) fn register_lifecycle(
 
     let r = router.clone();
     ctx.defun(
-        "scenario-record-csv",
+        (
+            "scenario-record-csv",
+            ["dir"],
+            "Record the current microgrid's components to CSV files in DIR.\n\n\
+             Make DIR if it is missing. Each component gets a telemetry file \
+             named after its id and category, such as 1-meter.csv. A \
+             component that reports active power bounds also gets \
+             ID-setpoints.csv, with one row per setpoint it receives, and \
+             ID-bounds.csv. A component that reports reactive power bounds also \
+             gets ID-reactive-bounds.csv. Files with the same names are \
+             overwritten, and a new call closes the files of the last one.\n\n\
+             A relative DIR is taken from the working directory of the \
+             process. scenario-stop-csv and scenario-stop close the files. \
+             Return the number of files opened. Signal an error when DIR or a \
+             file cannot be made.",
+        ),
         move |dir: String| -> Result<i64, Error> {
             let w = r.site();
             let path = std::path::PathBuf::from(dir);
@@ -495,10 +604,19 @@ pub(super) fn register_lifecycle(
     );
 
     let r = router.clone();
-    ctx.defun("scenario-stop-csv", move || -> Result<i64, Error> {
-        let w = r.site();
-        Ok(w.scenario_close_csv() as i64)
-    });
+    ctx.defun(
+        (
+            "scenario-stop-csv",
+            "Close the CSV files that scenario-record-csv opened.\n\n\
+             This writes all rows to disk. It acts on the current microgrid; \
+             scenario-stop also closes the files. Return the number of files \
+             closed.",
+        ),
+        move || -> Result<i64, Error> {
+            let w = r.site();
+            Ok(w.scenario_close_csv() as i64)
+        },
+    );
 
     // `(scenario-running-p)` — t while a scenario is in progress
     // (started, not yet stopped). Site-scoped like `scenario-elapsed`
@@ -508,16 +626,30 @@ pub(super) fn register_lifecycle(
     // instead of shadowing it with a flag of its own that a crash or a
     // mid-run reload could leave out of sync.
     let r = router.clone();
-    ctx.defun("scenario-running-p", move || -> Result<bool, Error> {
-        Ok(r.site().scenario_is_running())
-    });
+    ctx.defun(
+        (
+            "scenario-running-p",
+            "Return t while a scenario runs in the current microgrid, else nil.\n\n\
+             A scenario runs from scenario-start until scenario-stop.",
+        ),
+        move || -> Result<bool, Error> { Ok(r.site().scenario_is_running()) },
+    );
 
     let r = router;
     let nowsrc = now;
-    ctx.defun("scenario-elapsed", move || -> Result<f64, Error> {
-        let w = r.site();
-        Ok(w.scenario_elapsed_s(nowsrc.now()))
-    });
+    ctx.defun(
+        (
+            "scenario-elapsed",
+            "Return the seconds since the scenario in the current microgrid started.\n\n\
+             After scenario-stop, the value stays at the length of the run. \
+             Before the first scenario-start, it is 0. In a stepped run, it \
+             counts simulation time.",
+        ),
+        move || -> Result<f64, Error> {
+            let w = r.site();
+            Ok(w.scenario_elapsed_s(nowsrc.now()))
+        },
+    );
 }
 
 #[cfg(test)]

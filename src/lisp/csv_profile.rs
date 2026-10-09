@@ -212,7 +212,19 @@ impl CsvLoadProfile {
 /// Register the `(csv-load)`, `(csv-fields)`, `(csv-lookup)` defuns.
 pub fn register(ctx: &mut TulispContext, load_dir: std::path::PathBuf) {
     ctx.defun(
-        "csv-load",
+        (
+            "csv-load",
+            ["path"],
+            "Load a CSV file of values over time, and return it as a profile.\n\n\
+             The first row holds the column names. The first column is the \
+             time in seconds, and the times must not go down from row to row. \
+             Each other column holds numbers; its name is a field for \
+             csv-lookup. Blank lines are skipped. A relative PATH is taken \
+             from the state directory, as in load.\n\n\
+             Signal an error when the file cannot be read, a cell is not a \
+             number, a row has too few cells, two columns have the same name, \
+             or a time is lower than the one before it.",
+        ),
         move |path: String| -> Result<Shared<CsvLoadProfile>, Error> {
             // Resolve relative paths against the config's load dir,
             // like (load ...) and (file-exists-p ...) do — resolving
@@ -230,12 +242,27 @@ pub fn register(ctx: &mut TulispContext, load_dir: std::path::PathBuf) {
         },
     );
 
-    ctx.defun("csv-fields", |profile: Shared<CsvLoadProfile>| {
-        profile.fields()
-    });
+    ctx.defun(
+        (
+            "csv-fields",
+            ["profile"],
+            "Return the field names of PROFILE as a sorted list of strings.\n\n\
+             PROFILE comes from csv-load. The time column is not a field.",
+        ),
+        |profile: Shared<CsvLoadProfile>| profile.fields(),
+    );
 
     ctx.defun(
-        "csv-lookup",
+        (
+            "csv-lookup",
+            ["profile", "field", "time-s"],
+            "Return the value of FIELD in PROFILE at TIME-S seconds.\n\n\
+             PROFILE comes from csv-load. Between two rows, the value is on \
+             the straight line between them. Before the first row, the value \
+             is the first row's value; after the last row, it is the last \
+             row's value. To repeat a profile, pass (mod TIME-S PERIOD). Signal \
+             an error when PROFILE has no FIELD.",
+        ),
         |profile: Shared<CsvLoadProfile>, field: String, t: f64| profile.lookup(&field, t),
     );
 }
