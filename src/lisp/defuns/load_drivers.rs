@@ -95,7 +95,18 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // argument here.
     let r = router.clone();
     ctx.defun(
-        "set-meter-power",
+        (
+            "set-meter-power",
+            ["id", "power-w"],
+            "Make meter ID report POWER-W watts instead of its children's sum.\n\n\
+             POWER-W is a number, a lambda that returns a number, or a symbol \
+             whose value is a number. The simulator calls the lambda, or reads \
+             the symbol, again and again while it runs, so the power can change \
+             over time. If ID is not a meter, nothing changes. Signal an error \
+             if no component has ID.\n\n\
+             clear-meter-power undoes this. Inside a scenario, scenario-stop \
+             puts the old value back. Return t.",
+        ),
         move |ctx: &mut TulispContext, id: i64, value: TulispObject| -> Result<bool, Error> {
             let w = r.site();
             let Some(c) = w.get(id as u64) else {
@@ -145,7 +156,20 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // strict door).
     let r = router.clone();
     ctx.defun(
-        "set-meter-reactive-power",
+        (
+            "set-meter-reactive-power",
+            ["id", "reactive-power-var"],
+            "Make meter ID report REACTIVE-POWER-VAR VAr of reactive power.\n\n\
+             The value replaces the sum of its children's reactive power, and \
+             any power factor set by set-meter-power-factor. \
+             REACTIVE-POWER-VAR is a number, a lambda that returns a number, \
+             or a symbol whose value is a number. The simulator calls the \
+             lambda, or reads the symbol, again and again while it runs.\n\n\
+             If ID is not a meter, nothing changes. Signal an error if no \
+             component has ID.\n\n\
+             clear-meter-reactive undoes this. Inside a scenario, \
+             scenario-stop puts the old value back. Return t.",
+        ),
         move |ctx: &mut TulispContext, id: i64, value: TulispObject| -> Result<bool, Error> {
             let w = r.site();
             let Some(c) = w.get(id as u64) else {
@@ -197,30 +221,46 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // its children — the way back from set-meter-power. Strict: a
     // component without a meter drive is an error.
     let r = router.clone();
-    ctx.defun("clear-meter-power", move |id: i64| -> Result<bool, Error> {
-        let w = r.site();
-        let Some(c) = w.get(id as u64) else {
-            return Err(Error::invalid_argument(format!(
-                "clear-meter-power: component {id} not found"
-            )));
-        };
-        w.scenario_snapshot_knob(id as u64, KnobKind::MeterPower);
-        let Some(m) = c.meter_drive() else {
-            return Err(Error::invalid_argument(format!(
-                "clear-meter-power: component {id} is not a meter"
-            )));
-        };
-        m.clear_active_power_source();
-        w.note_knob_changed(id as u64, "meter-power", None, None, None);
-        Ok(true)
-    });
+    ctx.defun(
+        (
+            "clear-meter-power",
+            ["id"],
+            "Make meter ID report the sum of its children's power again.\n\n\
+             This undoes set-meter-power. Signal an error if ID is not a meter. \
+             Inside a scenario, scenario-stop puts the old value back. Return t.",
+        ),
+        move |id: i64| -> Result<bool, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "clear-meter-power: component {id} not found"
+                )));
+            };
+            w.scenario_snapshot_knob(id as u64, KnobKind::MeterPower);
+            let Some(m) = c.meter_drive() else {
+                return Err(Error::invalid_argument(format!(
+                    "clear-meter-power: component {id} is not a meter"
+                )));
+            };
+            m.clear_active_power_source();
+            w.note_knob_changed(id as u64, "meter-power", None, None, None);
+            Ok(true)
+        },
+    );
 
     // Drop a meter's reactive-power override — whichever of Var /
     // PowerFactor is set, it's the same slot — returning it to summing
     // children's Q. The Q twin of clear-meter-power above.
     let r = router.clone();
     ctx.defun(
-        "clear-meter-reactive",
+        (
+            "clear-meter-reactive",
+            ["id"],
+            "Make meter ID report the sum of its children's reactive power again.\n\n\
+             This undoes set-meter-reactive-power and set-meter-power-factor. \
+             Signal an error if ID is not a meter. Inside a scenario, \
+             scenario-stop puts the old value back. Return t.",
+        ),
         move |id: i64| -> Result<bool, Error> {
             let w = r.site();
             let Some(c) = w.get(id as u64) else {
@@ -254,7 +294,18 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // `0.0 < pf <= 1.0` before the value reaches the meter.
     let r = router.clone();
     ctx.defun(
-        "set-meter-power-factor",
+        (
+            "set-meter-power-factor",
+            ["id", "pf", "leading"],
+            "Hold meter ID's reactive power at power factor PF of its own power.\n\n\
+             PF must be above 0 and at most 1; any other value is an error. The \
+             reactive power Q follows the meter's live active power P: \
+             Q = P * tan(acos(PF)). When LEADING is non-nil, Q is negated. This \
+             replaces any value from set-meter-reactive-power. If ID is not a \
+             meter, nothing changes. Signal an error if no component has ID.\n\n\
+             clear-meter-reactive undoes this. Inside a scenario, \
+             scenario-stop puts the old value back. Return t.",
+        ),
         move |id: i64, pf: f64, leading: Option<bool>| -> Result<bool, Error> {
             if !(pf > 0.0 && pf <= 1.0) {
                 return Err(Error::invalid_argument(format!(
@@ -293,7 +344,19 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // is the strict door).
     let r = router.clone();
     ctx.defun(
-        "set-battery-soc",
+        (
+            "set-battery-soc",
+            ["id", "soc-pct"],
+            "Set the state of charge of battery ID to SOC-PCT percent.\n\n\
+             The charge jumps to the new value at once. Values below 0 or \
+             above 100 are clamped to that range, and a value that is not \
+             finite is ignored. If ID is an EV charger, this sets the plugged \
+             car's state of charge instead; signal an error if no car is \
+             plugged in. For any other component, nothing changes. Signal an \
+             error if no component has ID.\n\n\
+             Inside a scenario, scenario-stop puts a plugged car back as it \
+             was; it does not restore a battery's state of charge. Return t.",
+        ),
         move |id: i64, pct: f64| -> Result<bool, Error> {
             let w = r.site();
             let Some(c) = w.get(id as u64) else {
@@ -321,7 +384,21 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // tick pair.
     let r = router.clone();
     ctx.defun(
-        "set-solar-sunlight",
+        (
+            "set-solar-sunlight",
+            ["id", "sunlight-pct"],
+            "Set the sunlight on solar inverter ID to SUNLIGHT-PCT percent.\n\n\
+             The inverter can then make at most SUNLIGHT-PCT percent of its \
+             array's peak power. SUNLIGHT-PCT is a number, a lambda that \
+             returns a number, or a symbol whose value is a number. The \
+             simulator calls the lambda, or reads the symbol, again and again \
+             while it runs. A number that is not finite is an error.\n\n\
+             After this call, the inverter no longer follows the site weather; \
+             clear-solar-sunlight makes it follow the weather again. If ID is \
+             not a solar inverter, nothing changes. Signal an error if no \
+             component has ID. Inside a scenario, scenario-stop puts the old \
+             value back. Return t.",
+        ),
         move |ctx: &mut TulispContext, id: i64, value: TulispObject| -> Result<bool, Error> {
             let w = r.site();
             let Some(c) = w.get(id as u64) else {
@@ -387,7 +464,14 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // Strict: a component without a sunlight knob errors.
     let r = router.clone();
     ctx.defun(
-        "clear-solar-sunlight",
+        (
+            "clear-solar-sunlight",
+            ["id"],
+            "Make solar inverter ID follow the site weather again.\n\n\
+             This undoes set-solar-sunlight. Signal an error if ID is not a \
+             solar inverter. Inside a scenario, scenario-stop puts the old \
+             value back. Return t.",
+        ),
         move |id: i64| -> Result<bool, Error> {
             let w = r.site();
             let Some(c) = w.get(id as u64) else {
@@ -430,7 +514,16 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // becomes `(/ V 3600.0)`, a function a lambda reading kg/s.
     let r = router.clone();
     ctx.defun(
-        "set-boiler-demand-kg-per-s",
+        (
+            "set-boiler-demand-kg-per-s",
+            ["id", "demand-kg-per-s"],
+            "Set the steam demand of steam boiler ID to DEMAND-KG-PER-S kg/s.\n\n\
+             DEMAND-KG-PER-S is a number, a lambda that returns a number, or a symbol \
+             whose value is a number. The simulator calls the lambda, or reads \
+             the symbol, again and again while it runs. Signal an error if ID \
+             is not a steam boiler. Inside a scenario, scenario-stop puts the \
+             old value back. Return t.",
+        ),
         move |ctx: &mut TulispContext, id: i64, value: TulispObject| -> Result<bool, Error> {
             set_boiler_demand(ctx, &r, "set-boiler-demand-kg-per-s", id, &value)
         },
@@ -438,7 +531,17 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 
     let r = router.clone();
     ctx.defun(
-        "set-boiler-demand",
+        (
+            "set-boiler-demand",
+            ["id", "demand-kg-per-h"],
+            "Deprecated: use set-boiler-demand-kg-per-s, which takes kg/s.\n\n\
+             Set the steam demand of steam boiler ID to DEMAND-KG-PER-H kg/h. \
+             DEMAND-KG-PER-H takes the same shapes as in \
+             set-boiler-demand-kg-per-s, and this divides it by 3600. The \
+             first call logs a warning. Signal an error if ID is not a steam \
+             boiler. Inside a scenario, scenario-stop puts the old value back. \
+             Return t.",
+        ),
         move |ctx: &mut TulispContext, id: i64, value: TulispObject| -> Result<bool, Error> {
             warn_renamed("set-boiler-demand", "set-boiler-demand-kg-per-s", " (kg/s)");
             let value = Convert::PerHourToPerSecond.apply(ctx, "set-boiler-demand", &value)?;
@@ -451,7 +554,15 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // for the same reason as set-boiler-demand.
     let r = router.clone();
     ctx.defun(
-        "set-boiler-pressure",
+        (
+            "set-boiler-pressure",
+            ["id", "pressure-bar"],
+            "Set the steam pressure of steam boiler ID to PRESSURE-BAR bar.\n\n\
+             The pressure jumps to the new value at once, and the boiler goes \
+             on from there. The boiler keeps it above 0 and at most its \
+             :max-bar, and ignores a value that is not finite. Signal an error \
+             if ID is not a steam boiler. Return t.",
+        ),
         move |id: i64, bar: f64| -> Result<bool, Error> {
             let w = r.site();
             let Some(c) = w.get(id as u64) else {
@@ -475,7 +586,19 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // this plist form, the same two-layer shape as make-*.
     let r = router.clone();
     ctx.defun(
-        "%plug-ev",
+        (
+            "%plug-ev",
+            ["args"],
+            "Plug a preset car into an EV charger; the plist form of plug-ev.\n\n\
+             ARGS must have :component-id, the charger's id, and :preset, a \
+             car symbol from ev-presets. The other keys change the car: \
+             :soc-pct, :target-soc-pct (100 unless given), :phases (1, 2 or 3), \
+             :max-current-a, :capacity-wh, :taper-start-pct and \
+             :taper-floor-pct (both 0 to 100).\n\n\
+             Signal an error if the component is not an EV charger, already has \
+             a car, or a value is out of range; then nothing changes. Inside a \
+             scenario, scenario-stop puts the charger back as it was. Return t.",
+        ),
         move |args: Plist<Renamed<PlugEvArgs>>| -> Result<bool, Error> {
             let a = args.into_inner().0;
             let w = r.site();
@@ -558,39 +681,59 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     );
 
     let r = router.clone();
-    ctx.defun("unplug-ev", move |id: i64| -> Result<bool, Error> {
-        let w = r.site();
-        let Some(c) = w.get(id as u64) else {
-            return Err(Error::invalid_argument(format!(
-                "unplug-ev: component {id} not found"
-            )));
-        };
-        let Some(port) = c.ev_port() else {
-            return Err(Error::invalid_argument(format!(
-                "unplug-ev: component {id} is not an EV charger"
-            )));
-        };
-        // Only when there is a car to take away: this suppresses a
-        // teardown restore (and its `knob_changed`) on a charger the
-        // run never displaced. It does NOT protect a car an operator
-        // plugs mid-scenario — `plug-ev` snapshots `Ev(None)` itself,
-        // and teardown then unplugs it by design, per the transient-
-        // knob contract.
-        if port.ev_info().is_some() {
-            w.scenario_snapshot_knob(id as u64, KnobKind::Ev);
-        }
-        let had = port.unplug_ev();
-        if had {
-            w.note_knob_changed(id as u64, "ev", None, None, None);
-        }
-        Ok(had)
-    });
+    ctx.defun(
+        (
+            "unplug-ev",
+            ["id"],
+            "Unplug the car from EV charger ID.\n\n\
+             Return t if a car was plugged in, or nil if the charger was \
+             empty. Signal an error if ID is not an EV charger. Inside a \
+             scenario, scenario-stop puts the charger back as it was.",
+        ),
+        move |id: i64| -> Result<bool, Error> {
+            let w = r.site();
+            let Some(c) = w.get(id as u64) else {
+                return Err(Error::invalid_argument(format!(
+                    "unplug-ev: component {id} not found"
+                )));
+            };
+            let Some(port) = c.ev_port() else {
+                return Err(Error::invalid_argument(format!(
+                    "unplug-ev: component {id} is not an EV charger"
+                )));
+            };
+            // Only when there is a car to take away: this suppresses a
+            // teardown restore (and its `knob_changed`) on a charger the
+            // run never displaced. It does NOT protect a car an operator
+            // plugs mid-scenario — `plug-ev` snapshots `Ev(None)` itself,
+            // and teardown then unplugs it by design, per the transient-
+            // knob contract.
+            if port.ev_info().is_some() {
+                w.scenario_snapshot_knob(id as u64, KnobKind::Ev);
+            }
+            let had = port.unplug_ev();
+            if had {
+                w.note_knob_changed(id as u64, "ev", None, None, None);
+            }
+            Ok(had)
+        },
+    );
 
     // The simulator's private view of the car: a plist, or nil for an
     // empty charger or a component that takes no EV.
     let r = router;
     ctx.defun(
-        "ev-info",
+        (
+            "ev-info",
+            ["id"],
+            "Return the car plugged into EV charger ID, as a plist.\n\n\
+             The keys are :preset, :soc-pct, :target-soc-pct, :phases, \
+             :max-current-a, :capacity-wh, :energy-wh (the energy charged \
+             since the car was plugged in), :plugged-at (an RFC 3339 time) and \
+             :state (charging, paused, done or tripped). Return nil if no car \
+             is plugged in, or if ID is not an EV charger. Signal an error if \
+             no component has ID.",
+        ),
         move |ctx: &mut TulispContext, id: i64| -> Result<TulispObject, Error> {
             let w = r.site();
             let Some(c) = w.get(id as u64) else {
@@ -630,7 +773,12 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // The catalog `plug-ev` names, so a scenario author (or the UI)
     // can list what is on offer without reading the Rust source.
     ctx.defun(
-        "ev-presets",
+        (
+            "ev-presets",
+            "Return the list of car presets that plug-ev takes.\n\n\
+             Each entry is a plist with :name, :phases, :max-current-a and \
+             :capacity-wh.",
+        ),
         move |ctx: &mut TulispContext| -> Result<TulispObject, Error> {
             Ok(PRESETS
                 .iter()

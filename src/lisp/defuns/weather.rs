@@ -127,7 +127,29 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // clear-sky day with no ambient clouds.
     let r = router.clone();
     ctx.defun(
-        "make-weather",
+        (
+            "make-weather",
+            ["args"],
+            "Replace the site's weather with one made from the keys in ARGS.\n\n\
+             The clouds of the old weather go too. Solar inverters without \
+             :sunlight-pct follow this weather. Every key is optional.\n\n\
+             Keys:\n  \
+             :sunrise, :sunset  the time of day (UTC) the sun rises and sets, \
+             as \"HH:MM\" or as seconds since midnight; default 06:00 and \
+             20:00\n  \
+             :peak-pct  the clear-sky sunlight at solar noon, in percent; \
+             default 100\n  \
+             :cloud-mean-gap-s  the mean time between random clouds, in \
+             seconds; 0, the default, means no random clouds\n  \
+             :cloud-depth-pct, :cloud-duration-s, :cloud-ramp-s  how deep \
+             each random cloud is, how long it lasts, and how long it takes to \
+             grow and fade; each a number, or a list (LO HI) to pick from at \
+             random; default (20 70), (60 600) and (10 60)\n  \
+             :seed  a seed for the random clouds, so they are the same in \
+             every run\n\n\
+             Signal an error if sunrise is not before sunset, or if a value is \
+             out of range. Return t.",
+        ),
         move |args: tulisp::Plist<Renamed<WeatherArgs>>| -> Result<bool, Error> {
             let a = args.into_inner().0;
             let mut cfg = WeatherConfig::default();
@@ -151,7 +173,19 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // that wants reproducibility from here on.
     let r = router.clone();
     ctx.defun(
-        "set-weather",
+        (
+            "set-weather",
+            ["args"],
+            "Change some settings of the site weather and keep the rest.\n\n\
+             ARGS takes the same keys as make-weather. Only the keys you pass \
+             change. The other settings, and the clouds already in the sky, \
+             stay. If the site has no weather yet, this makes one from the \
+             defaults.\n\n\
+             :seed works differently: it rebuilds the weather, so the random \
+             clouds start again from that seed, and the clouds already in the \
+             sky are dropped. Signal an error if sunrise is not before sunset, \
+             or if a value is out of range; then nothing changes. Return t.",
+        ),
         move |args: tulisp::Plist<Renamed<WeatherArgs>>| -> Result<bool, Error> {
             let a = args.into_inner().0;
             patch_args(&a)?
@@ -168,7 +202,18 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // would.
     let r = router.clone();
     ctx.defun(
-        "pass-cloud",
+        (
+            "pass-cloud",
+            ["depth-pct", "duration-s", "ramp-s"],
+            "Send one cloud over the site's solar arrays, starting now.\n\n\
+             At its deepest, the cloud cuts the sunlight by DEPTH-PCT percent \
+             (0 to 100). It lasts DURATION-S seconds in all, or 2 * RAMP-S \
+             seconds if that is longer. It takes RAMP-S \
+             seconds to grow at the start and RAMP-S seconds to fade at the \
+             end; without RAMP-S, it starts and ends at once.\n\n\
+             Signal an error if the site has no weather (see make-weather), or \
+             if a value is out of range. Return t.",
+        ),
         move |depth_pct: f64, duration_s: f64, ramp_s: Option<f64>| -> Result<bool, Error> {
             let (depth_pct, duration, ramp) =
                 weather::validate::pass_cloud_args(depth_pct, duration_s, ramp_s.unwrap_or(0.0))
@@ -195,7 +240,16 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // sky isn't modelled.
     let r = router;
     ctx.defun(
-        "weather-status",
+        (
+            "weather-status",
+            "Return the site's sunlight now, as an alist.\n\n\
+             The alist is ((sunlight-pct . N) (clear-sky-pct . N) \
+             (events . N)): the sunlight with the clouds, the sunlight a clear \
+             sky would give, and the number of clouds the weather keeps: the \
+             ones passing now and the ones that ended less than an hour ago. The \
+             values are for the time of the last physics tick (the wall clock \
+             before the first tick), rounded to two decimals. Return nil if the site has no weather.",
+        ),
         move |ctx: &mut TulispContext| -> Result<TulispObject, Error> {
             let Some((pct, clear, events)) = r.site().with_weather(|w| {
                 // Un-anchored (nothing has ticked yet) falls back to

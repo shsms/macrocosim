@@ -13,7 +13,17 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     // Mirrors what a SunSpec / IEEE 1547-2018 EMS pushes via Modbus.
     let r = router.clone();
     ctx.defun(
-        "set-reactive-pf-limit",
+        (
+            "set-reactive-pf-limit",
+            ["id", "pf-limit"],
+            "Limit inverter ID's reactive power to PF-LIMIT times its power.\n\n\
+             The limit is |Q| <= PF-LIMIT * |P|, where Q is the reactive power \
+             and P the active power. PF-LIMIT is a ratio, not a true power \
+             factor. A PF-LIMIT of 0 or less removes this limit; with no apparent \
+             power cap either, the inverter still keeps |Q| <= |P|. If ID is not \
+             a battery or solar inverter, nothing changes. Signal an error if \
+             no component has ID. Return t.",
+        ),
         move |id: i64, k: f64| -> Result<bool, Error> {
             let w = r.site();
             match w.get(id as u64) {
@@ -34,7 +44,18 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 
     let r = router;
     ctx.defun(
-        "set-reactive-apparent-va",
+        (
+            "set-reactive-apparent-va",
+            ["id", "apparent-va"],
+            "Limit inverter ID's reactive power by an apparent power cap in VA.\n\n\
+             The limit is sqrt(P^2 + Q^2) <= APPARENT-VA, where Q is the \
+             reactive power and P the active power. So the more active power \
+             the inverter makes, the less room is left for reactive power. An \
+             APPARENT-VA of 0 or less removes this limit; with no PF limit \
+             either, the inverter still keeps |Q| <= |P|. If ID is not a \
+             battery or solar inverter, nothing changes. Signal an error if no \
+             component has ID. Return t.",
+        ),
         move |id: i64, va: f64| -> Result<bool, Error> {
             let w = r.site();
             match w.get(id as u64) {
