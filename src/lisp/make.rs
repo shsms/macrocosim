@@ -68,8 +68,8 @@ AsList! {
         /// (true cos φ) in `(0.0, 1.0]`. Mutually exclusive with
         /// `:reactive-power-var`.
         power_factor<":power-factor">: Option<f64>,
-        /// Whether the power-factor-derived Q is leading (negative)
-        /// rather than lagging. Requires `:power-factor`.
+        /// Whether the power-factor-derived Q is leading (the opposite sign
+        /// of P) rather than lagging. Requires `:power-factor`.
         leading: Option<bool>,
         successors: Option<Vec<ComponentHandle>>,
         hidden: Option<bool>,
@@ -296,10 +296,33 @@ AsList! {
 // Registration
 // -----------------------------------------------------------------------------
 
+/// The docstring of the `%make-*` primitive `form`, which builds `what` (such
+/// as "a battery"). It points at the `make-*` wrapper for the keys and names
+/// `defaults`, the plist the wrapper adds. `extra` goes before that sentence.
+fn primitive_doc(what: &str, form: &str, defaults: &str, extra: &str) -> String {
+    let wrapper = &form[1..];
+    format!(
+        "Build {what} without defaults and return its handle.\n\n\
+         {extra}It takes the same keys as {wrapper}, but it does not add \
+         {defaults}. A key you leave out takes its built-in value. Signal an \
+         error when :id is not positive or another component already has it, \
+         or when a key's value is out of range."
+    )
+}
+
 pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedSiteRouter) {
     let r = router.clone();
     ctx.defun(
-        "%make-grid-connection-point",
+        (
+            "%make-grid-connection-point",
+            ["args"],
+            primitive_doc(
+                "a grid connection point",
+                "%make-grid-connection-point",
+                "grid-defaults",
+                "",
+            ),
+        ),
         move |_ctx: &mut TulispContext, args: Plist<Renamed<GridArgs>>| {
             let w = r.site();
             let a = args.into_inner().0;
@@ -352,7 +375,11 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
 
     let r = router.clone();
     ctx.defun(
-        "%make-meter",
+        (
+            "%make-meter",
+            ["args"],
+            primitive_doc("a meter", "%make-meter", "meter-defaults", ""),
+        ),
         move |ctx: &mut TulispContext, args: Plist<Renamed<MeterArgs>>| {
             let w = r.site();
             let a = args.into_inner().0;
@@ -395,7 +422,11 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
 
     let r = router.clone();
     ctx.defun(
-        "%make-battery",
+        (
+            "%make-battery",
+            ["args"],
+            primitive_doc("a battery", "%make-battery", "battery-defaults", ""),
+        ),
         move |_ctx: &mut TulispContext, args: Plist<Renamed<BatteryArgs>>| {
             let w = r.site();
             let a = args.into_inner().0;
@@ -444,7 +475,16 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
 
     let r = router.clone();
     ctx.defun(
-        "%make-battery-inverter",
+        (
+            "%make-battery-inverter",
+            ["args"],
+            primitive_doc(
+                "a battery inverter",
+                "%make-battery-inverter",
+                "battery-inverter-defaults",
+                "",
+            ),
+        ),
         move |_ctx: &mut TulispContext, args: Plist<Renamed<BatteryInverterArgs>>| {
             let w = r.site();
             let a = args.into_inner().0;
@@ -494,7 +534,16 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
 
     let r = router.clone();
     ctx.defun(
-        "%make-solar-inverter",
+        (
+            "%make-solar-inverter",
+            ["args"],
+            primitive_doc(
+                "a solar inverter",
+                "%make-solar-inverter",
+                "solar-inverter-defaults",
+                "",
+            ),
+        ),
         move |ctx: &mut TulispContext, args: Plist<Renamed<SolarInverterArgs>>| {
             let w = r.site();
             let a = args.into_inner().0;
@@ -617,7 +666,16 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
 
     let r = router.clone();
     ctx.defun(
-        "%make-ev-charger",
+        (
+            "%make-ev-charger",
+            ["args"],
+            primitive_doc(
+                "an EV charger",
+                "%make-ev-charger",
+                "ev-charger-defaults",
+                "",
+            ),
+        ),
         move |_ctx: &mut TulispContext, args: Plist<Renamed<EvChargerArgs>>| {
             let w = r.site();
             let a = args.into_inner().0;
@@ -695,7 +753,16 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
 
     let r = router.clone();
     ctx.defun(
-        "%make-steam-boiler",
+        (
+            "%make-steam-boiler",
+            ["args"],
+            primitive_doc(
+                "a steam boiler",
+                "%make-steam-boiler",
+                "steam-boiler-defaults",
+                "",
+            ),
+        ),
         move |ctx: &mut TulispContext, args: Plist<Renamed<SteamBoilerArgs>>| {
             let w = r.site();
             let a = args.into_inner().0;
@@ -775,15 +842,30 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
     // complete the topology and classify the meters around them;
     // power is set on the neighboring meter. One registration loop
     // because the bodies are identical up to the category.
-    for (form, category) in [
-        ("%make-chp", Category::Chp),
-        ("%make-wind-turbine", Category::WindTurbine),
-        ("%make-power-transformer", Category::PowerTransformer),
-        ("%make-breaker", Category::Breaker),
+    for (form, category, what) in [
+        ("%make-chp", Category::Chp, "a CHP"),
+        (
+            "%make-wind-turbine",
+            Category::WindTurbine,
+            "a wind turbine",
+        ),
+        (
+            "%make-power-transformer",
+            Category::PowerTransformer,
+            "a power transformer",
+        ),
+        ("%make-breaker", Category::Breaker, "a breaker"),
     ] {
         let r = router.clone();
-        ctx.defun(
+        let doc = primitive_doc(
+            what,
             form,
+            "marker-defaults",
+            "It has no physics of its own. It completes the topology and sets \
+             the kind of the meters next to it.\n\n",
+        );
+        ctx.defun(
+            (form, ["args"], doc),
             move |_ctx: &mut TulispContext, args: Plist<Renamed<MarkerArgs>>| {
                 let w = r.site();
                 let a = args.into_inner().0;

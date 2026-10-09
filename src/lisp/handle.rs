@@ -12,7 +12,12 @@ impl TulispAny for ComponentHandle {}
 /// Helpers some of the make-* fns expose so config code can introspect a
 /// handle (e.g. extract `id`).
 pub fn register(ctx: &mut TulispContext) {
-    ctx.defun("component-id", |h: ComponentHandle| -> i64 {
-        h.id() as i64
-    });
+    ctx.defun(
+        (
+            "component-id",
+            ["component"],
+            "Return the id of COMPONENT, a handle that a make-* function returned.",
+        ),
+        |h: ComponentHandle| -> i64 { h.id() as i64 },
+    );
 }
