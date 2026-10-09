@@ -103,8 +103,11 @@ const ROW_GAP = 8;
 // A dock strip per edge. `size` is the strip's height (bottom) or
 // width (right); `axis` is the direction that size runs in, so the
 // tiles run along the other one and the tile splitters cut across
-// it. Each strip persists its size, tile order and shares under
-// `key`; each panel remembers its edge under DOCK_KEY_PREFIX.
+// it. `keep` is how much of main, along that axis, the strip leaves
+// for the rest of it: in a narrow window the strip gives up its size,
+// down to its `min`, before the rest goes below `keep`. Each strip
+// persists its size, tile order and shares under `key`; each panel
+// remembers its edge under DOCK_KEY_PREFIX.
 const DOCK_KEY_PREFIX = "mc-panel-dock-";
 const STRIPS = {
   bottom: {
@@ -116,6 +119,7 @@ const STRIPS = {
     size: 260,
     min: 120,
     maxFrac: 0.8,
+    keep: 240,
     title: "Dock to the bottom",
   },
   right: {
@@ -127,6 +131,7 @@ const STRIPS = {
     size: 560,
     min: 320,
     maxFrac: 0.6,
+    keep: 600,
     title: "Dock to the right",
   },
 };
@@ -887,11 +892,19 @@ function saveOrderFromDom(edge) {
 
 // A strip size held inside the strip's own bounds, measured against
 // main as it is now (see clampStripSize) — what the stored size is
-// read through, and what the splitter drag is clamped by.
-const clampStrip = (edge, v) => {
+// read through, and what the splitter drag is clamped by. `min` is
+// the strip's smallest size (stripMin).
+const clampStrip = (edge, v, min = stripMin(edge)) => {
   const cfg = STRIPS[edge];
-  const bounds = { min: cfg.min, maxFrac: cfg.maxFrac, fallback: cfg.size };
+  const bounds = { min, maxFrac: cfg.maxFrac, fallback: cfg.size, keep: cfg.keep };
   return clampStripSize(v, bounds, extentOf(document.getElementById("app"), cfg.axis));
+};
+// A strip's own `min`; the bottom strip is also at least as tall as its tallest
+// open tile's floor, so a tile's form is never cut off.
+const stripMin = (edge) => {
+  const cfg = STRIPS[edge];
+  if (cfg.axis !== "y") return cfg.min;
+  return Math.max(cfg.min, ...openTiles(edge).map((t) => floorOf(panels.get(tileName(t)))));
 };
 // The stored size, so clamped.
 const stripSize = (edge) => clampStrip(edge, loadStrip(edge)?.size);
@@ -908,17 +921,23 @@ function ensureStripSplitter(edge) {
   if (stripsWired.has(edge)) return;
   stripsWired.add(edge);
   const cfg = STRIPS[edge];
+  // The tiles do not change during a drag, so their floors are read once, as it
+  // starts.
+  let min = cfg.min;
   makeSplitter({
     axis: cfg.axis,
     splitter: document.getElementById(cfg.splitter),
-    getStart: () => extentOf(stripEl(edge), cfg.axis),
+    getStart: () => {
+      min = stripMin(edge);
+      return extentOf(stripEl(edge), cfg.axis);
+    },
     apply: (v) => {
       setExtent(stripEl(edge), cfg.axis, `${v}px`);
       saveStrip(edge, { size: Math.round(v) });
       clearTimeout(stripRefitTimer);
       stripRefitTimer = setTimeout(refitFloating, REFIT_SETTLE);
     },
-    clamp: (v) => clampStrip(edge, v),
+    clamp: (v) => clampStrip(edge, v, min),
   });
 }
 
@@ -1050,23 +1069,30 @@ function refitFloating() {
 // comes back. Installed once, at module scope: the listener outlives
 // any one panel, and does nothing while none are open.
 let refitTimer = 0;
+// The floating cards fitted again, and the open strips laid out again: a
+// strip's size is a stored number, so a smaller window or a taller tile has to
+// re-clamp it (stripSize).
+function refitAll() {
+  refitFloating();
+  for (const edge of Object.keys(STRIPS)) {
+    if (stripEl(edge)?.querySelector(".float-panel.open")) layoutStrip(edge);
+  }
+}
 window.addEventListener("resize", () => {
   clearTimeout(refitTimer);
   if (openStack.length === 0) return;
-  refitTimer = setTimeout(() => {
-    refitFloating();
-    // A strip's size is a stored number, so a smaller window has to
-    // re-clamp it against the new ceiling (stripSize).
-    for (const edge of Object.keys(STRIPS)) {
-      if (stripEl(edge)?.querySelector(".float-panel.open")) layoutStrip(edge);
-    }
-  }, REFIT_SETTLE);
+  refitTimer = setTimeout(refitAll, REFIT_SETTLE);
 });
-// A density switch changes how tall the cards' content is, so their
-// floors and caps are measured again.
-new MutationObserver(refitFloating).observe(document.documentElement, {
+// A density switch changes how tall the cards' content is, so their floors,
+// caps and strips are measured again. Setting the same density again is no
+// switch.
+new MutationObserver((records) => {
+  const now = document.documentElement.dataset.density;
+  if (openStack.length && records.some((r) => r.oldValue !== now)) refitAll();
+}).observe(document.documentElement, {
   attributes: true,
   attributeFilter: ["data-density"],
+  attributeOldValue: true,
 });
 
 // The matching chrome toggle is pressed (and lit) while its panel is open,

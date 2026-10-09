@@ -34,14 +34,15 @@ async function inUtc(fn) {
 }
 
 // Runs `fn` in compact density, then in comfortable, and switches back:
-// [compact result, comfortable result].
-async function inBothDensities(fn) {
+// [compact result, comfortable result]. On page `pg`, the main one unless
+// given.
+async function inBothDensities(fn, pg = page) {
   const compact = await fn();
-  await page.click("#density-toggle");
+  await pg.click("#density-toggle");
   try {
     return [compact, await fn()];
   } finally {
-    await page.click("#density-toggle");
+    await pg.click("#density-toggle");
   }
 }
 
@@ -4169,6 +4170,39 @@ check(
     check(`e2e: a jump centres the node ${label}`, placed === mode && covers && Math.abs(j.off) <= 20, JSON.stringify({ placed, j }));
   }
   await p.evaluate(() => localStorage.removeItem("mc-panel-dock-node"));
+  await ctx.close();
+}
+
+// ── e2e: strips give way to the canvas in a narrow window ───────────
+// At 1024px the right strip narrows so the rest of main keeps 600px, and the
+// bottom strip at its smallest still holds the REPL's form, in both densities.
+// In a context of its own, so the panels open docked.
+{
+  const ctx = await browser.newContext({ ...CONTEXT, viewport: { width: 1024, height: 768 } });
+  await ctx.addInitScript(() => localStorage.setItem("mc-strip-bottom", JSON.stringify({ size: 1 })));
+  const p = await ctx.newPage();
+  await openDemoTopology(p);
+  await p.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
+  const rightWidth = await p.evaluate(() => document.getElementById("dock-right").getBoundingClientRect().width);
+  check("e2e: at 1024px the right strip narrows so the rest of main keeps 600px", rightWidth >= 320 && rightWidth <= 424, `${rightWidth}`);
+  await p.click("#repl-btn");
+  const replFits = await inBothDensities(
+    () =>
+      p.evaluate(() => ({
+        docked: document.querySelector("#dock-bottom #repl.open") !== null,
+        over:
+          document.querySelector('#repl-form button[type="submit"]').getBoundingClientRect().bottom -
+          document.getElementById("repl").getBoundingClientRect().bottom,
+        strip: document.getElementById("dock-bottom").getBoundingClientRect().height,
+      })),
+    p,
+  );
+  // Smaller than the strip's 260px default: the stored size is its smallest.
+  check(
+    "e2e: the bottom strip at its smallest holds the REPL form, in both densities",
+    replFits.every((f) => f.docked && f.strip < 260 && f.over <= 0.5),
+    JSON.stringify(replFits),
+  );
   await ctx.close();
 }
 

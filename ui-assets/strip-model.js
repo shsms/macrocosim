@@ -31,12 +31,13 @@ export function mergeOrder(present, stored) {
   return [...present, ...stored.filter((n) => !present.includes(n))];
 }
 
-// A strip's size, held between `min` and `maxFrac` of `bound` — the
-// extent it is measured against, live, since a size saved on a bigger
-// window may be most of a small one. The floor wins over the ceiling,
-// as in the drag clamp; a size that is not a number at all takes
+// A strip's size, held between a floor and a ceiling measured against `bound`,
+// the extent it sits in, live, since a size saved on a bigger window may be
+// most of a small one. The ceiling is `maxFrac` of the bound, and leaves the
+// rest of the bound at least `keep`; the floor is `min`. The floor wins over
+// the ceiling, as in the drag clamp; a size that is not a number at all takes
 // `fallback`.
-export function clampStripSize(size, { min, maxFrac, fallback }, bound) {
+export function clampStripSize(size, { min, maxFrac, fallback, keep = 0 }, bound) {
   const want = Number.isFinite(size) ? size : fallback;
-  return Math.max(min, Math.min(bound * maxFrac, want));
+  return Math.max(min, Math.min(bound * maxFrac, bound - keep, want));
 }

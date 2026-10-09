@@ -88,5 +88,11 @@ assert.equal(clampStripSize(Number.NaN, cfg, 1000), 260);
 assert.equal(clampStripSize(undefined, cfg, 1000), 260);
 assert.equal(clampStripSize(Number.POSITIVE_INFINITY, cfg, 1000), 260);
 assert.equal(clampStripSize(Number.NaN, cfg, 200), 160);
+// `keep` leaves the canvas that much of the bound: a narrow window takes the
+// strip down first, as far as its minimum.
+const right = { min: 320, maxFrac: 0.6, fallback: 560, keep: 600 };
+assert.equal(clampStripSize(560, right, 1600), 560);
+assert.equal(clampStripSize(560, right, 1024), 424);
+assert.equal(clampStripSize(560, right, 800), 320);
 
 console.log("panel-dock: all tests passed");
