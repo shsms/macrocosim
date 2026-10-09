@@ -130,6 +130,14 @@ page.once("websocket", (ws) =>
   }),
 );
 await page.goto(BASE, { waitUntil: "networkidle" });
+// A panel opens docked unless a choice is stored. The sections below test
+// floating cards, so store a float for each panel; the docked defaults have a
+// section of their own.
+await page.evaluate(() => {
+  for (const n of ["node", "metrics-btn", "formula-btn", "weather-btn", "defaults-btn", "scenario-report-btn", "repl-btn", "logs-btn"]) {
+    localStorage.setItem(`mc-panel-dock-${n}`, JSON.stringify({ mode: "float" }));
+  }
+});
 
 // ── unit tests: import the module in the browser ──────────────────
 const unit = await page.evaluate(async () => {
@@ -3927,17 +3935,15 @@ check(
 );
 
 // ── e2e: a double-click while the inspector docks ──────────────────
-// The first tap opens the inspector docked on the right, the strip
-// appears, and the canvas narrows under a pointer that has not moved:
-// the second tap still counts on the node, and the double-click selects
-// its subtree. In a context of its own, with the inspector's dock
-// stored, so nothing else is open.
+// The first tap opens the inspector docked on the right, the strip appears, and
+// the canvas narrows under a pointer that has not moved: the second tap still
+// counts on the node, and the double-click selects its subtree. In a context of
+// its own, where nothing is stored, so the inspector opens docked and nothing
+// else is open.
 {
   const ctx = await browser.newContext(CONTEXT);
   const p = await ctx.newPage();
-  await p.goto(BASE, { waitUntil: "networkidle" });
-  await p.evaluate(() => localStorage.setItem("mc-panel-dock-node", JSON.stringify({ mode: "right" })));
-  await p.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
+  await openDemoTopology(p);
   const ROOT = 2;
   const rectOf = (id) => p.evaluate(async (n) => (await import("/assets/topology.js")).topology.debugNodeScreenRect(n), id);
   const centre = (r) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
@@ -4051,6 +4057,53 @@ check(
     target !== null && emptyDouble.selected.length === 0 && !emptyDouble.docked,
     JSON.stringify({ target, emptyDouble }),
   );
+  await ctx.close();
+}
+
+// ── e2e: panels open docked the first time ─────────────────────────
+// With no choice stored, the REPL and the logs open in the bottom strip and
+// every other panel in the right one, which narrows the canvas. A float the
+// user chose is remembered. In a context of its own, where nothing is stored.
+{
+  const ctx = await browser.newContext(CONTEXT);
+  const p = await ctx.newPage();
+  await openDemoTopology(p);
+  const canvasWidth = () => p.evaluate(() => document.getElementById("topology").getBoundingClientRect().width);
+  // The strip a card sits in, or "float".
+  const where = (sel) =>
+    p.evaluate((s) => {
+      const el = document.querySelector(s);
+      if (!el) return null;
+      return el.closest("#dock-right") ? "right" : el.closest("#dock-bottom") ? "bottom" : "float";
+    }, sel);
+  const wide = await canvasWidth();
+  await p.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
+  const placed = { "#inspector": await where("#inspector") };
+  const narrow = await canvasWidth();
+  for (const [btn, card] of [
+    ["#metrics-btn", "#panel-metrics-btn"],
+    ["#formula-btn", "#panel-formula-btn"],
+    ["#weather-btn", "#panel-weather-btn"],
+    ["#defaults-btn", "#panel-defaults-btn"],
+    ["#scenario-report-btn", "#panel-scenario-report-btn"],
+    ["#repl-btn", "#repl"],
+    ["#logs-btn", "#logs-panel"],
+  ]) {
+    await p.click(btn);
+    placed[card] = await where(card);
+  }
+  const bottom = ["#repl", "#logs-panel"];
+  check(
+    "e2e: panels open docked: the REPL and logs at the bottom, the rest on the right",
+    Object.entries(placed).every(([card, edge]) => edge === (bottom.includes(card) ? "bottom" : "right")),
+    JSON.stringify(placed),
+  );
+  check("e2e: the canvas narrows when the right strip appears", narrow < wide - 100, JSON.stringify({ wide, narrow }));
+  // A tile's own button floats it, and that choice is stored.
+  await p.click("#panel-metrics-btn .float-dock");
+  await p.reload({ waitUntil: "networkidle" });
+  await p.click("#metrics-btn");
+  check("e2e: a panel the user floated opens floating after a reload", (await where("#panel-metrics-btn")) === "float");
   await ctx.close();
 }
 
@@ -4173,8 +4226,7 @@ await noPlot.evaluate(() => {
 await new Promise((r) => setTimeout(r, 1500));
 check("e2e: without uPlot the note is written once, not every frame", await noPlot.evaluate(() => document.querySelector('.mcard[data-card="power"] [data-chart] .hint')?.dataset.seen === "1"));
 // The other three builders: the inspector's grid chart (built on
-// arrival), a component's charts fold, and the weather chart — the
-// weather panel last, since it floats over the inspector's folds.
+// arrival), a component's charts fold, and the weather chart.
 await noPlot.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
 const gridNote = await waitFor(async () => noPlot.evaluate(() => document.querySelector("#charts .chart .hint")?.textContent || null), 8000).catch(() => null);
 check("e2e: without uPlot the grid's frequency chart says so", /uPlot/.test(gridNote ?? ""), String(gridNote));

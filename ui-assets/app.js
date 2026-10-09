@@ -65,13 +65,11 @@ export {
 };
 
 const status = document.getElementById("status");
-// `inspect` holds the node inspector's content; `inspector` is the
-// floating card around it — one of the cards in #panel-dock, which
-// overlays the right side of the canvas without ever resizing it, so
-// a double-click's second click lands on an unmoved graph. The card
-// is shown when something is selected; hidden on deselect, Esc, the ×
-// button, or a tab switch — all via closePanel("node") (side-panel.js
-// owns the whole dock, including openPanel()).
+// `inspect` holds the node inspector's content; `inspector` is the card around
+// it, docked in the right strip unless the user floated it over the canvas. The
+// card is shown when something is selected; hidden on deselect, Esc, the ×
+// button, or a tab switch — all via closePanel("node") (side-panel.js owns the
+// whole dock, including openPanel()).
 export const inspectEl = document.getElementById("inspect");
 export const inspectorEl = document.getElementById("inspector");
 

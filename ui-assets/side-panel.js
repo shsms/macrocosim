@@ -1,13 +1,14 @@
-// The floating panel shell. Each named panel — the node inspector
+// The panel shell. Each named panel — the node inspector
 // ("node"), the formula explorer ("formula-btn"), the metrics panel
-// ("metrics-btn"), the REPL ("repl-btn"), the log tail ("logs-btn"),
-// the Defaults editor, the live Scenario report — is
-// its own concurrently-openable, draggable, resizable card floating
-// over #panel-dock. Any card can also dock into the bottom or right
-// strip (`#dock-bottom`, `#dock-right`) as a tile — same element,
-// `docked` class, laid out by `layoutStrip` — and float back out. The
-// cards are absolute floats, not a column: opening one never changes
-// another's size.
+// ("metrics-btn"), the weather panel ("weather-btn"), the REPL
+// ("repl-btn"), the log tail ("logs-btn"), the Defaults editor, the live
+// Scenario report — is its own concurrently-openable card: a tile docked
+// in the bottom or right strip (`#dock-bottom`, `#dock-right`; the
+// `docked` class, laid out by `layoutStrip`), or floating over
+// #panel-dock, draggable and resizable. It is the same element either
+// way. A card docks the first time it opens (PANEL_DEFAULTS) and keeps
+// the user's own choice after that. Floating cards are absolute floats,
+// not a column: opening one never changes another's size.
 // Re-opening an open panel just re-renders it (running its teardown
 // first); closing runs
 // teardown and hides the card. The shell never knows what's inside a
@@ -74,13 +75,14 @@ const RESIZE_SETTLE = 280;
 // cards on each one would measure geometry that is still moving.
 const REFIT_SETTLE = 180;
 
-// Per-panel defaults: the card's width, and where an unplaced card
-// spawns. Unlisted panels take the stylesheet's 420px and the
-// top-right cascade.
+// Per-panel defaults: the card's width, where an unplaced card spawns, and the
+// strip it docks in the first time it opens, when the user has stored no
+// choice. A panel without one of these takes the stylesheet's 420px, the
+// top-right cascade or the right strip.
 const PANEL_DEFAULTS = {
   "metrics-btn": { width: 430 },
-  "repl-btn": { width: 560, spawn: "bottom-left" },
-  "logs-btn": { width: 720, spawn: "bottom-left" },
+  "repl-btn": { width: 560, spawn: "bottom-left", dock: "bottom" },
+  "logs-btn": { width: 720, spawn: "bottom-left", dock: "bottom" },
 };
 // Panels whose markup is static in index.html, so a module can keep
 // addressing their elements by id: name → [card id, content id, scroll
@@ -931,11 +933,13 @@ function saveStrip(edge, patch) {
 // when the strip has none.
 const storedShares = (edge) => loadStrip(edge)?.shares ?? {};
 
+// The user's stored choice: `{mode}` with a strip's edge or "float", or null
+// when there is none.
 function loadDock(name) {
   const raw = readJson(DOCK_KEY_PREFIX + name);
   // Own properties only: `"toString" in STRIPS` is true, and docking
   // to that edge would throw the moment a strip config was read.
-  return Object.hasOwn(STRIPS, raw?.mode) ? raw : null;
+  return Object.hasOwn(STRIPS, raw?.mode) || raw?.mode === "float" ? raw : null;
 }
 function saveDock(name, v) {
   writeStorage(DOCK_KEY_PREFIX + name, JSON.stringify(v));
@@ -1085,12 +1089,13 @@ export function openPanel(name, render, teardown = null) {
   // A re-render keeps where the panel already is; only a fresh open
   // re-places it (the card has to be visible to be measured).
   if (opening) {
-    // A panel that lives in the strip goes back to its tile; anything
-    // else is placed as a float.
-    const stored = loadDock(name);
+    // A panel that lives in the strip goes back to its tile; one the user
+    // floated is placed as a float; one with no choice yet docks at its default
+    // edge.
+    const mode = loadDock(name)?.mode ?? PANEL_DEFAULTS[name]?.dock ?? "right";
     if (p.dock) layoutStrip(p.dock);
-    else if (stored) dockPanel(name, stored.mode);
-    else placePanel(p, name);
+    else if (mode === "float") placePanel(p, name);
+    else dockPanel(name, mode);
   }
   syncButton(name, true);
   render(p.contentEl);
