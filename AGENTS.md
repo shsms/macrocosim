@@ -77,6 +77,9 @@ is wiring the topology + animating the environment.
 - `ui-assets/` — the SPA as hand-rolled ES modules (`app.js` is the
   entry; `topology.js`, `live.js`, `metrics-store.js`,
   `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
+  `repl-symbols.js` (the names the REPL completes and describes, from
+  `/api/symbols`, which lists every name the interpreter defines with its
+  kind, signature and docstring),
   `dialogs.js`, `editor.js`, … own one concern each;
   `http.js` the failed-response reader (`errorText`, `getJson`) and
   `bgFetch`; `notices.js` toasts, form errors and the UI's log lines;

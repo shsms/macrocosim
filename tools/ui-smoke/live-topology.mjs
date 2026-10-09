@@ -2106,6 +2106,27 @@ const replOut = await waitFor(async () => {
   return /\b3\b/.test(t) ? t : null;
 }, 10000);
 check("e2e: an eval in the REPL panel lands its result in the output band", /\b3\b/.test(replOut ?? ""), replOut);
+// A function an eval defines completes once the eval answers, even when the
+// eval fails after defining it.
+await page.fill("#repl-input", '(progn (defun smoke-sym-fn (a) "Smoke doc." a) (error "smoke-after-defun"))');
+await page.keyboard.press("Control+Enter");
+await waitFor(async () =>
+  await page.evaluate(() => [...document.querySelectorAll("#repl-output .repl-error")].some((e) => e.textContent.includes("smoke-after-defun")) || null), 10000).catch(() => null);
+await page.type("#repl-input", "(smoke-sym-");
+const definedNow = await waitFor(async () =>
+  await page.evaluate(() => document.getElementById("repl-completions").textContent.includes("smoke-sym-fn") || null), 5000).catch(() => null);
+check("e2e: a function an eval defines shows up in completion", definedNow === true);
+await page.keyboard.press("Escape"); // dismisses the popup
+// A word already at the cursor opens no popup when the input gets focus.
+const focusRead = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/symbols");
+await page.evaluate(() => {
+  const i = document.getElementById("repl-input");
+  i.value = "(make-";
+  i.blur();
+  i.focus();
+});
+await focusRead.catch(() => null);
+check("e2e: focusing the REPL input opens no popup for the word already there", (await page.evaluate(() => document.querySelectorAll("#repl-completions li").length)) === 0);
 await page.fill("#repl-input", "");
 await page.type("#repl-input", "(make-");
 const popup = await waitFor(async () =>

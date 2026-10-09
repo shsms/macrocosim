@@ -11,12 +11,8 @@ import { inspectorLive, liveCharts } from "./inspect.js";
 import { appendLog } from "./logs.js";
 import { metricsStore } from "./metrics-store.js";
 import { logUi, notify } from "./notices.js";
-import {
-  COMPLETIONS,
-  indentForNewline,
-  rainbowHighlight,
-  wordAtCursor,
-} from "./repl-syntax.js";
+import { createSymbolStore } from "./repl-symbols.js";
+import { indentForNewline, rainbowHighlight, wordAtCursor } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
 import { closePanel } from "./side-panel.js";
 import { readStorage, writeStorage } from "./storage.js";
@@ -57,11 +53,6 @@ export function setupLogsPanel() {
   document.getElementById("logs-clear").addEventListener("click", () => box.replaceChildren());
 }
 
-// Hardcoded completion candidates for the REPL. Until tulisp exposes
-// obarray enumeration upstream, this list has to track the surface
-// macrocosim exposes by hand. Drop-in replacement: hit /api/symbols
-// (TBD) and merge the response into this array.
-
 export function setupRepl() {
   const form = document.getElementById("repl-form");
   const input = document.getElementById("repl-input");
@@ -70,6 +61,16 @@ export function setupRepl() {
   const completions = document.getElementById("repl-completions");
   let selectedIdx = 0;
   let active = []; // current list of candidates
+  let filledAt = -1; // where the cursor was when `active` was filled
+  let typed = false; // whether the user typed since focus, a pick or Escape
+  // The names the interpreter defines, read each time the input gets focus and
+  // after each eval the server answers, since an eval can define new ones.
+  const symbols = createSymbolStore(getJson);
+  async function refreshSymbols() {
+    await symbols.refresh();
+    // A word already at the cursor opens no popup until the user types.
+    if (document.activeElement === input && typed) refresh();
+  }
 
   // Electric-pair: typed open chars insert their close + leave the
   // cursor between. Closing char typed when the next char is the
@@ -117,13 +118,10 @@ export function setupRepl() {
 
   function refresh() {
     const { prefix } = wordAtCursor(input);
-    if (!prefix || prefix.length < 1) {
-      active = [];
-    } else {
-      active = COMPLETIONS.filter((c) => c.startsWith(prefix)).slice(0, 12);
-      // If the only match is exactly what's typed, no point showing a popup.
-      if (active.length === 1 && active[0] === prefix) active = [];
-    }
+    active = symbols.complete(prefix);
+    // If the only match is exactly what's typed, no point showing a popup.
+    if (active.length === 1 && active[0] === prefix) active = [];
+    filledAt = input.selectionStart;
     selectedIdx = 0;
     renderCompletions();
   }
@@ -137,6 +135,7 @@ export function setupRepl() {
     const newCursor = start + choice.length;
     input.setSelectionRange(newCursor, newCursor);
     active = [];
+    typed = false;
     renderCompletions();
     // Programmatic .value assignment doesn't fire `input`; nudge
     // the overlay (and other input listeners) explicitly.
@@ -189,6 +188,8 @@ export function setupRepl() {
         seen++;
       }
     }
+    // Text typed while the format was out wins over the formatted copy.
+    if (input.value !== src) return;
     input.value = formatted;
     input.setSelectionRange(newCursor, newCursor);
     refreshOverlay();
@@ -225,12 +226,15 @@ export function setupRepl() {
       const klass = res.ok ? "repl-value" : "repl-error";
       const text = res.ok ? (await res.json()).value : await errorText(res);
       addResult(entry, klass, text);
+      // A failed eval can still have defined names before its error.
+      refreshSymbols();
     } catch (err) {
       addResult(entry, "repl-error", `transport error: ${err.message}`);
       logUi("error", `REPL: transport error: ${err.message}`);
     }
     input.value = "";
     refreshOverlay();
+    refresh();
     output.scrollTop = output.scrollHeight;
   }
 
@@ -239,12 +243,25 @@ export function setupRepl() {
     run();
   });
   input.addEventListener("input", () => {
+    typed = true;
     refreshOverlay();
     refresh();
   });
   input.addEventListener("scroll", () => {
     overlay.scrollTop = input.scrollTop;
   });
+  input.addEventListener("focus", () => {
+    typed = false;
+    refreshSymbols();
+  });
+  // The cursor can move without an `input` event: on arrow keys, a click, and a
+  // typed closer that steps over the one already there. An open popup then
+  // follows the word at the new cursor; Up and Down move only the selection.
+  function cursorMoved() {
+    if (active.length && input.selectionStart !== filledAt) refresh();
+  }
+  input.addEventListener("keyup", cursorMoved);
+  input.addEventListener("click", cursorMoved);
   input.addEventListener("blur", () => {
     // Defer hide so click-on-li handlers fire first.
     setTimeout(() => {
@@ -275,6 +292,7 @@ export function setupRepl() {
       if (e.key === "Escape") {
         e.preventDefault();
         active = [];
+        typed = false;
         renderCompletions();
         return;
       }
