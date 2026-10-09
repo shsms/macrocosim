@@ -313,6 +313,8 @@ What to change in your own scripts:
 - The REPL completes the names the interpreter defines. It reads them
   each time the input gets focus and after each eval, so a function an
   eval defines completes at once.
+  The completion popup shows the selected name's signature and
+  docstring.
 - `GET /api/symbols` lists every defined name with its kind, signature
   and docstring.
 - macrocosim now uses tulisp 0.32, which adds many Emacs Lisp

@@ -2131,14 +2131,35 @@ await page.fill("#repl-input", "");
 await page.type("#repl-input", "(make-");
 const popup = await waitFor(async () =>
   await page.evaluate(() => {
+    const box = document.getElementById("repl-popup");
     const ul = document.getElementById("repl-completions");
-    if (ul.hidden || ul.children.length === 0) return null;
-    const u = ul.getBoundingClientRect();
+    if (box.hidden || ul.children.length === 0) return null;
+    const u = box.getBoundingClientRect();
     const card = document.getElementById("repl").getBoundingClientRect();
     return { entries: ul.children.length, top: u.top - card.top, bottom: card.bottom - u.bottom };
   }), 5000).catch(() => null);
 check("e2e: the completion popup fits inside the default-sized REPL card", popup !== null && popup.entries > 5 && popup.top >= 0 && popup.bottom >= 0, JSON.stringify(popup));
 await page.keyboard.press("Escape"); // dismisses the popup
+await page.fill("#repl-input", "");
+// The popup shows the selected name's signature and docstring, from
+// /api/symbols.
+await page.type("#repl-input", "(set-meter-po");
+const docPane = await waitFor(async () =>
+  await page.evaluate(() => {
+    const doc = document.getElementById("repl-doc").textContent;
+    return doc.includes("(set-meter-power ID POWER-W)") ? doc : null;
+  }), 5000).catch(() => null);
+check("e2e: the completion popup shows the selected name's signature and docstring", /Make meter ID report/.test(docPane ?? ""), docPane);
+// A right click on a name picks nothing; a click picks it, and the focus
+// stays in the input.
+await page.click("#repl-completions li:nth-child(2)", { button: "right" });
+check("e2e: a right click on a completion picks nothing", (await page.evaluate(() => document.getElementById("repl-input").value)) === "(set-meter-po)");
+await page.click("#repl-completions li:nth-child(2)");
+const afterClick = await page.evaluate(() => ({
+  value: document.getElementById("repl-input").value,
+  focused: document.activeElement?.id === "repl-input",
+}));
+check("e2e: a click on a completion picks it and keeps the focus in the input", afterClick.value === "(set-meter-power-factor)" && afterClick.focused, JSON.stringify(afterClick));
 await page.fill("#repl-input", "");
 await page.keyboard.press("Escape");
 check("e2e: Escape in the REPL input closes the panel", (await panelOpen("repl")) === false);
@@ -4128,11 +4149,12 @@ check(
   const dockedPopup = await waitFor(
     () =>
       p.evaluate(() => {
+        const box = document.getElementById("repl-popup");
         const ul = document.getElementById("repl-completions");
-        if (ul.hidden || ul.children.length === 0) return null;
+        if (box.hidden || ul.children.length === 0) return null;
         return {
           entries: ul.children.length,
-          over: document.getElementById("repl-body").getBoundingClientRect().top - ul.getBoundingClientRect().top,
+          over: document.getElementById("repl-body").getBoundingClientRect().top - box.getBoundingClientRect().top,
         };
       }),
     5000,

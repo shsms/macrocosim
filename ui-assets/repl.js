@@ -58,7 +58,9 @@ export function setupRepl() {
   const input = document.getElementById("repl-input");
   const overlay = document.getElementById("repl-input-overlay");
   const output = document.getElementById("repl-output");
+  const popup = document.getElementById("repl-popup");
   const completions = document.getElementById("repl-completions");
+  const docPane = document.getElementById("repl-doc");
   let selectedIdx = 0;
   let active = []; // current list of candidates
   let filledAt = -1; // where the cursor was when `active` was filled
@@ -86,34 +88,48 @@ export function setupRepl() {
 
   function renderCompletions() {
     if (!active.length) {
-      completions.hidden = true;
+      popup.hidden = true;
       completions.innerHTML = "";
+      docPane.innerHTML = "";
       return;
     }
-    completions.hidden = false;
+    popup.hidden = false;
     completions.innerHTML = active
       .map(
         (c, i) =>
           `<li class="${i === selectedIdx ? "selected" : ""}" data-i="${i}">${escapeHtml(c)}</li>`,
       )
       .join("");
-    for (const li of completions.querySelectorAll("li")) {
-      li.addEventListener("mousedown", (e) => {
-        e.preventDefault(); // don't blur the textarea
-        selectedIdx = Number(li.dataset.i);
-        applyCompletion();
-      });
-    }
+    renderDoc();
     // The popup opens upward from the input, and the REPL's body clips what
     // overhangs it, which a docked tile's short height would. So it is no
     // taller than the room above the input, and scrolls the rest.
-    completions.style.maxHeight = "";
-    const s = getComputedStyle(completions);
+    popup.style.maxHeight = "";
+    const s = getComputedStyle(popup);
     const top = document.getElementById("repl-body").getBoundingClientRect().top;
-    const inputTop = document.getElementById("repl-input-wrap").getBoundingClientRect().top;
-    const room = inputTop - Number.parseFloat(s.marginBottom) - top;
-    completions.style.maxHeight = `${Math.max(0, Math.min(Number.parseFloat(s.maxHeight), Math.floor(room)))}px`;
+    const formTop = document.getElementById("repl-form").getBoundingClientRect().top;
+    const room = formTop - Number.parseFloat(s.marginBottom) - top;
+    const cap = Math.max(0, Math.min(Number.parseFloat(s.maxHeight), Math.floor(room)));
+    popup.style.maxHeight = `${cap}px`;
+    // The list and the doc pane each scroll within the popup's height.
+    const borders = Number.parseFloat(s.borderTopWidth) + Number.parseFloat(s.borderBottomWidth);
+    completions.style.maxHeight = docPane.style.maxHeight = `${Math.max(0, cap - borders)}px`;
     completions.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+  }
+
+  // The selected name's signature, kind and full docstring, beside the list.
+  function renderDoc() {
+    const sym = symbols.lookup(active[selectedIdx]);
+    if (!sym) {
+      docPane.innerHTML = "";
+      return;
+    }
+    const head = sym.signature ? sym.signature.text : sym.name;
+    const text = sym.doc ? `<pre class="repl-doc-text">${escapeHtml(sym.doc)}</pre>` : "";
+    docPane.innerHTML =
+      `<div class="repl-doc-head"><span class="repl-doc-sig">${escapeHtml(head)}</span>` +
+      `<span class="repl-doc-kind">${escapeHtml(sym.kind)}</span></div>${text}`;
+    docPane.scrollTop = 0;
   }
 
   function refresh() {
@@ -262,12 +278,21 @@ export function setupRepl() {
   }
   input.addEventListener("keyup", cursorMoved);
   input.addEventListener("click", cursorMoved);
+  // A press anywhere in the popup keeps the focus in the input, so its blur
+  // does not hide the popup; a press on a name picks it.
+  popup.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    // Another button picks nothing; a right click opens the context menu.
+    if (e.button !== 0) return;
+    const li = e.target.closest("#repl-completions li");
+    if (li) {
+      selectedIdx = Number(li.dataset.i);
+      applyCompletion();
+    }
+  });
   input.addEventListener("blur", () => {
-    // Defer hide so click-on-li handlers fire first.
-    setTimeout(() => {
-      active = [];
-      renderCompletions();
-    }, 100);
+    active = [];
+    renderCompletions();
   });
   input.addEventListener("keydown", (e) => {
     // Completion popup keys take priority when it's open.

@@ -239,9 +239,12 @@
                 <textarea id="repl-input" rows="2" spellcheck="false"
                           autocomplete="off"
                           placeholder="(eval lisp here — ctrl/cmd+enter to run, tab to complete)"></textarea>
-                <ul id="repl-completions" hidden></ul>
               </div>
               <button type="submit" class="btn btn-primary">Eval</button>
+              <div id="repl-popup" hidden>
+                <ul id="repl-completions"></ul>
+                <div id="repl-doc"></div>
+              </div>
             </form>
           </div>
         </aside>

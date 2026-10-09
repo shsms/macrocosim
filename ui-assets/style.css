@@ -1513,11 +1513,12 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   padding: var(--space-2);
   border-top: 1px solid var(--border);
   background: var(--bg);
+  position: relative; /* anchor for the completion popup */
 }
 
 #repl-input-wrap {
   flex: 1;
-  position: relative; /* anchor for the absolutely-positioned completion list */
+  position: relative; /* anchor for the rainbow-paren overlay */
 }
 
 /* The overlay and textarea share every layout-affecting property so
@@ -1572,25 +1573,62 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 /* Any other symbol immediately after `(` — a function call. */
 .repl-function-head { color: var(--syn-fn); }
 
-#repl-completions {
+/* The completion popup: the names on the left, the selected name's
+   signature and docstring beside them. Each half scrolls on its own, within
+   the height repl.js caps the popup to. */
+#repl-popup {
   position: absolute;
-  bottom: 100%;       /* float upward from the textarea */
-  left: 0;
+  bottom: 100%;       /* float upward from the input row */
+  left: var(--space-2);
+  right: var(--space-2);
   margin: 0 0 var(--space-1);
-  padding: var(--space-1) 0;
-  list-style: none;
+  display: flex;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--text-md);
-  min-width: 240px;
   /* border-box, so the height repl.js caps it to is the whole popup's. */
   box-sizing: border-box;
   max-height: 220px;
-  overflow-y: auto;
+  overflow: hidden;
   z-index: var(--z-popover);
   box-shadow: var(--shadow-2);
+}
+#repl-popup[hidden] { display: none; }
+#repl-completions {
+  flex: 0 0 auto;
+  min-width: 240px;
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+  overflow-y: auto;
+}
+#repl-doc {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-1) var(--space-3);
+  border-left: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+#repl-doc:empty { display: none; }
+.repl-doc-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+.repl-doc-sig { color: var(--syn-fn); }
+.repl-doc-kind { color: var(--muted); }
+.repl-doc-text {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  white-space: pre-wrap;
+  font: inherit;
+  color: var(--fg);
 }
 #repl-completions li {
   padding: var(--space-0) var(--space-3);
