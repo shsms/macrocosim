@@ -2251,6 +2251,27 @@ await page.evaluate(() => {
 });
 await page.click("#logs-btn");
 check("e2e: the logs button closes the Logs panel", (await panelOpen("logs-panel")) === false);
+// Opening a card stores no width: its default is not the user's. A sideways
+// drag is, and it stays — on the bottom-left REPL card too, whose content
+// re-fit must not write the old width back.
+await page.click("#repl-btn");
+await new Promise((r) => setTimeout(r, 800));
+const openedSize = await page.evaluate(() => localStorage.getItem("mc-panel-size-repl-btn"));
+check("e2e: opening the REPL panel stores no size", openedSize === null, openedSize);
+const replWidth = async () =>
+  await page.evaluate(() => ({
+    w: document.getElementById("repl").getBoundingClientRect().width,
+    stored: JSON.parse(localStorage.getItem("mc-panel-size-repl-btn") ?? "null")?.w ?? null,
+  }));
+// What the native resize handle writes on a sideways drag.
+await page.evaluate(() => { document.getElementById("repl").style.width = "700px"; });
+await new Promise((r) => setTimeout(r, 1000));
+const dragged = await replWidth();
+check("e2e: a sideways drag keeps the REPL panel's width and stores it", Math.abs(dragged.w - 700) <= 1 && dragged.stored === 700, JSON.stringify(dragged));
+await page.evaluate(() => { document.getElementById("repl").style.width = "560px"; });
+await waitFor(async () => ((await replWidth()).stored === 560 ? true : null), 5000).catch(() => null);
+await page.click("#repl-btn");
+await page.evaluate(() => localStorage.removeItem("mc-panel-size-repl-btn"));
 // In Scenarios the backtick works too.
 await page.keyboard.press("2");
 await page.keyboard.press("`");

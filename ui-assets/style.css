@@ -107,6 +107,7 @@
   /* A capped floating card stays at least this tall: the drag strip
      plus a row of content. side-panel.js reads it for its cap floor. */
   --panel-min-height: 60px;
+  --panel-min-width: 280px;
 
   /* Per-category palette — the pill nodes' category bar reads these
      (pill.js via topology.js), and the legend / sidebar use them too,
@@ -1153,12 +1154,13 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   right: 0;
   width: 420px;
   max-width: 100%;
-  /* The card hugs its content — a fold opening or shutting re-sizes
-     it — up to the dock's bound (viewport minus chrome); past that
-     .panel-content scrolls. `resize` gives the gripper, but the
-     height it writes is converted into a persisted inline max-height
-     cap once the gesture ends (side-panel.js), so a card can never be
-     stretched past its own content. */
+  /* The card hugs its content — a fold opening or shutting re-sizes it — up to
+     the dock's bound (viewport minus chrome); past that .panel-content scrolls.
+     `resize` gives the gripper, both axes: the height it writes is converted
+     into a persisted inline max-height cap once the gesture ends
+     (side-panel.js), so a card can never be stretched past its own content,
+     while the width it writes is stored as the card's width, clamped to the
+     dock (side-panel.js). */
   height: auto;
   /* Cards spawn CASCADE_BASE (40px, side-panel.js) below the dock's
      top edge, so a max-height resolved against the dock's own 100%
@@ -1173,7 +1175,8 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
      its inline max-height or the inline value would win and undo it. */
   max-height: calc(100% - 40px);
   min-height: var(--panel-min-height);
-  resize: vertical;
+  min-width: var(--panel-min-width);
+  resize: both;
   /* border-box so the bound above and the height the user resizes to
      are the card's real height — a content-box card overshoots the
      dock by its border and reopens 2 px taller every time. */

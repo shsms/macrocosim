@@ -22,7 +22,8 @@ import { readStorage, writeStorage } from "./storage.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
 // name → { el, contentEl, band, teardown, pos, shown, cascade, isStatic,
-// refitTimer, resizeTimer, dock, floatStyle, dragging }
+// refitTimer, resizeTimer, dock, floatStyle, appliedWidth, dragging }
+// appliedWidth is the inline width the code last wrote (applyWidth).
 // band is the static card's scroll band (STATIC_PANELS), or null.
 // dock is the edge the card is docked to, or null while it floats;
 // floatStyle parks the card's inline float geometry while it is
@@ -61,6 +62,9 @@ const CASCADE_DRIFT = 16;
 // once at load. The literal only serves a run with nothing to read
 // (the boot smoke's DOM shim, a stylesheet without the token).
 const MIN_HEIGHT = Number.parseFloat(cssToken("--panel-min-height")) || 60;
+// The width a floating card never goes below (--panel-min-width, the
+// .float-panel min-width); clampWidth clamps a stored width to it.
+const MIN_WIDTH = Number.parseFloat(cssToken("--panel-min-width")) || 280;
 // Of a clamped panel, how much must stay on screen: enough of the
 // card's width to grab horizontally, and its strip vertically.
 const KEEP_X = 80;
@@ -243,6 +247,7 @@ function ensurePanel(name) {
     resizeTimer: 0,
     dock: null,
     floatStyle: "",
+    appliedWidth: el.style.width,
     dragging: false,
   };
   // A bottom-left card hangs from the dock's bottom edge (see
@@ -255,8 +260,9 @@ function ensurePanel(name) {
   // card that can land on that edge, since one may also be sitting in
   // the top-right cascade for now (placePanel).
   if (PANEL_DEFAULTS[name]?.spawn === "bottom-left") {
+    const canRefit = () => !p.dragging && !p.dock && el.classList.contains("open") && !resizePending(p);
     new ResizeObserver(() => {
-      // A hidden card measures as nothing, and an inline height is
+      // A hidden card measures as nothing, and resizePending is
       // wireResize's in-gesture signal — the user is holding the
       // gripper and a re-fit would fight the drag. p.dragging is the
       // same story for the head: a drag-out re-parents the card, which
@@ -266,11 +272,10 @@ function ensurePanel(name) {
       // REFIT_SETTLE would otherwise be sanitized as a display:none
       // zero box, and clampOffset would write that nonsense back into
       // p.shown. closePanel cancels it too.
-      if (p.dragging || p.dock || !el.classList.contains("open") || el.style.height) return;
+      if (!canRefit()) return;
       clearTimeout(p.refitTimer);
       p.refitTimer = setTimeout(() => {
-        if (p.dragging || p.dock || !el.classList.contains("open") || el.style.height) return;
-        sanitizePanel(p, name, false);
+        if (canRefit()) sanitizePanel(p, name, false);
       }, REFIT_SETTLE);
     }).observe(el);
   }
@@ -556,44 +561,78 @@ function applyCap(el, cap) {
   el.style.maxHeight = `min(${cap}px, calc(100% - ${CASCADE_BASE}px))`;
 }
 
-// CSS `resize` gives the height affordance; there is no resize event
-// for it, so the observer is how we notice. An inline height is the
-// one signal that a height is the user's doing and not the content's
-// — content growth leaves the style empty, and the conversion below
-// clears it again. It watches the style attribute, not the box: with
-// a cap in force a drag downward writes a taller inline height while
-// max-height keeps the box pinned, so a size observer never fires,
-// the cap never clears, and the drag looks dead in that direction.
-// The conversion waits RESIZE_SETTLE after the last tick, on the
-// record's resizeTimer, so a close or a dock inside that window can
-// run settleResize first, while the card is still where the drag
-// measured it, rather than letting the timer fire on a hidden or
-// re-parented card.
+// A width the dock can still hold, never below the card's own floor: the
+// gripper writes raw inline widths (it can drag below the stylesheet's
+// min-width, which only floors the box), and the dock's inner width is the
+// ceiling — a stored width from a wider window comes back clamped, the way a
+// stored cap is re-measured.
+function clampWidth(el, w) {
+  return Math.round(Math.max(MIN_WIDTH, Math.min(w, el.parentElement?.clientWidth ?? window.innerWidth)));
+}
+
+// Set the card's width and record it in p.appliedWidth (see resizePending).
+function applyWidth(p, w) {
+  p.el.style.width = `${w}px`;
+  p.appliedWidth = p.el.style.width;
+}
+
+// Whether a gripper drag is running: an inline height, or an inline width other
+// than the one the code last wrote (p.appliedWidth: a default, stored or
+// clamped width).
+function resizePending(p) {
+  return Boolean(p.el.style.height) || p.el.style.width !== p.appliedWidth;
+}
+
+// CSS `resize` gives the affordance, both axes; there is no resize event for
+// it, so the observer is how we notice. An inline height is the one signal that
+// a height is the user's doing and not the content's — content growth leaves
+// the style empty, and the conversion below clears it again. It watches the
+// style attribute, not the box: with a cap in force a drag downward writes a
+// taller inline height while max-height keeps the box pinned, so a size
+// observer never fires, the cap never clears, and the drag looks dead in that
+// direction. A width drag is noticed off the style attribute too
+// (resizePending); it clears the cap only when a height drag is running too, or
+// the card would grow tall off a width gesture. The conversion waits RESIZE_SETTLE after the last tick, on the
+// record's resizeTimer, so a close or a dock inside that window can run
+// settleResize first, while the card is still where the drag measured it,
+// rather than letting the timer fire on a hidden or re-parented card.
 function wireResize(el, name, p) {
   new MutationObserver(() => {
-    if (!el.style.height) return;
+    if (!resizePending(p)) return;
     // Let the card follow the pointer while the gesture runs: the old
     // cap would otherwise pin it and the drag would look dead.
-    el.style.maxHeight = "";
+    if (el.style.height) el.style.maxHeight = "";
     clearTimeout(p.resizeTimer);
     p.resizeTimer = setTimeout(() => settleResize(p, name), RESIZE_SETTLE);
   }).observe(el, { attributes: true, attributeFilter: ["style"] });
 }
 
-// Turn a pending gripper drag into the stored cap now. Only an open
-// floating card can be measured against its dock; anything else just
-// drops the in-flight height — so a caller about to hide or re-parent
-// the card runs this first, while the card still counts as open and
-// floating. A no-op when no drag is pending.
+// Turn a pending gripper drag into the stored sizes now. Only an open floating
+// card can be measured against its dock; anything else just drops the in-flight
+// sizes — so a caller about to hide or re-parent the card runs this first,
+// while the card still counts as open and floating. A no-op when no drag is
+// pending.
 function settleResize(p, name) {
   clearTimeout(p.resizeTimer);
   const { el } = p;
   const h = Number.parseFloat(el.style.height);
+  const w = el.style.width === p.appliedWidth ? Number.NaN : Number.parseFloat(el.style.width);
   el.style.height = "";
-  if (!h || p.dock || !el.classList.contains("open")) return;
-  const cap = capOf(el, h, floorOf(p));
-  applyCap(el, cap);
-  saveSize(name, cap);
+  if ((!h && !w) || p.dock || !el.classList.contains("open")) {
+    el.style.width = p.appliedWidth;
+    return;
+  }
+  const size = loadSize(name);
+  if (h) {
+    const cap = capOf(el, h, floorOf(p));
+    applyCap(el, cap);
+    size.h = cap;
+  }
+  if (w) {
+    size.w = capWidth(el, w);
+    applyWidth(p, size.w);
+  }
+  saveSize(name, size);
 }
 
 // A stored JSON value, or null when nothing (or no JSON) is stored.
@@ -617,10 +656,13 @@ function savePos(name, pos) {
 }
 function loadSize(name) {
   const raw = readJson(SIZE_KEY_PREFIX + name);
-  return raw && Number.isFinite(raw.h) ? raw.h : null;
+  // Either may be missing: a size holds only the axes the user has dragged, and
+  // one stored by an older build has no `w`.
+  const axis = (v) => (Number.isFinite(v) ? v : undefined);
+  return { h: axis(raw?.h), w: axis(raw?.w) };
 }
-function saveSize(name, h) {
-  writeStorage(SIZE_KEY_PREFIX + name, JSON.stringify({ h }));
+function saveSize(name, size) {
+  writeStorage(SIZE_KEY_PREFIX + name, JSON.stringify({ h: size.h, w: size.w }));
 }
 
 // Fit a visible card to the geometry it currently finds itself in: a
@@ -656,11 +698,18 @@ function sanitizePanel(p, name, persist = true) {
   const floor = floorOf(p);
   if (p.band) el.style.minHeight = `${floor}px`;
   const stored = loadSize(name);
-  if (stored != null) {
-    const cap = capOf(el, stored, floor);
-    applyCap(el, cap);
-    if (persist && cap !== stored) saveSize(name, cap);
+  const size = { ...stored };
+  if (stored.h != null) {
+    size.h = capOf(el, stored.h, floor);
+    applyCap(el, size.h);
   }
+  // The stored width follows the same rule as the cap: clamped to the geometry
+  // the card finds, and written back to storage only when `persist` is on.
+  if (stored.w != null) {
+    size.w = clampWidth(el, stored.w);
+    applyWidth(p, size.w);
+  }
+  if (persist && (size.h !== stored.h || size.w !== stored.w)) saveSize(name, size);
   // Fit the user's placement to this geometry. The fit is what the
   // card shows; the placement itself only moves when the correction
   // is the user's own (an open or a float-out), so a window that
@@ -767,6 +816,7 @@ function dockPanel(name, edge = "bottom") {
   settleResize(p, name);
   p.floatStyle = p.el.style.cssText;
   p.el.style.cssText = "";
+  p.appliedWidth = "";
   p.dock = edge;
   p.el.classList.add("docked");
   const dockBtn = p.el.querySelector(".float-dock");
@@ -801,6 +851,7 @@ function floatPanel(name) {
   dockEl().appendChild(p.el);
   p.el.style.cssText = p.floatStyle;
   p.floatStyle = "";
+  p.appliedWidth = p.el.style.width;
   saveDock(name, { mode: "float" });
   layoutStrip(edge);
   // A card auto-docked from storage has never been placed as a float,

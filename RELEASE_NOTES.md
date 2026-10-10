@@ -302,6 +302,9 @@ What to change in your own scripts:
   REPL and the logs along the bottom, the other panels down the right,
   and the canvas narrows to make room. Float a docked panel with its ⤒
   button and it opens floating from then on.
+- A floating panel's corner gripper resizes it sideways too. Like the
+  height, the width you set stays after a reload, and after you dock
+  the panel and float it again.
 - The UI works in a window down to 1024px wide. The bars wrap onto more
   rows, and in a narrow window the panels docked on the right get
   narrower, down to their smallest width, so the canvas keeps about
