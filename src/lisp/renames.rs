@@ -4,6 +4,7 @@
 //! managed file, a `*-defaults` plist or a script written with the
 //! old names keeps working; each old name warns once per process.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
 
@@ -350,6 +351,10 @@ pub(crate) fn rename_plist_value(
 pub(crate) struct Renamed<T>(pub T);
 
 impl<T: Plistable> Plistable for Renamed<T> {
+    fn plist_keys() -> Vec<Cow<'static, str>> {
+        T::plist_keys()
+    }
+
     fn from_plist_as_slice(ctx: &mut TulispContext, kvs: &[TulispObject]) -> Result<Self, Error> {
         let kvs = rename_kvs(ctx, kvs)?;
         T::from_plist_as_slice(ctx, &kvs).map(Renamed)

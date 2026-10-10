@@ -106,6 +106,10 @@ struct ParamEntry {
     /// `required`, `optional`, `rest` or `key`; `other` for a position a later
     /// tulisp adds.
     position: &'static str,
+    /// The plist keys a `key` parameter takes, each with its leading `:`;
+    /// `None` for the others, and for a key parameter that lists no keys, such
+    /// as one only a docstring's usage line declares.
+    keys: Option<Vec<String>>,
     /// Where `label` is in `text`, in UTF-16 code units, as JavaScript indexes
     /// a string.
     start: usize,
@@ -159,6 +163,8 @@ fn signature_entry(name: &str, signature: &Signature) -> SignatureEntry {
                 ParamPosition::Keywords => "key",
                 _ => "other",
             },
+            keys: (!param.keys.is_empty())
+                .then(|| param.keys.iter().map(|key| key.to_string()).collect()),
             start: utf16(range.start),
             end: utf16(range.end),
         })

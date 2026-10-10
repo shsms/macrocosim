@@ -4,6 +4,7 @@ use crate::test_dir::TestDir;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use chrono::Utc;
+use serde_json::json;
 use std::io::Write;
 use tower::ServiceExt;
 
@@ -572,6 +573,28 @@ async fn symbols_endpoint_describes_each_name() {
         find("define-scenario")["signature"]["params"][0]["position"],
         "key"
     );
+    // A Rust defun's plist parameter carries its keys, each with the leading
+    // `:`; the non-key parameters carry none.
+    let param = &find("%make-grid-connection-point")["signature"]["params"][0];
+    assert_eq!(param["position"], "key");
+    assert_eq!(
+        param["keys"],
+        json!([
+            ":id",
+            ":name",
+            ":rated-fuse-current-a",
+            ":rated-lower-w",
+            ":rated-upper-w",
+            ":successors",
+            ":stream-jitter-pct",
+            ":operational-mode",
+            ":health",
+            ":telemetry-mode",
+            ":command-mode"
+        ])
+    );
+    let positional_keys = &find("set-meter-power")["signature"]["params"][0]["keys"];
+    assert!(positional_keys.is_null(), "{positional_keys}");
     assert_eq!(find("when")["kind"], "macro");
     assert_eq!(find("if")["kind"], "special-form");
     let var = find("battery-defaults");
