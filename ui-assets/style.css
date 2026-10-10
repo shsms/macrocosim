@@ -55,6 +55,7 @@
   --syn-comment: #888888;
   --syn-special: #c08cf0;
   --syn-fn: #7ab8ff;
+  --syn-plist-key: #4ec9b0;
   /* Graph pills and the hover card (pill.js reads these at load and again on a
      theme change). */
   --pill-surface: #242a33;
@@ -181,6 +182,7 @@
   --syn-comment: #6e7781;
   --syn-special: #7b3fc4;
   --syn-fn: #0a66c2;
+  --syn-plist-key: #0e7a6b;
   --pill-surface: #ffffff;
   --pill-border: #d3d8df;
   --pill-fg: #1f2328;
@@ -1586,6 +1588,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .paren-mismatch { color: var(--syn-mismatch); background: color-mix(in srgb, var(--syn-mismatch) 18%, transparent); }
 .repl-string { color: var(--syn-string); }
 .repl-comment { color: var(--syn-comment); font-style: italic; }
+/* A plist key: `:name` at a word boundary (repl-syntax.js). */
+.repl-plist-key { color: var(--syn-plist-key); }
 /* Special-form heads (defun / let / when / …): syntax keywords. */
 .repl-special-form { color: var(--syn-special); font-weight: 600; }
 /* Any other symbol immediately after `(` — a function call. */

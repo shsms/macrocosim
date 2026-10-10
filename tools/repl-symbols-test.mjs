@@ -1,7 +1,8 @@
-// Unit tests for the REPL's symbol helpers (ui-assets/repl-symbols.js):
-// which call the cursor is in, which parameter an argument fills, how
-// the hint line renders, and the completion store; and the word at the cursor
-// that completion replaces (ui-assets/repl-syntax.js).
+// Unit tests for the REPL's symbol helpers (ui-assets/repl-symbols.js): which
+// call the cursor is in, which parameter an argument fills, how the hint line
+// renders, the keys a call can still take, and the completion store; the word
+// at the cursor that completion replaces and the highlighter
+// (ui-assets/repl-syntax.js).
 // Run: node tools/repl-symbols-test.mjs   (exits non-zero on failure)
 //
 // repl-symbols.js touches no DOM, so no shim is needed.
@@ -10,7 +11,9 @@ import assert from "node:assert/strict";
 const { callAtCursor, createSymbolStore, hintHtml, keyCompletions, paramFor } = await import(
   new URL("../ui-assets/repl-symbols.js", import.meta.url)
 );
-const { wordAtCursor } = await import(new URL("../ui-assets/repl-syntax.js", import.meta.url));
+const { rainbowHighlight, wordAtCursor } = await import(
+  new URL("../ui-assets/repl-syntax.js", import.meta.url)
+);
 
 // The cursor is where `|` is.
 const at = (src) => callAtCursor(src.replace("|", ""), src.indexOf("|"));
@@ -231,5 +234,30 @@ assert.equal(word("(foo 'ba|"), "ba");
 assert.equal(word('(foo "a|'), "a");
 assert.equal(word("`(foo ,@ba|"), "ba");
 assert.equal(word("(foo |"), "");
+
+// ── rainbowHighlight ────────────────────────────────────────────
+const hl = (src) => rainbowHighlight(src);
+// A plist key at a word boundary gets its own class, in a plain argument run
+// and in the head path's rest alike.
+assert.ok(hl("(make-battery :id 7)").includes('<span class="repl-plist-key">:id</span>'));
+assert.ok(hl("(f (g :id 1))").includes('<span class="repl-plist-key">:id</span>'));
+assert.ok(hl("':id").includes('<span class="repl-plist-key">:id</span>'));
+// A lone `:` is not one, nor the colon of a symbol like a:b, nor a key inside a
+// string or a comment.
+assert.ok(!hl("(f :)").includes("repl-plist-key"));
+assert.ok(!hl("(f a:b c)").includes("repl-plist-key"));
+assert.ok(!hl('":id"').includes("repl-plist-key"));
+assert.ok(hl('":id"').includes("repl-string"));
+assert.ok(!hl("; :id").includes("repl-plist-key"));
+assert.ok(hl("; :id").includes("repl-comment"));
+// The head keeps its own classes beside the keys, and an escapable character in
+// a key still comes out escaped.
+assert.ok(hl("(let ((k :id)) k)").includes('class="repl-special-form"'));
+assert.ok(hl("(make-battery :id)").includes('class="repl-function-head"'));
+assert.ok(hl("(f :a<b)").includes('<span class="repl-plist-key">:a&lt;b</span>'));
+// A key heading a list, as in a quoted plist, is a key too, not a function head.
+assert.ok(hl("'(:a 1 :b 2)").includes('<span class="repl-plist-key">:a</span>'));
+assert.ok(!hl("'(:a 1 :b 2)").includes("repl-function-head"));
+assert.ok(!hl("(:)").includes("repl-plist-key"));
 
 console.log("repl-symbols-test: ok");

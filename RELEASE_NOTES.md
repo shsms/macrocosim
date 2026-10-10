@@ -327,6 +327,7 @@ What to change in your own scripts:
   without the ones given before the cursor.
   `make-microgrid`, `make-weather`, the component `make-*` functions and
   `plug-ev` list their keys too.
+  A key shows in its own colour as you type it.
   `set-active-power` and `set-reactive-power` take `:lifetime-s` and
   `:clamp`, and the `augment-*-bounds` functions take `:lifetime-s`, but
   none of them list their keys.

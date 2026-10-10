@@ -5,6 +5,11 @@
 
 import { escapeHtml } from "./html.js";
 
+// A character a Lisp identifier can hold: anything but whitespace, a paren or
+// bracket, a string or comment start, a quote or a splice (let*, %make-*, 1+,
+// string=, größe).
+const WORD_CHAR = /[^\s()[\]{}";'`,@]/;
+
 // Locate the Lisp identifier the cursor is inside (or just past), returning its
 // substring start / end indices for replacement and the prefix typed so far.
 // Used by Tab-completion to know what to complete.
@@ -12,9 +17,7 @@ export function wordAtCursor(input) {
   const v = input.value;
   const c = input.selectionStart;
   let start = c;
-  // A Lisp identifier runs to whitespace, a paren or bracket, a string or
-  // comment start, a quote or a splice (let*, %make-*, 1+, string=, größe).
-  while (start > 0 && /[^\s()[\]{}";'`,@]/.test(v[start - 1])) start--;
+  while (start > 0 && WORD_CHAR.test(v[start - 1])) start--;
   return { prefix: v.slice(start, c), start, end: c };
 }
 
@@ -40,6 +43,26 @@ const SPECIAL_FORMS = new Set([
   "save-excursion", "save-restriction", "with-current-buffer",
 ]);
 
+// A plist key: a `:` at a word boundary, then word characters. WORD_CHAR is the
+// class `wordAtCursor` reads a word with, so a key the completion offers is one
+// the overlay colours. The `:` inside a symbol such as `a:b` starts no key.
+// Strings and comments never reach this: they are flushed with their own class
+// first.
+const PLIST_KEY = new RegExp(`(?<!${WORD_CHAR.source}):${WORD_CHAR.source}+`, "g");
+
+// `text` with its plist keys wrapped in their class; the rest is escaped as it
+// goes, so a key next to an escapable character is still found in the raw text.
+const markPlistKeys = (text) => {
+  let out = "";
+  let last = 0;
+  for (const m of text.matchAll(PLIST_KEY)) {
+    out += escapeHtml(text.slice(last, m.index));
+    out += `<span class="repl-plist-key">${escapeHtml(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + escapeHtml(text.slice(last));
+};
+
 // Render `src` as HTML with paren depth highlighting + simple
 // string / comment colouring. Walks character-by-character so we
 // don't have to ship a real parser. Mismatched closes (more
@@ -56,10 +79,10 @@ export function rainbowHighlight(src) {
   // head of a freshly-opened list. Set on `(`, cleared once the
   // head is emitted (or on `)` for safety).
   let expectingHead = false;
-  // Flush `buf` as plain text, except when `expectingHead` is set
-  // — then split off the first non-whitespace token, classify it
-  // as a special-form or function-call head, and clear the flag.
-  // String / comment / mismatched-paren spans bypass this path
+  // Flush `buf` as text with its plist keys marked, except when `expectingHead`
+  // is set: then split off the first non-whitespace token, classify it as a
+  // special-form or function-call head (a keyword is no head: see below), and
+  // clear the flag. String / comment / mismatched-paren spans bypass this path
   // and pass an explicit class.
   const flush = (cls) => {
     if (!buf) return;
@@ -69,19 +92,24 @@ export function rainbowHighlight(src) {
       const m = buf.match(/^(\s*)(\S+)([\s\S]*)$/);
       if (m) {
         const [, ws, head, rest] = m;
-        const headCls = SPECIAL_FORMS.has(head)
-          ? "repl-special-form"
-          : "repl-function-head";
         out += escapeHtml(ws);
-        out += `<span class="${headCls}">${escapeHtml(head)}</span>`;
-        out += escapeHtml(rest);
+        if (head.startsWith(":")) {
+          // A keyword is never called: a list that starts with one, as in a
+          // quoted plist `'(:a 1 :b 2)`, is data, and its first key is coloured
+          // like the rest.
+          out += markPlistKeys(head + rest);
+        } else {
+          const headCls = SPECIAL_FORMS.has(head) ? "repl-special-form" : "repl-function-head";
+          out += `<span class="${headCls}">${escapeHtml(head)}</span>`;
+          out += markPlistKeys(rest);
+        }
         expectingHead = false;
       } else {
         // Buffer is whitespace-only; the head is still pending.
         out += escapeHtml(buf);
       }
     } else {
-      out += escapeHtml(buf);
+      out += markPlistKeys(buf);
     }
     buf = "";
   };
