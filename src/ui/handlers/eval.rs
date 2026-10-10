@@ -1,6 +1,8 @@
 //! `/api/eval`, `/api/mg/{mg}/eval`, `/api/format` (tulisp-fmt) and
 //! `/api/symbols`.
 
+use std::collections::HashMap;
+
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use tulisp::symbols::{ParamPosition, Signature, SymbolInfo, SymbolKind};
@@ -119,6 +121,11 @@ struct ParamEntry {
 /// Every name the interpreter defines, sorted by name: the functions, macros
 /// and special forms with their signatures, and the variables.  The list
 /// follows what is loaded, so a `defun` in an eval shows up on the next call.
+///
+/// A `make-*` wrapper in `sim/defaults.lisp` hands its `&rest` tail to its
+/// `%make-*` primitive, which reads it as a plist: the primitive's keys
+/// complete at the wrapper's arguments too, so its rest parameter is given them
+/// as a key parameter.
 pub(in crate::ui) async fn symbols(
     State(config): State<Config>,
 ) -> Result<Json<SymbolsResponse>, ApiError> {
@@ -127,6 +134,31 @@ pub(in crate::ui) async fn symbols(
         .into_iter()
         .map(|(name, info)| symbol_entry(name, info))
         .collect();
+    let plist_keys: HashMap<String, Vec<String>> = symbols
+        .iter()
+        .filter_map(|entry| {
+            let keys = entry
+                .signature
+                .as_ref()?
+                .params
+                .iter()
+                .find_map(|param| param.keys.clone())?;
+            Some((entry.name.strip_prefix('%')?.to_string(), keys))
+        })
+        .collect();
+    for entry in &mut symbols {
+        let Some(keys) = plist_keys.get(&entry.name) else {
+            continue;
+        };
+        if let Some(param) = entry
+            .signature
+            .as_mut()
+            .and_then(|sig| sig.params.iter_mut().find(|p| p.position == "rest"))
+        {
+            param.position = "key";
+            param.keys = Some(keys.clone());
+        }
+    }
     symbols.sort_unstable_by(|a, b| a.name.cmp(&b.name));
     Ok(Json(SymbolsResponse { symbols }))
 }

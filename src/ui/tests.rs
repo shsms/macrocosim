@@ -565,10 +565,14 @@ async fn symbols_endpoint_describes_each_name() {
     assert_eq!(wide["params"][0]["start"], 7);
     assert_eq!(wide["params"][0]["end"], 11);
 
-    assert_eq!(
-        find("make-battery")["signature"]["params"][0]["position"],
-        "rest"
-    );
+    // The Lisp `make-*` wrapper's `&rest` tail is its primitive's plist, so its
+    // rest parameter is given the primitive's keys.
+    let wrapper = &find("make-battery")["signature"]["params"][0];
+    assert_eq!(wrapper["position"], "key");
+    let primitive_keys = &find("%make-battery")["signature"]["params"][0]["keys"];
+    assert!(primitive_keys.is_array(), "{primitive_keys}");
+    assert_eq!(wrapper["keys"], *primitive_keys);
+    assert_eq!(find("plug-ev")["signature"]["params"][2]["position"], "key");
     assert_eq!(
         find("define-scenario")["signature"]["params"][0]["position"],
         "key"
