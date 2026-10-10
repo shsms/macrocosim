@@ -355,3 +355,13 @@ What to change in your own scripts:
   now reads it in that zone too, and names the zone next to the field.
 - The UI did not start in a browser that blocks site storage. It now
   starts and works; it just does not remember your settings.
+- Dragging the corner gripper down on a floating REPL or Logs card
+  that opened along the bottom made the card grow upward, even after
+  you had moved it. Its top edge moved, and the corner you held stayed
+  where it was. Now, while you drag, the corner you hold follows the
+  pointer and the card's top-left corner stays in place.
+
+  A card you resize past the right or bottom edge of the area the
+  panels float in stops at that edge when you let go. If it already
+  reached past that edge when you took hold of it, it can get smaller
+  there, but no bigger.

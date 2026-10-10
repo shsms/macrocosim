@@ -22,8 +22,14 @@ import { readStorage, writeStorage } from "./storage.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
 // name → { el, contentEl, band, teardown, pos, shown, cascade, isStatic,
-// refitTimer, resizeTimer, dock, floatStyle, appliedWidth, dragging }
+// refitTimer, resizeTimer, dock, floatStyle, appliedWidth, gripperPress,
+// dragging }
 // appliedWidth is the inline width the code last wrote (applyWidth).
+// gripperPress is the card's size at a press that may start a gripper drag, its
+// inline max-height (put back when the height only drifted), and whether a
+// refit was skipped meanwhile (refitDue), until settleResize ends the press (its
+// release, a close or a dock) and runs that refit. sanitizePanel skips the card
+// while it is set.
 // band is the static card's scroll band (STATIC_PANELS), or null.
 // dock is the edge the card is docked to, or null while it floats;
 // floatStyle parks the card's inline float geometry while it is
@@ -32,8 +38,8 @@ import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 // either drag, and across the hand-over between them. The card is
 // following the pointer then, so nothing else may move it:
 // sanitizePanel, the one thing that does, gates on this.
-// resizeTimer is the pending conversion of a gripper drag into a
-// stored cap (wireResize); settleResize runs it early.
+// resizeTimer is the pending settle of a resize no press started
+// (wireResize); settleResize runs it early.
 // pos is the user's placement (persisted); shown is the fit of pos
 // against the current geometry, what the card displays
 // (sanitizePanel); null until the first sanitize — read it as
@@ -69,11 +75,14 @@ const MIN_WIDTH = Number.parseFloat(cssToken("--panel-min-width")) || 280;
 // card's width to grab horizontally, and its strip vertically.
 const KEEP_X = 80;
 const KEEP_Y = 40;
-// Quiet time after the last resize tick that counts as "the gesture
-// ended". Converting the dragged height into a cap mid-drag would
-// fight the browser's own resize, which keeps sizing from the height
-// it started with.
+// Quiet time after the last resize tick that counts as "the gesture ended", for
+// a resize no press started (see wireResize). Converting an inline height into
+// a cap before its writes stop would fight them.
 const RESIZE_SETTLE = 280;
+// The farthest a gripper press can take an axis from its size at the press and
+// still leave it undragged. A hand dragging along one axis drifts a pixel or two
+// along the other, and the browser writes that axis for the drift.
+const RESIZE_SLOP = 4;
 // Same idea for the window's own resize: a maximize or a drag of the
 // window edge arrives as a burst of events, and re-fitting the open
 // cards on each one would measure geometry that is still moving.
@@ -248,6 +257,7 @@ function ensurePanel(name) {
     dock: null,
     floatStyle: "",
     appliedWidth: el.style.width,
+    gripperPress: null,
     dragging: false,
   };
   // A bottom-left card hangs from the dock's bottom edge (see
@@ -583,56 +593,168 @@ function resizePending(p) {
   return Boolean(p.el.style.height) || p.el.style.width !== p.appliedWidth;
 }
 
+// Whether the inline size `v` on `axis` ("width" or "height") is within
+// RESIZE_SLOP of the card's size at the press `from`. With no press (an inline
+// size a script wrote) nothing is.
+const withinSlop = (from, axis, v) => Boolean(from) && Math.abs(v - from[axis]) <= RESIZE_SLOP;
+
+// Pin the card by its top-left corner for a gripper press: inline left and top,
+// with its right and bottom anchors and its offset transform cleared. A card
+// hangs from the dock's right edge, and an .anchor-bottom one from its bottom
+// edge, so a new width or height would move its left or top edge; pinned, the
+// browser grows the right and bottom edges, the ones the user drags. Nothing
+// else writes a card's inline left, so it marks a pinned card (pinned).
+//
+// It runs at the drag's first tick, which may already have moved the left edge
+// (a new width) or, on an .anchor-bottom card, the top edge (a new height). The
+// corner from before that tick is found from the edges the card hangs from and
+// its size at the press, so it assumes nothing else resized the card between
+// the press and that tick.
+function pinTopLeft(p) {
+  const { el, gripperPress: from } = p;
+  const dock = el.parentElement;
+  const r = el.getBoundingClientRect();
+  const dockBox = dock.getBoundingClientRect();
+  const left = r.right - from.width;
+  const top = el.classList.contains("anchor-bottom") ? r.bottom - from.height : r.top;
+  el.style.transform = "none";
+  el.style.right = "auto";
+  el.style.bottom = "auto";
+  el.style.left = `${left - dockBox.left - dock.clientLeft}px`;
+  el.style.top = `${top - dockBox.top - dock.clientTop}px`;
+}
+
+const pinned = (p) => Boolean(p.el.style.left);
+
+// Undo pinTopLeft: the card hangs from its edges again, at its shown offset.
+function unpinTopLeft(p) {
+  const { el } = p;
+  for (const side of ["left", "top", "right", "bottom"]) el.style[side] = "";
+  applyPos(el, p.shown);
+}
+
 // CSS `resize` gives the affordance, both axes; there is no resize event for
 // it, so the observer is how we notice. An inline height is the one signal that
 // a height is the user's doing and not the content's — content growth leaves
-// the style empty, and the conversion below clears it again. It watches the
-// style attribute, not the box: with a cap in force a drag downward writes a
-// taller inline height while max-height keeps the box pinned, so a size
-// observer never fires, the cap never clears, and the drag looks dead in that
-// direction. A width drag is noticed off the style attribute too
-// (resizePending); it clears the cap only when a height drag is running too, or
-// the card would grow tall off a width gesture. The conversion waits RESIZE_SETTLE after the last tick, on the
-// record's resizeTimer, so a close or a dock inside that window can run
-// settleResize first, while the card is still where the drag measured it,
-// rather than letting the timer fire on a hidden or re-parented card.
+// the style empty, and the conversion below clears it again.
+//
+// The observer watches the style attribute, not the box: with a cap in force a
+// drag downward writes a taller inline height while max-height holds the box's
+// height, so a size observer never fires, the cap never clears, and the drag
+// looks dead in that direction.
+//
+// A width drag is noticed off the style attribute too (resizePending). It
+// clears the cap only when a height drag is running too, or the card would grow
+// tall off a width gesture. While a press is held, an inline size within
+// RESIZE_SLOP of the size at the press is drift from the other axis, and does
+// not count as a drag on its axis.
+//
+// A gripper press settles at its release, however long the drag pauses. An
+// inline size written with no press, such as by a script, settles RESIZE_SETTLE
+// after its last tick, on the record's resizeTimer. A close or a dock runs
+// settleResize first, while the card is still where the drag measured it, so a
+// hidden or re-parented card never settles.
 function wireResize(el, name, p) {
+  // The gripper is part of the card's own box, so a press whose target is the
+  // card itself (not its content) may start a resize. Only the primary button of
+  // the primary pointer does, and only one press at a time. Its release can land
+  // anywhere, but only the pressing pointer's release ends it.
+  el.addEventListener("pointerdown", (e) => {
+    if (e.target !== el || e.button !== 0 || !e.isPrimary || p.gripperPress || p.dock || !p.shown) return;
+    const r = el.getBoundingClientRect();
+    p.gripperPress = { width: r.width, height: r.height, maxHeight: el.style.maxHeight, refitDue: false };
+    const press = new AbortController();
+    const release = (ev) => {
+      if (ev.pointerId !== e.pointerId) return;
+      press.abort();
+      settleResize(p, name);
+    };
+    window.addEventListener("pointerup", release, { signal: press.signal });
+    window.addEventListener("pointercancel", release, { signal: press.signal });
+  });
   new MutationObserver(() => {
     if (!resizePending(p)) return;
     // Let the card follow the pointer while the gesture runs: the old
-    // cap would otherwise pin it and the drag would look dead.
-    if (el.style.height) el.style.maxHeight = "";
+    // cap would otherwise hold its height and the drag would look dead.
+    if (el.style.height && !withinSlop(p.gripperPress, "height", Number.parseFloat(el.style.height))) {
+      el.style.maxHeight = "";
+    }
+    // Pinned at the first tick, not at the press: a layout change before the
+    // browser starts its resize stops the gesture.
+    if (p.gripperPress && !pinned(p)) pinTopLeft(p);
     clearTimeout(p.resizeTimer);
-    p.resizeTimer = setTimeout(() => settleResize(p, name), RESIZE_SETTLE);
+    if (!p.gripperPress) p.resizeTimer = setTimeout(() => settleResize(p, name), RESIZE_SETTLE);
   }).observe(el, { attributes: true, attributeFilter: ["style"] });
 }
 
 // Turn a pending gripper drag into the stored sizes now. Only an open floating
 // card can be measured against its dock; anything else just drops the in-flight
 // sizes — so a caller about to hide or re-parent the card runs this first,
-// while the card still counts as open and floating. A no-op when no drag is
-// pending.
+// while the card still counts as open and floating. With no drag pending it
+// stores nothing, but it still ends a held press (p.gripperPress), and runs the
+// refit that press held off.
 function settleResize(p, name) {
   clearTimeout(p.resizeTimer);
   const { el } = p;
-  const h = Number.parseFloat(el.style.height);
-  const w = el.style.width === p.appliedWidth ? Number.NaN : Number.parseFloat(el.style.width);
-  el.style.height = "";
-  if ((!h && !w) || p.dock || !el.classList.contains("open")) {
+  const from = p.gripperPress;
+  p.gripperPress = null;
+  // The card's box before the unpin (a pinned card's top-left corner is where
+  // the pin held it), and the dock's box, which bounds the size.
+  const at = from && el.getBoundingClientRect();
+  const dockBox = from && el.parentElement?.getBoundingClientRect();
+  if (pinned(p)) unpinTopLeft(p);
+  let h = Number.parseFloat(el.style.height);
+  let w = el.style.width === p.appliedWidth ? Number.NaN : Number.parseFloat(el.style.width);
+  // An axis the press moved no further than RESIZE_SLOP was drift, not a drag:
+  // it keeps the cap or width it had.
+  if (withinSlop(from, "height", h)) {
+    h = Number.NaN;
+    el.style.maxHeight = from.maxHeight;
+  }
+  if (withinSlop(from, "width", w)) {
+    w = Number.NaN;
     el.style.width = p.appliedWidth;
-    return;
   }
-  const size = loadSize(name);
-  if (h) {
-    const cap = capOf(el, h, floorOf(p));
-    applyCap(el, cap);
-    size.h = cap;
+  el.style.height = "";
+  const open = !p.dock && el.classList.contains("open");
+  if ((!h && !w) || !open) {
+    el.style.width = p.appliedWidth;
+  } else {
+    // A size reaching past the dock's right or bottom edge would leave the
+    // dragged corner off it, so the room from the pinned corner to that edge
+    // bounds the size. The bound is never below the size at the press: a card
+    // already past the edge can shrink, not grow.
+    const maxH = dockBox ? Math.max(dockBox.bottom - at.top, from.height) : Number.POSITIVE_INFINITY;
+    const maxW = dockBox ? Math.max(dockBox.right - at.left, from.width) : Number.POSITIVE_INFINITY;
+    const size = loadSize(name);
+    if (h) {
+      const cap = capOf(el, Math.min(h, maxH), floorOf(p));
+      applyCap(el, cap);
+      size.h = cap;
+    }
+    if (w) {
+      size.w = clampWidth(el, Math.min(w, maxW));
+      applyWidth(p, size.w);
+    }
+    saveSize(name, size);
   }
-  if (w) {
-    size.w = capWidth(el, w);
-    applyWidth(p, size.w);
+  if (!from || !open) return;
+  // Unpinned, the card hangs from the dock's right edge again, and an
+  // .anchor-bottom card from its bottom edge too, so at its new size its
+  // top-left corner may have moved: shift it back to `at`, clamped like the end
+  // of a head drag, as the card's new placement. The pinned left/top were
+  // rounded to the layout's sub-pixel grid, so a move under half a pixel is
+  // treated as that rounding, not a move.
+  const now = el.getBoundingClientRect();
+  if (Math.abs(now.left - at.left) > 0.5 || Math.abs(now.top - at.top) > 0.5) {
+    const { dx, dy } = p.shown;
+    p.shown = { ...p.shown, ...clampOffset(anchorOf(el, p.shown), dx + at.left - now.left, dy + at.top - now.top) };
+    applyPos(el, p.shown);
+    p.pos = { ...p.shown };
+    p.cascade = false;
+    savePos(name, p.pos);
   }
-  saveSize(name, size);
+  if (from.refitDue) sanitizePanel(p, name, false);
 }
 
 // A stored JSON value, or null when nothing (or no JSON) is stored.
@@ -691,8 +813,13 @@ function sanitizePanel(p, name, persist = true) {
   // the single gate — refitFloating reaches a held card from three
   // sides (a strip appearing or vanishing, the window-resize settle,
   // the strip splitter's settle), not just off the card's own
-  // observer.
+  // observer. A gripper press holds the card the same way; its release runs
+  // the refit it held off (settleResize).
   if (p.dock || p.dragging) return;
+  if (p.gripperPress) {
+    p.gripperPress.refitDue = true;
+    return;
+  }
   const { el } = p;
   // The floor as min-height too, so a gripper drag stops at it.
   const floor = floorOf(p);
@@ -1199,8 +1326,8 @@ export function closePanel(name) {
   // The card is going away; its dock menu must not outlive it.
   if (openMenu?.dataset.panel === name) closeDockMenu();
   // A gripper drag that has not settled yet is committed now, while
-  // the card is still visible to measure; the timer would otherwise
-  // fire on a hidden card.
+  // the card is still visible to measure; its release, or the timer of
+  // a resize no press started, would otherwise settle a hidden card.
   settleResize(p, name);
   p.el.classList.remove("open");
   // A closed tile keeps its slot but no longer counts; the strip may

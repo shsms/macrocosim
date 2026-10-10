@@ -2268,10 +2268,250 @@ await page.evaluate(() => { document.getElementById("repl").style.width = "700px
 await new Promise((r) => setTimeout(r, 1000));
 const dragged = await replWidth();
 check("e2e: a sideways drag keeps the REPL panel's width and stores it", Math.abs(dragged.w - 700) <= 1 && dragged.stored === 700, JSON.stringify(dragged));
-await page.evaluate(() => { document.getElementById("repl").style.width = "560px"; });
-await waitFor(async () => ((await replWidth()).stored === 560 ? true : null), 5000).catch(() => null);
+// The width stays through a dock and a float-out.
+await page.click("#repl .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("right")');
+await new Promise((r) => setTimeout(r, 400));
+await page.click("#repl .float-dock");
+await new Promise((r) => setTimeout(r, 400));
+const refloated = await replWidth();
+check("e2e: the REPL panel's dragged width survives a dock and a float-out", Math.abs(refloated.w - 700) <= 1 && refloated.stored === 700, JSON.stringify(refloated));
+// Back to the default width, the card wholly on screen, for the gripper drags.
+const resetReplWidth = async () => {
+  await page.evaluate(() => { document.getElementById("repl").style.width = "560px"; });
+  await waitFor(async () => ((await replWidth()).stored === 560 ? true : null), 5000).catch(() => null);
+};
+await resetReplWidth();
+// A mouse drag on the gripper: the corner under the pointer follows it, and the
+// card's top-left corner stays put.
+const replRect = async () =>
+  await page.evaluate(() => {
+    const r = document.getElementById("repl").getBoundingClientRect();
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+  });
+// Drags the REPL panel's gripper by (dx, dy), holds it `pause` ms there, moves
+// it on to (endX, endY) and lets go; returns the card's box before the drag and
+// just before the release.
+const dragGripper = async (dx, dy, { pause = 0, endX = dx, endY = dy } = {}) => {
+  const from = await replRect();
+  const x = from.right - 4;
+  const y = from.bottom - 4;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + dx, y + dy, { steps: 5 });
+  await new Promise((r) => setTimeout(r, pause));
+  await page.mouse.move(x + endX, y + endY, { steps: 5 });
+  const to = await replRect();
+  await page.mouse.up();
+  // The release settles the drag; RESIZE_SETTLE is longer than this.
+  await new Promise((r) => setTimeout(r, 100));
+  return { from, to };
+};
+// Whether the REPL panel's stored offset is the one it shows.
+const offsetStored = async () =>
+  await page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem("mc-panel-pos-repl-btn") ?? "null");
+    const transform = document.getElementById("repl").style.transform;
+    return { stored, transform, same: stored !== null && transform === `translate(${stored.dx}px, ${stored.dy}px)` };
+  });
+// A pause in the drag keeps the corner too.
+const right = await dragGripper(50, 0, { pause: 500, endX: 100 });
+check(
+  "e2e: dragging the REPL panel's gripper right moves its right edge, not its left",
+  Math.abs(right.to.right - right.from.right - 100) <= 2 && Math.abs(right.to.left - right.from.left) <= 1,
+  JSON.stringify(right),
+);
+// The shifted offset is the card's placement now, stored at the release.
+const placed = await offsetStored();
+check("e2e: a gripper drag stores the REPL panel's shifted offset", placed.same, JSON.stringify(placed));
+// A drag that pauses and comes back to where it started stores no offset of its
+// own on the way.
+await dragGripper(100, 0, { pause: 500, endX: 0 });
+const back = await offsetStored();
+check(
+  "e2e: a gripper drag that pauses and comes back leaves the stored offset as it was",
+  JSON.stringify(back.stored) === JSON.stringify(placed.stored),
+  JSON.stringify({ placed: placed.stored, back }),
+);
+// A sideways drag drifts a pixel or two along the other axis, and the browser
+// writes that axis too. The drift is not a height drag: it stores no height.
+const drift = await dragGripper(40, 2);
+const driftSize = await page.evaluate(() => JSON.parse(localStorage.getItem("mc-panel-size-repl-btn") ?? "null"));
+check(
+  "e2e: a sideways gripper drag with a pixel of vertical drift stores a width and no height",
+  driftSize !== null && driftSize.h === undefined && driftSize.w !== undefined,
+  JSON.stringify({ drift, driftSize }),
+);
+// The REPL panel hangs from the dock's bottom edge; a drag down still moves its
+// bottom edge.
+const down = await dragGripper(0, 36);
+check(
+  "e2e: dragging the REPL panel's gripper down moves its bottom edge, not its top",
+  Math.abs(down.to.top - down.from.top) <= 1 && down.to.bottom - down.from.bottom >= 30,
+  JSON.stringify(down),
+);
+// Past the dock's bottom or right edge the card stops at it, gripper and all.
+await dragGripper(0, 2000);
+const deep = await page.evaluate(() => {
+  const card = document.getElementById("repl");
+  return {
+    h: JSON.parse(localStorage.getItem("mc-panel-size-repl-btn") ?? "null")?.h ?? null,
+    room: card.parentElement.getBoundingClientRect().bottom - card.getBoundingClientRect().top,
+  };
+});
+check(
+  "e2e: a gripper drag past the dock's bottom edge caps the REPL panel at it",
+  deep.h !== null && deep.h <= deep.room + 1,
+  JSON.stringify(deep),
+);
+const past = await dragGripper(3000, 0);
+const settled = await replRect();
+const floatAreaRight = await page.evaluate(
+  () => document.getElementById("repl").parentElement.getBoundingClientRect().right,
+);
+check(
+  "e2e: a gripper drag past the dock's right edge stops the REPL panel at it",
+  settled.right <= floatAreaRight + 1 && Math.abs(settled.left - past.from.left) <= 1,
+  JSON.stringify({ past, settled, floatAreaRight }),
+);
+await resetReplWidth();
+// A press held while the window shrinks lands the card below the dock's top
+// once it is let go, whether the pointer stays put or moves after the shrink.
+// A press that resizes nothing leaves the stored placement as it was.
+const replPlace = async () =>
+  await page.evaluate(() => {
+    const card = document.getElementById("repl");
+    return {
+      top: card.getBoundingClientRect().top,
+      dockTop: card.parentElement.getBoundingClientRect().top,
+      inner: window.innerHeight,
+      stored: JSON.parse(localStorage.getItem("mc-panel-pos-repl-btn") ?? "null"),
+    };
+  });
+for (const moved of [false, true]) {
+  const before = await replPlace();
+  const held = await replRect();
+  await page.mouse.move(held.right - 4, held.bottom - 4);
+  await page.mouse.down();
+  await page.setViewportSize({ width: 1600, height: 450 });
+  await new Promise((r) => setTimeout(r, 600));
+  if (moved) await page.mouse.move(held.right - 4, 400, { steps: 5 });
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 100));
+  const shrunk = await replPlace();
+  await page.setViewportSize(CONTEXT.viewport);
+  await new Promise((r) => setTimeout(r, 600));
+  const regrown = await replPlace();
+  check(
+    `e2e: a gripper press held while the window shrinks${moved ? ", then moved," : ""} leaves the REPL panel's head in the window`,
+    shrunk.top >= shrunk.dockTop - 1 &&
+      shrunk.top <= shrunk.inner - 20 &&
+      regrown.top <= regrown.inner - 100 &&
+      (moved || JSON.stringify(regrown.stored) === JSON.stringify(before.stored)),
+    JSON.stringify({ before, shrunk, regrown }),
+  );
+}
+// Only the primary button of the primary pointer presses the gripper: a
+// right-button press holds no drag, so an inline size written meanwhile still
+// settles after RESIZE_SETTLE, and another pointer's release does not end a
+// drag.
+{
+  const held = await replRect();
+  await page.mouse.move(held.right - 4, held.bottom - 4);
+  await page.mouse.down({ button: "right" });
+  await page.evaluate(() => { document.getElementById("repl").style.width = "613px"; });
+  await new Promise((r) => setTimeout(r, 600));
+  const whileRight = await replWidth();
+  await page.mouse.up({ button: "right" });
+  check(
+    "e2e: a right-button press on the gripper holds no drag: a width written meanwhile settles",
+    whileRight.stored === 613,
+    JSON.stringify(whileRight),
+  );
+}
+{
+  await page.evaluate(() => {
+    document.getElementById("repl").dispatchEvent(new PointerEvent("pointerdown", { pointerId: 5, isPrimary: false, bubbles: true }));
+    document.getElementById("repl").style.width = "617px";
+  });
+  await new Promise((r) => setTimeout(r, 600));
+  const afterSecondary = await replWidth();
+  check(
+    "e2e: a press by a non-primary pointer holds no drag: a width written meanwhile settles",
+    afterSecondary.stored === 617,
+    JSON.stringify(afterSecondary),
+  );
+}
+{
+  const held = await replRect();
+  await page.mouse.move(held.right - 4, held.bottom - 4);
+  await page.mouse.down();
+  await page.mouse.move(held.right + 26, held.bottom - 4, { steps: 5 });
+  await page.evaluate(() => window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 7, isPrimary: false })));
+  const stillPinned = await page.evaluate(() => document.getElementById("repl").style.left !== "");
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 100));
+  check("e2e: another pointer's release does not end a gripper drag", stillPinned);
+}
+await resetReplWidth();
+// Drags the REPL panel by its head by dx and lets go; `at` is where along the
+// head to grab it, from its left end (the middle unless given).
+const dragReplHead = async (dx, at = 0.5) => {
+  const h = await page.evaluate((f) => {
+    const r = document.querySelector("#repl .panel-drag").getBoundingClientRect();
+    return { x: r.left + r.width * f, y: r.top + r.height / 2 };
+  }, at);
+  await page.mouse.move(h.x, h.y);
+  await page.mouse.down();
+  await page.mouse.move(h.x + dx, h.y, { steps: 8 });
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 300));
+};
+// A card hanging off the window's left edge keeps its left edge through a press
+// and a sideways drag of its gripper.
+await dragReplHead(-(await replRect()).left - 200);
+const offLeft = await dragGripper(20, 0);
+const offLeftSettled = await replRect();
+check(
+  "e2e: a gripper drag on a card hanging off the left edge keeps its left edge",
+  offLeft.from.left < -100 && Math.abs(offLeftSettled.left - offLeft.from.left) <= 1,
+  JSON.stringify({ offLeft, offLeftSettled }),
+);
+// Narrowed at its left limit, the card is clamped like the end of a head drag:
+// at least KEEP_X (80px) of it stays on screen.
+// Grabbed 70px from the head's right end, clear of its buttons.
+const atLimitFrom = await replRect();
+await dragReplHead(2 - (atLimitFrom.right - 70), 1 - 70 / (atLimitFrom.right - atLimitFrom.left));
+const atLimit = await dragGripper(-40, 0);
+const atLimitSettled = await replRect();
+check(
+  "e2e: a gripper drag that narrows a card at its left limit keeps 80px of it on screen",
+  atLimit.from.right <= 81 && atLimit.to.right <= atLimit.from.right - 30 && atLimitSettled.right >= 79,
+  JSON.stringify({ atLimit, atLimitSettled }),
+);
+// A card already past the dock's right edge can shrink there, not grow: a drag
+// that narrows it narrows it by the drag, not down to the room left.
+await page.click("#logs-btn");
+await page.click("#logs-panel .float-dock");
+await page.click('.dock-menu .dock-menu-item:has-text("right")');
+await new Promise((r) => setTimeout(r, 400));
+const edgeRight = await page.evaluate(() => document.getElementById("repl").parentElement.getBoundingClientRect().right);
+await dragReplHead(edgeRight - (await replRect()).right + 100);
+const narrowed = await dragGripper(-10, 0);
+const narrowW = (await replWidth()).w;
+check(
+  "e2e: a gripper drag on a card past the dock's edge narrows it by the drag, not to the room left",
+  narrowed.from.right > edgeRight && Math.abs(narrowW - (narrowed.from.right - narrowed.from.left - 10)) <= 2,
+  JSON.stringify({ narrowed, narrowW, edgeRight }),
+);
+await page.click("#logs-panel .float-dock");
+await page.click("#logs-btn");
 await page.click("#repl-btn");
-await page.evaluate(() => localStorage.removeItem("mc-panel-size-repl-btn"));
+await page.evaluate(() => {
+  localStorage.removeItem("mc-panel-size-repl-btn");
+  localStorage.removeItem("mc-panel-pos-repl-btn");
+  localStorage.removeItem("mc-strip-right");
+});
 // In Scenarios the backtick works too.
 await page.keyboard.press("2");
 await page.keyboard.press("`");
