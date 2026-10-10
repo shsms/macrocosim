@@ -46,8 +46,10 @@ export function createSymbolStore(fetchJson) {
   };
 }
 
-// The call the cursor is in: the head of the innermost open form and the index
-// of the argument the cursor is on (-1 on the head itself). Strings and
+// The call the cursor is in: the head of the innermost open form, the index of
+// the argument the cursor is on (-1 on the head itself), and the texts of the
+// arguments that end before the cursor — the one the cursor is in, or sits
+// right after, is not among them, as it is still being typed. Strings and
 // comments are skipped, a nested form or a string is one argument, and a quote
 // belongs to what follows it. null outside any form, when the form has no head
 // yet, or when its head is a form or a string.
@@ -68,20 +70,28 @@ export function callAtCursor(text, cursor) {
   let inElement = false;
   let headStart = -1;
   let headEnd = -1;
+  let elStart = -1;
+  const args = [];
+  // The element being read, if any, ends just before `end`.
+  const endElement = (end) => {
+    if (inElement && count > 1) args.push(text.slice(elStart, end));
+    inElement = false;
+  };
   for (let i = start; i < cursor; i++) {
     const c = text[i];
     if (/\s/.test(c)) {
-      inElement = false;
+      endElement(i);
       continue;
     }
     if (c === ";") {
+      endElement(i);
       i = lineEnd(text, i, cursor);
-      inElement = false;
       continue;
     }
     if (!inElement) {
       count++;
       inElement = true;
+      elStart = i;
       if (count === 1 && (c === "(" || c === '"')) return null;
       if (count === 1) headStart = i;
     }
@@ -91,7 +101,7 @@ export function callAtCursor(text, cursor) {
   }
   if (count === 0) return null;
   const head = text.slice(headStart, headEnd);
-  return { head, argIndex: (inElement ? count - 1 : count) - 1 };
+  return { head, argIndex: (inElement ? count - 1 : count) - 1, args };
 }
 
 // The index of the string's closing quote, for the string whose opening quote

@@ -21,29 +21,35 @@ assert.equal(at("|"), null);
 assert.equal(at("foo|"), null);
 assert.equal(at("(f 1) |"), null);
 // On the head itself the argument index is -1.
-assert.deepEqual(at("(set-meter-po|"), { head: "set-meter-po", argIndex: -1 });
+assert.deepEqual(at("(set-meter-po|"), { head: "set-meter-po", argIndex: -1, args: [] });
 // A space after the head starts the first argument.
-assert.deepEqual(at("(f |"), { head: "f", argIndex: 0 });
-assert.deepEqual(at("(f 1|"), { head: "f", argIndex: 0 });
-assert.deepEqual(at("(f 1 |"), { head: "f", argIndex: 1 });
-assert.deepEqual(at("(f 1 2|)"), { head: "f", argIndex: 1 });
+assert.deepEqual(at("(f |"), { head: "f", argIndex: 0, args: [] });
+assert.deepEqual(at("(f 1|"), { head: "f", argIndex: 0, args: [] });
+assert.deepEqual(at("(f 1 |"), { head: "f", argIndex: 1, args: ["1"] });
+assert.deepEqual(at("(f 1 2|)"), { head: "f", argIndex: 1, args: ["1"] });
 // A nested form counts as one argument, and the innermost open form is the
 // call.
-assert.deepEqual(at("(f (g 1 2) |"), { head: "f", argIndex: 1 });
-assert.deepEqual(at("(f (g 1 |"), { head: "g", argIndex: 1 });
-assert.deepEqual(at("(f '(1 2) |"), { head: "f", argIndex: 1 });
+assert.deepEqual(at("(f (g 1 2) |"), { head: "f", argIndex: 1, args: ["(g 1 2)"] });
+assert.deepEqual(at("(f (g 1 |"), { head: "g", argIndex: 1, args: ["1"] });
+assert.deepEqual(at("(f '(1 2) |"), { head: "f", argIndex: 1, args: ["'(1 2)"] });
 // Parens in a string or a comment don't count, and a string is one argument;
 // the cursor inside a string is on that argument.
-assert.deepEqual(at('(f "a (b" |'), { head: "f", argIndex: 1 });
-assert.deepEqual(at('(f "a b|'), { head: "f", argIndex: 0 });
-assert.deepEqual(at("(f ; (g\n 1 |"), { head: "f", argIndex: 1 });
-assert.deepEqual(at("(; note\n f 1 |"), { head: "f", argIndex: 1 });
-assert.deepEqual(at('(f "a\\"(" |'), { head: "f", argIndex: 1 });
+assert.deepEqual(at('(f "a (b" |'), { head: "f", argIndex: 1, args: ['"a (b"'] });
+assert.deepEqual(at('(f "a b|'), { head: "f", argIndex: 0, args: [] });
+assert.deepEqual(at("(f ; (g\n 1 |"), { head: "f", argIndex: 1, args: ["1"] });
+// A comment right after an argument ends it.
+assert.deepEqual(at("(f 1; c\n |"), { head: "f", argIndex: 1, args: ["1"] });
+assert.deepEqual(at("(; note\n f 1 |"), { head: "f", argIndex: 1, args: ["1"] });
+assert.deepEqual(at('(f "a\\"(" |'), { head: "f", argIndex: 1, args: ['"a\\"("'] });
 // A form whose head is not a symbol is no call.
 assert.equal(at("((f) |"), null);
 assert.equal(at('("f" |'), null);
 // Several lines.
-assert.deepEqual(at("(make-battery\n  :id 7\n  |"), { head: "make-battery", argIndex: 2 });
+assert.deepEqual(at("(make-battery\n  :id 7\n  |"), {
+  head: "make-battery",
+  argIndex: 2,
+  args: [":id", "7"],
+});
 
 // ── paramFor ────────────────────────────────────────────────────
 const req = (label) => ({ label, position: "required" });
