@@ -10,11 +10,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Format + clippy + cargo test (lib, bin, integration). tulisp /
-  # tulisp-async / tulisp-fmt are normal crates.io releases per
-  # Cargo.toml; the proto roots (microgrid, assets, dispatch) are
-  # vendored as this repo's own submodules, so `submodules:
-  # recursive` is all the checkout needs.
+  # Format + clippy + cargo test (lib, bin, integration). tulisp is a
+  # pinned git rev (see Cargo.toml's [patch.crates-io]); tulisp-async
+  # and tulisp-fmt are crates.io releases. The proto roots (microgrid,
+  # assets, dispatch) are vendored as this repo's own submodules, so
+  # `submodules: recursive` is all the checkout needs.
   rust:
     runs-on: ubuntu-latest
     steps:

@@ -18,7 +18,7 @@ prost = "0.14.0"
 prost-types = "0.14.0"
 tokio = { version = "1.43.1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time"] }
 tokio-stream = "0.1.15"
-tulisp = { version = "0.32", features = ["sync", "etags"] }
+tulisp = { git = "https://github.com/shsms/tulisp", rev = "42cf4432b166fd5e57050193b7fce2e24f48fdaa", features = ["sync", "etags"] }
 tulisp-fmt = "0.2"
 tulisp-async = "0.4"
 notify = "6.1.1"
@@ -70,6 +70,13 @@ tempfile = "3"
 [lib]
 name = "macrocosim"
 path = "src/lib.rs"
+
+# While tulisp comes from git (see the dependency above), tulisp-async, which
+# depends on tulisp too, must use the same copy, or the ctx types split. Cargo
+# reads this section only when macrocosim is the crate being built, not when it
+# is a dependency of another crate.
+[patch.crates-io]
+tulisp = { git = "https://github.com/shsms/tulisp", rev = "42cf4432b166fd5e57050193b7fce2e24f48fdaa" }
 
 [[bin]]
 name = "macrocosim"

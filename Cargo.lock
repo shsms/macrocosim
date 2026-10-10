@@ -2449,8 +2449,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tulisp"
 version = "0.32.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18f2482a55bd20c4369ae8ed158e7f44b35020d423c512e8bfe67477cf178711"
+source = "git+https://github.com/shsms/tulisp?rev=42cf4432b166fd5e57050193b7fce2e24f48fdaa#42cf4432b166fd5e57050193b7fce2e24f48fdaa"
 
 [[package]]
 name = "tulisp-async"

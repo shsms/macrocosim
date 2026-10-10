@@ -473,8 +473,10 @@ so construction + validation stay identical.
 
 ## Dependencies
 
-- `tulisp = { version = "0.32", features = ["sync", "etags"] }` — the
-  crates.io release.
+- `tulisp = { git = "https://github.com/shsms/tulisp", rev = "…", features = ["sync", "etags"] }`
+  — upstream main at a pinned rev, until a tulisp release carries what this
+  repo needs. Then depend on that version and drop the `[patch.crates-io]`
+  entry.
 - `tulisp-async = "0.4"` — same-ctx timer primitives (`run-with-timer`, `cancel-timer`,
   `sleep-for`). `TokioExecutor::new` calls `Handle::current()`, so
   `Config::new` must be invoked inside a running tokio runtime.
