@@ -1588,16 +1588,17 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 /* Any other symbol immediately after `(` — a function call. */
 .repl-function-head { color: var(--syn-fn); }
 
-/* The completion popup: the names on the left, the selected name's
-   signature and docstring beside them. Each half scrolls on its own, within
-   the height repl.js caps it to. It opens over the word being completed:
-   repl.js puts its left edge at the word's start, sliding it left to stay
-   within the input. */
+/* The completion popup: the names on the left, the selected name's signature
+   and docstring beside them. Each half scrolls on its own, within the height
+   repl.js caps it to. It opens over the word being completed: repl.js puts its
+   left edge at the word's start, sliding it left to stay within the input. The
+   doc pane is as wide as its widest line, so a docstring shows as written; it
+   folds only when the input is too narrow for it. */
 #repl-popup {
   position: absolute;
   bottom: 100%;       /* float upward from the input row */
   left: 0;            /* set by repl.js, at the word being completed */
-  width: min(480px, 100%);
+  max-width: 100%;
   margin: 0 0 var(--space-1);
   display: flex;
   background: var(--bg-elev);
@@ -1622,7 +1623,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   overflow-y: auto;
 }
 #repl-doc {
-  flex: 1 1 0;
+  flex: 0 1 auto;
+  width: max-content;
   min-width: 0;
   overflow-y: auto;
   padding: var(--space-1) var(--space-3);
@@ -1635,8 +1637,13 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   justify-content: space-between;
   gap: var(--space-2);
   margin-bottom: var(--space-1);
+  white-space: nowrap;
 }
-.repl-doc-sig { color: var(--syn-fn); }
+.repl-doc-sig {
+  color: var(--syn-fn);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .repl-doc-kind { color: var(--muted); }
 .repl-doc-text {
   margin: 0;
