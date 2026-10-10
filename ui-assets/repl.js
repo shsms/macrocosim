@@ -120,6 +120,17 @@ export function setupRepl() {
     const borders = Number.parseFloat(s.borderTopWidth) + Number.parseFloat(s.borderBottomWidth);
     completions.style.maxHeight = docPane.style.maxHeight = `${Math.max(0, cap - borders)}px`;
     completions.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+    // The popup opens over the word being completed: its left edge at the
+    // word's start. The overlay mirrors the textarea's text in the same font
+    // and box, so a marker holding the text from the word's start on wraps
+    // where the textarea does and measures where the word is; the popup slides
+    // left to stay within the input. Plain text measures as the textarea lays
+    // it out; refreshOverlay() puts the highlighting back.
+    const { start } = wordAtCursor(input);
+    overlay.innerHTML = `${escapeHtml(input.value.slice(0, start))}<span>${escapeHtml(input.value.slice(start))}</span>`;
+    const at = overlay.lastElementChild.offsetLeft;
+    refreshOverlay();
+    popup.style.left = `${Math.max(0, Math.min(at, input.clientWidth - popup.offsetWidth))}px`;
   }
 
   // The selected name's signature, kind and full docstring, beside the list.

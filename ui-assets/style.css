@@ -1529,12 +1529,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   padding: var(--space-2);
   border-top: 1px solid var(--border);
   background: var(--bg);
-  position: relative; /* anchor for the completion popup */
 }
 
 #repl-input-wrap {
   flex: 1;
-  position: relative; /* anchor for the rainbow-paren overlay */
+  position: relative; /* anchor for the rainbow-paren overlay and the completion popup */
 }
 
 /* The overlay and textarea share every layout-affecting property so
@@ -1591,12 +1590,14 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 
 /* The completion popup: the names on the left, the selected name's
    signature and docstring beside them. Each half scrolls on its own, within
-   the height repl.js caps the popup to. */
+   the height repl.js caps it to. It opens over the word being completed:
+   repl.js puts its left edge at the word's start, sliding it left to stay
+   within the input. */
 #repl-popup {
   position: absolute;
   bottom: 100%;       /* float upward from the input row */
-  left: var(--space-2);
-  right: var(--space-2);
+  left: 0;            /* set by repl.js, at the word being completed */
+  width: min(480px, 100%);
   margin: 0 0 var(--space-1);
   display: flex;
   background: var(--bg-elev);

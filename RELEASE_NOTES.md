@@ -314,7 +314,7 @@ What to change in your own scripts:
   each time the input gets focus and after each eval, so a function an
   eval defines completes at once.
   The completion popup shows the selected name's signature and
-  docstring.
+  docstring, and opens over the word being completed.
   While you type a call, a line above the input shows its signature,
   with the current argument marked, and the first line of its
   docstring.

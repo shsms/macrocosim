@@ -2146,6 +2146,31 @@ const popup = await waitFor(async () =>
 check("e2e: the completion popup fits inside the default-sized REPL card", popup !== null && popup.entries > 5 && popup.top >= 0 && popup.bottom >= 0, JSON.stringify(popup));
 await page.keyboard.press("Escape"); // dismisses the popup
 await page.fill("#repl-input", "");
+// The popup opens over the word being completed: its left edge moves with the
+// word. A popup as wide as the input sits at its left edge wherever the word
+// is, so the card is made wide enough for the popup to move.
+const setReplWidth = async (px) => {
+  await page.evaluate((w) => { document.getElementById("repl").style.width = w; }, `${px}px`);
+  await new Promise((r) => setTimeout(r, 1000));
+};
+await setReplWidth(1000);
+const popupLeft = async (text) => {
+  await page.fill("#repl-input", "");
+  await page.type("#repl-input", text);
+  return await waitFor(async () =>
+    await page.evaluate(() => {
+      const box = document.getElementById("repl-popup");
+      if (box.hidden) return null;
+      return { left: box.getBoundingClientRect().left - document.getElementById("repl-input").getBoundingClientRect().left };
+    }), 5000).catch(() => null);
+};
+const leftAtStart = await popupLeft("(smoke-sym-");
+await page.keyboard.press("Escape"); // dismisses the popup
+const leftIndented = await popupLeft("        (smoke-sym-");
+await page.keyboard.press("Escape"); // dismisses the popup
+await page.fill("#repl-input", "");
+await setReplWidth(560);
+check("e2e: the completion popup opens over the word being completed", leftAtStart !== null && leftIndented !== null && leftIndented.left - leftAtStart.left >= 40, JSON.stringify({ leftAtStart, leftIndented }));
 // Where a call takes a key, typing a `:` offers its keys. Nothing is offered
 // before that, so Enter there still starts a new line.
 await page.type("#repl-input", "(make-battery ");

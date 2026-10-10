@@ -242,12 +242,14 @@
                 <textarea id="repl-input" rows="2" spellcheck="false"
                           autocomplete="off"
                           placeholder="(eval lisp here — ctrl/cmd+enter to run, tab to complete)"></textarea>
+                <!-- The completion popup: repl.js sets its left edge at the
+                     start of the word being completed. -->
+                <div id="repl-popup" hidden>
+                  <ul id="repl-completions"></ul>
+                  <div id="repl-doc"></div>
+                </div>
               </div>
               <button type="submit" class="btn btn-primary">Eval</button>
-              <div id="repl-popup" hidden>
-                <ul id="repl-completions"></ul>
-                <div id="repl-doc"></div>
-              </div>
             </form>
           </div>
         </aside>
