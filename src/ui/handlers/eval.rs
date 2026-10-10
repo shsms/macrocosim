@@ -1,6 +1,7 @@
 //! `/api/eval`, `/api/mg/{mg}/eval`, `/api/format` (tulisp-fmt) and
 //! `/api/symbols`.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use axum::extract::State;
@@ -111,7 +112,7 @@ struct ParamEntry {
     /// The plist keys a `key` parameter takes, each with its leading `:`;
     /// `None` for the others, and for a key parameter that lists no keys, such
     /// as one only a docstring's usage line declares.
-    keys: Option<Vec<String>>,
+    keys: Option<Vec<Cow<'static, str>>>,
     /// Where `label` is in `text`, in UTF-16 code units, as JavaScript indexes
     /// a string.
     start: usize,
@@ -134,20 +135,21 @@ pub(in crate::ui) async fn symbols(
         .into_iter()
         .map(|(name, info)| symbol_entry(name, info))
         .collect();
-    let plist_keys: HashMap<String, Vec<String>> = symbols
+    let mut plist_keys: HashMap<String, Vec<Cow<'static, str>>> = symbols
         .iter()
         .filter_map(|entry| {
+            let name = entry.name.strip_prefix('%')?;
             let keys = entry
                 .signature
                 .as_ref()?
                 .params
                 .iter()
                 .find_map(|param| param.keys.clone())?;
-            Some((entry.name.strip_prefix('%')?.to_string(), keys))
+            Some((name.to_string(), keys))
         })
         .collect();
     for entry in &mut symbols {
-        let Some(keys) = plist_keys.get(&entry.name) else {
+        let Some(keys) = plist_keys.remove(&entry.name) else {
             continue;
         };
         if let Some(param) = entry
@@ -156,7 +158,7 @@ pub(in crate::ui) async fn symbols(
             .and_then(|sig| sig.params.iter_mut().find(|p| p.position == "rest"))
         {
             param.position = "key";
-            param.keys = Some(keys.clone());
+            param.keys = Some(keys);
         }
     }
     symbols.sort_unstable_by(|a, b| a.name.cmp(&b.name));
@@ -195,8 +197,7 @@ fn signature_entry(name: &str, signature: &Signature) -> SignatureEntry {
                 ParamPosition::Keywords => "key",
                 _ => "other",
             },
-            keys: (!param.keys.is_empty())
-                .then(|| param.keys.iter().map(|key| key.to_string()).collect()),
+            keys: (!param.keys.is_empty()).then(|| param.keys.clone()),
             start: utf16(range.start),
             end: utf16(range.end),
         })
