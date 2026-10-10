@@ -582,8 +582,8 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
     );
 
     // Plug a preset car into a charger. The Lisp-facing `plug-ev` in
-    // sim/common.lisp spreads (plug-ev ID PRESET &rest OVERRIDES) into
-    // this plist form, the same two-layer shape as make-*.
+    // sim/common.lisp spreads (plug-ev COMPONENT-ID PRESET &rest OVERRIDES)
+    // into this plist form, the same two-layer shape as make-*.
     let r = router.clone();
     ctx.defun(
         (
@@ -1937,9 +1937,9 @@ mod tests {
         assert!(!b.has_unrenderable_source());
     }
 
-    /// `(plug-ev ID PRESET …)` spreads its overrides into `%plug-ev`,
-    /// the car lands on the charger, `(ev-info ID)` prints it as a
-    /// plist, and `(unplug-ev ID)` takes it back off.
+    /// `(plug-ev COMPONENT-ID PRESET …)` spreads its overrides into `%plug-ev`,
+    /// the car lands on the charger, `(ev-info ID)` prints it as a plist, and
+    /// `(unplug-ev ID)` takes it back off.
     #[test]
     fn plug_ev_plugs_a_preset_with_overrides_and_unplug_clears_it() {
         let (cfg, _dir) = config_with("(%make-ev-charger :id 7)");

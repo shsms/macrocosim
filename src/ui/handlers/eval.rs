@@ -111,7 +111,8 @@ struct ParamEntry {
     position: &'static str,
     /// The plist keys a `key` parameter takes, each with its leading `:`;
     /// `None` for the others, and for a key parameter that lists no keys, such
-    /// as one only a docstring's usage line declares.
+    /// as one only a docstring's usage line declares. A wrapper that fills
+    /// every key of its primitive from its own parameters gets an empty list.
     keys: Option<Vec<Cow<'static, str>>>,
     /// Where `label` is in `text`, in UTF-16 code units, as JavaScript indexes
     /// a string.
@@ -123,10 +124,14 @@ struct ParamEntry {
 /// and special forms with their signatures, and the variables.  The list
 /// follows what is loaded, so a `defun` in an eval shows up on the next call.
 ///
-/// A `make-*` wrapper in `sim/defaults.lisp` hands its `&rest` tail to its
-/// `%make-*` primitive, which reads it as a plist: the primitive's keys
-/// complete at the wrapper's arguments too, so its rest parameter is given them
-/// as a key parameter.
+/// A function `name` whose `%name` primitive declares plist keys is taken to be
+/// a Lisp wrapper that hands its `&rest` tail to `%name`, which reads it as a
+/// plist: in the prelude, the `make-*` wrappers in `sim/defaults.lisp` and
+/// `plug-ev`. The primitive's keys complete at the wrapper's arguments too, so
+/// the wrapper's rest parameter is given them as a key parameter. A key with
+/// the name of one of the wrapper's required or optional parameters is left
+/// out: a wrapper that fills a key from its own parameter names that parameter
+/// after the key.
 pub(in crate::ui) async fn symbols(
     State(config): State<Config>,
 ) -> Result<Json<SymbolsResponse>, ApiError> {
@@ -149,14 +154,21 @@ pub(in crate::ui) async fn symbols(
         })
         .collect();
     for entry in &mut symbols {
-        let Some(keys) = plist_keys.remove(&entry.name) else {
+        let Some(mut keys) = plist_keys.remove(&entry.name) else {
             continue;
         };
-        if let Some(param) = entry
-            .signature
-            .as_mut()
-            .and_then(|sig| sig.params.iter_mut().find(|p| p.position == "rest"))
-        {
+        let Some(sig) = entry.signature.as_mut() else {
+            continue;
+        };
+        keys.retain(|key| {
+            !sig.params.iter().any(|p| {
+                matches!(p.position, "required" | "optional")
+                    && key
+                        .strip_prefix(':')
+                        .is_some_and(|name| name.eq_ignore_ascii_case(&p.label))
+            })
+        });
+        if let Some(param) = sig.params.iter_mut().find(|p| p.position == "rest") {
             param.position = "key";
             param.keys = Some(keys);
         }

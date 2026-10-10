@@ -543,6 +543,11 @@ Per-component plist args win without any special handling — AsList!
 takes the first occurrence of each key, as `plist-get` does, and the
 wrapper's defaults appear last in the merged plist.
 
+The REPL completes a wrapper's arguments with its `%` primitive's keys
+(`/api/symbols`). A wrapper that fills a key from one of its own parameters, as
+`plug-ev` fills `:component-id` and `:preset`, names that parameter after the
+key, so the REPL does not offer that key.
+
 Keyword names follow [`docs/names-and-units.md`](docs/names-and-units.md):
 the unit is the suffix (`:power-w`, `:soc-lower-pct`,
 `:command-delay-s`, `:ramp-rate-w-per-s`). An old keyword still loads
@@ -629,7 +634,7 @@ pack kwargs (`:capacity-wh`, `:initial-soc-pct`, `:soc-lower-pct`,
 and ignored, so older files still load, and the site import drops
 them from an export's charger.
 
-The car is runtime state, driven by `(plug-ev ID PRESET &rest
+The car is runtime state, driven by `(plug-ev COMPONENT-ID PRESET &rest
 overrides)` (`:soc-pct`, `:target-soc-pct`, `:phases`, `:max-current-a`,
 `:capacity-wh`, `:taper-start-pct`, `:taper-floor-pct`), `(unplug-ev ID)`,
 `(ev-info ID)` — a plist, or `nil` for an empty charger or any

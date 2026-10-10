@@ -572,7 +572,14 @@ async fn symbols_endpoint_describes_each_name() {
     let primitive_keys = &find("%make-battery")["signature"]["params"][0]["keys"];
     assert!(primitive_keys.is_array(), "{primitive_keys}");
     assert_eq!(wrapper["keys"], *primitive_keys);
-    assert_eq!(find("plug-ev")["signature"]["params"][2]["position"], "key");
+    // `plug-ev` passes `:component-id` and `:preset` from its own parameters,
+    // so its rest parameter is given the other keys only.
+    let overrides = &find("plug-ev")["signature"]["params"][2];
+    assert_eq!(overrides["position"], "key");
+    let keys = overrides["keys"].as_array().unwrap();
+    assert!(keys.contains(&json!(":soc-pct")), "{keys:?}");
+    assert!(!keys.contains(&json!(":component-id")), "{keys:?}");
+    assert!(!keys.contains(&json!(":preset")), "{keys:?}");
     assert_eq!(
         find("define-scenario")["signature"]["params"][0]["position"],
         "key"
