@@ -7,7 +7,7 @@
 // repl-symbols.js touches no DOM, so no shim is needed.
 import assert from "node:assert/strict";
 
-const { callAtCursor, createSymbolStore, hintHtml, paramFor } = await import(
+const { callAtCursor, createSymbolStore, hintHtml, keyCompletions, paramFor } = await import(
   new URL("../ui-assets/repl-symbols.js", import.meta.url)
 );
 const { wordAtCursor } = await import(new URL("../ui-assets/repl-syntax.js", import.meta.url));
@@ -97,6 +97,71 @@ assert.equal(
 );
 // A variable has no signature, so no hint.
 assert.equal(hintHtml({ name: "v", kind: "variable", signature: null, doc: "d" }, 0), "");
+
+// ── keyCompletions ──────────────────────────────────────────────
+const makeBattery = {
+  name: "make-battery",
+  kind: "function",
+  signature: {
+    text: "(make-battery ARGS)",
+    params: [{ label: "ARGS", position: "key", keys: [":id", ":name", ":initial-soc-pct"] }],
+  },
+  doc: null,
+};
+// The keys of the parameter the cursor is at, that match what is typed.
+const keysAt = (src, symbol = makeBattery) => {
+  const cursor = src.indexOf("|");
+  const text = src.replace("|", "");
+  const { prefix } = wordAtCursor({ value: text, selectionStart: cursor });
+  return keyCompletions(symbol, callAtCursor(text, cursor), prefix);
+};
+assert.deepEqual(keysAt("(make-battery :|"), [":id", ":name", ":initial-soc-pct"]);
+assert.deepEqual(keysAt("(make-battery :i|"), [":id", ":initial-soc-pct"]);
+assert.deepEqual(keysAt("(make-battery :initial-soc-pct|"), [":initial-soc-pct"]);
+// A key the call has given is not offered again; the one being typed still is,
+// as it may be a prefix of another.
+assert.deepEqual(keysAt("(make-battery :id 7 :|"), [":name", ":initial-soc-pct"]);
+assert.deepEqual(keysAt("(make-battery :id 7 :n|"), [":name"]);
+// A key's value does not count as given: keys sit at every second argument.
+assert.deepEqual(keysAt("(make-battery :id :name :|"), [":name", ":initial-soc-pct"]);
+// Nothing typed yet, or the cursor at a key's value: no keys, so Enter and Tab
+// keep their own jobs there.
+assert.deepEqual(keysAt("(make-battery |"), []);
+assert.deepEqual(keysAt("(make-battery :id 7 |"), []);
+assert.deepEqual(keysAt("(make-battery :id :|"), []);
+// The keys start after the positional parameters.
+const plug = {
+  name: "plug",
+  kind: "function",
+  signature: {
+    text: "(plug ID &rest ARGS)",
+    params: [
+      { label: "ID", position: "required", keys: null },
+      { label: "ARGS", position: "key", keys: [":id", ":name"] },
+    ],
+  },
+  doc: null,
+};
+assert.deepEqual(keysAt("(plug 1 :|", plug), [":id", ":name"]);
+assert.deepEqual(keysAt("(plug 1 :id 7 :|", plug), [":name"]);
+assert.deepEqual(keysAt("(plug 1 :id :|", plug), []);
+// A positional parameter takes no keys, nor does a key parameter without keys,
+// an unknown symbol, or no call at all.
+assert.deepEqual(keysAt("(set-meter-power 1 :|", setMeterPower), []);
+assert.deepEqual(
+  keysAt("(make-battery :|", {
+    name: "make-battery",
+    kind: "function",
+    signature: {
+      text: "(make-battery ARGS)",
+      params: [{ label: "ARGS", position: "key", keys: null }],
+    },
+    doc: null,
+  }),
+  [],
+);
+assert.deepEqual(keyCompletions(null, { head: "f", argIndex: 0, args: [] }, ":i"), []);
+assert.deepEqual(keyCompletions(makeBattery, null, ":i"), []);
 
 // ── createSymbolStore ───────────────────────────────────────────
 const symbols = [

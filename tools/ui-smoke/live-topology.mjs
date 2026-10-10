@@ -2146,6 +2146,23 @@ const popup = await waitFor(async () =>
 check("e2e: the completion popup fits inside the default-sized REPL card", popup !== null && popup.entries > 5 && popup.top >= 0 && popup.bottom >= 0, JSON.stringify(popup));
 await page.keyboard.press("Escape"); // dismisses the popup
 await page.fill("#repl-input", "");
+// Where a call takes a key, typing a `:` offers its keys. Nothing is offered
+// before that, so Enter there still starts a new line.
+await page.type("#repl-input", "(make-battery ");
+await new Promise((r) => setTimeout(r, 300));
+const noKeyPopup = await page.evaluate(() => document.getElementById("repl-popup").hidden);
+await page.keyboard.press("Enter");
+const afterEnter = await page.evaluate(() => document.getElementById("repl-input").value);
+check("e2e: at a key with nothing typed, no popup opens and Enter starts a new line", noKeyPopup && afterEnter.startsWith("(make-battery \n"), JSON.stringify({ noKeyPopup, afterEnter }));
+await page.type("#repl-input", ":i");
+const offeredKeys = await waitFor(async () =>
+  await page.evaluate(() => {
+    const keys = [...document.querySelectorAll("#repl-completions li")].map((li) => li.textContent);
+    return keys.includes(":id") ? keys : null;
+  }), 5000).catch(() => null);
+check("e2e: typing : at a key of make-battery offers its keys", offeredKeys !== null && offeredKeys.every((k) => k.startsWith(":i")), JSON.stringify(offeredKeys));
+await page.keyboard.press("Escape"); // dismisses the popup
+await page.fill("#repl-input", "");
 // The popup shows the selected name's signature and docstring, from
 // /api/symbols; after completing it, the hint line marks the argument the
 // cursor is on.

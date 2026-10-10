@@ -133,14 +133,33 @@ function formEnd(text, i, limit) {
   return limit - 1;
 }
 
+const isPositional = (p) => p.position === "required" || p.position === "optional";
+
 // The index in `params` of the parameter argument `argIndex` fills, or -1 for
 // none. Past the positional parameters, a rest or key parameter takes every
 // argument.
 export function paramFor(params, argIndex) {
   if (argIndex < 0) return -1;
-  const positional = params.filter((p) => p.position === "required" || p.position === "optional");
+  const positional = params.filter(isPositional);
   if (argIndex < positional.length) return params.indexOf(positional[argIndex]);
   return params.findIndex((p) => p.position === "rest" || p.position === "key");
+}
+
+// The plist keys the call can still take: those the parameter the cursor is at
+// declares, without the ones the call has given before the cursor, that match
+// `prefix`. The keys sit at every second argument from the first the parameter
+// takes, so a key's value does not count as given, and the cursor at a value
+// gets no keys. [] too when nothing is typed yet (like `complete`), when the
+// parameter is not a key one or declares no keys, or when there is no call.
+export function keyCompletions(symbol, call, prefix) {
+  const sig = symbol?.signature;
+  if (!sig || !call || !prefix) return [];
+  const param = sig.params[paramFor(sig.params, call.argIndex)];
+  if (!param || param.position !== "key" || !param.keys) return [];
+  const positional = sig.params.filter(isPositional).length;
+  if ((call.argIndex - positional) % 2 !== 0) return [];
+  const given = new Set(call.args.slice(positional).filter((_, i) => i % 2 === 0));
+  return param.keys.filter((k) => k.startsWith(prefix) && !given.has(k));
 }
 
 // The hint line for `symbol` with the cursor on argument `argIndex`: its

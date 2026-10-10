@@ -318,8 +318,16 @@ What to change in your own scripts:
   While you type a call, a line above the input shows its signature,
   with the current argument marked, and the first line of its
   docstring.
+  When you type a `:` in a call that lists its keys, such as
+  `define-scenario`, the popup offers the keys that call can still take,
+  without the ones given before the cursor.
+  `set-active-power` and `set-reactive-power` take `:lifetime-s` and
+  `:clamp`, and the `augment-*-bounds` functions take `:lifetime-s`, but
+  none of them list their keys.
 - `GET /api/symbols` lists every defined name with its kind, signature
-  and docstring.
+  and docstring. A key parameter carries the keys it takes, when its
+  definition declares them. That covers the built-in functions that
+  declare their plist as a parameter, such as `define-scenario`.
 - macrocosim now uses tulisp 0.32, which adds many Emacs Lisp
   functions, among them `defconst`, `add-to-list`, `plist-put`,
   `substring`, `string-replace`, `seq-sort` and `read-from-string`.

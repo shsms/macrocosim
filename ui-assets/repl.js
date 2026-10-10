@@ -12,7 +12,7 @@ import { inspectorLive, liveCharts } from "./inspect.js";
 import { appendLog } from "./logs.js";
 import { metricsStore } from "./metrics-store.js";
 import { logUi, notify } from "./notices.js";
-import { callAtCursor, createSymbolStore, hintHtml } from "./repl-symbols.js";
+import { callAtCursor, createSymbolStore, hintHtml, keyCompletions } from "./repl-symbols.js";
 import { indentForNewline, rainbowHighlight, wordAtCursor } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
 import { closePanel } from "./side-panel.js";
@@ -147,7 +147,11 @@ export function setupRepl() {
 
   function refresh() {
     const { prefix } = wordAtCursor(input);
-    active = symbols.complete(prefix);
+    // At a key of a call, the popup lists the keys the call can still take;
+    // when none match, or elsewhere, it lists names.
+    const call = callAtCursor(input.value, input.selectionStart);
+    const keys = keyCompletions(call && symbols.lookup(call.head), call, prefix);
+    active = keys.length > 0 ? keys : symbols.complete(prefix);
     // If the only match is exactly what's typed, no point showing a popup.
     if (active.length === 1 && active[0] === prefix) active = [];
     filledAt = input.selectionStart;
