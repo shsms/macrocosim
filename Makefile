@@ -37,8 +37,8 @@ $(PLAYWRIGHT_STAMP):
 	npx playwright install chromium
 	@touch $@
 
-# The browser smoke against a scratch server on OS-chosen ports. The
-# server log is printed when the boot or the smoke fails; the scratch
+# The browser smokes against a scratch server on OS-chosen ports. The
+# server log is printed when the boot or a smoke fails; the scratch
 # state dir goes with the server.
 ui-e2e: ui-e2e-deps
 	cargo build --bin macrocosim

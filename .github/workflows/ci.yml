@@ -154,11 +154,12 @@ jobs:
       - name: pytest
         run: uv run --no-sync pytest -q
 
-  # Live browser smoke: boots the binary against a scratch starter-site
+  # Live browser smokes: boots the binary against a scratch starter-site
   # microgrid (`make ui-e2e`, the same target AGENTS.md gives for
-  # running tools/ui-smoke/live-topology.mjs by hand) and drives the
+  # running the tools/ui-smoke/ scripts by hand) and drives the
   # real SPA with Playwright/Chromium — inspector knobs, dialogs, the
-  # metrics panel, hover cards, the steam-boiler round trip end to end.
+  # metrics panel, hover cards, the steam-boiler round trip end to end,
+  # and the REPL's keys and layout.
   # `ui-test`'s DOM-shim boot smoke misses regressions here since
   # it never drives a browser against a live server.
   ui-e2e:
@@ -212,5 +213,5 @@ jobs:
       # Builds the binary, boots a scratch server on OS-chosen ports,
       # runs the smoke, prints the server log on failure, and kills
       # the server — the Makefile owns the recipe.
-      - name: Live topology smoke
+      - name: Browser smokes
         run: make ui-e2e

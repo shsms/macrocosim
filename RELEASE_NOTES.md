@@ -317,9 +317,9 @@ What to change in your own scripts:
   each time the input gets focus and after each eval, so a function an
   eval defines completes at once.
   The completion popup shows the selected name's signature and
-  docstring and opens over the word being completed. It grows to fit
+  docstring and opens at the word being completed. It grows to fit
   its widest line, signature included, up to the width of the input.
-  While you type a call, a line above the input shows its signature,
+  While you type a call, a line under the input shows its signature,
   with the current argument marked, and the first line of its
   docstring.
   When you type a `:` in a call that lists its keys, such as
@@ -343,9 +343,10 @@ What to change in your own scripts:
   macrocosim keeps its own `floor`, `ceiling`, `sin`, `cos` and
   `random`. `random` still takes only an optional integer limit, and
   `set-random-seed` seeds it.
-- The REPL reads like a terminal. The prompt is the last line of the output and scrolls with it. There is no input box or Eval button: Ctrl+Enter (Cmd+Enter on a Mac) evals, as before. The microgrid chip and the Emacs keys checkbox are in the panel's head.
-- The REPL's completion popup opens below the prompt or above it, whichever has more room. A floating REPL keeps the height you drag it to, even while its output is shorter.
-- The REPL keeps a history, like a shell. Up on the input's first line brings back the previous command, and Down on its last line the next one. The history is kept in the browser, across reloads and microgrids. Clicking a command in the REPL's output puts it back in the input.
+- The REPL reads like a terminal. The prompt is the last line of the output and scrolls with it, and the input no longer sits in a box of its own. Ctrl+Enter (Cmd+Enter on a Mac) evals, as before; the Eval button is now a small *eval* button in the panel's head, beside the microgrid chip and the Emacs keys checkbox.
+- The REPL's completion popup opens below the prompt or above it, whichever has more room.
+- A floating REPL keeps the height you drag it to, even while its output is shorter.
+- The REPL keeps a history, like a shell. Up on the input's first row brings back the previous command, and Down on its last row the next one. The history is kept in the browser, across reloads and microgrids: the last 500 commands. A command over 16K characters runs but is not kept. Clicking a command in the REPL's output puts it back in the input.
 - The REPL's output colours commands and values the way the input does.
 - An *Emacs keys* checkbox turns on Emacs keys in the REPL (C-a, C-e, C-k, C-y, M-f, M-b, M-p, M-n and more). It is off by default, and the browser remembers it.
 
