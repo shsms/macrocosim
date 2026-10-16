@@ -346,6 +346,9 @@ function applyPos(el, pos) {
 function wireDrag(el, name, p) {
   const strip = el.querySelector(".panel-drag");
   strip.addEventListener("pointerdown", (e) => {
+    // A control in the head (the REPL's microgrid chip and Emacs checkbox)
+    // takes its own press; the rest of the strip drags.
+    if (e.target.closest("button, input, select, textarea, label, a")) return;
     e.preventDefault();
     strip.setPointerCapture(e.pointerId);
     if (p.dock) reorderDrag(el, strip, p.dock, name, p, e.pointerId);

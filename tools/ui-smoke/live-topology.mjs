@@ -2231,18 +2231,22 @@ await page.evaluate(() => {
 });
 await page.click("#repl-btn");
 await page.click("#logs-btn");
+// `fn` evaluated on page `pg` two frames from now. The REPL brings its prompt
+// back into view from a resize observer, which runs before the next paint.
+const evaluateAfterFrames = (pg, fn) =>
+  pg.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))).then(() => pg.evaluate(fn));
 const floors = await inBothDensities(() =>
-  page.evaluate(() => {
+  evaluateAfterFrames(page, () => {
     const bottom = (sel) => document.querySelector(sel).getBoundingClientRect().bottom;
     return {
-      evalOver: bottom('#repl-form button[type="submit"]') - bottom("#repl"),
+      promptOver: bottom("#repl-form") - bottom("#repl"),
       tailOver: bottom("#logs") - bottom("#logs-panel"),
     };
   }),
 );
 check(
-  "e2e: capped REPL and logs cards hold the Eval button and the tail, in both densities",
-  floors.every((f) => f.evalOver <= 0.5 && f.tailOver <= 0.5),
+  "e2e: capped REPL and logs cards hold the prompt and the tail, in both densities",
+  floors.every((f) => f.promptOver <= 0.5 && f.tailOver <= 0.5),
   JSON.stringify(floors),
 );
 await page.click("#repl-btn");
@@ -2455,11 +2459,12 @@ for (const moved of [false, true]) {
 }
 await resetReplWidth();
 // Drags the REPL panel by its head by dx and lets go; `at` is where along the
-// head to grab it, from its left end (the middle unless given).
-const dragReplHead = async (dx, at = 0.5) => {
+// head to grab it, from its left end (the grip unless given: further along, the
+// head holds the REPL's controls, which take a press themselves).
+const dragReplHead = async (dx, at = null) => {
   const h = await page.evaluate((f) => {
-    const r = document.querySelector("#repl .panel-drag").getBoundingClientRect();
-    return { x: r.left + r.width * f, y: r.top + r.height / 2 };
+    const r = document.querySelector(f == null ? "#repl .drag-grip" : "#repl .panel-drag").getBoundingClientRect();
+    return { x: r.left + r.width * (f ?? 0.5), y: r.top + r.height / 2 };
   }, at);
   await page.mouse.move(h.x, h.y);
   await page.mouse.down();
@@ -4538,7 +4543,7 @@ check(
 
 // ── e2e: strips give way to the canvas in a narrow window ───────────
 // At 1024px the right strip narrows so the rest of main keeps 600px, and the
-// bottom strip at its smallest still holds the REPL's form, in both densities.
+// bottom strip at its smallest still holds the REPL's prompt, in both densities.
 // In a context of its own, so the panels open docked.
 {
   const ctx = await browser.newContext({ ...CONTEXT, viewport: { width: 1024, height: 768 } });
@@ -4551,10 +4556,10 @@ check(
   await p.click("#repl-btn");
   const replFits = await inBothDensities(
     () =>
-      p.evaluate(() => ({
+      evaluateAfterFrames(p, () => ({
         docked: document.querySelector("#dock-bottom #repl.open") !== null,
         over:
-          document.querySelector('#repl-form button[type="submit"]').getBoundingClientRect().bottom -
+          document.getElementById("repl-form").getBoundingClientRect().bottom -
           document.getElementById("repl").getBoundingClientRect().bottom,
         strip: document.getElementById("dock-bottom").getBoundingClientRect().height,
       })),

@@ -223,36 +223,45 @@
           </div>
         </aside>
         <aside id="repl" class="float-panel" aria-label="repl">
-          <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span></div>
+          <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span>
+            <span class="repl-head-tools">
+              <button type="button" id="repl-mg-chip" class="repl-mg-chip" title="REPL targets this microgrid — click to jump"></button>
+              <label class="repl-keys-toggle"
+                     title="Emacs keys in the input: C-a, C-e, C-k, C-y, M-f, M-b, M-p, M-n, …"><input type="checkbox" id="repl-emacs"> Emacs keys</label>
+              <span class="repl-eval-hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> eval</span>
+            </span>
+          </div>
           <button class="btn btn-quiet btn-icon float-close" type="button" title="Close (Esc)">×</button>
           <button class="btn btn-quiet btn-icon float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
           <div id="repl-body" class="panel-content">
-            <div id="repl-output"></div>
-            <!-- The signature of the call the cursor is in, its current
-                 argument marked, and the first line of its docstring. -->
-            <div id="repl-hint"></div>
-            <form id="repl-form">
-              <button type="button" id="repl-mg-chip" class="repl-mg-chip" title="REPL targets this microgrid — click to jump"></button>
-              <div id="repl-input-wrap">
-                <!-- Rainbow-paren overlay. The textarea sits on top with
-                     transparent text; this layer renders the same content
-                     with depth-coloured parens. aria-hidden because it's
-                     a visual mirror of the textarea, not its own input. -->
-                <pre id="repl-input-overlay" aria-hidden="true"></pre>
-                <textarea id="repl-input" rows="2" spellcheck="false"
-                          autocomplete="off"
-                          placeholder="(eval lisp here — ctrl/cmd+enter to run, tab to complete)"></textarea>
-                <!-- The completion popup: repl.js sets its left edge at the
-                     start of the word being completed. -->
-                <div id="repl-popup" hidden>
-                  <ul id="repl-completions"></ul>
-                  <div id="repl-doc"></div>
+            <!-- One scrolling transcript, like a terminal: the past entries,
+                 then the prompt with the hint under it. -->
+            <div id="repl-output">
+              <div id="repl-log"></div>
+              <form id="repl-form">
+                <span class="repl-prompt-mark" aria-hidden="true">▸</span>
+                <div id="repl-input-wrap">
+                  <!-- Rainbow-paren overlay. The textarea sits on top with
+                       transparent text; this layer renders the same content
+                       with depth-coloured parens. aria-hidden because it's a
+                       visual mirror of the textarea, not its own input. -->
+                  <pre id="repl-input-overlay" aria-hidden="true"></pre>
+                  <textarea id="repl-input" rows="1" spellcheck="false"
+                            autocomplete="off"
+                            placeholder="(eval lisp here — ctrl/cmd+enter to run, tab to complete)"></textarea>
+                  <!-- The completion popup: repl.js sets its left edge at the
+                       start of the word being completed, and opens it below or
+                       above the prompt, whichever has more room. -->
+                  <div id="repl-popup" hidden>
+                    <ul id="repl-completions"></ul>
+                    <div id="repl-doc"></div>
+                  </div>
                 </div>
-              </div>
-              <button type="submit" class="btn btn-primary">Eval</button>
-              <label class="repl-mg-chip repl-keys-toggle"
-                     title="Emacs keys in the input: C-a, C-e, C-k, C-y, M-f, M-b, M-p, M-n, …"><input type="checkbox" id="repl-emacs"> Emacs keys</label>
-            </form>
+                <!-- The signature of the call the cursor is in, its current
+                     argument marked, and the first line of its docstring. -->
+                <div id="repl-hint"></div>
+              </form>
+            </div>
           </div>
         </aside>
         <aside id="logs-panel" class="float-panel" aria-label="logs">
@@ -571,8 +580,9 @@
         <h4>REPL</h4>
         <ul class="help-list">
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> — eval. <kbd>Tab</kbd> — complete.</li>
+          <li>The REPL reads like a terminal: the prompt is the last line of the output and scrolls with it, and a click anywhere in the output moves to it. The completion popup opens below the prompt or above it, whichever has more room. The panel's head shows the microgrid evals go to; click it to pick another.</li>
           <li><kbd>↑</kbd> on the input's first line brings back the previous command, <kbd>↓</kbd> on its last line the next one; going past the newest returns what you were typing. History is kept in this browser, across reloads and microgrids. Clicking a command in the output puts it back in the input.</li>
-          <li>The <em>Emacs keys</em> checkbox beside <em>Eval</em> turns on Emacs keys, remembered in this browser: <kbd>C-a</kbd> <kbd>C-e</kbd> <kbd>C-f</kbd> <kbd>C-b</kbd> <kbd>C-p</kbd> <kbd>C-n</kbd> <kbd>M-f</kbd> <kbd>M-b</kbd> <kbd>M-&lt;</kbd> <kbd>M-&gt;</kbd> move; <kbd>C-d</kbd> <kbd>M-d</kbd> <kbd>M-DEL</kbd> <kbd>C-k</kbd> delete and kill; <kbd>C-y</kbd> yanks the last kill; <kbd>M-p</kbd> / <kbd>M-n</kbd> step through history from anywhere. The browser keeps <kbd>C-n</kbd> (a new window) to itself. On Linux, the GTK Emacs key theme gives it to text fields in Firefox and Chrome: <code>gsettings set org.gnome.desktop.interface gtk-key-theme Emacs</code>. It changes every GTK text field on the desktop; <code>gsettings reset org.gnome.desktop.interface gtk-key-theme</code> undoes it.</li>
+          <li>The <em>Emacs keys</em> checkbox in the panel's head turns on Emacs keys, remembered in this browser: <kbd>C-a</kbd> <kbd>C-e</kbd> <kbd>C-f</kbd> <kbd>C-b</kbd> <kbd>C-p</kbd> <kbd>C-n</kbd> <kbd>M-f</kbd> <kbd>M-b</kbd> <kbd>M-&lt;</kbd> <kbd>M-&gt;</kbd> move; <kbd>C-d</kbd> <kbd>M-d</kbd> <kbd>M-DEL</kbd> <kbd>C-k</kbd> delete and kill; <kbd>C-y</kbd> yanks the last kill; <kbd>M-p</kbd> / <kbd>M-n</kbd> step through history from anywhere. The browser keeps <kbd>C-n</kbd> (a new window) to itself. On Linux, the GTK Emacs key theme gives it to text fields in Firefox and Chrome: <code>gsettings set org.gnome.desktop.interface gtk-key-theme Emacs</code>. It changes every GTK text field on the desktop; <code>gsettings reset org.gnome.desktop.interface gtk-key-theme</code> undoes it.</li>
           <li>The <em>REPL</em> and <em>Logs</em> buttons in the top bar open the REPL and the server log tail, docked along the bottom at first — dock, float, resize and close them like any other panel. A backtick opens the REPL from anywhere; <kbd>Esc</kbd> in its input closes it. The Logs panel's <em>show</em> dropdown sets a minimum level (lines below it stay hidden) and <em>clear</em> empties the tail.</li>
         </ul>
       </div>

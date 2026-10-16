@@ -70,6 +70,7 @@ export function setupRepl() {
   const input = document.getElementById("repl-input");
   const overlay = document.getElementById("repl-input-overlay");
   const output = document.getElementById("repl-output");
+  const log = document.getElementById("repl-log");
   const popup = document.getElementById("repl-popup");
   const completions = document.getElementById("repl-completions");
   const docPane = document.getElementById("repl-doc");
@@ -113,8 +114,24 @@ export function setupRepl() {
 
   function refreshOverlay() {
     overlay.innerHTML = rainbowHighlight(input.value);
-    overlay.scrollTop = input.scrollTop;
+    fitInput();
   }
+
+  // The input grows with its text instead of scrolling, so the prompt reads as
+  // part of the transcript; the transcript scrolls to keep its end in view. A
+  // closed panel has no layout to measure: its input keeps its one row.
+  function fitInput() {
+    if (!input.offsetParent) return;
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+    const below = form.getBoundingClientRect().bottom - output.getBoundingClientRect().bottom;
+    if (below > 0) output.scrollTop += below;
+  }
+  // Opening the panel and changing its width both re-wrap the input, and the
+  // transcript can grow under the prompt without the panel changing size (a
+  // density switch): each brings the prompt back into view.
+  const fitObserver = new ResizeObserver(fitInput);
+  for (const el of [output, log]) fitObserver.observe(el);
 
   function renderCompletions() {
     if (!active.length) {
@@ -131,14 +148,20 @@ export function setupRepl() {
       )
       .join("");
     renderDoc();
-    // The popup opens upward from the input, and the REPL's body clips what
-    // overhangs it, which a docked tile's short height would. So it is no
-    // taller than the room above the input, and scrolls the rest.
+    // The popup opens on the side of the prompt with more of the transcript's
+    // visible height: below while the transcript is short, above once the
+    // prompt has reached the bottom. The transcript clips what overhangs it,
+    // which a docked tile's short height would, so the popup is no taller than
+    // that room, and scrolls the rest.
+    const view = output.getBoundingClientRect();
+    const wrap = popup.parentElement.getBoundingClientRect();
+    const down = view.bottom - wrap.bottom > wrap.top - view.top;
+    popup.classList.toggle("below", down);
     popup.style.maxHeight = "";
     const s = getComputedStyle(popup);
-    const top = document.getElementById("repl-body").getBoundingClientRect().top;
-    const formTop = document.getElementById("repl-form").getBoundingClientRect().top;
-    const room = formTop - Number.parseFloat(s.marginBottom) - top;
+    const room = down
+      ? view.bottom - wrap.bottom - Number.parseFloat(s.marginTop)
+      : wrap.top - view.top - Number.parseFloat(s.marginBottom);
     const cap = Math.max(0, Math.min(Number.parseFloat(s.maxHeight), Math.floor(room)));
     popup.style.maxHeight = `${cap}px`;
     // The list and the doc pane each scroll within the popup's height.
@@ -150,11 +173,11 @@ export function setupRepl() {
     // and box, so a marker holding the text from the word's start on wraps
     // where the textarea does and measures where the word is; the popup slides
     // left to stay within the input. Plain text measures as the textarea lays
-    // it out; refreshOverlay() puts the highlighting back.
+    // it out; the highlighting goes back right after.
     const { start } = wordAtCursor(input);
     overlay.innerHTML = `${escapeHtml(input.value.slice(0, start))}<span>${escapeHtml(input.value.slice(start))}</span>`;
     const at = overlay.lastElementChild.offsetLeft;
-    refreshOverlay();
+    overlay.innerHTML = rainbowHighlight(input.value);
     popup.style.left = `${Math.max(0, Math.min(at, input.clientWidth - popup.offsetWidth))}px`;
   }
 
@@ -327,7 +350,7 @@ export function setupRepl() {
   function formatFailed(message) {
     const entry = document.createElement("div");
     entry.className = "repl-entry";
-    output.appendChild(entry);
+    log.appendChild(entry);
     addResult(entry, "repl-error", `format: ${message}`);
     output.scrollTop = output.scrollHeight;
   }
@@ -351,7 +374,7 @@ export function setupRepl() {
     entry.className = "repl-entry";
     entry.innerHTML = `<pre class="repl-prompt" title="Click to edit again"><span class="repl-prompt-mark">▸</span> ${rainbowHighlight(src)}</pre>`;
     entry.firstChild.dataset.src = src;
-    output.appendChild(entry);
+    log.appendChild(entry);
     output.scrollTop = output.scrollHeight;
     try {
       const res = await fetch(mgPath("eval") ?? "/api/eval", { method: "POST", body: src });
@@ -368,29 +391,25 @@ export function setupRepl() {
     output.scrollTop = output.scrollHeight;
   }
 
-  // A click on a command in the transcript puts it back in the input. A
-  // drag that selects text is a copy, so it leaves the input alone.
+  // A click on a command in the transcript puts it back in the input, and a
+  // click anywhere else in it moves to the prompt, as in a terminal. A drag
+  // that selects text is a copy, so it leaves the input alone.
   output.addEventListener("click", (e) => {
+    if (form.contains(e.target) || !window.getSelection().isCollapsed) return;
     const prompt = e.target.closest(".repl-prompt");
-    if (!prompt || !window.getSelection().isCollapsed) return;
-    history.reset();
-    recalled = null;
-    setInput(prompt.dataset.src);
+    if (prompt) {
+      history.reset();
+      recalled = null;
+      setInput(prompt.dataset.src);
+    }
     input.focus();
   });
 
-  form.addEventListener("submit", (e) => {
-    e.preventDefault();
-    run();
-  });
   input.addEventListener("input", () => {
     typed = true;
     refreshOverlay();
     refresh();
     updateHint();
-  });
-  input.addEventListener("scroll", () => {
-    overlay.scrollTop = input.scrollTop;
   });
   input.addEventListener("focus", () => {
     typed = false;

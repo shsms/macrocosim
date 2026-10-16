@@ -775,23 +775,44 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
   color: var(--fg);
 }
 
+/* The REPL's head holds its controls, so the transcript below is all
+   transcript. They keep the head's mono face but not its uppercase title style,
+   and push right, clear of the close and dock buttons. */
+#repl .panel-drag {
+  justify-content: flex-start;
+  gap: var(--space-3);
+  padding: 0 calc(2 * var(--icon-btn-size) + var(--space-0) + var(--space-2)) 0 var(--space-3);
+}
+.repl-head-tools {
+  margin-left: auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+  cursor: default;
+}
 .repl-mg-chip {
   font: inherit;
-  font-size: var(--text-md);
   background: var(--bg-deep);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-3);
+  padding: 0 var(--space-2);
   color: var(--accent);
   cursor: pointer;
   white-space: nowrap;
-  align-self: stretch;
 }
 .repl-mg-chip:hover { border-color: var(--accent); }
 .repl-mg-chip.muted { color: var(--muted); }
-.repl-keys-toggle { display: flex; align-items: center; gap: var(--space-1); color: var(--muted); }
+.repl-keys-toggle { display: flex; align-items: center; gap: var(--space-1); color: var(--muted); cursor: pointer; }
 .repl-keys-toggle input { margin: 0; accent-color: var(--accent); }
-.repl-keys-toggle:has(input:checked) { color: var(--accent); border-color: var(--accent); }
+.repl-keys-toggle:has(input:checked) { color: var(--accent); }
+.repl-eval-hint { color: var(--muted); }
 
 #topology-empty-hint {
   display: none;
@@ -1414,11 +1435,10 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   display: block;
 }
 
-/* REPL panel: eval output over the input row. The card hugs its content up to
-   the gripper's cap or the dock bound; the output band's floor leaves room for
-   the completion popup (#repl-completions, 220px) above the input. The card's
-   own floor, measured by side-panel.js (floorOf), holds the card head, that
-   floor and the input form. */
+/* REPL panel: one transcript band holding the output and, as its last line,
+   the prompt. The band's floor leaves room for the completion popup
+   (#repl-popup, 220px) beside the prompt. The card's own floor, measured by
+   side-panel.js (floorOf), holds the card head and that floor. */
 #repl-body {
   display: flex;
   flex-direction: column;
@@ -1491,27 +1511,23 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .log-line.trace .log-lvl { color: var(--muted); }
 .log-line .log-msg { flex: 1; }
 
+/* The transcript: past entries, then the prompt and its hint, scrolling as
+   one, like a terminal. */
 #repl-output {
   flex: 1 1 auto;
   min-height: 240px;
   overflow-y: auto;
   padding: var(--space-2) var(--space-4);
   background: var(--bg-elev);
-}
-#repl-output:empty::before {
-  /* Empty rest state hint — disappears the moment a result lands. */
-  content: "REPL output appears here.";
-  color: var(--muted);
-  font-style: italic;
+  cursor: text;
 }
 
-/* One line, kept when empty, so the input below never moves. A long signature
-   or docstring line ends in an ellipsis. */
+/* The line under the prompt's text, kept when empty so the transcript does not
+   jump as it fills. A long signature or docstring line ends in an ellipsis. */
 #repl-hint {
-  flex: 0 0 auto;
+  grid-column: 2;
+  min-width: 0;
   min-height: 1lh;
-  padding: var(--space-1) var(--space-4);
-  border-top: 1px solid var(--border);
   font-size: var(--text-sm);
   white-space: nowrap;
   overflow: hidden;
@@ -1529,20 +1545,19 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .repl-value    { color: var(--good); white-space: pre-wrap; }
 .repl-error    { color: var(--bad); white-space: pre-wrap; }
 
+/* The prompt: a ▸ and the input, set like a past command's line, with the hint
+   under the input. */
 #repl-form {
-  /* Never shrink: the output band above is the flexible part, so a
-     capped card clips its own scrollback, not the input row. */
-  flex: 0 0 auto;
-  display: flex;
-  align-items: stretch;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border-top: 1px solid var(--border);
-  background: var(--bg);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  line-height: 1.4;
 }
 
 #repl-input-wrap {
-  flex: 1;
+  min-width: 0;
   position: relative; /* anchor for the rainbow-paren overlay and the completion popup */
 }
 
@@ -1554,9 +1569,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 #repl-input-overlay {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2);
+  border: none;
+  border-radius: 0;
+  padding: 0;
   font-family: var(--font-mono);
   font-size: var(--text-lg);
   line-height: 1.4;
@@ -1570,9 +1585,13 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   color: transparent;
   caret-color: var(--fg);
   resize: none;
+  /* repl.js sizes it to its text, so it never scrolls on its own. A block, so
+     the wrap is exactly as tall: no baseline gap under an inline textarea. */
+  overflow: hidden;
+  display: block;
   z-index: var(--z-canvas);
 }
-#repl-input:focus { outline: 1px solid var(--accent); }
+#repl-input:focus { outline: none; }
 #repl-input::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: transparent; }
 #repl-input-overlay {
   position: absolute;
@@ -1626,6 +1645,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   box-shadow: var(--shadow-2);
 }
 #repl-popup[hidden] { display: none; }
+/* With more room under the prompt than over it, the popup drops down. */
+#repl-popup.below { top: 100%; bottom: auto; margin: var(--space-1) 0 0; }
 #repl-completions {
   flex: 0 0 auto;
   min-width: 240px;
