@@ -541,7 +541,8 @@ function reorderDrag(el, head, edge, name, p, pointerId) {
 // stays `auto`, so folding a card open or shut re-sizes the panel by
 // itself, and the user's drag only says how far that may go. Dragging
 // past the content therefore leaves no dead space — the card snaps
-// back to its content once the gesture ends.
+// back to its content once the gesture ends. The floating REPL is the
+// exception: its stylesheet takes the cap as its height (applyCap).
 const capOf = (el, h, floor) => Math.max(floor, Math.min(h, el.parentElement?.clientHeight ?? window.innerHeight));
 
 // The lowest a card can go and still hold its content: its chrome (the head,
@@ -570,8 +571,14 @@ function floorOf(p) {
 // the stylesheet's — including the stylesheet's own 40px shave (kept
 // in sync with CASCADE_BASE here), which a bare `100%` would silently
 // undo for every capped panel.
+//
+// The same bound goes in --card-cap, for a card whose stylesheet makes the cap
+// its height (the floating REPL: a terminal keeps its size, its transcript
+// filling it); every other card hugs its content and ignores it.
 function applyCap(el, cap) {
-  el.style.maxHeight = `min(${cap}px, calc(100% - ${CASCADE_BASE}px))`;
+  const bound = `min(${cap}px, calc(100% - ${CASCADE_BASE}px))`;
+  el.style.maxHeight = bound;
+  el.style.setProperty("--card-cap", bound);
 }
 
 // A width the dock can still hold, never below the card's own floor: the
@@ -748,8 +755,14 @@ function settleResize(p, name) {
   // of a head drag, as the card's new placement. The pinned left/top were
   // rounded to the layout's sub-pixel grid, so a move under half a pixel is
   // treated as that rounding, not a move.
+  //
+  // A press that sized nothing moves nothing either: the card hangs from its
+  // placement again, which stays as stored. (The pin can still have been taken:
+  // a box the window shrinks under a held gripper gets an inline size from the
+  // browser, within the slop.)
   const now = el.getBoundingClientRect();
-  if (Math.abs(now.left - at.left) > 0.5 || Math.abs(now.top - at.top) > 0.5) {
+  const moved = Math.abs(now.left - at.left) > 0.5 || Math.abs(now.top - at.top) > 0.5;
+  if ((h || w) && moved) {
     const { dx, dy } = p.shown;
     p.shown = { ...p.shown, ...clampOffset(anchorOf(el, p.shown), dx + at.left - now.left, dy + at.top - now.top) };
     applyPos(el, p.shown);

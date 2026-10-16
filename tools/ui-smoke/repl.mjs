@@ -217,6 +217,36 @@ await page.evaluate(() => document.activeElement.blur());
 await page.locator(".repl-value").first().click();
 check("a click in the output moves to the prompt", await page.evaluate(() => document.activeElement.id), "repl-input");
 
+// ── a floating REPL keeps the height it is given ────────────────
+// Other cards hug their content and take a drag as a cap; a terminal keeps
+// its size, its transcript filling it however short it is.
+await page.setViewportSize({ width: 1280, height: 900 });
+await page.evaluate(() => {
+  localStorage.setItem("mc-panel-dock-repl-btn", JSON.stringify({ mode: "float" }));
+  localStorage.setItem("mc-panel-size-repl-btn", JSON.stringify({ h: 560 }));
+});
+await openRepl();
+await page.waitForTimeout(500);
+const card = () => page.evaluate(() => {
+  const el = document.getElementById("repl");
+  const r = el.getBoundingClientRect();
+  return { floating: !el.classList.contains("docked"), h: Math.round(r.height), right: r.right, bottom: r.bottom };
+});
+let held = await card();
+check("the REPL floats", held.floating, true);
+check("a floating REPL is as tall as its stored height, with a short transcript", Math.abs(held.h - 560) <= 2, true);
+await page.mouse.move(held.right - 4, held.bottom - 4);
+await page.mouse.down();
+await page.mouse.move(held.right - 4, held.bottom - 104, { steps: 5 });
+await page.mouse.up();
+await page.waitForTimeout(300);
+held = await card();
+check("a gripper drag sets the height it is let go at", Math.abs(held.h - 460) <= 4, true);
+await page.evaluate(() => {
+  localStorage.removeItem("mc-panel-dock-repl-btn");
+  localStorage.removeItem("mc-panel-size-repl-btn");
+});
+
 await browser.close();
 console.log(failures ? `repl smoke: ${failures} FAILED` : "repl smoke: all passed");
 process.exit(failures ? 1 : 0);

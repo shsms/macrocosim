@@ -1511,8 +1511,16 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .log-line.trace .log-lvl { color: var(--muted); }
 .log-line .log-msg { flex: 1; }
 
-/* The transcript: past entries, then the prompt and its hint, scrolling as
-   one, like a terminal. */
+/* A floating REPL keeps the height it was given (side-panel.js applyCap)
+   instead of hugging a short transcript; a gripper drag in progress writes an
+   inline height, which wins until it settles. */
+#repl:not(.docked) {
+  --card-cap: auto;
+  height: var(--card-cap);
+}
+
+/* The transcript: past entries, then the prompt and its hint, scrolling as one,
+   like a terminal. */
 #repl-output {
   flex: 1 1 auto;
   min-height: 240px;
