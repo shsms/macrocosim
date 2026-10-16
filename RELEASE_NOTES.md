@@ -343,6 +343,7 @@ What to change in your own scripts:
   macrocosim keeps its own `floor`, `ceiling`, `sin`, `cos` and
   `random`. `random` still takes only an optional integer limit, and
   `set-random-seed` seeds it.
+- The REPL keeps a history, like a shell: Up on the input's first line brings back the previous command, Down on its last line the next one. It is kept in the browser, across reloads and microgrids. Clicking a command in the REPL's output puts it back in the input. The output colours commands and values as the input does. An *Emacs keys* checkbox beside Eval turns on Emacs keys (C-a, C-e, C-k, C-y, M-f, M-b, M-p, M-n and more); it is off by default and the browser remembers it.
 
 ## Bug Fixes
 

@@ -18,7 +18,7 @@
 import { cascadeColumn, cascadeSlot } from "./panel-geometry.js";
 import { cssToken } from "./pill.js";
 import { makeSplitter } from "./splitter.js";
-import { readStorage, writeStorage } from "./storage.js";
+import { readJson, writeStorage } from "./storage.js";
 import { clampStripSize, mergeOrder, normalizedShares } from "./strip-model.js";
 
 // name → { el, contentEl, band, teardown, pos, shown, cascade, isStatic,
@@ -755,15 +755,6 @@ function settleResize(p, name) {
     savePos(name, p.pos);
   }
   if (from.refitDue) sanitizePanel(p, name, false);
-}
-
-// A stored JSON value, or null when nothing (or no JSON) is stored.
-function readJson(key) {
-  try {
-    return JSON.parse(readStorage(key));
-  } catch (_) {
-    return null;
-  }
 }
 
 function loadPos(name) {

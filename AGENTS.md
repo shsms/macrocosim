@@ -87,6 +87,7 @@ is wiring the topology + animating the environment.
   `notices.js` toasts, form errors and the UI's log lines;
   `connection.js` whether the server can be reached, and its banner;
   `logs.js` the logs panel's rows; `storage.js` guarded localStorage;
+  `repl-keys.js` the REPL's history and Emacs keys, DOM-free;
   `zone.js` the display zone (the sim zone or UTC, from the top bar's
   zone chip) every shown time goes through: the formatters, `<time>`
   elements it re-formats on a switch, uPlot's `tzDate`, and the

@@ -250,6 +250,8 @@
                 </div>
               </div>
               <button type="submit" class="btn btn-primary">Eval</button>
+              <label class="repl-mg-chip repl-keys-toggle"
+                     title="Emacs keys in the input: C-a, C-e, C-k, C-y, M-f, M-b, M-p, M-n, …"><input type="checkbox" id="repl-emacs"> Emacs keys</label>
             </form>
           </div>
         </aside>
@@ -569,6 +571,8 @@
         <h4>REPL</h4>
         <ul class="help-list">
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> — eval. <kbd>Tab</kbd> — complete.</li>
+          <li><kbd>↑</kbd> on the input's first line brings back the previous command, <kbd>↓</kbd> on its last line the next one; going past the newest returns what you were typing. History is kept in this browser, across reloads and microgrids. Clicking a command in the output puts it back in the input.</li>
+          <li>The <em>Emacs keys</em> checkbox beside <em>Eval</em> turns on Emacs keys, remembered in this browser: <kbd>C-a</kbd> <kbd>C-e</kbd> <kbd>C-f</kbd> <kbd>C-b</kbd> <kbd>C-p</kbd> <kbd>C-n</kbd> <kbd>M-f</kbd> <kbd>M-b</kbd> <kbd>M-&lt;</kbd> <kbd>M-&gt;</kbd> move; <kbd>C-d</kbd> <kbd>M-d</kbd> <kbd>M-DEL</kbd> <kbd>C-k</kbd> delete and kill; <kbd>C-y</kbd> yanks the last kill; <kbd>M-p</kbd> / <kbd>M-n</kbd> step through history from anywhere. The browser keeps <kbd>C-n</kbd> (a new window) to itself. On Linux, the GTK Emacs key theme gives it to text fields in Firefox and Chrome: <code>gsettings set org.gnome.desktop.interface gtk-key-theme Emacs</code>. It changes every GTK text field on the desktop; <code>gsettings reset org.gnome.desktop.interface gtk-key-theme</code> undoes it.</li>
           <li>The <em>REPL</em> and <em>Logs</em> buttons in the top bar open the REPL and the server log tail, docked along the bottom at first — dock, float, resize and close them like any other panel. A backtick opens the REPL from anywhere; <kbd>Esc</kbd> in its input closes it. The Logs panel's <em>show</em> dropdown sets a minimum level (lines below it stay hidden) and <em>clear</em> empties the tail.</li>
         </ul>
       </div>

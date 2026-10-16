@@ -20,6 +20,15 @@ export function writeStorage(key, value) {
   }
 }
 
+// A stored JSON value, or null when nothing (or no JSON) is stored.
+export function readJson(key) {
+  try {
+    return JSON.parse(readStorage(key));
+  } catch (_) {
+    return null;
+  }
+}
+
 export function removeStorage(key) {
   try {
     localStorage.removeItem(key);

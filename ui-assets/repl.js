@@ -12,11 +12,12 @@ import { inspectorLive, liveCharts } from "./inspect.js";
 import { appendLog } from "./logs.js";
 import { metricsStore } from "./metrics-store.js";
 import { logUi, notify } from "./notices.js";
+import { EmacsKeys, emacsCommand, onFirstLine, onLastLine, ReplHistory } from "./repl-keys.js";
 import { callAtCursor, createSymbolStore, hintHtml, keyCompletions } from "./repl-symbols.js";
 import { indentForNewline, rainbowHighlight, wordAtCursor } from "./repl-syntax.js";
 import { mgPath, readSelectedMg, readSubview } from "./routing.js";
 import { closePanel } from "./side-panel.js";
-import { readStorage, writeStorage } from "./storage.js";
+import { readJson, readStorage, writeStorage } from "./storage.js";
 import { topology } from "./topology.js";
 
 
@@ -54,6 +55,16 @@ export function setupLogsPanel() {
   document.getElementById("logs-clear").addEventListener("click", () => box.replaceChildren());
 }
 
+// The commands run, per browser and across microgrids, like a shell's history;
+// and whether the Emacs keys are on.
+const HISTORY_KEY = "mc-repl-history";
+const EMACS_KEY = "mc-repl-emacs";
+
+function loadHistory() {
+  const stored = readJson(HISTORY_KEY);
+  return Array.isArray(stored) ? stored.filter((s) => typeof s === "string") : [];
+}
+
 export function setupRepl() {
   const form = document.getElementById("repl-form");
   const input = document.getElementById("repl-input");
@@ -78,6 +89,20 @@ export function setupRepl() {
       updateHint();
     }
   }
+
+  const emacsToggle = document.getElementById("repl-emacs");
+  let history = new ReplHistory(loadHistory());
+  // The text and caret a history step left in the input: while both are
+  // untouched, Up and Down keep walking history from any line of a multi-line
+  // entry.
+  let recalled = null;
+  const emacs = new EmacsKeys();
+
+  emacsToggle.checked = readStorage(EMACS_KEY) === "on";
+  emacsToggle.addEventListener("change", () => {
+    writeStorage(EMACS_KEY, emacsToggle.checked ? "on" : "off");
+    input.focus();
+  });
 
   // Electric-pair: typed open chars insert their close + leave the
   // cursor between. Closing char typed when the next char is the
@@ -241,6 +266,63 @@ export function setupRepl() {
     updateHint();
   }
 
+  // Replaces the whole input, caret at the end, with no completion popup.
+  function setInput(text) {
+    input.value = text;
+    input.setSelectionRange(text.length, text.length);
+    active = [];
+    renderCompletions();
+    refreshOverlay();
+    updateHint();
+  }
+
+  // One step through history (dir -1 older, +1 newer); false when there is
+  // nothing further that way, so the key can do what it does natively.
+  function historyStep(dir) {
+    const text = history.step(dir, input.value);
+    if (text == null) return false;
+    setInput(text);
+    recalled = { text, caret: text.length };
+    return true;
+  }
+
+  // Up/Down (and C-p/C-n) go to history from the input's first/last line, or
+  // from anywhere while the input still holds what history put there.
+  function atHistoryEdge(dir) {
+    const caret = input.selectionStart;
+    if (caret !== input.selectionEnd) return false;
+    if (recalled && recalled.text === input.value && recalled.caret === caret) return true;
+    return dir < 0 ? onFirstLine(input.value, caret) : onLastLine(input.value, caret);
+  }
+
+  // Saves a run command. History is re-read first, since another tab may have
+  // added to it since this one loaded.
+  function remember(src) {
+    history = new ReplHistory(loadHistory());
+    history.push(src);
+    recalled = null;
+    writeStorage(HISTORY_KEY, JSON.stringify(history.entries));
+  }
+
+  // Applies an Emacs command's result. Edits go through execCommand so they
+  // land on the browser's undo stack and Ctrl+Z still works; setRangeText is
+  // the fallback for a browser without it.
+  function applyEmacs({ caret, replace }) {
+    if (replace && (replace.start !== replace.end || replace.text)) {
+      const { start, end, text } = replace;
+      input.setSelectionRange(start, end);
+      const done = text ? document.execCommand("insertText", false, text) : document.execCommand("delete");
+      if (!done) {
+        input.setRangeText(text, start, end);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      // A kill or a yank is not typing: no completion popup.
+      active = [];
+      renderCompletions();
+    }
+    input.setSelectionRange(caret, caret);
+  }
+
   // A failed format gets a transcript entry of its own, like a failed eval.
   function formatFailed(message) {
     const entry = document.createElement("div");
@@ -251,20 +333,24 @@ export function setupRepl() {
   }
 
   // A result line under a transcript entry, of class "repl-value" or
-  // "repl-error".
+  // "repl-error". A value is Lisp, coloured as the input is; an error stays
+  // plain, so it reads as one.
   function addResult(entry, klass, text) {
     const out = document.createElement("pre");
     out.className = klass;
-    out.textContent = text;
+    if (klass === "repl-value") out.innerHTML = rainbowHighlight(text);
+    else out.textContent = text;
     entry.appendChild(out);
   }
 
   async function run() {
     const src = input.value.trim();
     if (!src) return;
+    remember(src);
     const entry = document.createElement("div");
     entry.className = "repl-entry";
-    entry.innerHTML = `<pre class="repl-prompt">▸ ${escapeHtml(src)}</pre>`;
+    entry.innerHTML = `<pre class="repl-prompt" title="Click to edit again"><span class="repl-prompt-mark">▸</span> ${rainbowHighlight(src)}</pre>`;
+    entry.firstChild.dataset.src = src;
     output.appendChild(entry);
     output.scrollTop = output.scrollHeight;
     try {
@@ -278,12 +364,20 @@ export function setupRepl() {
       addResult(entry, "repl-error", `transport error: ${err.message}`);
       logUi("error", `REPL: transport error: ${err.message}`);
     }
-    input.value = "";
-    refreshOverlay();
-    refresh();
-    updateHint();
+    setInput("");
     output.scrollTop = output.scrollHeight;
   }
+
+  // A click on a command in the transcript puts it back in the input. A
+  // drag that selects text is a copy, so it leaves the input alone.
+  output.addEventListener("click", (e) => {
+    const prompt = e.target.closest(".repl-prompt");
+    if (!prompt || !window.getSelection().isCollapsed) return;
+    history.reset();
+    recalled = null;
+    setInput(prompt.dataset.src);
+    input.focus();
+  });
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -328,8 +422,20 @@ export function setupRepl() {
     renderCompletions();
   });
   input.addEventListener("keydown", (e) => {
+    const command = emacsToggle.checked ? emacsCommand(e) : null;
+    // A kill only joins the one before it when nothing came in between.
+    if (!command?.includes("kill") && !["Control", "Alt", "Shift", "Meta"].includes(e.key)) {
+      emacs.interrupt();
+    }
     // Completion popup keys take priority when it's open.
     if (active.length) {
+      if (command === "next-line" || command === "previous-line") {
+        e.preventDefault();
+        const step = command === "next-line" ? 1 : active.length - 1;
+        selectedIdx = (selectedIdx + step) % active.length;
+        renderCompletions();
+        return;
+      }
       if (e.key === "Tab" || (e.key === "Enter" && !e.ctrlKey && !e.metaKey)) {
         e.preventDefault();
         applyCompletion();
@@ -365,6 +471,27 @@ export function setupRepl() {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       run();
+      return;
+    }
+    // History, like a shell's: Up from the first line, Down from the last.
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+    if (plain && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      const dir = e.key === "ArrowUp" ? -1 : 1;
+      if (atHistoryEdge(dir) && historyStep(dir)) e.preventDefault();
+      return;
+    }
+    if (command) {
+      e.preventDefault();
+      if (command === "history-previous" || command === "history-next") {
+        historyStep(command === "history-previous" ? -1 : 1);
+        return;
+      }
+      if (command === "previous-line" || command === "next-line") {
+        const dir = command === "previous-line" ? -1 : 1;
+        if (atHistoryEdge(dir) && historyStep(dir)) return;
+      }
+      const caret = input.selectionDirection === "backward" ? input.selectionStart : input.selectionEnd;
+      applyEmacs(emacs.run(command, input.value, caret));
       return;
     }
     // Tab when the completion popup isn't open: roundtrip the

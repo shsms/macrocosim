@@ -789,6 +789,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
 }
 .repl-mg-chip:hover { border-color: var(--accent); }
 .repl-mg-chip.muted { color: var(--muted); }
+.repl-keys-toggle { display: flex; align-items: center; gap: var(--space-1); color: var(--muted); }
+.repl-keys-toggle input { margin: 0; accent-color: var(--accent); }
+.repl-keys-toggle:has(input:checked) { color: var(--accent); border-color: var(--accent); }
 
 #topology-empty-hint {
   display: none;
@@ -1520,7 +1523,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 
 .repl-entry { margin-bottom: var(--space-2); }
 .repl-entry pre { margin: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); border: none; background: transparent; }
-.repl-prompt   { color: var(--accent); }
+.repl-prompt   { color: var(--fg); cursor: pointer; }
+.repl-prompt-mark { color: var(--accent); }
+.repl-prompt:hover { background: var(--bg); }
 .repl-value    { color: var(--good); white-space: pre-wrap; }
 .repl-error    { color: var(--bad); white-space: pre-wrap; }
 
