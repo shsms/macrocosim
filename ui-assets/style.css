@@ -776,8 +776,13 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
 }
 
 /* The REPL's head holds its controls, so the transcript below is all
-   transcript. They keep the head's mono face but not its uppercase title style,
-   and push right, clear of the close and dock buttons. */
+   transcript. They are set in the mono face at the docked head's size, without
+   its uppercase title style, and push right, clear of the close and dock
+   buttons. In a narrow head the microgrid chip shrinks first, so the checkbox
+   and the eval button stay. The clip leaves room for their focus rings. The
+   right margin keeps a bit of the head draggable beside the close and dock
+   buttons, which, with them, is most of what shows of a card pushed off the
+   left edge. */
 #repl .panel-drag {
   justify-content: flex-start;
   gap: var(--space-3);
@@ -785,17 +790,19 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
 }
 .repl-head-tools {
   margin-left: auto;
+  margin-right: var(--space-4);
   min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  overflow: hidden;
+  overflow: clip;
+  overflow-clip-margin: var(--space-1);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   letter-spacing: 0;
   text-transform: none;
   white-space: nowrap;
-  cursor: default;
+  user-select: none;
 }
 .repl-mg-chip {
   font: inherit;
@@ -806,13 +813,17 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
   color: var(--accent);
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .repl-mg-chip:hover { border-color: var(--accent); }
 .repl-mg-chip.muted { color: var(--muted); }
-.repl-keys-toggle { display: flex; align-items: center; gap: var(--space-1); color: var(--muted); cursor: pointer; }
+.repl-keys-toggle { flex: none; display: flex; align-items: center; gap: var(--space-1); color: var(--muted); cursor: pointer; }
 .repl-keys-toggle input { margin: 0; accent-color: var(--accent); }
 .repl-keys-toggle:has(input:checked) { color: var(--accent); }
-.repl-eval-hint { color: var(--muted); }
+.repl-eval-btn { flex: none; font: inherit; }
 
 #topology-empty-hint {
   display: none;
@@ -1436,9 +1447,10 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 
 /* REPL panel: one transcript band holding the output and, as its last line,
-   the prompt. The band's floor leaves room for the completion popup
-   (#repl-popup, 220px) beside the prompt. The card's own floor, measured by
-   side-panel.js (floorOf), holds the card head and that floor. */
+   the prompt. The band's floor (240px) holds the prompt and keeps room for the
+   completion popup above or below it; repl.js caps the popup to that room. The
+   card's own floor, measured by side-panel.js (floorOf), holds the card head
+   and that floor. */
 #repl-body {
   display: flex;
   flex-direction: column;
@@ -1511,9 +1523,10 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .log-line.trace .log-lvl { color: var(--muted); }
 .log-line .log-msg { flex: 1; }
 
-/* A floating REPL keeps the height it was given (side-panel.js applyCap)
-   instead of hugging a short transcript; a gripper drag in progress writes an
-   inline height, which wins until it settles. */
+/* Once the gripper has given it a height (side-panel.js applyCap), a floating
+   REPL keeps that height instead of hugging a short transcript; until then it
+   hugs, like any card. A gripper drag in progress writes an inline height,
+   which wins until it settles. */
 #repl:not(.docked) {
   --card-cap: auto;
   height: var(--card-cap);
@@ -1547,9 +1560,9 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 
 .repl-entry { margin-bottom: var(--space-2); }
 .repl-entry pre { margin: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); border: none; background: transparent; }
-.repl-prompt   { color: var(--fg); cursor: pointer; }
+.repl-command  { color: var(--fg); cursor: pointer; }
 .repl-prompt-mark { color: var(--accent); }
-.repl-prompt:hover { background: var(--bg); }
+.repl-command:hover { background: var(--bg); }
 .repl-value    { color: var(--good); white-space: pre-wrap; }
 .repl-error    { color: var(--bad); white-space: pre-wrap; }
 
@@ -1629,13 +1642,13 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 
 /* The completion popup: the names on the left, the selected name's signature
    and docstring beside them. Each half scrolls on its own, within the height
-   repl.js caps it to. It opens over the word being completed: repl.js puts its
+   repl.js caps it to. It opens at the word being completed: repl.js puts its
    left edge at the word's start, sliding it left to stay within the input. The
    doc pane is as wide as its widest line, so a docstring shows as written; it
    folds only when the input is too narrow for it. */
 #repl-popup {
   position: absolute;
-  bottom: 100%;       /* float upward from the input row */
+  bottom: 100%;       /* above the prompt; .below drops it under */
   left: 0;            /* set by repl.js, at the word being completed */
   max-width: 100%;
   margin: 0 0 var(--space-1);

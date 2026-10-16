@@ -2102,7 +2102,7 @@ check("e2e: the REPL panel spawns 560px wide, 8px to the right of the Logs panel
 await page.fill("#repl-input", "(+ 1 2)");
 await page.keyboard.press("Control+Enter");
 const replOut = await waitFor(async () => {
-  const t = await page.evaluate(() => document.getElementById("repl-output").textContent);
+  const t = await page.evaluate(() => document.getElementById("repl-entries").textContent);
   return /\b3\b/.test(t) ? t : null;
 }, 10000);
 check("e2e: an eval in the REPL panel lands its result in the output band", /\b3\b/.test(replOut ?? ""), replOut);
@@ -2237,16 +2237,19 @@ const evaluateAfterFrames = (pg, fn) =>
   pg.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))).then(() => pg.evaluate(fn));
 const floors = await inBothDensities(() =>
   evaluateAfterFrames(page, () => {
-    const bottom = (sel) => document.querySelector(sel).getBoundingClientRect().bottom;
+    const box = (sel) => document.querySelector(sel).getBoundingClientRect();
     return {
-      promptOver: bottom("#repl-form") - bottom("#repl"),
-      tailOver: bottom("#logs") - bottom("#logs-panel"),
+      promptOver: box("#repl-form").bottom - box("#repl").bottom,
+      // The prompt scrolls with the transcript: all of it shows, not only its
+      // bottom edge.
+      promptCut: box("#repl-output").top - box("#repl-form").top,
+      tailOver: box("#logs").bottom - box("#logs-panel").bottom,
     };
   }),
 );
 check(
   "e2e: capped REPL and logs cards hold the prompt and the tail, in both densities",
-  floors.every((f) => f.promptOver <= 0.5 && f.tailOver <= 0.5),
+  floors.every((f) => f.promptOver <= 0.5 && f.promptCut <= 0.5 && f.tailOver <= 0.5),
   JSON.stringify(floors),
 );
 await page.click("#repl-btn");
@@ -2381,7 +2384,9 @@ check(
 await resetReplWidth();
 // A press held while the window shrinks lands the card below the dock's top
 // once it is let go, whether the pointer stays put or moves after the shrink.
-// A press that resizes nothing leaves the stored placement as it was.
+// A press that resizes nothing leaves the stored placement as it was. The REPL
+// holds a stored height from the gripper drags above, so its height follows
+// the window down: the case a press that sized nothing must not save.
 const replPlace = async () =>
   await page.evaluate(() => {
     const card = document.getElementById("repl");
@@ -2484,9 +2489,17 @@ check(
 );
 // Narrowed at its left limit, the card is clamped like the end of a head drag:
 // at least KEEP_X (80px) of it stays on screen.
-// Grabbed 70px from the head's right end, clear of its buttons.
-const atLimitFrom = await replRect();
-await dragReplHead(2 - (atLimitFrom.right - 70), 1 - 70 / (atLimitFrom.right - atLimitFrom.left));
+// Grabbed in the gap between the head's controls and its close and dock
+// buttons: the part of the head a card at its left limit still shows.
+const headGap = await page.evaluate(() => {
+  const head = document.querySelector("#repl .panel-drag").getBoundingClientRect();
+  const tools = document.querySelector("#repl .repl-head-tools").getBoundingClientRect();
+  const dock = document.querySelector("#repl .float-dock").getBoundingClientRect();
+  const x = (tools.right + dock.left) / 2;
+  return { x, at: (x - head.left) / head.width, width: dock.left - tools.right };
+});
+check("e2e: the REPL head keeps a draggable gap beside its close and dock buttons", headGap.width >= 12, JSON.stringify(headGap));
+await dragReplHead(2 - headGap.x, headGap.at);
 const atLimit = await dragGripper(-40, 0);
 const atLimitSettled = await replRect();
 check(
@@ -4543,7 +4556,8 @@ check(
 
 // ── e2e: strips give way to the canvas in a narrow window ───────────
 // At 1024px the right strip narrows so the rest of main keeps 600px, and the
-// bottom strip at its smallest still holds the REPL's prompt, in both densities.
+// bottom strip at its smallest still holds the REPL's prompt, in both
+// densities.
 // In a context of its own, so the panels open docked.
 {
   const ctx = await browser.newContext({ ...CONTEXT, viewport: { width: 1024, height: 768 } });
@@ -4561,14 +4575,17 @@ check(
         over:
           document.getElementById("repl-form").getBoundingClientRect().bottom -
           document.getElementById("repl").getBoundingClientRect().bottom,
+        cut:
+          document.getElementById("repl-output").getBoundingClientRect().top -
+          document.getElementById("repl-form").getBoundingClientRect().top,
         strip: document.getElementById("dock-bottom").getBoundingClientRect().height,
       })),
     p,
   );
   // Smaller than the strip's 260px default: the stored size is its smallest.
   check(
-    "e2e: the bottom strip at its smallest holds the REPL form, in both densities",
-    replFits.every((f) => f.docked && f.strip < 260 && f.over <= 0.5),
+    "e2e: the bottom strip at its smallest holds the REPL prompt, in both densities",
+    replFits.every((f) => f.docked && f.strip < 260 && f.over <= 0.5 && f.cut <= 0.5),
     JSON.stringify(replFits),
   );
   await ctx.close();

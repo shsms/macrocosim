@@ -77,12 +77,85 @@ await openRepl();
 await page.keyboard.press("ArrowUp");
 check("history survives a reload", await val(), "(* 2 3)");
 await evalSrc("(list 1 2)");
-await page.locator(".repl-prompt").last().click();
+// A click on a command recalls it a moment later, in place of the draft, as
+// one edit Ctrl+Z takes back.
+await setVal("(draft)");
+await page.locator(".repl-command").last().click();
+await page.waitForFunction(() => document.getElementById("repl-input").value === "(list 1 2)", null, { timeout: 2000 }).catch(() => {});
 check("a click on a command in the output puts it back", await val(), "(list 1 2)");
+await page.keyboard.press("Control+z");
+check("Ctrl+Z brings back the draft it replaced", await val(), "(draft)");
+// A double-click selects a word and recalls nothing; typing cancels a recall
+// still to come. `pastRecall` waits in the page, so it always outlasts the
+// recall's 300ms timer.
+const pastRecall = () => page.evaluate(() => new Promise((r) => setTimeout(r, 350)));
+// With "(draft)" selected in the input, Chromium would keep that selection over
+// the double-clicked word, but the click handler collapses it. x=45 lands on
+// "list" in "▸ (list 1 2)".
+await page.$eval("#repl-input", (t) => t.setSelectionRange(0, 7));
+await page.locator(".repl-command").last().dblclick({ position: { x: 45, y: 8 } });
+await pastRecall();
+check("a double-click on a command selects a word, and does not recall it", [await page.evaluate(() => getSelection().toString()), await val()], ["list", "(draft)"]);
+// The second click of a double-click recalls nothing, also when the
+// double-click selects no text. The selection is cleared first, as a selection
+// ends the click handler early.
+await page.evaluate(() => getSelection().removeAllRanges());
+await page.locator(".repl-command").last().dispatchEvent("click", { detail: 2 });
+await pastRecall();
+check("a double-click's second click does not recall", await val(), "(draft)");
+await setVal("");
+await page.locator(".repl-command").last().click();
+await page.keyboard.type("q");
+await pastRecall();
+check("typing right after a click cancels the recall", await val(), "q");
+// From a recalled multi-line entry, with the caret where history left it, Up
+// walks on to the next older entry.
+await evalSrc("(progn\n  1)");
+await setVal("");
+await page.keyboard.press("ArrowUp");
+check("Up recalls a multi-line entry", await val(), "(progn\n  1)");
+await page.keyboard.press("ArrowUp");
+check("and Up from its last line walks on", await val(), "(list 1 2)");
+// A long line wraps onto several rows: Up on a lower row moves the caret up a
+// row, not to history.
+const long = `(list ${Array.from({ length: 80 }, (_, i) => i).join(" ")})`;
+await setVal(long);
+await page.keyboard.press("ArrowUp");
+check("Up on a wrapped row stays in the input", [await val() === long, (await caret())[0] < long.length], [true, true]);
+await setVal(long, 0);
+await page.keyboard.press("ArrowDown");
+check("and so does Down", [await val() === long, (await caret())[0] > 0], [true, true]);
+// Up at the very start goes to history, even when the input starts with a
+// newline.
+await setVal("\n(a)", 0);
+await page.keyboard.press("ArrowUp");
+check("Up at the start of a leading newline recalls", (await val()) !== "\n(a)", true);
+// The head's eval button runs the prompt.
+await setVal("(+ 40 2)");
+const before = await page.$$eval(".repl-value", (e) => e.length);
+await page.click("#repl-eval");
+await page.waitForFunction((n) => document.querySelectorAll(".repl-value").length > n, before);
+check("the eval button runs the prompt", [await page.locator(".repl-value").last().textContent(), await val()], ["42", ""]);
+// The input empties when a command is sent, so text typed while a slow eval
+// runs stays.
+let delayed = 0;
+await page.route("**/eval", async (route) => {
+  delayed++;
+  await new Promise((r) => setTimeout(r, 800));
+  await route.continue();
+});
+await setVal("(+ 1 1)");
+const pending = await page.$$eval(".repl-value", (e) => e.length);
+await page.keyboard.press("Control+Enter");
+await page.keyboard.type("abc");
+await page.waitForFunction((n) => document.querySelectorAll(".repl-value").length > n, pending);
+check("text typed during a slow eval stays", [delayed, await val()], [1, "abc"]);
+await page.unroute("**/eval");
+await setVal("");
 
 // ── highlighting ────────────────────────────────────────────────
 await evalSrc('(list 1 "a")');
-const lastPrompt = page.locator(".repl-prompt").last();
+const lastPrompt = page.locator(".repl-command").last();
 check("a command in the output is highlighted", (await lastPrompt.locator(".paren-0, .repl-function-head").count()) > 0, true);
 check("and reads as typed", await lastPrompt.textContent(), '▸ (list 1 "a")');
 check("a value is highlighted", (await page.locator(".repl-value").last().locator(".paren-0, .repl-string").count()) > 0, true);
@@ -126,6 +199,14 @@ await page.keyboard.press("Alt+f");
 await page.keyboard.press("Control+k");
 await page.keyboard.press("Control+z");
 check("C-z undoes a kill", await val(), "(make-meter :id 1)");
+// A key typed between two kills starts a fresh kill: C-y yanks only the second.
+await setVal("(x)\n(y)", 0);
+await page.keyboard.press("Control+k");
+await page.keyboard.type("z");
+await page.keyboard.press("Control+k");
+await page.keyboard.press("Control+y");
+check("a typed key ends a run of kills", await val(), "z\n(y)");
+await setVal("(make-meter :id 1)");
 await page.keyboard.press("Control+a");
 await page.keyboard.press("Control+d");
 check("C-d", await val(), "make-meter :id 1)");
@@ -148,6 +229,8 @@ await page.keyboard.press("Control+p");
 check("C-p moves up a line", [await val(), (await caret())[0]], ["(a\n b)", 2]);
 await page.keyboard.press("Control+p");
 check("C-p on the first line brings back a command", await val(), "(no-such-fn)");
+// Playwright hands C-n to the page; a real browser on Linux or Windows keeps
+// it, unless the GTK Emacs key theme gives it to text fields.
 await page.keyboard.press("Control+n");
 check("C-n goes back", await val(), "(a\n b)");
 check("no completion popup came up", await page.$eval("#repl-popup", (u) => u.hidden), true);

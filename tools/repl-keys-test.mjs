@@ -1,12 +1,12 @@
 // Unit tests for the REPL's history and Emacs keys (ui-assets/repl-keys.js):
-// stepping through history with a draft, the line edges that hand Up/Down
-// to history, the key → command mapping, and each command's edit.
+// stepping through history with a draft, the key → command mapping, and each
+// command's edit.
 // Run: node tools/repl-keys-test.mjs   (exits non-zero on failure)
 //
 // repl-keys.js imports nothing and touches no DOM, so no shim is needed.
 import assert from "node:assert/strict";
 
-const { EmacsKeys, ReplHistory, emacsCommand, onFirstLine, onLastLine } = await import(
+const { EmacsKeys, ReplHistory, emacsCommand } = await import(
   new URL("../ui-assets/repl-keys.js", import.meta.url)
 );
 
@@ -50,13 +50,21 @@ const { EmacsKeys, ReplHistory, emacsCommand, onFirstLine, onLastLine } = await 
   // A stored list that is longer than the cap is trimmed on load.
   assert.deepEqual(new ReplHistory(["1", "2", "3", "4"], 2).entries, ["3", "4"]);
 }
-
-// ── line edges ──────────────────────────────────────────────────
-assert.equal(onFirstLine("(a\n b)", 2), true);
-assert.equal(onFirstLine("(a\n b)", 3), false);
-assert.equal(onLastLine("(a\n b)", 2), false);
-assert.equal(onLastLine("(a\n b)", 3), true);
-assert.equal(onLastLine("(a)", 0), true);
+{
+  // By default the newest 500 commands are kept.
+  const h = new ReplHistory();
+  for (let i = 0; i <= 500; i++) h.push(`(${i})`);
+  assert.equal(h.entries.length, 500);
+  assert.equal(h.entries[0], "(1)");
+  // A command longer than 16K characters runs but is not kept, so a few huge
+  // pastes cannot fill the browser's storage.
+  h.push(`("${"x".repeat(16 * 1024)}")`);
+  assert.ok(h.entries.at(-1) === "(500)", "a command over 16K characters was kept");
+  // One of exactly 16K characters is kept.
+  const max = `(${"x".repeat(16 * 1024 - 2)})`;
+  h.push(max);
+  assert.ok(h.entries.at(-1) === max, "a command of 16K characters was dropped");
+}
 
 // ── emacsCommand ────────────────────────────────────────────────
 const key = (k, mods = {}) => ({ key: k, code: "", ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...mods });
@@ -80,8 +88,22 @@ assert.equal(emacsCommand(alt("n")), "history-next");
 assert.equal(emacsCommand(key("Backspace", { altKey: true })), "backward-kill-word");
 assert.equal(emacsCommand(key("<", { altKey: true, shiftKey: true, code: "Comma" })), "beginning-of-buffer");
 assert.equal(emacsCommand(key(">", { altKey: true, shiftKey: true, code: "Period" })), "end-of-buffer");
-// Caps Lock and Shift do not change a Ctrl binding's letter.
+// Meta goes by the letter the layout types where it types one: Dvorak's f key
+// sits where QWERTY has Y, and German has `<` on a key of its own.
+assert.equal(emacsCommand(key("f", { altKey: true, code: "KeyY" })), "forward-word");
+assert.equal(emacsCommand(key("u", { altKey: true, code: "KeyF" })), null);
+assert.equal(emacsCommand(key("<", { altKey: true, code: "IntlBackslash" })), "beginning-of-buffer");
+assert.equal(emacsCommand(key(";", { altKey: true, shiftKey: true, code: "Comma" })), null);
+// A macOS dead key (Option+N on a US Mac) falls back to the physical key, as
+// Option's special characters do; so does Option+Shift+Comma.
+assert.equal(emacsCommand(key("Dead", { altKey: true, code: "KeyN" })), "history-next");
+assert.equal(emacsCommand(key("¯", { altKey: true, shiftKey: true, code: "Comma" })), "beginning-of-buffer");
+// Shift with a Meta letter is not bound.
+assert.equal(emacsCommand(key("F", { altKey: true, shiftKey: true, code: "KeyF" })), null);
+// Caps Lock does not change a Ctrl binding's letter; Ctrl+Shift stays the
+// browser's (Ctrl+Shift+K is Firefox's web console).
 assert.equal(emacsCommand(key("A", { ctrlKey: true })), "beginning-of-line");
+assert.equal(emacsCommand(key("K", { ctrlKey: true, shiftKey: true })), null);
 // Everything else stays the browser's: plain keys, unbound letters, Cmd, and
 // Ctrl+Alt (AltGr on many layouts).
 assert.equal(emacsCommand(key("a")), null);
@@ -139,6 +161,31 @@ assert.equal(run("kill-line", "(a b)|"), "(a b)|");
   assert.equal(run("yank", "x|y", keys), "xfoo bar|y");
   keys.interrupt();
   assert.equal(run("kill-word", "(|zap)", keys), "(|)");
+  assert.equal(run("yank", "|", keys), "zap|");
+}
+{
+  // A kill only joins the one before it where that one left the text: a
+  // click that moved the caret, or typing or a paste that changed the text,
+  // starts a fresh kill, with no keydown in between.
+  const keys = new EmacsKeys();
+  // The caret moved.
+  assert.equal(run("kill-line", "(a| b)\n(c)", keys), "(a|\n(c)");
+  assert.equal(run("kill-line", "(a\n(c|)", keys), "(a\n(c|");
+  assert.equal(run("yank", "|", keys), ")|");
+  // The text changed after the caret, and the caret did not move.
+  assert.equal(run("kill-line", "(a| b)\n(c)", keys), "(a|\n(c)");
+  assert.equal(run("kill-line", "(a|Z\n(c)", keys), "(a|\n(c)");
+  assert.equal(run("yank", "|", keys), "Z|");
+}
+{
+  // A kill with nothing to take (C-k at the end, M-d at the end, M-DEL at the
+  // start) leaves the kill ring as it was.
+  const keys = new EmacsKeys();
+  assert.equal(run("kill-word", "(|zap)", keys), "(|)");
+  keys.interrupt();
+  assert.equal(run("kill-line", "(a)|", keys), "(a)|");
+  assert.equal(run("kill-word", "(a)|", keys), "(a)|");
+  assert.equal(run("backward-kill-word", "|(a)", keys), "|(a)");
   assert.equal(run("yank", "|", keys), "zap|");
 }
 // A kill or yank reports its edit; a motion reports none.

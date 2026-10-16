@@ -756,10 +756,9 @@ function settleResize(p, name) {
   // rounded to the layout's sub-pixel grid, so a move under half a pixel is
   // treated as that rounding, not a move.
   //
-  // A press that sized nothing moves nothing either: the card hangs from its
-  // placement again, which stays as stored. (The pin can still have been taken:
-  // a box the window shrinks under a held gripper gets an inline size from the
-  // browser, within the slop.)
+  // A press that sized nothing keeps the stored placement. The pin can still
+  // have been taken: when the window shrinks under a held gripper, the browser
+  // can write an inline size within the slop (Chromium does).
   const now = el.getBoundingClientRect();
   const moved = Math.abs(now.left - at.left) > 0.5 || Math.abs(now.top - at.top) > 0.5;
   if ((h || w) && moved) {

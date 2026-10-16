@@ -4,10 +4,13 @@
 
 // The commands run so far, oldest first, and a walk through them. A walk starts
 // at the input's own text (the draft) and keeps whatever the user typed into
-// each entry it passed, the way readline does, until the next push.
+// each entry it passed, the way readline does, until the next push. It keeps
+// the newest `cap` commands of up to `maxChars` each, which bounds what it
+// stores in the browser.
 export class ReplHistory {
-  constructor(entries = [], cap = 500) {
+  constructor(entries = [], cap = 500, maxChars = 16 * 1024) {
     this.cap = cap;
+    this.maxChars = maxChars;
     this.entries = entries.slice(-cap);
     this.reset();
   }
@@ -17,9 +20,10 @@ export class ReplHistory {
     this.edits = new Map();
   }
 
-  // Records a run command, unless it is blank or repeats the newest entry.
+  // Records a run command, unless it is blank, too long, or repeats the newest
+  // entry.
   push(src) {
-    if (src.trim() && src !== this.entries.at(-1)) {
+    if (src.trim() && src.length <= this.maxChars && src !== this.entries.at(-1)) {
       this.entries.push(src);
       if (this.entries.length > this.cap) this.entries.shift();
     }
@@ -37,9 +41,6 @@ export class ReplHistory {
   }
 }
 
-export const onFirstLine = (value, caret) => !value.slice(0, caret).includes("\n");
-export const onLastLine = (value, caret) => !value.slice(caret).includes("\n");
-
 const CTRL = {
   a: "beginning-of-line",
   e: "end-of-line",
@@ -51,28 +52,32 @@ const CTRL = {
   k: "kill-line",
   y: "yank",
 };
-// Meta keys go by e.code, the physical key: macOS's Option turns e.key into
-// another character (ƒ for f).
+// Meta keys by the character the layout types for them.
 const META = {
-  KeyF: "forward-word",
-  KeyB: "backward-word",
-  KeyD: "kill-word",
-  KeyP: "history-previous",
-  KeyN: "history-next",
-  Backspace: "backward-kill-word",
+  f: "forward-word",
+  b: "backward-word",
+  d: "kill-word",
+  p: "history-previous",
+  n: "history-next",
+  "<": "beginning-of-buffer",
+  ">": "end-of-buffer",
 };
+// The character a physical key types on a US layout, for when Option on a Mac
+// types another character (ƒ for f) or starts a dead key.
+const usCharacter = (code, shift) =>
+  shift ? { Comma: "<", Period: ">" }[code] : /^Key([A-Z])$/.exec(code)?.[1].toLowerCase();
 
 // The Emacs command a keydown asks for, or null to leave the key to the
 // browser. Ctrl and Alt each count only alone: Ctrl+Alt is AltGr on many
-// layouts, and Cmd is always the browser's.
+// layouts, and Cmd is always the browser's, as is Ctrl+Shift.
 export function emacsCommand(e) {
   if (e.metaKey || (e.ctrlKey && e.altKey)) return null;
-  if (e.ctrlKey) return e.key.length === 1 ? (CTRL[e.key.toLowerCase()] ?? null) : null;
+  if (e.ctrlKey) return !e.shiftKey && e.key.length === 1 ? (CTRL[e.key.toLowerCase()] ?? null) : null;
   if (!e.altKey) return null;
-  if (e.shiftKey && (e.key === "<" || e.code === "Comma")) return "beginning-of-buffer";
-  if (e.shiftKey && (e.key === ">" || e.code === "Period")) return "end-of-buffer";
-  if (e.shiftKey) return null;
-  return META[e.code] ?? (e.key === "Backspace" ? META.Backspace : null);
+  if (e.key === "Backspace") return e.shiftKey ? null : "backward-kill-word";
+  // A printable ASCII character is what the layout types: Shift is part of it.
+  if (/^[ -~]$/.test(e.key)) return META[e.key] ?? null;
+  return META[usCharacter(e.code, e.shiftKey)] ?? null;
 }
 
 const lineStart = (v, i) => v.lastIndexOf("\n", i - 1) + 1;
@@ -98,29 +103,35 @@ const sameColumn = (v, caret, start) => Math.min(start + caret - lineStart(v, ca
 
 // Runs the editing commands, holding the kill ring (one entry, as C-y only ever
 // yanks the last kill). Kills back to back join into one, in the order the text
-// had; interrupt() is the caller's note that some other key came in between.
+// had. A kill joins only where the one before left the text: a click that moved
+// the caret, or typing or a paste that changed the text, starts a fresh kill.
+// interrupt() is the caller's note that some other key came in between.
 export class EmacsKeys {
   constructor() {
     this.killed = "";
-    this.killing = false;
+    // Where the last kill left the caret and the text's length, while a
+    // following kill may join it; else null.
+    this.chain = null;
   }
 
   interrupt() {
-    this.killing = false;
+    this.chain = null;
   }
 
   // What the editing command `cmd` does to the text `v` with the caret at
   // `caret`: the new caret, and the edit, if any, as { start, end, text } over
   // the old text. The history commands are the caller's, not this one's.
   run(cmd, v, caret) {
-    const killing = this.killing;
-    this.killing = false;
+    const chain = this.chain;
+    this.chain = null;
     const move = (to) => ({ caret: to });
+    // A kill with nothing to take leaves the kill ring as it was.
     const kill = (start, end) => {
+      if (start === end) return move(caret);
       const text = v.slice(start, end);
-      if (!killing) this.killed = text;
+      if (chain?.caret !== caret || chain.length !== v.length) this.killed = text;
       else this.killed = start < caret ? text + this.killed : this.killed + text;
-      this.killing = true;
+      this.chain = { caret: start, length: v.length - text.length };
       return { caret: start, replace: { start, end, text: "" } };
     };
     switch (cmd) {
