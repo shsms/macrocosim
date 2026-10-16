@@ -51,5 +51,6 @@ ui-e2e: ui-e2e-deps
 	  for _ in $$(seq 1 30); do [ -s "$$sd/endpoints.json" ] && break; sleep 1; done; \
 	  [ -s "$$sd/endpoints.json" ] || { echo "server failed to boot:"; cat "$$sd/server.log"; exit 1; }; \
 	  ui=$$(sed -n 's/.*"ui":"\([^"]*\)".*/\1/p' "$$sd/endpoints.json"); \
-	  MACROCOSIM_UI="http://$$ui" node tools/ui-smoke/live-topology.mjs \
+	  { MACROCOSIM_UI="http://$$ui" node tools/ui-smoke/live-topology.mjs \
+	    && MACROCOSIM_UI="http://$$ui" node tools/ui-smoke/repl.mjs; } \
 	    || { echo "--- server log:"; cat "$$sd/server.log"; exit 1; }

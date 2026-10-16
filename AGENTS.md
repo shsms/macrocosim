@@ -139,11 +139,12 @@ is wiring the topology + animating the environment.
     / `set-meter-power-factor` (with a `leading` checkbox) on meters.
 - `tools/ui-smoke/` — Playwright smoke scripts against a live server
   (`MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`
-  points it at a server you already run). The e2e half drives the
-  Starter site (microgrid 2200) from a scratch state dir; `make ui-e2e`
-  boots one and runs it, and the `ui-e2e` job in
-  `.github/workflows/ci.yml` does the same on pushes to main and PRs
-  targeting main.
+  points it at a server you already run). The e2e half drives the Starter site
+  (microgrid 2200) from a scratch state dir. `repl.mjs` drives the REPL's
+  history, Emacs keys and layout with real key presses, in Chromium or, given
+  `firefox` as its argument, Firefox. `make ui-e2e` boots one server and runs
+  both, and the `ui-e2e` job in `.github/workflows/ci.yml` does the same on
+  pushes to main and PRs targeting main.
 - `src/server.rs` — `Microgrid` gRPC service
 - `src/assets_server.rs` — `PlatformAssets` gRPC service (shared port)
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
