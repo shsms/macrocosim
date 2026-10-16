@@ -2780,3 +2780,47 @@ in =src/lisp/defuns/frequency.rs=), and =step()= then pulls the
 frequency to the NaN nominal for every microgrid
 (=src/sim/frequency.rs=). Refuse a nominal that is not finite. (A NaN =:mean-rev-rate= or
 =:sigma= already becomes 0 through =max(0.0)=.)
+
+* Review backlog — 2026-10-10
+** TODO Set a floating card's width through a CSS custom property  :ui:cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-10 Sa 15:22]
+:END:
+
+Left from the review of the floating-card gripper. The code writes a
+card's default, stored or clamped width as its inline width, and the
+gripper writes its inline width too. So =resizePending= and
+=settleResize= (=ui-assets/side-panel.js=) tell the two apart through
+=p.appliedWidth=. If the code set the width through a custom property
+(e.g. =--panel-w=) instead, an inline width would only come from the
+gripper, and =appliedWidth= and =applyWidth= could go.
+
+** TODO Drop the RESIZE_SETTLE timer if no script resizes a card  :ui:cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-10 Sa 15:22]
+:END:
+
+Left from the review of the floating-card gripper. A gripper drag now
+starts with a press and settles at its release. Only an inline size
+written with no press settles on a timer: =RESIZE_SETTLE= (280 ms)
+after its last change, on =p.resizeTimer=
+(=ui-assets/side-panel.js=, =wireResize=). Check whether anything
+still writes a card's inline size without a press. If nothing does,
+drop the timer, =resizeTimer= and =RESIZE_SETTLE=.
+
+** TODO A head drag drops the refit it skips                           :ui:
+:LOGBOOK:
+- State "TODO"       from              [2026-10-10 Sa 15:22]
+:END:
+
+Left from the review of the floating-card gripper; main has it too.
+=sanitizePanel= (=ui-assets/side-panel.js=) returns at once while
+=p.dragging= is set, that is, while a pointer holds the card's head.
+A refit asked for during the drag (the window-resize settle, a strip
+appearing or vanishing, the strip splitter's settle) is dropped, and
+the release does not run one. So a card let go after the window
+shrank can stay where a refit would have moved it.
+
+A gripper press already records a skipped refit
+(=p.resizeFrom.refitDue=) and runs it at its release
+(=settleResize=). The head drag could do the same.
