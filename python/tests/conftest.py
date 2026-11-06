@@ -12,11 +12,14 @@ import os
 
 import pytest
 
-from macrocosim._process import which_binary
+from macrocosim._process import resolve_binary
 
 
 def _binary() -> str | None:
-    return os.environ.get("MACROCOSIM_BIN") or which_binary("macrocosim")
+    try:
+        return resolve_binary("macrocosim", env_var="MACROCOSIM_BIN")
+    except FileNotFoundError:
+        return None
 
 
 def pytest_configure(config: pytest.Config) -> None:

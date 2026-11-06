@@ -1,8 +1,6 @@
-"""Shared process plumbing: binary discovery, spawn, the endpoints wait.
+"""Process plumbing: binary discovery, spawn, the endpoints wait, stop.
 
-Internal. The 0.1 clients (:mod:`macrocosim.runtime`, :mod:`macrocosim.aio`)
-use `spawn_macrocosim`; the 0.2 client uses `spawn` and `wait_endpoints`.
-Both stop the process with `terminate`.
+Internal; imports `_errors`.
 """
 
 from __future__ import annotations
@@ -19,10 +17,6 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
-
-if TYPE_CHECKING:
-    from .build import ConfigSource, LispRenderable
 
 from ._errors import WRONG_SHAPE
 
@@ -39,135 +33,38 @@ def which_binary(name: str) -> str | None:
     return shutil.which(name, path=sysconfig.get_path("scripts")) or shutil.which(name)
 
 
-def resolve_binary(
-    name: str,
-    *,
-    env_var: str,
-    explicit: str | os.PathLike[str] | None,
-    flag: str | None,
-) -> str:
-    """Locate a bundled binary: an explicit path → ``$env_var`` → wheel / PATH.
-
-    ``flag`` names the launch/run keyword that overrides it, for the not-found
-    message (``bin`` for macrocosim, ``macroctl_bin`` for macroctl); ``None``
-    when there is none.
-    """
-    for candidate in (explicit, os.environ.get(env_var)):
-        if candidate:
-            path = Path(candidate)
-            if path.is_file():
-                return str(path)
-            raise FileNotFoundError(f"{name} binary not found at {path}")
+def resolve_binary(name: str, *, env_var: str) -> str:
+    """Locate a bundled binary: ``$env_var`` → wheel / PATH."""
+    candidate = os.environ.get(env_var)
+    if candidate:
+        path = Path(candidate)
+        if path.is_file():
+            return str(path)
+        raise FileNotFoundError(f"{name} binary not found at {path}")
     found = which_binary(name)
     if found:
         return found
-    pass_flag = f"pass {flag}=..., " if flag else ""
     raise FileNotFoundError(
-        f"no {name} binary; install the macrocosim platform wheel, {pass_flag}"
-        f"set {env_var}, or put it on PATH"
+        f"no {name} binary; install the macrocosim platform wheel, set {env_var}, "
+        "or put it on PATH"
     )
 
 
-def render_config(config: ConfigSource, tmpdir: Path) -> Path:
-    """A config file path as-is, or render to_lisp object(s) to a temp file."""
-    if hasattr(config, "to_lisp"):
-        # A run-time check that needs no import of `build`; the checker does
-        # not narrow on hasattr, hence the cast.
-        forms: list[LispRenderable] = [cast("LispRenderable", config)]
-    elif isinstance(config, (str, os.PathLike)):
-        # config is str | PathLike here; the structural narrowing leaves a
-        # spurious Protocol-and-PathLike intersection the checker can't shed.
-        return Path(config)  # ty: ignore[invalid-argument-type]
-    else:
-        forms = list(config)
-    path = tmpdir / "config.lisp"
-    path.write_text("\n".join(f.to_lisp() for f in forms) + "\n")
-    return path
+def terminate(process: subprocess.Popen[bytes]) -> None:
+    """Stop a child process: SIGTERM, then SIGKILL if it has not exited after 5 s.
 
-
-@dataclass
-class SpawnedMacrocosim:
-    """A freshly spawned simulator, before the endpoint handshake."""
-
-    process: subprocess.Popen[bytes]
-    """The simulator process."""
-
-    endpoints_file: Path
-    """Written by the process once its servers are up (the ready signal)."""
-
-    log_file: Path
-    """The process's combined stdout+stderr, for failure diagnostics."""
-
-    tmpdir: Path
-    """Holds the rendered config + endpoints + log. Removed by
-    ``Site.close()`` on the happy path; deliberately kept when a launch
-    fails so the log survives for post-mortem reading."""
-
-    def fail(self, exc_type: type[Exception], message: str) -> None:
-        """Stop the process and raise ``exc_type`` with the log tail attached."""
-        terminate(self.process)
-        tail = self.log_file.read_text(errors="replace")[-4000:]
-        raise exc_type(f"{message}\n{tail}")
-
-
-def spawn_macrocosim(
-    config: ConfigSource, bin: str | os.PathLike[str] | None
-) -> SpawnedMacrocosim:
-    """Spawn the simulator on ephemeral ports; the caller awaits the handshake.
-
-    Sends the child's output to a file, not a PIPE: an undrained pipe fills
-    its ~64KB buffer and the child blocks on write before it can emit the
-    endpoints handshake. The file also carries diagnostics for failures.
+    A process that survives SIGKILL for another 5 s (stuck in the kernel) is
+    left behind rather than raising, so the caller's own error is kept.
     """
-    binary = resolve_binary(
-        "macrocosim", env_var="MACROCOSIM_BIN", explicit=bin, flag="bin"
-    )
-    tmpdir = Path(tempfile.mkdtemp(prefix="macrocosim-py-"))
-    config_path = render_config(config, tmpdir)
-    # Rendered configs (builder objects) anchor their persistent state
-    # (overrides journals, snapshots, created-microgrid stubs) in the
-    # tempdir — a test's structural evals must never litter the
-    # process cwd, and the dir is cleaned up with the Site. A
-    # user-supplied .lisp path keeps its long-standing contract
-    # instead: relative (load …)s and journals anchor next to the
-    # config file, as when the binary derived the anchor from the
-    # config's own location.
-    if isinstance(config, (str, os.PathLike)):
-        state_dir = config_path.parent
-    else:
-        state_dir = tmpdir
-    endpoints_file = tmpdir / "endpoints.json"
-    log_file = tmpdir / "macrocosim.log"
-    with log_file.open("wb") as log:
-        process = subprocess.Popen(
-            [
-                binary,
-                str(config_path),
-                "--ephemeral-ports",
-                f"--emit-endpoints={endpoints_file}",
-                f"--state-dir={state_dir}",
-            ],
-            stdout=log,
-            stderr=subprocess.STDOUT,
-        )
-    return SpawnedMacrocosim(
-        process=process,
-        endpoints_file=endpoints_file,
-        log_file=log_file,
-        tmpdir=tmpdir,
-    )
-
-
-def terminate(process: subprocess.Popen[bytes] | None) -> None:
-    """Stop a child process, escalating to kill if terminate doesn't take."""
-    if process is None or process.poll() is not None:
+    if process.poll() is not None:
         return
     process.terminate()
     try:
         process.wait(timeout=5.0)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=5.0)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=5.0)
 
 
 LOG_TAIL_CHARS = 4000

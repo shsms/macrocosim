@@ -52,9 +52,7 @@ class _LoopbackTimeout(Exception):
 
 
 def _default_binary() -> str:
-    return _process.resolve_binary(
-        "macrocosim", env_var="MACROCOSIM_BIN", explicit=None, flag=None
-    )
+    return _process.resolve_binary("macrocosim", env_var="MACROCOSIM_BIN")
 
 
 class _Simulator:

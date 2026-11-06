@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -147,11 +148,13 @@ def test_a_failed_popen_keeps_a_given_state_dir(
     assert (tmp_path / "s").is_dir()
 
 
-def test_resolve_binary_without_a_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_binary_not_found_names_every_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("MACROCOSIM_BIN", raising=False)
     monkeypatch.setattr(p, "which_binary", lambda name: None)
     with pytest.raises(FileNotFoundError) as info:
-        p.resolve_binary("macrocosim", env_var="MACROCOSIM_BIN", explicit=None, flag=None)
+        p.resolve_binary("macrocosim", env_var="MACROCOSIM_BIN")
     assert str(info.value) == (
         "no macrocosim binary; install the macrocosim platform wheel, set "
         "MACROCOSIM_BIN, or put it on PATH"
@@ -163,7 +166,7 @@ def test_a_bad_env_var_keeps_its_own_message(
 ) -> None:
     monkeypatch.setenv("MACROCOSIM_BIN", str(tmp_path / "missing"))
     with pytest.raises(FileNotFoundError, match="macrocosim binary not found at"):
-        p.resolve_binary("macrocosim", env_var="MACROCOSIM_BIN", explicit=None, flag=None)
+        p.resolve_binary("macrocosim", env_var="MACROCOSIM_BIN")
 
 
 def _handle(tmp_path: Path, returncode: int | None = None) -> p._Handle:
@@ -246,3 +249,28 @@ def test_log_tail(tmp_path: Path) -> None:
     tail = p.log_tail(handle)
     assert len(tail) == p.LOG_TAIL_CHARS and tail.endswith("END")
 
+
+class StuckProcess:
+    """A process that ignores SIGTERM, and SIGKILL too."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def poll(self) -> int | None:
+        return None
+
+    def terminate(self) -> None:
+        self.calls.append("terminate")
+
+    def kill(self) -> None:
+        self.calls.append("kill")
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.calls.append(f"wait {timeout}")
+        raise subprocess.TimeoutExpired("mc", timeout or 0)
+
+
+def test_terminate_kills_after_5_s_and_gives_up_without_raising() -> None:
+    process = StuckProcess()
+    p.terminate(process)  # type: ignore[arg-type]
+    assert process.calls == ["terminate", "wait 5.0", "kill", "wait 5.0"]

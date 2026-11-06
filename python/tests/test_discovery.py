@@ -46,7 +46,5 @@ def test_resolve_binary_prefers_env_var(monkeypatch, tmp_path) -> None:
     binary.write_text("")
     monkeypatch.setenv("MACROCOSIM_BIN", str(binary))
     monkeypatch.setattr(rt.shutil, "which", lambda name, path=None: "/scripts/x")
-    found = rt.resolve_binary(
-        "macrocosim", env_var="MACROCOSIM_BIN", explicit=None, flag="bin"
-    )
+    found = rt.resolve_binary("macrocosim", env_var="MACROCOSIM_BIN")
     assert found == str(binary)
