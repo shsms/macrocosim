@@ -1,10 +1,14 @@
-"""Y4/Y5 together: drive the environment, inject a fault, assert the result.
+"""Change the simulated world, inject a fault, and see how reads differ.
 
-Build a topology in Python, then use the component handles
-(``site.component(id).command`` / ``.status`` / ``.drive``) and settle-aware ``expect`` to
-exercise it the way an integration test would.
+Component reads come from the simulator's own sampler, so they do not show
+telemetry faults. Aggregates such as ``grid_power`` come from the gRPC
+telemetry, so they do.
 
-    MACROCOSIM_BIN=../target/debug/macrocosim python examples/environment_and_faults.py
+The test changes the environment (sunlight, a battery's state of charge, a load)
+and faults; the app under test, which this example leaves out, would command the
+inverters over ``microgrid.grpc_url``.
+
+    MACROCOSIM_BIN=../target/release/macrocosim python examples/environment_and_faults.py
 """
 
 from __future__ import annotations
@@ -16,62 +20,52 @@ from frequenz.quantities import Energy, Percentage, Power
 
 import macrocosim as mc
 
-TOPOLOGY = mc.Microgrid(
-    id=1,
-    topology=mc.grid(
-        id=1,
-        successors=[
-            mc.meter(
-                id=2,
-                successors=[
-                    mc.battery_inverter(
-                        id=3,
-                        rated=(Power.from_watts(-5000), Power.from_watts(5000)),
-                        successors=[
-                            mc.battery(
-                                id=4,
-                                capacity=Energy.from_kilowatt_hours(100),
-                                initial_soc=Percentage.from_percent(50),
-                            )
-                        ],
-                    ),
-                    mc.solar_inverter(
-                        id=5,
-                        rated=(Power.from_watts(-5000), Power.from_watts(0)),
-                        sunlight=Percentage.from_percent(80),
-                    ),
-                    mc.meter(id=6, power=Power.from_watts(1000)),  # a consumer meter
-                ],
-            )
-        ],
-    ),
+kW = Power.from_kilowatts
+pct = Percentage.from_percent
+
+BATTERY = mc.make_battery(
+    id=14, capacity=Energy.from_kilowatt_hours(100), initial_soc=pct(50)
+)
+INVERTER = mc.make_battery_inverter(id=13, successors=[BATTERY])
+SOLAR = mc.make_solar_inverter(id=15, sunlight=pct(80), array_peak=kW(10))
+LOAD = mc.make_meter(id=12, power=kW(5))
+MAIN = mc.make_meter(id=11, successors=[LOAD, INVERTER, SOLAR])
+SPEC = mc.make_microgrid(
+    id=1, topology=mc.make_grid_connection_point(id=10, successors=[MAIN])
 )
 
 
 async def main() -> None:
-    with mc.launch(TOPOLOGY) as site:
-        # Command a battery-inverter setpoint, then trip it offline.
-        inv = site.component(3)
-        inv.command(active_power=Power.from_kilowatts(2), lifetime=timedelta(seconds=60))
-        await inv.expect.active_power(
-            approx=Power.from_kilowatts(2), tol=Power.from_watts(300)
+    async with mc.launch(SPEC) as microgrid:
+        # Sunlight is the power available: 80 % of a 10 kW array.
+        await microgrid[SOLAR].power.expect(
+            mc.near(kW(-8), tol=kW(0.5)), timeout=timedelta(seconds=30)
         )
-        print("OK  inverter holding 2 kW")
+        await microgrid[SOLAR].sunlight.set(pct(20))
+        await microgrid[SOLAR].power.expect(mc.near(kW(-2), tol=kW(0.5)))
 
-        inv.status(health=mc.Health.ERROR)
-        await inv.expect.active_power(
-            approx=Power.from_watts(0), tol=Power.from_watts(100)
-        )
-        print("OK  fault injected — inverter tripped to ~0 W")
+        # A state of charge set is a one-time jump; the physics carries on.
+        await microgrid[BATTERY].soc.set(pct(90))
+        await microgrid[BATTERY].soc.expect(mc.between(pct(89), pct(91)))
 
-        # Drive the environment and assert the aggregates react.
-        site.component(6).drive(power=Power.from_kilowatts(3))
-        await site.component(6).expect.active_power(
-            approx=Power.from_kilowatts(3), tol=Power.from_watts(300)
-        )
-        site.component(5).drive(sunlight=Percentage.from_percent(0))
-        await site.expect.pv_power(approx=Power.from_watts(0), tol=Power.from_watts(200))
-        print("OK  drove load to 3 kW and PV to 0")
+        # Silence the main meter: the app (and grid_power, which is computed
+        # from the same telemetry) stops seeing it, but this test's own read of
+        # the meter keeps returning values. That is a current limitation.
+        await microgrid[MAIN].telemetry_mode.set(mc.TelemetryMode.SILENT)
+        print("main meter still reads:", await microgrid[MAIN].power.read())
+        # The aggregate reuses the meter's last sample for a few seconds, then
+        # has no value.
+        while True:
+            try:
+                await microgrid.grid_power.read(timeout=timedelta(seconds=1))
+            except mc.NoSample:
+                print("grid_power has no value while the meter is silent")
+                break
+        await microgrid[MAIN].telemetry_mode.set(mc.TelemetryMode.NORMAL)
+
+        # A tripped inverter goes to 0 W.
+        await microgrid[SOLAR].health.set(mc.Health.ERROR)
+        await microgrid[SOLAR].power.expect(mc.near(kW(0), tol=kW(0.1)))
 
 
 if __name__ == "__main__":

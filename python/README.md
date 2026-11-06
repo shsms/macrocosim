@@ -1,275 +1,298 @@
 # macrocosim (Python)
 
-Python integration-testing client for the
-[macrocosim](https://github.com/shsms/macrocosim) microgrid simulator.
+An integration-testing client for
+[macrocosim](https://github.com/shsms/macrocosim), a microgrid simulator that
+serves the gRPC Microgrid API. A test describes a microgrid, starts a private
+simulator for it, points the app under test at the simulator's gRPC address,
+then changes the simulated world (loads, state of charge, sunlight, faults) and
+waits for what the simulator measures.
 
-Build a topology, launch the simulator, drive its environment, inject
-faults, and assert on the resulting grid state — from inside `pytest`,
-talking to it the same way a downstream control app would (the gRPC
-Microgrid API + the HTTP `/api` control plane).
-
-```python
-from datetime import timedelta
-from frequenz.quantities import Energy, Percentage, Power
-import macrocosim as mc
-
-async def test_limiter_holds_import_cap():
-    bat = mc.battery(id=4, capacity=Energy.from_kilowatt_hours(92),
-                     initial_soc=Percentage.from_percent(50))
-    inv = mc.battery_inverter(id=3, successors=[bat],
-        rated=(Power.from_kilowatts(-5), Power.from_kilowatts(5)))
-    mg  = mc.Microgrid(id=1,
-        topology=mc.grid(id=1, successors=[mc.meter(id=2, successors=[inv])]))
-
-    with mc.launch(mg) as site:
-        site.component(inv).status(health=mc.Health.ERROR)            # fault injection
-        await site.component(inv).expect.active_power(
-            approx=Power.from_watts(0), tol=Power.from_watts(100))
-        await site.component(bat).expect.soc(
-            within=(Percentage.from_percent(45), Percentage.from_percent(55)))
-```
+The app under test commands the inverters; the test only changes the world
+around it and observes.
 
 ## Install
 
-Released as a **platform wheel** that bundles the `macrocosim` + `macroctl`
-binaries (built from the Rust crate via maturin), so a downstream install
-just works — no separate binary to fetch:
+The wheel bundles the `macrocosim` and `macroctl` binaries, so there is nothing
+else to fetch:
 
 ```sh
-pip install 'macrocosim[grpc]'      # or: uv add 'macrocosim[grpc]'
+pip install macrocosim pytest pytest-asyncio
 ```
 
-`launch()` finds the bundled binaries automatically (in the interpreter's
-scripts directory, even off PATH). Override with `MACROCOSIM_BIN` /
-`MACROCTL_BIN`, or `bin=` on `launch`, to point at a local build.
+`launch` finds the bundled simulator in the interpreter's scripts directory,
+then on `PATH`. Set `MACROCOSIM_BIN` to use another build, such as a local
+`cargo build`.
+
+## A first test
+
+`test_first.py`:
+
+```python
+"""A first test: set a load and expect the grid connection point to see it."""
+
+from datetime import timedelta
+
+from frequenz.quantities import Power
+
+import macrocosim as mc
+
+
+async def test_grid_power_follows_the_load() -> None:
+    load = mc.make_meter()
+    spec = mc.make_microgrid(topology=mc.make_grid_connection_point(successors=[load]))
+
+    async with mc.launch(spec) as microgrid:
+        await microgrid[load].power.set(Power.from_kilowatts(20))
+        await microgrid.grid_power.expect(
+            mc.near(Power.from_kilowatts(20), tol=Power.from_kilowatts(1)),
+            timeout=timedelta(seconds=30),
+        )
+```
+
+The test describes a microgrid, starts a simulator for it, changes the load and
+waits for the grid connection point to measure it. Leaving the `async with`
+block stops the simulator. A real test also starts the app under test, pointed
+at `microgrid.grpc_url`.
+
+The test needs pytest-asyncio's auto mode, in `pyproject.toml`. Without it,
+pytest fails every `async def` test with "async def functions are not natively
+supported". The second line avoids pytest-asyncio's deprecation warning:
+
+```toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+```
+
+The file is in [`examples/pytest_demo/`](examples/pytest_demo/), which CI runs.
+
+## Topology specs
+
+Each `make_*` constructor returns an inert, frozen spec: `make_microgrid`,
+`make_grid_connection_point`, `make_meter`, `make_battery`,
+`make_battery_inverter`, `make_solar_inverter` and `make_chp`. A field left out
+uses the simulator's default. Values are typed:
+[frequenz-quantities](https://pypi.org/project/frequenz-quantities/) (`Power`,
+`Energy`, `Percentage`, ...) and `datetime.timedelta`; a bare number where a
+quantity belongs is a `TypeError`.
+
+**Ids.** `id=` is optional on every component spec. No id means the test does
+not care which number the component gets; give an explicit id to any component
+the test refers to by number. Automatic ids may change between versions. Look
+components up by the spec object itself: `microgrid[LOAD]`. A spec used under
+two parents is one shared component.
+
+**From a Lisp config.** A hand-written `(make-meter :id 410 :power-w 5000.0)`
+becomes `mc.make_meter(id=410, power=Power.from_watts(5000))`. To convert a
+form:
+
+*   Replace `-` with `_` in the keyword.
+*   Drop the unit suffix.
+*   Wrap the value in its quantity type.
+*   Use enum members for symbols.
+*   Use `True` and `False` for `t` and `nil`.
+*   Turn `let*` bindings into Python variables.
+
+There are two exceptions. `:ramp-rate-w-per-s` and
+`:reactive-ramp-rate-var-per-s` keep their suffix and take plain floats.
+`:topology` takes a grid-connection-point spec, not a lambda.
+
+## Live components
+
+`async with mc.launch(spec, env=..., state_dir=...) as microgrid:` yields an
+`mc.Microgrid` with `id`, `grpc_url`, `ui_url`, `log_path`, the aggregates
+`grid_power`, `pv_power`, `consumer_power`, `battery_power` and their `*_energy`
+totals, and `microgrid[spec]` / `microgrid[id]`.
+
+| Live class | Read and expect | `set` | `clear()` | Fault knobs (write-only) |
+|---|---|---|---|---|
+| `Meter` | `power`, `reactive_power` | both | both | `health`, `telemetry_mode`, `command_mode` |
+| `Battery` | `soc` | `soc` | — | same |
+| `BatteryInverter` | `power` | — | — | same |
+| `SolarInverter` | `power` | `sunlight` (write-only) | `sunlight` | same |
+| `GridConnectionPoint`, `Chp` | — | — | — | same |
+
+Every signal has `read(timeout=5 s)` and `expect(matcher, timeout=10 s,
+hold_for=None)`, with the matchers `near`, `between`, `at_most` and `at_least`:
+
+*   `read` returns the first sample with a value that is newer than the newest
+    sample the simulator had when the call started. It skips samples with no
+    value. Right after a `set` it can still return the old value; use `expect`
+    to wait for a change.
+*   `expect` waits up to `timeout` for a new sample to match. With `hold_for`,
+    the first matching sample starts the hold, and every sample for that long
+    must match too. It returns `None`.
+
+Signs are in
+[names-and-units](https://github.com/shsms/macrocosim/blob/main/docs/names-and-units.md):
+meter and battery inverter power are positive when consuming or charging, solar
+power is negative while producing, `grid_power` is positive when importing.
+Energy totals count from when the simulator's aggregates started, not from the
+start of the test: read twice and subtract to measure an interval.
+
+**What `clear()` means.** It does not restore the spec's value.
+`Meter.power.clear()` makes the meter measure its children again (0 W for a leaf
+meter); `reactive_power.clear()` also ends a power-factor setting;
+`sunlight.clear()` makes the inverter follow the site's weather. Set power on
+leaf (load) meters: on a meter with children it replaces their sum. A `soc` set
+is a one-time jump; the physics carries on from the new value.
+
+**Fault knobs.** Any `health` other than `OK` makes the simulator refuse the
+app's commands to that component. An inverter that is not `OK` stops: its power
+goes to 0. An inverter shares its power among its batteries that are `OK`, and
+publishes 0 when none is. A meter keeps measuring.
+
+`health=ERROR` also sets `command_mode` to `ERROR`; `STANDBY` leaves
+`command_mode` as it is. `health=OK` sets `command_mode` back to `NORMAL` if the
+component's operational mode accepts control, else to `ERROR`. So set
+`command_mode` after `health`.
+
+**Reads and telemetry faults.** Component reads (`microgrid[x].power`,
+`.reactive_power`, `.soc`) come from the simulator's own 1 Hz sampler, so they
+do not show telemetry faults, stream intervals or jitter. This is a current
+limitation. Aggregates such as `microgrid.grid_power` are computed from the gRPC
+telemetry the app receives, and they do show every fault. Health and command
+faults change what the components do or what the app can command, so both kinds
+of read show their effect.
+
+**A category the topology lacks** reads 0: `pv_power` is 0 W on a site without
+solar.
+
+## Launch options and the log
+
+*   `env={...}` is laid over the test's environment for the simulator process
+    only, for example `{"FAKETIME": "+3600", "LD_PRELOAD": ...}`. Only
+    `FAKETIME` offsets are supported, not speed factors.
+*   `state_dir=` (absent or empty; created if absent) is where the simulator
+    runs: `config.lisp`, `endpoints.json` and `macrocosim.log`. It is kept, so
+    pass pytest's `tmp_path` to keep the log of a failing test. Without it, a
+    temporary directory is used and deleted, and error messages say so instead
+    of naming a log.
+*   `ready_timeout=` (20 s) bounds the start-up.
+
+Leaving the block stops the simulator: the client waits up to 5 s for it to
+exit, then kills it if it is still running.
+
+## Fixtures
+
+A fixture can take over launching and stopping, as long as the test still names
+its spec. This one, in `conftest.py`, returns a function that launches a spec
+and keeps each simulator's log under the test's `tmp_path`:
+
+```python
+"""A fixture that launches the spec a test hands it, and stops it afterwards."""
+
+import contextlib
+import itertools
+from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
+
+import pytest
+
+import macrocosim as mc
+
+LaunchMicrogrid = Callable[[mc.MicrogridSpec], Awaitable[mc.Microgrid]]
+
+
+@pytest.fixture
+async def launch_microgrid(tmp_path: Path) -> AsyncIterator[LaunchMicrogrid]:
+    """Return a function that launches a spec; stop every simulator it started
+    when the test ends.
+
+    Each simulator's log stays in tmp_path.
+    """
+    count = itertools.count(1)
+    async with contextlib.AsyncExitStack() as stack:
+
+        async def start(spec: mc.MicrogridSpec) -> mc.Microgrid:
+            state_dir = tmp_path / f"macrocosim-{next(count)}"
+            return await stack.enter_async_context(mc.launch(spec, state_dir=state_dir))
+
+        yield start
+```
+
+A test asks for it and passes its spec:
+
+```python
+LaunchMicrogrid = Callable[[mc.MicrogridSpec], Awaitable[mc.Microgrid]]
+
+
+async def test_grid_power_holds(launch_microgrid: LaunchMicrogrid) -> None:
+    microgrid = await launch_microgrid(SPEC)
+    await microgrid[LOAD].power.set(Power.from_kilowatts(7))
+    ...
+```
+
+The simulators stop when the test ends. A fixture that also starts the app under
+test is the natural next step; that part depends on the app. The full example is
+[`examples/pytest_demo/test_demo.py`](examples/pytest_demo/test_demo.py).
+
+## Loads that change over time
+
+Specs and setters take constants. Drive a changing load from a task:
+
+```python
+async def ramp(meter: mc.Meter) -> None:
+    for kw in range(0, 21, 2):
+        await meter.power.set(Power.from_kilowatts(kw))
+        await asyncio.sleep(1)
+
+task = asyncio.create_task(ramp(microgrid[LOAD]))
+```
+
+## Errors
+
+| Error | Means |
+|---|---|
+| `SpecError` (a `ValueError`) | the client found a spec invalid; raised where it is built |
+| `LaunchError` | the simulator could not start or get ready; carries the log tail |
+| `ServerError` | the simulator's HTTP API failed, or answered something unexpected |
+| `SimulatorExited` (a `ServerError`) | the simulator process is gone |
+| `Rejected` | the simulator refused a set or a fault, with its reason |
+| `UnknownComponent` (a `LookupError`) | no such component in this microgrid |
+| `NoSample` | no usable sample: none in time, a stall, a gap or a null |
+| `ExpectationFailed` (an `AssertionError`) | samples arrived and disagreed |
+| `MicrogridClosed` | the microgrid was used after its launch block exited |
+
+All derive from `MacrocosimError`. When a spec is built, the client checks
+types, finite values, ids and a few other rules. A wrong type raises
+`TypeError`. A value that fails the other checks raises `ValueError` or its
+subclass `SpecError`.
+
+The client does not check every value. The simulator refuses other invalid
+values when it starts, for example a negative interval or a power factor outside
+(0, 1]. `launch` then raises `LaunchError` with the log tail.
+
+## Interactive use
+
+`python -m asyncio` gives a REPL where `await` works at the top level:
+
+```python
+>>> import macrocosim as mc
+>>> cm = mc.launch(spec); microgrid = await cm.__aenter__()
+>>> await microgrid.grid_power.read()
+```
 
 ## Development
 
-This package is [uv](https://docs.astral.sh/uv/)-native; the build backend
-is maturin, so `uv sync` compiles the binaries from the repo's Rust crate
-(needs the Rust toolchain + `git submodule update --init`).
+The package is [uv](https://docs.astral.sh/uv/)-native; the build backend is
+maturin, so `uv sync` compiles the binaries from the repository's Rust crate
+(needs the Rust toolchain and `git submodule update --init`).
 
 ```sh
 uv sync                       # venv from uv.lock; builds the binaries
-uv run pytest                 # tests; ruff / ty also via `uv run`
+uv run pytest                 # the suite; ruff and ty also via `uv run`
+uv run pytest examples/pytest_demo
 ```
 
-Point tests at a fast local `cargo` build instead of the wheel's binary:
-
-```sh
-MACROCOSIM_BIN=../target/debug/macrocosim uv run pytest
-```
-
-## The surface
-
-**Build** a topology — the spec *is* the graph (nested `successors`),
-rendering 1:1 to macrocosim's `(make-*)` Lisp:
-
-```python
-from frequenz.quantities import Energy, Percentage, Power
-
-P = Power.from_kilowatts
-mg = mc.Microgrid(id=1, topology=mc.grid(id=1, successors=[
-    mc.meter(id=2, successors=[
-        mc.battery_inverter(id=3, rated=(P(-5), P(5)), successors=[
-            mc.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
-                       initial_soc=Percentage.from_percent(50))]),
-        mc.solar_inverter(id=5, sunlight=Percentage.from_percent(80)),
-        mc.meter(id=6, power=Power.from_watts(1000))])]))
-```
-
-Constructors: `grid`, `meter`, `battery_inverter`, `solar_inverter`,
-`battery`, `ev_charger`, `chp`, `steam_boiler`. Kwargs mirror the plist keys
-(`snake_case` → `:kebab-case`; a quantity argument gets its unit-suffixed key,
-e.g. `capacity` → `:capacity-wh`): `rated=(lo, hi)` `Power` bounds, `capacity`
-an `Energy`, `initial_soc` / `sunlight` a `Percentage`; `mc.raw("(lambda () …)")`
-splices Lisp. `ev_charger` takes no pack: `phases` and `idle` (`mc.EvIdle`)
-say what it offers, and `Site.plug_ev` plugs a car after launch.
-
-Typed throughout — no bare numbers or unit strings. Knobs take enums
-(`mc.Health`, `mc.CommandMode`, `mc.TelemetryMode`, scenario `mc.Metric`,
-`mc.Schedule`); quantities are
-[`frequenz-quantities`](https://pypi.org/project/frequenz-quantities/)
-(`Power`, `Energy`, `Percentage`, `Frequency`), imported from it directly;
-times are `datetime` (`timedelta`, or a `datetime.time` for an absolute scenario clock).
-`mc.to_lisp_atom(v)` shows the Lisp literal any of them emits.
-Or use an existing config: `mc.launch("topology.lisp")`.
-
-**Launch** and get a `Site` (a context manager; tears the process down):
-
-```python
-with mc.launch(mg) as site:
-    site.grpc          # first microgrid's gRPC address ("host:port")
-    site.grpc_url      # ... as a "grpc://host:port" URL a client connects with
-    site.eval("(...)") # raw Lisp escape hatch
-```
-
-**Read** — component telemetry over gRPC (what the app sees), aggregates
-over the graph-derived formulas:
-
-```python
-site.active_power(3)      # Power | None       (component, gRPC)
-site.soc(4)               # Percentage | None  (battery SoC, gRPC)
-site.grid_power()         # Power | None       (/ pv_power() / consumer_power() / …)
-```
-
-`soc` is a battery's. A charger streams no SoC over gRPC — the pack
-belongs to the car, which is the simulator's business and not the
-API's — so read a plugged car's charge with `ev_info` below.
-
-**EV chargers** — plug state, outside gRPC: plug/unplug go through Lisp,
-`ev_info` reads a JSON route:
-
-```python
-site.plug_ev(1, mc.EvPreset.CITY, soc=Percentage.from_percent(40))  # None (plug a car in)
-site.unplug_ev(1)         # bool               (False if already empty)
-site.ev_info(1)           # dict               ({"plugged": False} or the fields,
-                          #                      plus `presets` either way)
-```
-
-**Energy** — the simulator integrates each power aggregate into a cumulative
-energy stream (server-side), so you can judge what an app *did* over a run:
-
-```python
-site.grid_energy()        # Energy | None  (cumulative, import positive)
-site.battery_energy()     # Energy | None  (/ consumer_energy() / pv_energy())
-```
-
-Assert on them through `expect` (a one-shot check — energy accumulates, so it
-isn't a settling value to poll):
-
-```python
-await site.expect.grid_energy(max=Energy.from_kilowatt_hours(15))   # held import down
-await site.expect.battery_energy(approx=Energy.from_kilowatt_hours(-8),
-                                 tol=Energy.from_kilowatt_hours(1))  # discharge total
-```
-
-Per-component energy is a first-class metric too, assertable from Lisp and the
-scenario framework: `(check "15m" :component-id 2 :metric 'energy :max 15000.0)` or
-`metric=mc.Metric.ENERGY` on a Python `Scenario.check`.
-
-**Mutate** — reach a component with `site[id]` (or `site.component(id)`), then
-act by *intent*:
-
-```python
-inv = site[3]
-inv.command(active_power=Power.from_kilowatts(2),      # app command (gRPC gateway)
-            lifetime=timedelta(seconds=30))
-inv.command(bounds=(Power.from_kilowatts(-1),
-                    Power.from_kilowatts(1)))           # narrow the envelope
-inv.status(health=mc.Health.ERROR)                       # inject a fault
-site[6].drive(power=Power.from_megawatts(2))            # drive the environment
-site[5].drive(sunlight=Percentage.from_percent(30))
-```
-
-`command` goes through the real gRPC gateway, so an out-of-envelope value
-raises `mc.SetpointRejected` (the production behaviour under test); `status` /
-`drive` are test-side stimuli.
-
-**Assert** — settle-aware `expect`, on a component (`site[id].expect`) or a
-microgrid aggregate (`site.expect`). The settle-aware assertions are `async`
-(they `await` between polls, so an app under test on the same event loop keeps
-running); the cumulative-energy ones are one-shot but `async` too, for a
-uniform surface:
-
-```python
-await site[3].expect.active_power(
-    approx=Power.from_kilowatts(2), tol=Power.from_watts(300),
-    timeout=timedelta(seconds=15))
-await site.expect.grid_power(
-    max=Power.from_megawatts(1), for_=timedelta(seconds=30))
-await site[4].expect.soc(
-    within=(Percentage.from_percent(45), Percentage.from_percent(55)))
-```
-
-`await expect.<metric>(…)` polls until the matcher holds; pass `for_=` to
-require it on every sample across a duration instead. Matchers: `approx`+`tol`,
-`within`, `max`, `min`.
-
-**Async core (v2): signals** — `macrocosim.aio` is the async-native
-core: every read, write, and wait is a coroutine on your event loop (no
-background threads). Its unit is the *signal*: once `aio.launch` binds
-the topology, the builder objects are the live handles, and every
-observable quantity is an object with up to three verbs — `read`
-(returns the plain quantity; raises `NoSample`), `expect` (takes one
-typed matcher), and `set` where the simulator allows it. Capability
-lives in the type:
-
-```python
-load = mc.meter(id=5, power=Power.zero())
-bat = mc.battery(id=4, capacity=Energy.from_kilowatt_hours(100),
-                 initial_soc=Percentage.from_percent(60))
-
-async with mc.aio.launch(mg) as site:
-    await load.power.set(Power.from_kilowatts(20))       # drive the world
-    await site.grid_power.expect(mc.at_most(Power.from_kilowatts(13)))
-    await bat.soc.set(Percentage.from_percent(11))       # teleport state
-    await bat.soc.expect(mc.between(Percentage.from_percent(10),
-                                    Percentage.from_percent(12)))
-    stored = await bat.stored_energy.read()              # state (SoC×capacity)
-    await site.battery_energy.expect(                    # flow (∫ battery_power)
-        mc.at_most(Energy.from_watt_hours(-1)))
-    await inv.health.set(mc.Health.ERROR)                # fault injection
-```
-
-Matchers: `near(x, tol=…)`, `between(lo, hi)`, `at_most(x)`,
-`at_least(x)` — one per expect, typed by the signal's quantity. An
-inverter's `power` has no `.set` (commanding it is `site[inv].command()`
-through the real gateway), and a cumulative signal's `expect` has no
-`hold_for` — the distinctions are in the types, not runtime errors.
-Every `*_energy` site aggregate is the integral of its `*_power`; energy
-*stored* in a battery is `bat.stored_energy`. Stimuli go over typed JSON
-control endpoints; rejections raise `ControlRejected`. See
-`../docs/python-api-redesign.org` for the design.
-
-**Scenarios** — author in Python, or run a registered Lisp scenario:
-
-```python
-scn = mc.Scenario("cloud-fade", length=timedelta(minutes=4))
-scn.at(timedelta(seconds=30), pv.sunlight, Percentage.from_percent(20))
-scn.check(timedelta(seconds=110), inv.power,
-          mc.near(Power.from_megawatts(1.5), tol=Power.from_kilowatts(300)))
-site.define_scenario(scn).run(wait=True).assert_passed()
-
-# deterministic, serverless gate (no app under test):
-mc.run_scenario_stepped([mg, scn], "cloud-fade", step=timedelta(milliseconds=250))
-```
-
-**pytest** — the plugin auto-loads; provide a `macrocosim_config` fixture:
-
-```python
-@pytest.fixture
-def macrocosim_config():
-    return mg
-
-async def test_grid_holds(macrocosim):
-    await macrocosim.expect.grid_power(
-        approx=Power.from_kilowatts(7), tol=Power.from_watts(500))
-
-@pytest.mark.macrocosim_scenario("cloud-fade")   # runs and gates after a
-                                                # passing test body; a failed
-                                                # check is a teardown error
-def test_scenario(macrocosim): ...
-```
-
-The `expect` assertions are `async`, so awaiting them needs `pytest-asyncio`
-(installed with the `grpc` extra) and `asyncio_mode = "auto"` in your pytest
-config — otherwise an `async def` test is collected but never awaited, and the
-assertion silently never runs.
-
-## Status
-
-Early but functional end to end — see `todo.org` §Y in the macrocosim repo
-for the design and roadmap. Building, launching, reading and mutating are
-synchronous; the settle-aware `expect` assertions are `async` (so they compose
-with an app under test on the same event loop). Runnable `examples/` cover each
-piece; `examples/pytest_demo/` is a live suite.
+Point the tests at a local build instead of the wheel's binary with
+`MACROCOSIM_BIN=../target/release/macrocosim`.
 
 ## License
 
 The Python package is [MIT](LICENSE-MIT). The wheel also bundles the
-`macrocosim` and `macroctl` binaries, which are
-[GPL-3.0-only](LICENSE-GPL-3.0); their source is the
-[macrocosim repository](https://github.com/shsms/macrocosim) at the
-release's git tag: `v0.1.0` for wheel version 0.1.0, and for a pre-release
-the semver form of the PEP 440 version, so `v0.1.0-alpha.1` for 0.1.0a1.
+`macrocosim` and `macroctl` binaries, which are [GPL-3.0-only](LICENSE-GPL-3.0);
+their source is the [macrocosim repository](https://github.com/shsms/macrocosim)
+at the release's git tag: `v0.2.0` for wheel version 0.2.0, and for a
+pre-release the semver form of the PEP 440 version, so `v0.2.0-alpha.1` for
+0.2.0a1.

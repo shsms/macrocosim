@@ -125,31 +125,60 @@ call at the new path.
 
 ### Python
 
-- `mg_id` is `microgrid_id` on every public method and class, in the
-  sync and the `aio` client.
-- `Component.component_id` is `Component.id`. `Check.component` and
-  `Scenario.check_metric(component=...)` are `component_id`.
-- `MicrogridEndpoint.grpc` is `MicrogridEndpoint.grpc_addr`.
-- Builder arguments renamed: `stream_jitter_pct` is `stream_jitter`,
-  `reactive_apparent_va` is `reactive_apparent`, `ramp_rate` is
-  `ramp_rate_w_per_s` and `reactive_ramp_rate` is
-  `reactive_ramp_rate_var_per_s`. In `steam_boiler`, `demand_kg_h` is
-  `demand_kg_per_s`, in kg/s, not kg/h. An old name raises `TypeError`
-  that names the new one. `steam_boiler` takes `interval`,
-  `command_delay` and `ramp_rate_w_per_s` as named arguments.
-- In `plug_ev`, `max_current_a` is `max_current`, a `Current`. `soc`,
-  `target_soc`, `taper_start` and `taper_floor` take a `Percentage`,
-  not a float. `taper_floor` was a fraction; it is now a percentage.
-- `run_scenario_stepped(step=...)` takes a `timedelta` and no longer an
-  integer in milliseconds.
-- A bare number for a typed argument raises `TypeError`: in the
-  builders, `drive(...)`, a signal's `set(...)`, `Scenario.at(...)` and
-  `Scenario.drive_meter(...)`. `raw(...)`, for a lambda or a symbol, is
-  taken by the builders' `power`, `reactive_power` and `sunlight`, by
-  `drive(power=...)` and `Scenario.drive_meter(...)`, and by a meter
-  power, meter reactive power or sunlight cue in `Scenario.at(...)`.
-- `capacity` goes out in Wh for a battery and for `plug_ev`.
-- The builder writes the new Lisp names only.
+The Python client is rewritten. 0.1 code needs changes; the table under Old and new names maps the old names to the new ones.
+
+#### Removed
+
+- The sync client (`Site`, `mc.launch` as a plain context manager) and the `macrocosim.aio` namespace: there is one async API at the top level.
+- The lowercase builders (`grid`, `meter`, `battery`, ...) that became live objects at launch, and `Microgrid(...)` as a builder.
+- The Python scenario API (`Scenario`, `Check`, `ScenarioRun`, `ScenarioReport`, `JournalEvent`, `run_scenario_stepped`) and the pytest plugin with its `macrocosim_scenario` marker.
+- EV chargers and steam boilers (`ev_charger`, `steam_boiler`, `plug_ev`, `unplug_ev`, `ev_info`, `EvIdle`, `EvPreset`).
+- Lisp in the API: `raw(...)`, `RawLisp`, `**extra`, `to_lisp()`, `to_lisp_atom`, `LispRenderable`, `ConfigSource`, `LaunchConfig`, `from_lisp_file`, `eval`, and launching a `.lisp` file.
+- Commands from tests: `set_active_power`, `augment_*`, `command()`, `SetpointRejected`.
+- `CumulativeSignal`, `stored_energy`, `drive(...)`, `status(...)`, the `microgrid_id` parameters, and the gRPC dependency.
+- `connect` and `MicrogridEndpoint`, which attached to a simulator that was already running. There is no replacement: `launch` always starts a new simulator.
+- Launching several microgrids at once. Each `launch` now starts one microgrid.
+- `ComponentHandle`, `Metric`, `MetricSpec` and `Schedule`.
+- `Signal.try_read`, `Site.read_until`, the `poll=` argument of `expect`, and `launch(bin=...)`. To use another binary, set `MACROCOSIM_BIN`.
+- Every 0.1 submodule: `macrocosim.runtime`, `.build`, `.handles`, `.scenarios`, `.signals`, `.metrics`, `.matchers`, `.enums`, `.errors`, `.assertions`, `.pytest_plugin` and `.aio`. Import from `macrocosim` only.
+
+#### Changed
+
+- Specs are inert and frozen, built by `make_*` constructors, and compared by identity; `launch` yields a `Microgrid`, and `microgrid[spec]` or `microgrid[id]` gives the live component. `id=` is optional; automatic ids may change between versions.
+- All reads go over the simulator's HTTP API at 1 Hz: component reads from its own sampler, aggregates from its loopback. Component reads do not show telemetry faults; aggregates do.
+- `expect(matcher, timeout=, hold_for=)` waits for the first matching sample, then requires every sample for `hold_for` to match, judged on the simulator's timestamps; it returns `None`. `read(timeout=)` replaces `read(wait=)`. It returns the first sample with a value that is newer than the newest sample the simulator had when the call started.
+- `launch` takes `env=` (laid over the environment for the simulator only) and `state_dir=` (kept, with the log); without `state_dir` the temporary directory is always deleted.
+- The binary bundled in the wheel is found before one on `PATH`.
+- An aggregate whose category the topology lacks (no solar, say) reads 0 instead of having no data.
+- Errors: the client's own errors derive from `MacrocosimError`. `SpecError` is raised for a spec that breaks one of the client's rules (for example an id, a pairing or a fuse current), `UnknownComponent` for a lookup of a component the microgrid does not have, and `MicrogridClosed` for a microgrid used after its launch block. `LaunchError`, `ServerError` and `SimulatorExited` are raised for failures of the simulator or its HTTP API, `Rejected` when the simulator refuses a set or a fault, `NoSample` when a `read` or `expect` gets no usable sample, and `ExpectationFailed` when the samples disagree.
+- A wrong argument type raises `TypeError`, and a wrong value `ValueError`. When a spec is built, a value that breaks one of the client's rules raises `SpecError`, a `ValueError` subclass. A NaN or infinite value, or an int too large for a float in a float field (`power_factor`, say), raises a plain `ValueError`.
+- Exception bases changed. `Rejected` is not a `ValueError`; the old `ControlRejected` and `EvalRejected` were. `launch` raises `LaunchError`; it raised `RuntimeError`, `TimeoutError` or `FileNotFoundError`. An `expect` that gets no sample raises `NoSample`, which is not an `AssertionError`; an `ExpectationFailed` is.
+- `DrivenSignal` and `SettingSignal` are replaced by `SettableSignal`, `ClearableSignal`, `Knob` and `ClearableKnob`.
+- `mc.Component` now names the live component class, not the base class of the builders.
+- A matcher is now any object with `matches()` and `describe()`. In 0.1 it was a dataclass with the fields `approx`, `tol`, `within`, `max` and `min`.
+- An energy `expect` now polls until its timeout, like a power `expect`. 0.1's `CumulativeSignal` checked the value once.
+
+#### Compatibility
+
+- The `grpc` extra is gone; an app under test depends on `frequenz-client-microgrid` itself. The package ships `py.typed`.
+- The `grpc` extra also installed pytest, pluggy and pytest-asyncio. Install `pytest` and `pytest-asyncio` yourself, and set `asyncio_mode = "auto"` (see python/README.md).
+
+#### Old and new names
+
+| 0.1 | 0.2 |
+|---|---|
+| `mc.Microgrid(id=1, topology=mc.grid(id=1, successors=[...]))` | `mc.make_microgrid(id=1, topology=mc.make_grid_connection_point(id=1, successors=[...]))` |
+| `mc.meter(...)`, `mc.battery(...)`, `mc.battery_inverter(...)`, `mc.solar_inverter(...)`, `mc.chp(...)` | `mc.make_meter(...)`, `mc.make_battery(...)`, `mc.make_battery_inverter(...)`, `mc.make_solar_inverter(...)`, `mc.make_chp(...)` |
+| `rated=(lo, hi)` on `grid`, `battery`, `battery_inverter` or `solar_inverter` | `rated_lower=lo, rated_upper=hi` on the matching `make_*` |
+| `async with mc.aio.launch(topology) as site:` | `async with mc.launch(spec, env=..., state_dir=...) as microgrid:` |
+| `site.grpc_url`, `site.grid_power` | `microgrid.grpc_url`, `microgrid.grid_power` |
+| `builder.power.set(x)` after launch | `microgrid[builder].power.set(x)` |
+| `expect(approx=x, tol=t)`, `max=`, `min=`, `within=` | `expect(mc.near(x, tol=t))`, `mc.at_most`, `mc.at_least`, `mc.between` |
+| `for_=` | `hold_for=` |
+| `read(wait=...)` | `read(timeout=...)` |
+| `ControlRejected`, `EvalRejected` | `Rejected`; eval is gone |
+| `DrivenSignal`, `SettingSignal` | `SettableSignal`, `ClearableSignal`, `Knob`, `ClearableKnob` |
+| `mc.raw(...)`, `**extra`, scenarios, EV, commands, the pytest plugin | removed |
 
 ### Lisp
 

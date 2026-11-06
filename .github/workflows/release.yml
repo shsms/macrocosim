@@ -64,9 +64,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # `smoke`: the host's Python can pip-install the wheel, so run the
-      # import + PATH check. `exec`: the host can execute the built binary,
-      # so run it once after bundling.
+      # `smoke`: the host's Python can pip-install the wheel, so install it
+      # and check the import, the version and the two bundled binaries; off
+      # Windows, also boot the simulator through `launch`. `exec`: the host
+      # can execute the built binary, so run it once after bundling.
       matrix:
         include:
           - { os: ubuntu-latest, target: x86_64, manylinux: auto, smoke: true, exec: true, bundle: linux-x86_64 }
@@ -129,7 +130,7 @@ jobs:
         run: |
           # Install the built wheel by explicit path. A plain
           # `pip install macrocosim` could pull a foreign package with
-          # the same name from PyPI; only the extras' dependencies
+          # the same name from PyPI; only the wheel's dependencies
           # should come from there.
           whl=$(python -c 'import glob; print(glob.glob("python/dist/*.whl")[0])')
           python -m pip install "${whl}"
@@ -147,6 +148,43 @@ jobs:
           installed = importlib.metadata.version("macrocosim")
           assert installed == wheel_version, (installed, wheel_version)
           print(f"wheel OK: macrocosim {installed}, both binaries bundled")
+          PY
+
+      # Boot the bundled simulator through the public API. Windows stays
+      # import-only until Windows support is decided.
+      - name: Launch the bundled simulator from the wheel
+        if: matrix.smoke && runner.os != 'Windows'
+        shell: bash
+        run: |
+          python -X dev -W error - <<'PY'
+          import asyncio
+          import importlib.resources
+          from datetime import timedelta
+
+          from frequenz.quantities import Power
+
+          import macrocosim as mc
+
+          assert importlib.resources.files("macrocosim").joinpath("py.typed").is_file()
+
+          spec = mc.make_microgrid(
+              id=1,
+              topology=mc.make_grid_connection_point(
+                  id=10, successors=[mc.make_meter(id=11, power=Power.from_kilowatts(5))]
+              ),
+          )
+
+          async def main() -> None:
+              async with mc.launch(spec) as microgrid:
+                  await microgrid.grid_power.expect(
+                      mc.near(Power.from_kilowatts(5), tol=Power.from_kilowatts(0.5)),
+                      timeout=timedelta(seconds=30),
+                  )
+                  load = await microgrid[11].power.read()
+                  assert abs(load - Power.from_kilowatts(5)) <= Power.from_kilowatts(0.5), load
+                  print("launch OK:", microgrid.grpc_url, load)
+
+          asyncio.run(main())
           PY
 
       # The hosted arm64 macOS image is expected to ship Rosetta 2; make

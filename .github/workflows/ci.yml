@@ -98,7 +98,7 @@ jobs:
         run: uv run --no-sync ruff format --check src tests examples
 
       - name: Type check (ty, all rules as errors)
-        run: uv run --no-sync ty check --error all src
+        run: uv run --no-sync ty check --error all src examples
 
   # Run the Python test suite: the unit tests and the live tests that
   # boot a real server, on Python 3.13 (the dev pin in
@@ -163,6 +163,10 @@ jobs:
         env:
           MACROCOSIM_REQUIRE_LIVE: "1"
         run: uv run --no-sync pytest -q
+
+      # The README's first test and the demo, run as a user would.
+      - name: pytest examples/pytest_demo
+        run: uv run --no-sync pytest -q examples/pytest_demo
 
   # Live browser smokes: boots the binary against a scratch starter-site
   # microgrid (`make ui-e2e`, the same target AGENTS.md gives for

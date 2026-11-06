@@ -1,4 +1,4 @@
-"""The 0.2 client against a real simulator (private imports until the switch)."""
+"""The client against a real simulator, through the public API."""
 
 from __future__ import annotations
 
@@ -20,11 +20,20 @@ from frequenz.quantities import (
 )
 from topology_check import topology_problems
 
-import macrocosim._spec as s
-from macrocosim._enums import CommandMode, Health, OperationalMode, TelemetryMode
-from macrocosim._errors import MicrogridClosed, NoSample
-from macrocosim._launch import launch
-from macrocosim._matchers import at_least, at_most, between, near
+import macrocosim as mc
+from macrocosim import (
+    CommandMode,
+    Health,
+    MicrogridClosed,
+    NoSample,
+    OperationalMode,
+    TelemetryMode,
+    at_least,
+    at_most,
+    between,
+    launch,
+    near,
+)
 
 pytestmark = [
     pytest.mark.live,
@@ -45,23 +54,23 @@ pct = Percentage.from_percent
 sec = timedelta(seconds=1)
 
 
-def _downstream_like() -> tuple[s.MicrogridSpec, s.MeterSpec, Any, Any]:
-    battery = s.make_battery(
+def _downstream_like() -> tuple[mc.MicrogridSpec, mc.MeterSpec, Any, Any]:
+    battery = mc.make_battery(
         id=1003,
         capacity=Energy.from_kilowatt_hours(100),
         initial_soc=pct(50),
         soc_lower=pct(10),
         soc_upper=pct(90),
     )
-    inverter = s.make_battery_inverter(
+    inverter = mc.make_battery_inverter(
         id=1002, rated_lower=kW(-30), rated_upper=kW(30), successors=[battery]
     )
-    load = s.make_meter(id=1004, power=kW(10))
-    spec = s.make_microgrid(
+    load = mc.make_meter(id=1004, power=kW(10))
+    spec = mc.make_microgrid(
         id=7,
-        topology=s.make_grid_connection_point(
+        topology=mc.make_grid_connection_point(
             id=1000,
-            successors=[s.make_meter(id=1001, successors=[inverter]), load],
+            successors=[mc.make_meter(id=1001, successors=[inverter]), load],
         ),
     )
     return spec, load, inverter, battery
@@ -85,12 +94,12 @@ async def test_downstream_flow(tmp_path: Path) -> None:
 
 
 async def test_clear() -> None:
-    load = s.make_meter(
+    load = mc.make_meter(
         id=11, power=kW(5), reactive_power=ReactivePower.from_volt_amperes_reactive(500)
     )
-    solar = s.make_solar_inverter(id=12, sunlight=pct(80))
-    spec = s.make_microgrid(
-        id=7, topology=s.make_grid_connection_point(id=10, successors=[load, solar])
+    solar = mc.make_solar_inverter(id=12, sunlight=pct(80))
+    spec = mc.make_microgrid(
+        id=7, topology=mc.make_grid_connection_point(id=10, successors=[load, solar])
     )
     async with launch(spec) as mg:
         await mg[load].power.expect(near(kW(5), tol=W(10)))
@@ -125,11 +134,11 @@ def _knobs() -> dict[str, Any]:
     }
 
 
-def _every_field() -> s.MicrogridSpec:
+def _every_field() -> mc.MicrogridSpec:
     def common(cid: int) -> dict[str, Any]:
         return {"id": cid, "name": f"c{cid}", **_knobs()}
 
-    battery = s.make_battery(
+    battery = mc.make_battery(
         **common(104),
         interval=2 * sec,
         capacity=Energy.from_kilowatt_hours(50),
@@ -141,7 +150,7 @@ def _every_field() -> s.MicrogridSpec:
         rated_lower=kW(-20),
         rated_upper=kW(20),
     )
-    inverter = s.make_battery_inverter(
+    inverter = mc.make_battery_inverter(
         **common(103),
         interval=2 * sec,
         successors=[battery],
@@ -155,7 +164,7 @@ def _every_field() -> s.MicrogridSpec:
         reactive_apparent=ApparentPower.from_kilo_volt_amperes(25),
         reactive_ramp_rate_var_per_s=1000.0,
     )
-    solar = s.make_solar_inverter(
+    solar = mc.make_solar_inverter(
         **common(105),
         interval=2 * sec,
         rated_lower=kW(-10),
@@ -172,7 +181,7 @@ def _every_field() -> s.MicrogridSpec:
         weather_lag=10 * sec,
         weather_jitter=pct(5),
     )
-    leaf = s.make_meter(
+    leaf = mc.make_meter(
         **common(102),
         interval=timedelta(milliseconds=500),
         power=kW(2),
@@ -180,8 +189,8 @@ def _every_field() -> s.MicrogridSpec:
         leading=True,
         hidden=True,
     )
-    chp = s.make_chp(**common(106))
-    main = s.make_meter(
+    chp = mc.make_chp(**common(106))
+    main = mc.make_meter(
         **common(101),
         interval=timedelta(milliseconds=500),
         power=kW(10),
@@ -189,11 +198,11 @@ def _every_field() -> s.MicrogridSpec:
         hidden=False,
         successors=[leaf, inverter, solar, chp],
     )
-    return s.make_microgrid(
+    return mc.make_microgrid(
         id=9,
         name="every-field",
         tso="tso-test",
-        topology=s.make_grid_connection_point(
+        topology=mc.make_grid_connection_point(
             **common(100),
             rated_fuse_current=Current.from_amperes(200),
             rated_lower=kW(-100),
@@ -214,26 +223,26 @@ async def test_every_field_boots() -> None:
         assert topology_problems(spec, await _topology(mg)) == []
 
 
-def _diamond() -> s.MicrogridSpec:
-    inv = s.make_battery_inverter(successors=[s.make_battery()])
-    return s.make_microgrid(
+def _diamond() -> mc.MicrogridSpec:
+    inv = mc.make_battery_inverter(successors=[mc.make_battery()])
+    return mc.make_microgrid(
         id=7,
-        topology=s.make_grid_connection_point(
-            successors=[s.make_meter(successors=[inv]), s.make_meter(successors=[inv])]
+        topology=mc.make_grid_connection_point(
+            successors=[mc.make_meter(successors=[inv]), mc.make_meter(successors=[inv])]
         ),
     )
 
 
-def _shared_battery() -> s.MicrogridSpec:
-    bat = s.make_battery()
-    return s.make_microgrid(
+def _shared_battery() -> mc.MicrogridSpec:
+    bat = mc.make_battery()
+    return mc.make_microgrid(
         id=7,
-        topology=s.make_grid_connection_point(
+        topology=mc.make_grid_connection_point(
             successors=[
-                s.make_meter(
+                mc.make_meter(
                     successors=[
-                        s.make_battery_inverter(successors=[bat]),
-                        s.make_battery_inverter(successors=[bat]),
+                        mc.make_battery_inverter(successors=[bat]),
+                        mc.make_battery_inverter(successors=[bat]),
                     ]
                 )
             ]
@@ -241,17 +250,17 @@ def _shared_battery() -> s.MicrogridSpec:
     )
 
 
-def _partial_ids() -> s.MicrogridSpec:
-    return s.make_microgrid(
+def _partial_ids() -> mc.MicrogridSpec:
+    return mc.make_microgrid(
         id=7,
-        topology=s.make_grid_connection_point(
+        topology=mc.make_grid_connection_point(
             id=1,
             successors=[
-                s.make_meter(
-                    successors=[s.make_battery_inverter(successors=[s.make_battery()])]
+                mc.make_meter(
+                    successors=[mc.make_battery_inverter(successors=[mc.make_battery()])]
                 ),
-                s.make_meter(id=1000),
-                s.make_meter(),
+                mc.make_meter(id=1000),
+                mc.make_meter(),
             ],
         ),
     )
@@ -296,9 +305,9 @@ async def test_units() -> None:
 
 
 async def test_an_absent_category_reads_zero() -> None:
-    spec = s.make_microgrid(
+    spec = mc.make_microgrid(
         id=7,
-        topology=s.make_grid_connection_point(successors=[s.make_meter(power=kW(5))]),
+        topology=mc.make_grid_connection_point(successors=[mc.make_meter(power=kW(5))]),
     )
     async with launch(spec) as mg:
         assert await mg.pv_power.read(timeout=10 * sec) == W(0)
@@ -306,9 +315,9 @@ async def test_an_absent_category_reads_zero() -> None:
 
 
 async def test_read_asymmetry() -> None:
-    meter = s.make_meter(power=kW(5))
-    spec = s.make_microgrid(
-        id=7, topology=s.make_grid_connection_point(successors=[meter])
+    meter = mc.make_meter(power=kW(5))
+    spec = mc.make_microgrid(
+        id=7, topology=mc.make_grid_connection_point(successors=[meter])
     )
     async with launch(spec) as mg:
         await mg.grid_power.expect(near(kW(5), tol=W(100)), timeout=20 * sec)
