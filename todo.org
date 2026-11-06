@@ -524,25 +524,7 @@ needs no =(load "sim/…")=. Two independent follow-ups, neither urgent:
 
 ** Y. Python integration-testing library (PyPI)                :python:testing:api:
 
-IMPLEMENTED — on the =python-client= branch (see =python/README.md= and
-=python/src/macrocosim/=). A synchronous, pytest-first client that drives
-macrocosim the way a downstream control app would: build a topology (nested
-=successors= → =(make-*)= Lisp), launch + manage the process, drive the
-environment, inject faults, read component telemetry over gRPC and graph
-aggregates over the HTTP formulas, and assert settle-aware — plus author
-scenarios in Python and a deterministic serverless gate
-(=run_scenario_stepped=).
-
-Phases Y0–Y8 done: process lifecycle, gRPC + HTTP transport, config builder,
-runtime mutation (=set= / =drive=), settle-aware assertions, scenarios + a
-pytest plugin, and packaging. Shipped as a =maturin= platform wheel bundling
-the =macrocosim= + =macroctl= binaries (=pip install macrocosim= just works);
-uv-native dev; the tulisp family is on crates.io (0.29.0 / 0.1.0).
-
-Deferred follow-ups: an async surface (sync-only today); a library↔binary
-version-compat check; typed wrappers for the dispatch / assets
-APIs and a =timeline(hold/ramp)= drive helper; and deterministic
-app-in-the-loop (a clock-step RPC, ties to D8).
+Shipped. 0.2 replaced the first client: one async API (=launch=, =Microgrid=, =make_*= specs), reads over HTTP, no Lisp in the API. See =python/README.md=.
 
 ** TODO Microgrid-file generated block: readable, nested, formatted :microgrid-files:
 :LOGBOOK:
@@ -572,6 +554,46 @@ Follow-ups to the microgrid-files core branch (generated-block quality):
 
 Then: improving reactive power support is the next roadmap item after
 this branch merges.
+
+** TODO Observe the app's setpoints from Python (read-only signal on inverters; the server already records them) :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-06 Fr 11:51]
+:END:
+
+** TODO EV chargers and steam boilers in the Python client, with a typed plug route on the server :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-06 Fr 11:51]
+:END:
+
+** TODO Python component reads that respect telemetry faults (optional gRPC reader or a server-side history filter) :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-06 Fr 11:51]
+:END:
+
+** TODO Re-arm an expect hold within its timeout, when a test needs it :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-06 Fr 11:51]
+:END:
+
+** TODO Python topology inside the simulator via pyo3, reusing plist(spec) :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-06 Fr 11:51]
+:END:
+
+** TODO Optional: version field in the endpoints file; stream filter on /metrics/history; 400 for an out-of-range SoC set :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-06 Fr 11:51]
+:END:
+
+** TODO Typed Python wrappers for the dispatch and assets APIs       :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-06 Fr 16:26]
+:END:
+
+** TODO A timeline drive helper in Python (hold, ramp), dropped from the 0.2 client :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-06 Fr 16:26]
+:END:
 
 * Review backlog — 2026-06-01
 
@@ -1464,7 +1486,11 @@ runs only after a passing body (skip, xfail and setup errors do not
 gate). A failed gate is documented as a teardown error. Plugin floor:
 pytest >= 7.4.
 
-*** TODO [#C] Sync Site close-race comments overstate the locks :python:cleanup:
+*** CANCELLED [#C] Sync Site close-race comments overstate the locks :python:cleanup:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-06 Fr 11:51] \\
+  0.2 removes the sync Site
+:END:
 A =to_thread= read blocked on =_grpc_lock=/=_pump_lock= during
 =close()= proceeds after the drain and inserts a fresh client/pump
 that is never closed — the "must not slip a fresh client past the
@@ -2240,7 +2266,7 @@ id, a pre-reload deadline can fire and reset a fresh component's
 axis that was never commanded. Pre-existing (the old drain path had
 the same hole), surfaced during the 2026-08-29 race fix review.
 
-** TODO Typed Python weather surface (and the drive clear fields) :python:api:
+** TODO Typed Python weather surface :python:api:
 :LOGBOOK:
 - Note taken on [2026-08-29 Sa 23:59] \\
   Widened per Sahas: fold the missing drive() clear fields into a
@@ -2259,6 +2285,8 @@ payload field-by-field and still has no ~clear_power~ /
 ~clear_reactive~ / ~clear_sunlight~ (the HTTP door has carried all
 three since 2026-08-29), and the PV handle should grow
 ~clear_sunlight()~ as the typed way back to weather-following.
+
+Note [2026-11-06]: the drive clear fields shipped as =clear()= in the 0.2 client; weather stays out of 0.2.
 
 ** TODO Smoke waitFor timeouts are swallowed by catch-and-continue  :testing:
 :LOGBOOK:
@@ -2486,8 +2514,10 @@ stream names, and the human output mimics the =Sample<Q>= shape
 instead. Decide one shape and name its fields by the rules in
 =docs/names-and-units.md=.
 
-** TODO Python formula() and latest() return raw floats and dicts   :python:api:
+** CANCELLED Python formula() and latest() return raw floats and dicts :python:api:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-06 Fr 11:51] \\
+  0.2 removes formula() and latest()
 - State "TODO"       from              [2026-10-06 Di 12:00]
 :END:
 
@@ -2582,7 +2612,7 @@ route adds a machine-readable kind. Add a stable =code= field beside
 every failure, list the codes in =AGENTS.md=, and have the SPA and the
 Python client branch on it.
 
-** TODO History and setpoints answer an empty result for an unknown component :api:
+** TODO Setpoints answer an empty result for an unknown component :api:
 :LOGBOOK:
 - State "TODO"       from              [2026-10-06 Di 12:00]
 :END:
@@ -2594,6 +2624,8 @@ does not look the component up), while =.../component/{id}=, =status=
 and =drive= answer 404. Make the two read routes answer 404 for an
 unknown component id as well, and check the SPA's inspector copes when
 a selected component disappears.
+
+Note [2026-11-06]: the history route answers 404 for an unknown component since the 0.2 client work; the setpoints route still answers empty.
 
 ** TODO Deferred Lisp runs on the lowest microgrid, not its own :lisp:scenarios:
 :LOGBOOK:

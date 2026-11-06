@@ -20,10 +20,10 @@ each quantity on each surface.
    Python). A Lisp `%` is spelled `-pct`.
 3. **Python arguments are typed and have no suffix.** They take
    `Power`, `Energy`, `Percentage`, `ReactivePower`, `ApparentPower`,
-   `Voltage`, `Current`, `timedelta` or `datetime`. A bare number
-   raises `TypeError`. Where `frequenz-quantities` has no type (ramp
-   rates, steam flow, pressure), the argument stays a float and keeps
-   a suffix, such as `ramp_rate_w_per_s`.
+   `Voltage`, `Current` or `timedelta`. A bare number raises
+   `TypeError`. Where `frequenz-quantities` has no type (ramp rates),
+   the argument stays a float and keeps a suffix, such as
+   `ramp_rate_w_per_s`.
 4. **Points in time are RFC 3339 strings with no unit suffix.** The
    time of an event ends in `_at` (`created_at`, `plugged_at`). A
    window is `start` and `end`. The time of a sample or a record is
@@ -56,7 +56,7 @@ each quantity on each surface.
    because the stream name fixes the unit. `/metrics/latest` carries
    the `unit` of each stream.
 10. **Names of things stay.** Stream and metric names (`grid_power`,
-    `battery_energy`) and function names (`set-meter-power`,
+    `battery_pool_energy`) and function names (`set-meter-power`,
     `set-frequency`) do not carry a unit. A positional argument whose
     unit does not change keeps its place. Its unit is in the
     docstring and in the tables below.
@@ -75,11 +75,11 @@ names.
 
 | Quantity | Lisp | HTTP / JSON | macroctl | Python | Unit |
 |---|---|---|---|---|---|
-| Rated band | `:rated-lower-w`, `:rated-upper-w` | | `list` columns `rated_lower_w`, `rated_upper_w` | `rated=(Power, Power)` | W |
+| Rated band | `:rated-lower-w`, `:rated-upper-w` | | `list` columns `rated_lower_w`, `rated_upper_w` | `rated_lower`, `rated_upper` (`Power`) | W |
 | Meter power | `:power-w` (number, lambda or symbol), `(set-meter-power ID POWER-W)` | `power_w` in `drive`; knob `meter-power` | | `power: Power` | W |
-| Setpoint | `(set-active-power ID POWER-W)` | `setpoints` entries carry `value` and `unit` | `set-power ID POWER_W` | `set_active_power(power: Power)` | W |
-| Bounds | `(augment-active-bounds ID BOUNDS)` | `envelope.active_w` as `[lower, upper]` | `augment-bounds --lower-w --upper-w` | `bounds=(Power, Power)` | W |
-| PV array size | `:array-peak-w` | | | | W |
+| Setpoint | `(set-active-power ID POWER-W)` | `setpoints` entries carry `value` and `unit` | `set-power ID POWER_W` | | W |
+| Bounds | `(augment-active-bounds ID BOUNDS)` | `envelope.active_w` as `[lower, upper]` | `augment-bounds --lower-w --upper-w` | | W |
+| PV array size | `:array-peak-w` | | | `array_peak: Power` | W |
 | Scenario peak | | `peak_grid_w` in the report | | | W |
 
 ## Energy
@@ -87,12 +87,12 @@ names.
 | Quantity | Lisp | HTTP / JSON | macroctl | Python | Unit |
 |---|---|---|---|---|---|
 | Battery capacity | `:capacity-wh` | | | `capacity: Energy` | Wh |
-| Car capacity | `:capacity-wh` in `plug-ev`, `ev-info`, `ev-presets` | `capacity_wh` in `GET .../component/{id}/ev` | | `plug_ev(capacity: Energy)` | Wh |
+| Car capacity | `:capacity-wh` in `plug-ev`, `ev-info`, `ev-presets` | `capacity_wh` in `GET .../component/{id}/ev` | | | Wh |
 | Car energy | `:energy-wh` in `ev-info` | `energy_wh` in `.../ev` | | | Wh |
-| Boiler thermal mass | `:capacity-wh-per-bar` | | | `capacity_wh_per_bar` (float) | Wh/bar |
-| Boiler heat per kg | `:wh-per-kg` | | | `wh_per_kg` (float) | Wh/kg |
+| Boiler thermal mass | `:capacity-wh-per-bar` | | | | Wh/bar |
+| Boiler heat per kg | `:wh-per-kg` | | | | Wh/kg |
 | Scenario totals | | `total_battery_charged_wh`, `total_battery_discharged_wh`, `total_pv_produced_wh`, `charge_wh`, `discharge_wh`, `produced_wh` | | | Wh |
-| Energy streams | `grid_energy`, `battery_energy` (stream names) | same names in `metrics/latest` | | `grid_energy()` returns `Energy` | Wh |
+| Energy streams | `grid_energy`, `battery_pool_energy` (stream names) | same names in `metrics/latest` | | the `Microgrid` properties `grid_energy`, `pv_energy`, `consumer_energy`, `battery_energy` (`Energy` signals) | Wh |
 
 ## Reactive and apparent power
 
@@ -113,7 +113,7 @@ names.
 |---|---|---|---|---|---|
 | Battery voltage | `:voltage-v` | | | `voltage: Voltage` | V |
 | Grid fuse rating | `:rated-fuse-current-a` | | `list` prints `fuse=N A` | `rated_fuse_current: Current` | A |
-| Car current limit | `:max-current-a` in `plug-ev`, `ev-info`, `ev-presets` | `max_current_a` in `.../ev` | | `plug_ev(max_current: Current)` | A |
+| Car current limit | `:max-current-a` in `plug-ev`, `ev-info`, `ev-presets` | `max_current_a` in `.../ev` | | | A |
 | Nominal frequency | `:nominal-hz` in `set-frequency-model` | | | | Hz |
 | Frequency now | `(set-frequency HZ)`, `(current-frequency)` | | | | Hz |
 
@@ -124,14 +124,14 @@ names.
 | Initial SoC | `:initial-soc-pct` | | | `initial_soc: Percentage` | % |
 | SoC window | `:soc-lower-pct`, `:soc-upper-pct`, `:soc-protect-margin-pct` | | | `soc_lower`, `soc_upper`, `soc_protect_margin` (`Percentage`) | % |
 | SoC now | `(set-battery-soc ID SOC-PCT)` | `soc_pct` in `drive` | | `soc` signal returns `Percentage` | % |
-| Car SoC | `:soc-pct`, `:target-soc-pct` | `soc_pct`, `target_soc_pct` in `.../ev` | | `plug_ev(soc, target_soc: Percentage)` | % |
-| Car taper | `:taper-start-pct`, `:taper-floor-pct` | | | `plug_ev(taper_start, taper_floor: Percentage)` | % |
-| Sunlight | `:sunlight-pct` (number, lambda or symbol), `(set-solar-sunlight ID SUNLIGHT-PCT)` | `sunlight_pct` | | `sunlight: Percentage`, or `raw(...)` for a lambda | % |
+| Car SoC | `:soc-pct`, `:target-soc-pct` | `soc_pct`, `target_soc_pct` in `.../ev` | | | % |
+| Car taper | `:taper-start-pct`, `:taper-floor-pct` | | | | % |
+| Sunlight | `:sunlight-pct` (number, lambda or symbol), `(set-solar-sunlight ID SUNLIGHT-PCT)` | `sunlight_pct` | | `sunlight: Percentage` | % |
 | Weather peak | `:peak-pct` | `peak_pct` | | | % |
 | Cloud depth | `:cloud-depth-pct`, `(pass-cloud DEPTH-PCT DURATION-S [RAMP-S])` | `cloud_depth_pct`, `depth_pct` | | | % |
 | Clear-sky level | `clear-sky-pct` in `(weather-status)` | `clear_sky_pct` | | | % |
 | Stream jitter | `:stream-jitter-pct` | | | `stream_jitter: Percentage` | % |
-| Weather jitter | `:weather-jitter-pct` | | | | % |
+| Weather jitter | `:weather-jitter-pct` | | | `weather_jitter: Percentage` | % |
 
 ## Durations
 
@@ -139,11 +139,11 @@ names.
 |---|---|---|---|---|---|
 | Stream interval | `:interval-s` | | | `interval: timedelta` | s |
 | Command delay | `:command-delay-s`, `:reactive-command-delay-s` | | | `command_delay`, `reactive_command_delay` (`timedelta`) | s |
-| Device delay | `:device-delay-s` | | | | s |
-| Request lifetime | `:lifetime-s` on `set-active-power`, `set-reactive-power`, `augment-active-bounds`, `augment-reactive-bounds` | `ttl_s` in setpoint events, `remaining_s` in the component state's `setpoints[]` | `--lifetime-s` (whole seconds) | `lifetime: timedelta` | s |
+| Device delay | `:device-delay-s` | | | `device_delay: timedelta` | s |
+| Request lifetime | `:lifetime-s` on `set-active-power`, `set-reactive-power`, `augment-active-bounds`, `augment-reactive-bounds` | `ttl_s` in setpoint events, `remaining_s` in the component state's `setpoints[]` | `--lifetime-s` (whole seconds) | | s |
 | Default lifetimes | `(set-default-request-lifetime-s LIFETIME-S)`, `(set-default-augment-lifetime-s LIFETIME-S)` | | | | s |
 | Physics tick and sample lag | `(set-physics-tick-s TICK-S)`, `(set-sample-lag-s LAG-S)` | | | | s |
-| PV weather lag | `:weather-lag-s` | | | | s |
+| PV weather lag | `:weather-lag-s` | | | `weather_lag: timedelta` | s |
 | Cloud timing | `:cloud-mean-gap-s` (0 means no ambient clouds), `:cloud-duration-s`, `:cloud-ramp-s` | `cloud_mean_gap_s`, `cloud_duration_s`, `cloud_ramp_s`, `duration_s`, `ramp_s` | | | s |
 | Timers | `(every :interval-s S :call F)`, `(define-controller :every-s S)` | | | | s |
 | Random outages | `random-outage :min-every-s :max-every-s :min-duration-s :max-duration-s` | | | | s |
@@ -151,8 +151,8 @@ names.
 | Scenario end | `(scenario-end-after-s SECONDS)` | `scenario_elapsed_s` in the report | | | s |
 | Dispatch duration | | `duration_s` | `dispatch create --duration-s` | | s |
 | History window | | `window_s` (query) | | | s |
-| Polling | | | `dashboard --interval-s` | `timeout`, `poll`, `for_` (`timedelta`) | s |
-| Stepped run | | | `scenario run --step-s` (above 0, default 0.1), `--until-s` | `run_scenario_stepped(step, until: timedelta)` | s |
+| Polling | | | `dashboard --interval-s` | `timeout`, `hold_for` (`timedelta`) | s |
+| Stepped run | | | `scenario run --step-s` (above 0, default 0.1), `--until-s` | | s |
 
 A scenario time (`:at`, `:length`, `check`'s first argument) is a
 number of seconds, a string such as `"4min"`, or a clock time (rule 8).
@@ -181,20 +181,44 @@ number of seconds, a string such as `"4min"`, or a clock time (rule 8).
 
 | Quantity | Lisp | HTTP / JSON | macroctl | Python | Unit |
 |---|---|---|---|---|---|
-| Steam demand | `:demand-kg-per-s`, `(set-boiler-demand-kg-per-s ID DEMAND-KG-PER-S)`, `(drive-boiler-kg-per-s ID SOURCE)` | `steam_demand_kg_per_s` in `drive`; knob `boiler-demand` (unit `"kg/s"`) | | `demand_kg_per_s` (float) | kg/s |
-| Pressure | `:target-bar`, `:max-bar`, `:initial-bar` | `pressure_bar` in `drive`, `pressure_target_bar`; knob `boiler-pressure` (unit `"bar"`) | | `target_bar`, `max_bar`, `initial_bar` (floats) | bar |
+| Steam demand | `:demand-kg-per-s`, `(set-boiler-demand-kg-per-s ID DEMAND-KG-PER-S)`, `(drive-boiler-kg-per-s ID SOURCE)` | `steam_demand_kg_per_s` in `drive`; knob `boiler-demand` (unit `"kg/s"`) | | | kg/s |
+| Pressure | `:target-bar`, `:max-bar`, `:initial-bar` | `pressure_bar` in `drive`, `pressure_target_bar`; knob `boiler-pressure` (unit `"bar"`) | | | bar |
+
+## Modes and fault knobs
+
+| Quantity | Lisp | HTTP / JSON | macroctl | Python | Unit |
+|---|---|---|---|---|---|
+| Operational mode | `:operational-mode` (`'inactive`, `'telemetry-only`, `'control-only`, `'control-and-telemetry`) | `operational_mode` in `topology` | | `operational_mode: OperationalMode` | none |
+| Health | `:health`, `(set-component-health ID HEALTH)` | `health` in `status` and `topology` | | `health: Health` in a spec; the `health` knob of a live component | none |
+| Telemetry mode | `:telemetry-mode`, `(set-component-telemetry-mode ID MODE)` | `telemetry_mode` in `status` and `topology` | | `telemetry_mode: TelemetryMode`; the `telemetry_mode` knob | none |
+| Command mode | `:command-mode`, `(set-component-command-mode ID MODE)` | `command_mode` in `status` and `topology` | | `command_mode: CommandMode`; the `command_mode` knob | none |
+
+## Signs
+
+| Value | Positive | Negative |
+|---|---|---|
+| Meter power | the subtree consumes | the subtree exports |
+| Battery inverter power, `battery_power` | charging | discharging |
+| Solar inverter power, `pv_power` | never (about 0 at night) | producing |
+| `grid_power` | import | export |
+| `consumer_power` | consuming | not used |
+| Each `*_energy` | the integral of its power since the loopback's first sample, with the same sign | |
+
+The aggregate streams `battery_pool_power` and `battery_pool_energy` are an
+exception to "the same name on every surface": Python names them `battery_power`
+and `battery_energy`.
 
 ## Ids
 
 | Quantity | Lisp | HTTP / JSON | macroctl | Python | Unit |
 |---|---|---|---|---|---|
 | Own id | `:id` | `id` | `snapshot load --id` | `Component.id` | |
-| Microgrid | `(make-microgrid :id N)` | `microgrid_id` on every WebSocket event about one microgrid | `--microgrid-id` | `microgrid_id` | |
-| Component | `:component-id` on `check` and `scenario-expect`; the item a `drive-*` helper returns carries `:component-id`; `%plug-ev` takes `:component-id` | `component_id` in history, setpoints, WebSocket events, scenario checks and timeline entries; `component_ids` (comma-separated) in the formula query | `list --component-id` | `component_id`, `Check.component_id` | |
+| Microgrid | `(make-microgrid :id N)` | `microgrid_id` on every WebSocket event about one microgrid | `--microgrid-id` | `Microgrid.id` | |
+| Component | `:component-id` on `check` and `scenario-expect`; the item a `drive-*` helper returns carries `:component-id`; `%plug-ev` takes `:component-id` | `component_id` in history, setpoints, WebSocket events, scenario checks and timeline entries; `component_ids` (comma-separated) in the formula query | `list --component-id` | | |
 | Dispatch | | `dispatch_id` | `dispatch get ID` | | |
 | Load collision | | `collision_id`, `suggested_id` | | | |
 | Graph edges | | | `connections --from`, `--to` | | |
-| gRPC address | | `grpc_addr` | | `MicrogridEndpoint.grpc_addr` | |
+| gRPC address | | `grpc_addr` | | `Microgrid.grpc_url` (`grpc://` plus the address) | |
 
 A microgrid in the endpoints file is `{"id", "name", "grpc_addr"}`.
 The import and snapshot-load request bodies name the new microgrid

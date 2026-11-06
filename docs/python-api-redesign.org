@@ -2,6 +2,9 @@
 #+OPTIONS: toc:2 num:nil
 #+STARTUP: showall
 
+*Superseded.* The 0.2 Python client replaced this sketch; see
+=python/README.md= for what shipped. The text below is kept as history.
+
 Status: draft. This sketches the second generation of macrocosim's
 Python client. The first generation grew feature by feature while we
 built end-to-end tests for downstream applications (power controllers,
