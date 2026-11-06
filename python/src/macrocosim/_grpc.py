@@ -306,3 +306,7 @@ class GrpcClient:
             pass
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5.0)
+        # Close the stopped loop too, or its self-pipe sockets leak until the
+        # garbage collector finds them (a ResourceWarning in whatever runs then).
+        if not self._thread.is_alive():
+            self._loop.close()
