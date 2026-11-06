@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
-from typing import Any, ClassVar, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 
 from frequenz.quantities import (
     ApparentPower,
@@ -40,6 +40,17 @@ from ._units import (
     type_and_value,
     unit_of,
 )
+
+if TYPE_CHECKING:
+    # Named only in the string generic parameters of the spec classes below.
+    from ._components import (  # noqa: F401
+        Battery,
+        BatteryInverter,
+        Chp,
+        GridConnectionPoint,
+        Meter,
+        SolarInverter,
+    )
 
 L = TypeVar("L", bound=object)
 """The live class a spec turns into once launched."""
@@ -144,7 +155,7 @@ def _check_successors(spec: ComponentSpec[Any], value: object) -> None:
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)
-class GridConnectionPointSpec(ComponentSpec[object]):
+class GridConnectionPointSpec(ComponentSpec["GridConnectionPoint"]):
     """Where the microgrid meets the grid; the root of every topology."""
 
     _make: ClassVar[str] = "make-grid-connection-point"
@@ -168,7 +179,7 @@ class GridConnectionPointSpec(ComponentSpec[object]):
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)
-class MeterSpec(ComponentSpec[object]):
+class MeterSpec(ComponentSpec["Meter"]):
     """A meter. A leaf meter with `power` set stands for a load."""
 
     _make: ClassVar[str] = "make-meter"
@@ -192,7 +203,7 @@ class MeterSpec(ComponentSpec[object]):
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)
-class BatterySpec(ComponentSpec[object]):
+class BatterySpec(ComponentSpec["Battery"]):
     """A battery, under one or more battery inverters."""
 
     _make: ClassVar[str] = "make-battery"
@@ -209,7 +220,7 @@ class BatterySpec(ComponentSpec[object]):
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)
-class BatteryInverterSpec(ComponentSpec[object]):
+class BatteryInverterSpec(ComponentSpec["BatteryInverter"]):
     """A battery inverter; its successors are batteries."""
 
     _make: ClassVar[str] = "make-battery-inverter"
@@ -228,9 +239,9 @@ class BatteryInverterSpec(ComponentSpec[object]):
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)
-class SolarInverterSpec(ComponentSpec[object]):
-    """A solar inverter with its array. Without `sunlight` it follows the
-    site's weather; with it, it holds that sunlight until cleared."""
+class SolarInverterSpec(ComponentSpec["SolarInverter"]):
+    """A solar inverter with its array. Without `sunlight` it follows the site's
+    weather; with it, it holds that sunlight until cleared."""
 
     _make: ClassVar[str] = "make-solar-inverter"
 
@@ -251,7 +262,7 @@ class SolarInverterSpec(ComponentSpec[object]):
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)
-class ChpSpec(ComponentSpec[object]):
+class ChpSpec(ComponentSpec["Chp"]):
     """A combined heat and power unit: a passive part of the topology."""
 
     _make: ClassVar[str] = "make-chp"
