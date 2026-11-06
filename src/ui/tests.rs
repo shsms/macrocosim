@@ -659,11 +659,24 @@ async fn history_endpoint_rejects_unknown_metric() {
 }
 
 #[tokio::test]
-async fn history_endpoint_returns_empty_for_unknown_component() {
+async fn history_endpoint_rejects_unknown_component() {
     let (cfg, _dir) = config_with("").await;
     let (status, body) = call(
         cfg,
         get("/api/mg/2200/component/999/history?metric=active_power_w"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error_of(&body), "component 999 not found");
+}
+
+#[tokio::test]
+async fn history_endpoint_returns_empty_for_a_known_component_without_samples() {
+    // No sampler tick has run, so the battery's ring is still empty.
+    let (cfg, _dir) = config_with("(%make-battery :id 1000)").await;
+    let (status, body) = call(
+        cfg,
+        get("/api/mg/2200/component/1000/history?metric=soc_pct"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

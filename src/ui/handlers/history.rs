@@ -55,6 +55,10 @@ fn history_body(
         .metric
         .parse()
         .map_err(|_| ApiError::bad_request(format!("unknown metric '{}'", q.metric)))?;
+    // After the metric parse, so an unknown metric stays a 400.
+    if site.get(id).is_none() {
+        return Err(ApiError::no_component(id));
+    }
     // Clamp: chrono panics on |seconds| near i64::MAX, and a huge
     // finite window would panic in the subtraction below. One year
     // is far past any real query.

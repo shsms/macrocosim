@@ -47,6 +47,7 @@ an unknown field answers 400.
   response. All of them are RFC 3339 strings.
 - History and setpoints answer with `component_id`, not `id`. A
   history `samples` pair is `[t_s, value]`, with `t_s` in epoch seconds.
+- History (`GET .../component/{id}/history`) answers 404 for an unknown component. It answered 200 with no samples, the same as a component that has not been sampled yet.
 - `metrics/latest`: `ts_ms` of each stream is `ts`, an RFC 3339 string.
 - `metrics/history`: each entry is `{t_s, value}`, with `t_s` in epoch
   seconds.
