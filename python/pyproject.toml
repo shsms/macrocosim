@@ -74,6 +74,7 @@ select = ["E", "F", "I", "UP", "B"]
 # The settle-aware `expect` assertions are async; auto mode runs
 # `async def test_*` without a per-test marker.
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 # The microgrid client decodes samples through its own deprecated
 # ComponentId (0.18.3 internal inconsistency) — not our code.
 filterwarnings = [

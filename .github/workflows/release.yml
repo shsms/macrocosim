@@ -29,6 +29,7 @@ on:
       - 'python/src/**'
       - 'python/pyproject.toml'
       - 'python/uv.lock'
+      - 'python/README.md'
       - '.github/workflows/release.yml'
 
 permissions:
@@ -131,14 +132,21 @@ jobs:
           # the same name from PyPI; only the extras' dependencies
           # should come from there.
           whl=$(python -c 'import glob; print(glob.glob("python/dist/*.whl")[0])')
-          python -m pip install "${whl}[grpc]"
-          python - <<'PY'
+          python -m pip install "${whl}"
+          WHL="${whl}" python - <<'PY'
+          import importlib.metadata, os, re, shutil, sysconfig
           import macrocosim  # noqa: F401
-          from macrocosim.runtime import which_binary
-          assert which_binary("macrocosim") and which_binary("macroctl"), (
-              "bundled binaries not found on PATH"
-          )
-          print("wheel OK: macrocosim + macroctl bundled and discoverable")
+          scripts = sysconfig.get_path("scripts")
+          for name in ("macrocosim", "macroctl"):
+              assert shutil.which(name, path=scripts) or shutil.which(name), (
+                  f"bundled {name} binary not found"
+              )
+          wheel_version = re.match(
+              r"macrocosim-([^-]+)-", os.path.basename(os.environ["WHL"])
+          ).group(1)
+          installed = importlib.metadata.version("macrocosim")
+          assert installed == wheel_version, (installed, wheel_version)
+          print(f"wheel OK: macrocosim {installed}, both binaries bundled")
           PY
 
       # The hosted arm64 macOS image is expected to ship Rosetta 2; make
@@ -265,8 +273,8 @@ jobs:
         with:
           packages-dir: dist
 
-  # After PyPI, so a failed upload leaves no half-release behind. Notes are
-  # GitHub's auto-generated PR list; edit the Release afterwards if wanted.
+  # After PyPI, so a failed upload leaves no half-release behind. The body is
+  # RELEASE_NOTES.md, followed by GitHub's auto-generated PR list.
   github-release:
     name: GitHub Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -275,6 +283,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only for RELEASE_NOTES.md, which the release body is read from.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: RELEASE_NOTES.md
+          sparse-checkout-cone-mode: false
       - name: Collect bundles, wheels + sdist
         uses: actions/download-artifact@v4
         with:
@@ -283,5 +297,9 @@ jobs:
       - run: ls -l assets
       - uses: softprops/action-gh-release@v2
         with:
+          # A version with a pre-release part (v0.2.0-alpha.1) is never
+          # marked "latest".
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           files: assets/*

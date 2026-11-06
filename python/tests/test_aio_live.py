@@ -1,13 +1,12 @@
 """End-to-end pass of the signal surface against a real simulator.
 
-Skips when no ``macrocosim`` binary is available (``MACROCOSIM_BIN``,
-PATH, or the wheel's scripts dir).
+Marked ``live``: skipped when no ``macrocosim`` binary is available
+(``MACROCOSIM_BIN``, the wheel's scripts dir, or PATH), see ``conftest.py``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from datetime import timedelta
 
@@ -15,14 +14,11 @@ import pytest
 from frequenz.quantities import Energy, Percentage, Power
 
 import macrocosim as mc
-from macrocosim._process import which_binary
 
 pytestmark = [
     pytest.mark.filterwarnings("ignore:.*ComponentId is deprecated.*:DeprecationWarning"),
+    pytest.mark.live,
 ]
-
-if not (os.environ.get("MACROCOSIM_BIN") or which_binary("macrocosim")):
-    pytest.skip("no macrocosim binary available", allow_module_level=True)
 
 kW = Power.from_kilowatts
 kWh = Energy.from_kilowatt_hours

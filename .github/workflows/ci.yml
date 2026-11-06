@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -97,29 +100,34 @@ jobs:
       - name: Type check (ty, all rules as errors)
         run: uv run --no-sync ty check --error all src
 
-  # Run the Python test suite — the pytest plugin's gates, the client's
-  # stream handling, and the live tests that boot a real server.
+  # Run the Python test suite: the unit tests and the live tests that
+  # boot a real server, on Python 3.13 (the dev pin in
+  # python/.python-version) and 3.14 (which the downstream peak-shaving
+  # suite requires).
   #
   # Unlike python-lint, this job builds the crate. `uv sync` here is
   # deliberately WITHOUT `--no-install-project`, so it runs the maturin
   # build of the project wheel, which needs protoc and the vendored
-  # proto submodules. python-lint skips all of that on purpose — ruff
-  # and ty only read the source — but the tests import the installed
-  # package and launch the binary, so here the build is the point. Two
-  # things fall out of that sync: the wheel drops the `macrocosim`
-  # binary into the venv's scripts directory, which `uv run` puts on
-  # PATH, so the live tests' binary discovery finds it with no
-  # MACROCOSIM_BIN to set (and they skip rather than fail if it is ever
-  # missing); and the package's pytest11 entry point is registered, so
-  # pytest auto-loads the plugin under test.
+  # proto submodules. The wheel puts the `macrocosim` binary into the
+  # venv's scripts directory, where the live tests' binary discovery
+  # finds it. MACROCOSIM_REQUIRE_LIVE=1 makes a missing binary fail the
+  # job instead of skipping the live tests.
   #
   # maturin builds RELEASE, so none of the debug artifacts the `rust`
-  # job caches are reusable here — this job keeps its own `-pywheel-`
+  # job caches are reusable here. This job keeps its own `-pywheel-`
   # cache (a prefix no other job restores by) and depends on nothing,
   # running in parallel with the rest.
   python-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.13', '3.14']
+    env:
+      # uv otherwise follows python/.python-version (3.13), for `uv sync`
+      # and for every `uv run --no-sync`.
+      UV_PYTHON: ${{ matrix.python }}
     defaults:
       run:
         working-directory: python
@@ -152,6 +160,8 @@ jobs:
         run: uv sync
 
       - name: pytest
+        env:
+          MACROCOSIM_REQUIRE_LIVE: "1"
         run: uv run --no-sync pytest -q
 
   # Live browser smokes: boots the binary against a scratch starter-site

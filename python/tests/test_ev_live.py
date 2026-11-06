@@ -1,11 +1,10 @@
 """Plug a car, watch it charge past the 6 A floor, unplug it.
 
-Skips when no ``macrocosim`` binary is available.
+Marked ``live``: skipped when no ``macrocosim`` binary is available.
 """
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Callable
 
@@ -13,10 +12,8 @@ import pytest
 from frequenz.quantities import Percentage, Power
 
 import macrocosim as mc
-from macrocosim._process import which_binary
 
-if not (os.environ.get("MACROCOSIM_BIN") or which_binary("macrocosim")):
-    pytest.skip("no macrocosim binary available", allow_module_level=True)
+pytestmark = pytest.mark.live
 
 
 def _wait(pred: Callable[[], object], limit_s: float = 15.0, every: float = 0.2):

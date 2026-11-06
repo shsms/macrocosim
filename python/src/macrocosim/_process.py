@@ -15,22 +15,22 @@ import sysconfig
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from .build import ConfigSource
-
-from .build import LispRenderable
+    from .build import ConfigSource, LispRenderable
 
 
 def which_binary(name: str) -> str | None:
-    """Find ``name`` on PATH, or in this interpreter's scripts directory.
+    """Find ``name`` in this interpreter's scripts directory, else on PATH.
 
     A platform wheel bundles the binaries there (``<venv>/bin``), which is
     reachable even when that directory isn't on PATH (unactivated venv, some
-    test runners); ``shutil.which`` also resolves the ``.exe`` on Windows.
+    test runners). It comes first so that an older build elsewhere on PATH
+    (``~/.cargo/bin``, say) never shadows the binary the wheel shipped with;
+    ``shutil.which`` also resolves the ``.exe`` on Windows.
     """
-    return shutil.which(name) or shutil.which(name, path=sysconfig.get_path("scripts"))
+    return shutil.which(name, path=sysconfig.get_path("scripts")) or shutil.which(name)
 
 
 def resolve_binary(
@@ -40,7 +40,7 @@ def resolve_binary(
     explicit: str | os.PathLike[str] | None,
     flag: str,
 ) -> str:
-    """Locate a bundled binary: an explicit path → ``$env_var`` → PATH / wheel.
+    """Locate a bundled binary: an explicit path → ``$env_var`` → wheel / PATH.
 
     ``flag`` names the launch/run keyword that overrides it, for the not-found
     message (``bin`` for macrocosim, ``macroctl_bin`` for macroctl).
@@ -62,8 +62,10 @@ def resolve_binary(
 
 def render_config(config: ConfigSource, tmpdir: Path) -> Path:
     """A config file path as-is, or render to_lisp object(s) to a temp file."""
-    if isinstance(config, LispRenderable):
-        forms: list[LispRenderable] = [config]
+    if hasattr(config, "to_lisp"):
+        # A run-time check that needs no import of `build`; the checker does
+        # not narrow on hasattr, hence the cast.
+        forms: list[LispRenderable] = [cast("LispRenderable", config)]
     elif isinstance(config, (str, os.PathLike)):
         # config is str | PathLike here; the structural narrowing leaves a
         # spurious Protocol-and-PathLike intersection the checker can't shed.
