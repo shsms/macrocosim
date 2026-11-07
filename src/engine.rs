@@ -18,6 +18,7 @@ use tokio::sync::broadcast;
 pub use metadata::Metadata;
 pub(crate) use metadata::reserved_ports_of;
 
+use crate::runner::ScriptStatus;
 use crate::runner::python::Interpreter;
 use crate::sim::MicrogridSite;
 use crate::sim::clock::SharedClock;
@@ -100,6 +101,9 @@ pub struct Engine {
     pub(crate) python: Arc<Interpreter>,
     /// One export at a time: the permit a `.py` export holds.
     pub(crate) exports: Arc<tokio::sync::Semaphore>,
+    /// The script runner's status on every change; the WS event pump
+    /// forwards it as a `script_status` event.
+    pub(crate) script_status: Arc<broadcast::Sender<ScriptStatus>>,
 }
 
 impl Engine {
@@ -136,6 +140,7 @@ impl Engine {
             spec_undo: Arc::new(Mutex::new(HashMap::new())),
             python: Arc::default(),
             exports: Arc::new(tokio::sync::Semaphore::new(1)),
+            script_status: Arc::new(broadcast::channel(64).0),
         }
     }
 
@@ -269,6 +274,11 @@ impl Engine {
     /// Subscribe to `microgrid_registered` notifications.
     pub fn subscribe_microgrid_registered(&self) -> broadcast::Receiver<u64> {
         self.microgrid_registered.subscribe()
+    }
+
+    /// Subscribe to the script runner's status changes.
+    pub fn subscribe_script_status(&self) -> broadcast::Receiver<ScriptStatus> {
+        self.script_status.subscribe()
     }
 
     /// Subscribe to `microgrid_unloaded` notifications.

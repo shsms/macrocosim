@@ -18,7 +18,9 @@ is wiring the topology + animating the environment.
   `grpc_port` changes, `unload` removes one (registry entry first,
   then its runtime, scenario journal and CSV sinks, dispatches and
   undo stacks, then the `microgrid_unloaded` broadcast),
-  `check_ids` keeps component ids unique across the engine. A registry entry's `spec` is that stored spec, or
+  `check_ids` keeps component ids unique across the engine,
+  `apply_hello` applies a script child's microgrids (a registered id
+  must have the script as its `source`). A registry entry's `spec` is that stored spec, or
   `None` for a Lisp-loaded microgrid; Lisp leaves an entry with a spec
   alone (reload, replay and save skip it, and a structural form on it
   is refused, which the eval routes answer with 409)
@@ -36,12 +38,25 @@ is wiring the topology + animating the environment.
   (`0.2.0-alpha.0` is `0.2.0a0`), the form the Python package carries
 - `src/undo.rs` — `UndoHistory<T>`, the per-microgrid undo / redo
   stack (capped at 20 steps), generic over what one step stores
-- `src/runner.rs` — the script runner. `runner/python.rs` finds the
-  Python interpreter (`--python`, `$MACROCOSIM_PYTHON`, beside the
-  binary, `PATH`) and checks it once per engine: 3.11 or later with the
-  `macrocosim` package of the binary's version. The `.py` export
-  (`GET /api/mg/{mg}/spec.py`) pipes the stored spec into
-  `python -P -m macrocosim.export`, one export at a time
+- `src/runner.rs` — the script runner: `macrocosim plant.py` runs the
+  script in one child, `python -P -m macrocosim._runner plant.py`, which
+  sends the script's `MICROGRIDS` in a hello (`POST /api/runner/hello`)
+  and then runs `run`. `runner/supervisor.rs` starts a new child on
+  every `.py` save in the script's tree (`runner/script_watch.rs`), applies its
+  hello with `engine::topology::apply_hello` (build and check aside,
+  stop the old child, then unload, rebuild and create), and keeps the
+  status `GET /api/runner` answers and the `script_status` event
+  carries; `runner/child.rs` is one child (stdin held, closing it is
+  the stop signal; output logged under `script:<name>`, each line led
+  by the script's name; on Unix the leader of its own process group,
+  which is ended once the child has ended);
+  `runner/hello.rs` the hello and its error codes.
+  `runner/python.rs` finds the Python interpreter (`--python`,
+  `$MACROCOSIM_PYTHON`, beside the binary, `PATH`) and checks it once
+  per engine: 3.11 or later with the `macrocosim` package of the
+  binary's version. The `.py` export (`GET /api/mg/{mg}/spec.py`) pipes
+  the stored spec into `python -P -m macrocosim.export`, one export at
+  a time
 - `src/watch.rs` — the debounced file watcher: `Files` watches a named
   set of files and re-arms them after an atomic save (the Lisp hot
   reload in `lisp/boot.rs`); `Tree` watches every directory under a
@@ -310,9 +325,11 @@ UI").
   stays in `server.rs`. Lock order: gateway → registry read guards →
   component locks; the gateway lock is never held across an `.await`.
   Outside all of them, the engine's `create_lock` (a tokio mutex) is
-  the one structural lock: create, import, load-as, a spec `PUT` and
-  an unload hold it, then the runtimes' `start_lock` (which `start`,
-  `stop` and `restart_grpc` take), then the order above.
+  the one structural lock: create, import, load-as, a spec `PUT`, an
+  unload and a script's hello hold it, then the runtimes' `start_lock`
+  (which `start`, `stop` and `restart_grpc` take), then the order
+  above. The script supervisor's own `ops` lock (a reload replacing the
+  pending child, a hello) is taken before `create_lock`.
 - **An axis is a `GatewayAxis` in the gateway plus a `DeviceAxis` in
   the component.** The chain is gateway delay → gateway ramp → device
   delay → output. Each step the gateway targets the armed command

@@ -60,6 +60,18 @@ pub struct RuntimeView {
     pub error: Option<String>,
 }
 
+impl RuntimeView {
+    /// The gRPC address while the server runs; `None` while it
+    /// starts, moves or has failed, even when `grpc_addr` still holds
+    /// the address a failed server had.
+    pub fn serving_addr(&self) -> Option<String> {
+        match self.status {
+            RuntimeStatus::Running => self.grpc_addr.clone(),
+            RuntimeStatus::Starting | RuntimeStatus::Failed => None,
+        }
+    }
+}
+
 /// Why [`MicrogridRuntimes::start`] could not start a microgrid.
 #[derive(Debug)]
 pub enum StartError {
@@ -574,6 +586,23 @@ mod tests {
     use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
     const V6: IpAddr = IpAddr::V6(Ipv6Addr::LOCALHOST);
+
+    /// Only a running server gives its address; a starting or failed
+    /// one gives none, whatever `grpc_addr` holds.
+    #[test]
+    fn only_a_running_server_gives_its_address() {
+        let view = |status| RuntimeView {
+            status,
+            grpc_addr: Some("[::1]:8800".into()),
+            error: None,
+        };
+        assert_eq!(
+            view(RuntimeStatus::Running).serving_addr().as_deref(),
+            Some("[::1]:8800")
+        );
+        assert_eq!(view(RuntimeStatus::Starting).serving_addr(), None);
+        assert_eq!(view(RuntimeStatus::Failed).serving_addr(), None);
+    }
 
     /// A port nobody holds right now, for tests that need a fixed
     /// one.

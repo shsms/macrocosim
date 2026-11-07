@@ -17,8 +17,16 @@ SCHEMA_VERSION = 1
 """The ``schema_version`` of the topology document this client writes."""
 
 
-def render(spec: MicrogridSpec) -> dict[str, Any]:
-    """The topology document, as JSON-ready data, holding `spec` alone."""
+def render(*specs: MicrogridSpec) -> dict[str, Any]:
+    """The topology document, as JSON-ready data, holding `specs`."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "microgrids": [render_microgrid(spec) for spec in specs],
+    }
+
+
+def render_microgrid(spec: MicrogridSpec) -> dict[str, Any]:
+    """One microgrid of the topology document, as JSON-ready data."""
     ids = spec._ids
     microgrid: dict[str, Any] = {}
     if spec.id is not None:
@@ -37,4 +45,4 @@ def render(spec: MicrogridSpec) -> dict[str, Any]:
     microgrid["connections"] = [
         [ids[parent], ids[child]] for parent in spec._order for child in children(parent)
     ]
-    return {"schema_version": SCHEMA_VERSION, "microgrids": [microgrid]}
+    return microgrid

@@ -1,8 +1,10 @@
-//! Headless macrocosim simulator: boot the microgrids of a topology
-//! document (`--topology`) or of Lisp scripts, spawn the physics tick,
-//! serve the Microgrid gRPC API and the UI.
+//! Headless macrocosim simulator: run a Python script, boot the
+//! microgrids of a topology document (`--topology`) or of Lisp
+//! scripts, spawn the physics tick, serve the Microgrid gRPC API and
+//! the UI.
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::Duration;
 
 use clap::Parser;
@@ -25,10 +27,12 @@ use tokio_stream::wrappers::TcpListenerStream;
 /// Headless macrocosim microgrid simulator.
 #[derive(Parser)]
 struct Args {
-    /// Lisp scripts to evaluate at boot, in order. With none, the
-    /// engine boots bare: UI + REPL up, empty registry — load a
-    /// topology on demand with `(load "…")` from the REPL or the
-    /// Microgrids tab.
+    /// A Python script (`plant.py`) to run, or Lisp scripts to
+    /// evaluate at boot, in order. A Python script runs alone, in a
+    /// child process that is started again whenever a `.py` file in
+    /// its directory tree changes. With none, the engine boots bare:
+    /// UI + REPL up, empty registry — load a topology on demand with
+    /// `(load "…")` from the REPL or the Microgrids tab.
     scripts: Vec<PathBuf>,
 
     /// Boot the microgrids of this topology document (JSON), each
@@ -68,9 +72,10 @@ struct Args {
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,
 
-    /// The Python interpreter that exports a microgrid as a `.py`
-    /// module. Without it, `$MACROCOSIM_PYTHON`, then a `python` next
-    /// to this binary, then `python3` or `python` on `PATH`.
+    /// The Python interpreter that runs the script and exports a
+    /// microgrid as a `.py` module. Without it, `$MACROCOSIM_PYTHON`,
+    /// then a `python` next to this binary, then `python3` or
+    /// `python` on `PATH`.
     #[arg(long, value_name = "PATH")]
     python: Option<PathBuf>,
 
@@ -148,6 +153,30 @@ async fn boot_topology(
     }
 }
 
+/// Split the positional arguments into the one Python script and the
+/// Lisp scripts, refusing a second `.py` or a `.py` beside anything
+/// else.
+fn split_scripts(paths: &[PathBuf]) -> Result<(Option<PathBuf>, Vec<PathBuf>), String> {
+    let (py, lisp): (Vec<&PathBuf>, Vec<&PathBuf>) = paths
+        .iter()
+        .partition(|p| p.extension().is_some_and(|e| e == "py"));
+    let shown = |ps: &[&PathBuf]| {
+        ps.iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match py.as_slice() {
+        [] => Ok((None, lisp.into_iter().cloned().collect())),
+        [script] if lisp.is_empty() => Ok((Some((*script).clone()), Vec::new())),
+        [_] => Err(format!(
+            "a Python script runs alone; it cannot be combined with {}",
+            shown(&lisp)
+        )),
+        _ => Err(format!("one Python script per engine; got {}", shown(&py))),
+    }
+}
+
 /// Bind a TCP listener for `label`, or log and exit the process on
 /// failure. Returns the listener and its resolved local address — the
 /// OS-chosen port when `addr`'s port is 0 (`--ephemeral-ports`).
@@ -213,8 +242,17 @@ async fn serve() {
     ])
     .unwrap();
 
-    let scripts: Vec<String> = args
-        .scripts
+    let (python_script, lisp_scripts) = split_scripts(&args.scripts).unwrap_or_else(|e| {
+        log::error!("{e}");
+        std::process::exit(1);
+    });
+    let python_script = python_script.map(|p| {
+        p.canonicalize().unwrap_or_else(|e| {
+            log::error!("Script {}: {e}", p.display());
+            std::process::exit(1);
+        })
+    });
+    let scripts: Vec<String> = lisp_scripts
         .iter()
         .map(|p| {
             p.to_str().map(str::to_owned).unwrap_or_else(|| {
@@ -223,7 +261,9 @@ async fn serve() {
             })
         })
         .collect();
-    if scripts.is_empty() {
+    if let Some(script) = &python_script {
+        log::info!("Running script {}", script.display());
+    } else if scripts.is_empty() {
         log::info!("No boot scripts given — starting a bare engine");
     } else {
         log::info!("Evaluating boot script(s): {}", scripts.join(", "));
@@ -237,6 +277,15 @@ async fn serve() {
     if let Some(python) = &args.python {
         engine.set_python(python.clone());
     }
+    // A script needs a usable interpreter; without one, say how to
+    // get one before anything binds.
+    let python = match &python_script {
+        Some(_) => Some(engine.python().await.unwrap_or_else(|e| {
+            log::error!("{e}");
+            std::process::exit(1);
+        })),
+        None => None,
+    };
 
     // Every microgrid runtime, boot-time and later, starts through
     // MicrogridRuntimes. The listener subscribes before the file
@@ -303,42 +352,17 @@ async fn serve() {
     }
     let (dispatch_listener, dispatch_addr) = bind_or_exit(dispatch_addr, "MicrogridDispatch").await;
 
-    // Emit the resolved endpoints once everything is bound — the
-    // machine-readable readiness signal. Boot-time microgrids only;
-    // runtime-created ones (POST /api/microgrids) aren't listed.
-    if let Some(target) = &args.emit_endpoints {
-        let json = serde_json::json!({
-            "ui": ui_addr.to_string(),
-            "microgrids": boot_ids
-                .iter()
-                .filter_map(|id| {
-                    let name = engine.microgrids().lock().get(id)?.def.name.clone();
-                    let addr = runtimes.status(*id)?.grpc_addr?;
-                    Some(serde_json::json!({ "id": id, "name": name, "grpc_addr": addr }))
-                })
-                .collect::<Vec<_>>(),
-            "assets": assets_addr.to_string(),
-            "dispatch": dispatch_addr.to_string(),
-            "version": *macrocosim::version::VERSION,
-        })
-        .to_string();
-        if target == "-" {
-            println!("{json}");
-        } else {
-            // This file is the readiness signal a harness polls for,
-            // so a failed write must kill the process (like a failed
-            // bind) — not leave a healthy-looking server the poller
-            // can never detect. Write + rename so the file appears
-            // only once its content is complete.
-            let tmp = format!("{target}.tmp");
-            if let Err(e) = std::fs::write(&tmp, format!("{json}\n"))
-                .and_then(|()| std::fs::rename(&tmp, target))
-            {
-                log::error!("emit-endpoints write {target}: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
+    // The script's supervisor exists before the UI serves, which
+    // answers its child's hello; the child starts once it does.
+    let supervisor = python_script.zip(python).map(|(script, python)| {
+        macrocosim::runner::ScriptSupervisor::new(
+            engine.clone(),
+            runtimes.clone(),
+            script,
+            python,
+            ui_addr,
+        )
+    });
 
     // Critical long-running tasks (UI, PlatformAssets and dispatch
     // servers) go into one JoinSet: any of them exiting means the
@@ -349,8 +373,12 @@ async fn serve() {
     // stays fire-and-forget for now.)
     let mut tasks: tokio::task::JoinSet<&'static str> = tokio::task::JoinSet::new();
     log::info!("Macrocosim UI listening on http://{ui_addr}");
+    let ui_runtimes = runtimes.clone();
+    let ui_runner = supervisor.clone();
     tasks.spawn(async move {
-        if let Err(e) = ui::serve_with_listener(ui_listener, ui_config, runtimes.clone()).await {
+        if let Err(e) =
+            ui::serve_with_listener(ui_listener, ui_config, ui_runtimes, ui_runner).await
+        {
             log::error!("UI server exited: {e}");
         }
         "UI server"
@@ -389,16 +417,124 @@ async fn serve() {
         }
         "MicrogridDispatch gRPC server"
     });
+    // With a script, Ctrl-C stops its child (stdin closed, then
+    // killed after a grace period, and its process group ended)
+    // before the process exits. The listener is registered here,
+    // before the first child starts, so a Ctrl-C while it loads stops
+    // it the same way; on Unix the child leads its own process group,
+    // which the terminal's SIGINT does not reach, and elsewhere it
+    // ignores SIGINT.
+    let mut script = supervisor
+        .as_ref()
+        .map(|supervisor| (supervisor, ctrl_c_listener()));
+    // Run the script once the UI serves: its child's hello needs it.
+    if let Some((supervisor, _)) = &script {
+        supervisor.start().await;
+    }
+
+    // Emit the resolved endpoints once everything is bound — the
+    // machine-readable readiness signal. Boot-time microgrids only;
+    // runtime-created ones (POST /api/microgrids) aren't listed. With
+    // a script, once its first child's hello was answered or it
+    // failed to load: the microgrids registered then.
+    if let Some(target) = &args.emit_endpoints {
+        let boot_ids = match script.as_mut() {
+            Some((supervisor, ctrl_c)) => {
+                tokio::select! {
+                    () = supervisor.first_load() => {}
+                    () = ctrl_c => stop_script_and_exit(supervisor).await,
+                }
+                engine.microgrids().lock().keys().copied().collect()
+            }
+            None => boot_ids.clone(),
+        };
+        let json = serde_json::json!({
+            "ui": ui_addr.to_string(),
+            "microgrids": boot_ids
+                .iter()
+                .filter_map(|id| {
+                    let name = engine.microgrids().lock().get(id)?.def.name.clone();
+                    let addr = runtimes.status(*id)?.serving_addr()?;
+                    Some(serde_json::json!({ "id": id, "name": name, "grpc_addr": addr }))
+                })
+                .collect::<Vec<_>>(),
+            "assets": assets_addr.to_string(),
+            "dispatch": dispatch_addr.to_string(),
+            "version": *macrocosim::version::VERSION,
+        })
+        .to_string();
+        if target == "-" {
+            println!("{json}");
+        } else {
+            // This file is the readiness signal a harness polls for,
+            // so a failed write must kill the process (like a failed
+            // bind) — not leave a healthy-looking server the poller
+            // can never detect. Write + rename so the file appears
+            // only once its content is complete.
+            let tmp = format!("{target}.tmp");
+            if let Err(e) = std::fs::write(&tmp, format!("{json}\n"))
+                .and_then(|()| std::fs::rename(&tmp, target))
+            {
+                log::error!("emit-endpoints write {target}: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // First exit wins: a critical surface died (its own error was
     // already logged), so stop the whole process rather than limping
     // on with the remaining listeners.
-    if let Some(res) = tasks.join_next().await {
-        match res {
-            Ok(label) => log::error!("{label} exited; shutting down"),
-            Err(e) => log::error!("critical task panicked: {e}; shutting down"),
+    let interrupted = async {
+        match script.as_mut() {
+            Some((supervisor, ctrl_c)) => {
+                ctrl_c.await;
+                *supervisor
+            }
+            None => std::future::pending().await,
         }
-        std::process::exit(1);
+    };
+    tokio::select! {
+        res = tasks.join_next() => {
+            match res {
+                Some(Ok(label)) => log::error!("{label} exited; shutting down"),
+                Some(Err(e)) => log::error!("critical task panicked: {e}; shutting down"),
+                None => log::error!("no server task is running; shutting down"),
+            }
+            if let Some(supervisor) = &supervisor {
+                supervisor.shutdown().await;
+            }
+            std::process::exit(1);
+        }
+        supervisor = interrupted => stop_script_and_exit(supervisor).await,
     }
+}
+
+/// A future that resolves on the first Ctrl-C. The signal handler is
+/// registered before this returns. A failed registration is logged
+/// and the future never resolves, so the process keeps running.
+fn ctrl_c_listener() -> Pin<Box<dyn Future<Output = ()> + Send>> {
+    #[cfg(unix)]
+    let listener = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
+    #[cfg(not(unix))]
+    let listener = tokio::signal::windows::ctrl_c();
+    let listener = listener
+        .inspect_err(|e| log::error!("cannot listen for Ctrl-C: {e}"))
+        .ok();
+    Box::pin(async move {
+        if let Some(mut listener) = listener
+            && listener.recv().await.is_some()
+        {
+            return;
+        }
+        std::future::pending().await
+    })
+}
+
+/// Stop the script after a Ctrl-C, then exit.
+async fn stop_script_and_exit(supervisor: &macrocosim::runner::ScriptSupervisor) -> ! {
+    log::info!("Interrupted; stopping the script");
+    supervisor.shutdown().await;
+    std::process::exit(0);
 }
 
 #[cfg(test)]
@@ -424,6 +560,30 @@ mod tests {
         let a = Args::parse_from(["macrocosim", "--topology", "t.json"]);
         assert_eq!(a.topology, Some(PathBuf::from("t.json")));
         assert!(Args::try_parse_from(["macrocosim", "--topology", "t.json", "x.lisp"]).is_err());
+    }
+
+    #[test]
+    fn one_python_script_runs_alone() {
+        let paths = |ps: &[&str]| ps.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(
+            split_scripts(&paths(&["plant.py"])).unwrap(),
+            (Some(PathBuf::from("plant.py")), vec![])
+        );
+        assert_eq!(
+            split_scripts(&paths(&["a.lisp", "b.lisp"])).unwrap(),
+            (None, paths(&["a.lisp", "b.lisp"]))
+        );
+        assert_eq!(
+            split_scripts(&paths(&["a.py", "b.py"])).unwrap_err(),
+            "one Python script per engine; got a.py, b.py"
+        );
+        assert_eq!(
+            split_scripts(&paths(&["a.py", "b.lisp"])).unwrap_err(),
+            "a Python script runs alone; it cannot be combined with b.lisp"
+        );
+        assert!(Args::try_parse_from(["macrocosim", "--topology", "t.json", "a.py"]).is_err());
+        let a = Args::parse_from(["macrocosim", "--python", "/opt/py/bin/python", "a.py"]);
+        assert_eq!(a.python, Some(PathBuf::from("/opt/py/bin/python")));
     }
 
     #[test]

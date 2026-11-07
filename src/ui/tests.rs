@@ -72,7 +72,7 @@ async fn call_full(
     runtimes: crate::runtime::MicrogridRuntimes,
     req: Request<Body>,
 ) -> (StatusCode, HeaderMap, Vec<u8>) {
-    let resp = router(config, runtimes).oneshot(req).await.unwrap();
+    let resp = router(config, runtimes, None).oneshot(req).await.unwrap();
     let status = resp.status();
     let headers = resp.headers().clone();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();

@@ -1,6 +1,6 @@
 """`connect`: attach to the microgrids of a simulator that is already running.
 
-Internal; imports `_errors`, `_process`, `_session`, `_topology`, `_microgrid`
+Internal; imports `_process`, `_session`, `_spec`, `_topology`, `_microgrid`
 and `_units`.
 """
 
@@ -16,6 +16,7 @@ import httpx
 from ._microgrid import Microgrid
 from ._process import Endpoints
 from ._session import _Session
+from ._spec import MicrogridSpec
 from ._topology import microgrid_from_json
 from ._units import check_type
 
@@ -24,6 +25,18 @@ def _no_exit() -> None:
     """The exit probe of a simulator this client did not start: it never knows
     that the simulator exited."""
     return None
+
+
+def _attach(
+    session: _Session, spec: MicrogridSpec, ui: str, grpc_addr: str | None
+) -> Microgrid:
+    """The live `Microgrid` of `spec` over `session`, at the simulator whose
+    UI serves at `ui` (``host:port``) and whose gRPC server for it is at
+    `grpc_addr` (``None`` when it has none)."""
+    endpoints = Endpoints(
+        ui=ui, microgrid_id=session.microgrid_id, grpc_addr=grpc_addr or ""
+    )
+    return Microgrid._create(session, spec, endpoints)
 
 
 def _listing(body: Any) -> list[tuple[int, str | None]]:
@@ -63,10 +76,7 @@ async def _connect(
         for microgrid_id, grpc_addr in listed:
             s = session(microgrid_id)
             spec = microgrid_from_json(await s.get_json(s.microgrid_path("spec")))
-            endpoints = Endpoints(
-                ui=parts.netloc, microgrid_id=microgrid_id, grpc_addr=grpc_addr or ""
-            )
-            microgrids[microgrid_id] = Microgrid._create(s, spec, endpoints)
+            microgrids[microgrid_id] = _attach(s, spec, parts.netloc, grpc_addr)
         yield microgrids
     finally:
         for s in sessions:

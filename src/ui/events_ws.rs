@@ -155,6 +155,9 @@ async fn event_pump(mut socket: WebSocket, engine: Engine) {
     // Engine) parks the branch instead of busy-looping, mirroring
     // `log_rx`.
     let mut dispatch_rx = Some(engine.dispatches().subscribe());
+    // The script runner's status, re-emitted as a ScriptStatus event
+    // with no microgrid.
+    let mut script_rx = Some(engine.subscribe_script_status());
     // Subscribe to every microgrid's per-site event bus + the
     // enterprise-wide `microgrid_registered` and `microgrid_unloaded`
     // channels. The initial snapshot covers every entry present at
@@ -240,6 +243,20 @@ async fn event_pump(mut socket: WebSocket, engine: Engine) {
                 }
                 Err(BroadcastRecv::Lagged(_)) => continue,
                 Err(BroadcastRecv::Closed) => dispatch_rx = None,
+            },
+            status = async {
+                match script_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => match status {
+                Ok(status) => {
+                    if !send_wire(&mut socket, None, &SiteEvent::ScriptStatus(status)).await {
+                        break;
+                    }
+                }
+                Err(BroadcastRecv::Lagged(_)) => continue,
+                Err(BroadcastRecv::Closed) => script_rx = None,
             },
             msg = socket.recv() => match msg {
                 Some(Ok(_)) => {}

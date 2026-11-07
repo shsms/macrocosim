@@ -11,7 +11,7 @@ from frequenz.quantities import Power
 
 import macrocosim as mc
 from macrocosim._connect import _connect
-from macrocosim._render import render
+from macrocosim._render import render_microgrid
 
 pytestmark = pytest.mark.filterwarnings("error")
 
@@ -44,7 +44,7 @@ class _Engine:
             return httpx.Response(200, json=entries)
         for mg_id, spec in self.specs.items():
             if path == f"/api/mg/{mg_id}/spec":
-                return httpx.Response(200, json=render(spec)["microgrids"][0])
+                return httpx.Response(200, json=render_microgrid(spec))
         if request.method == "POST":
             return httpx.Response(204)
         return httpx.Response(404, json={"error": "no route"})

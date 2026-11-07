@@ -82,10 +82,7 @@ def _every_category() -> list[mc.MicrogridSpec]:
 
 
 def _doc(specs: list[mc.MicrogridSpec]) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "microgrids": [render(s)["microgrids"][0] for s in specs],
-    }
+    return render(*specs)
 
 
 def _run(text: str) -> list[mc.MicrogridSpec]:

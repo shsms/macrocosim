@@ -116,7 +116,7 @@ impl TestServer {
         let ui_config = config.clone();
         let ui_runtimes = runtimes.clone();
         handles.push(tokio::spawn(async move {
-            let _ = ui::serve_with_listener(ui_listener, ui_config, ui_runtimes).await;
+            let _ = ui::serve_with_listener(ui_listener, ui_config, ui_runtimes, None).await;
         }));
 
         // PlatformAssets has its own port, as in the binary.

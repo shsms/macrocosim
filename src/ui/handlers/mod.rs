@@ -20,6 +20,7 @@ pub(in crate::ui) mod history;
 pub(in crate::ui) mod microgrid_data;
 pub(in crate::ui) mod microgrids;
 pub(in crate::ui) mod recording;
+pub(in crate::ui) mod runner;
 pub(in crate::ui) mod scenarios;
 pub(in crate::ui) mod scripts;
 pub(in crate::ui) mod snapshots;

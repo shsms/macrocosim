@@ -45,17 +45,25 @@ use events_ws::events_ws;
 /// `runtimes` starts and reports each microgrid's runtime, and holds
 /// the per-microgrid loopback slots the `/api/mg/{mg}/metrics/*`
 /// routes read.
+///
+/// `runner` is the supervisor of the engine's script, which the
+/// `/api/runner` routes answer for; `None` without a script.
 pub async fn serve_with_listener(
     listener: tokio::net::TcpListener,
     config: Config,
     runtimes: crate::runtime::MicrogridRuntimes,
+    runner: Option<std::sync::Arc<crate::runner::ScriptSupervisor>>,
 ) -> std::io::Result<()> {
-    axum::serve(listener, router(config, runtimes))
+    axum::serve(listener, router(config, runtimes, runner))
         .await
         .map_err(std::io::Error::other)
 }
 
-fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router {
+fn router(
+    config: Config,
+    runtimes: crate::runtime::MicrogridRuntimes,
+    runner: Option<std::sync::Arc<crate::runner::ScriptSupervisor>>,
+) -> Router {
     use handlers::{
         assets::{asset, index, logs_backfill},
         component::component,
@@ -77,6 +85,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
             adopt, load_file, load_file_as, microgrids_create, microgrids_import, microgrids_list,
         },
         recording::{recording_event, recording_report, recording_start, recording_stop},
+        runner::{runner_hello, runner_status},
         scenarios::{
             scenario_csv_file, scenario_csv_list, scenario_events, scenario_report,
             scenario_summary, scenarios_list, scenarios_start, scenarios_stop,
@@ -155,6 +164,8 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .route("/api/scenarios/stop", post(scenarios_stop))
         .route("/api/scenarios/{name}/start", post(scenarios_start))
         .route("/api/scripts", get(scripts_list))
+        .route("/api/runner", get(runner_status))
+        .route("/api/runner/hello", post(runner_hello))
         .route("/api/load", post(load_file))
         .route("/api/load-as", post(load_file_as))
         .route(
@@ -174,7 +185,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .layer(Extension(runtimes.loopbacks()))
         .layer(Extension(runtimes))
         .layer(axum::middleware::from_fn(origin_guard))
-        .with_state(AppState::new(config))
+        .with_state(AppState::new(config, runner))
 }
 
 /// Same-origin guard for the browser-facing surface.
