@@ -10,6 +10,10 @@ waits for what the simulator measures.
 The app under test commands the inverters; the test only changes the world
 around it and observes.
 
+The same client runs site scripts: `macrocosim plant.py` starts a simulator on
+a script's microgrids and runs its `run` function with these objects (see
+[Scripts](#scripts)).
+
 ## Install
 
 The wheel bundles the `macrocosim` and `macroctl` binaries, so there is nothing
@@ -84,7 +88,9 @@ the test refers to by number. Automatic ids may change between versions. Look
 components up by the spec object itself: `microgrid[LOAD]`. A spec used under
 two parents is one shared component.
 
-**From a Lisp config.** A hand-written `(make-meter :id 410 :power-w 5000.0)`
+**From a Lisp config.** The
+[porting guide](https://github.com/shsms/macrocosim/blob/main/docs/python-scripts.md#porting-from-lisp)
+covers whole site files. A hand-written `(make-meter :id 410 :power-w 5000.0)`
 becomes `mc.make_meter(id=410, power=Power.from_watts(5000))`. To convert a
 form:
 
@@ -152,8 +158,9 @@ component's operational mode accepts control, else to `ERROR`. So set
 `command_mode` after `health`.
 
 **Reads and telemetry faults.** Component reads (`microgrid[x].power`,
-`.reactive_power`, `.soc`) come from the simulator's own 1 Hz sampler, so they
-do not show telemetry faults, stream intervals or jitter. This is a current
+`.reactive_power`, `.soc`) come from the simulator's own 1 Hz sampler, so a
+value can be up to one second old, and they do not show telemetry faults,
+stream intervals or jitter. This is a current
 limitation. Aggregates such as `microgrid.grid_power` are computed from the gRPC
 telemetry the app receives, and they do show every fault. Health and command
 faults change what the components do or what the app can command, so both kinds
@@ -289,12 +296,65 @@ The client does not check every value. The simulator refuses other invalid
 values when it starts, for example a negative interval or a power factor outside
 (0, 1]. `launch` then raises `LaunchError` with the log tail.
 
+## Scripts
+
+A script declares microgrids in `MICROGRIDS` and animates them in
+`async def run(microgrids)`; `macrocosim plant.py` runs it and runs it again on
+every save:
+
+```python
+import asyncio
+
+from frequenz.quantities import Power
+
+import macrocosim as mc
+
+LOAD = mc.make_meter(id=2)
+MICROGRIDS = [
+    mc.make_microgrid(id=7, topology=mc.make_grid_connection_point(id=1, successors=[LOAD]))
+]
+
+
+async def run(microgrids: dict[int, mc.Microgrid]) -> None:
+    plant = microgrids[7]
+    for kw in range(0, 21, 2):
+        await plant[LOAD].power.set(Power.from_kilowatts(kw))
+        await asyncio.sleep(1)
+```
+
+`run` gets the same `Microgrid` objects a test gets from `launch`. Each microgrid
+needs an explicit `id`, and a component whose state (state of charge, a plugged
+car, boiler pressure) should survive an edit of the topology needs one too. The
+[guide](https://github.com/shsms/macrocosim/blob/main/docs/python-scripts.md)
+covers reloads, recording and porting from Lisp.
+
+**Recording.** `async with microgrid.record(name, csv=False) as recording:`
+records the block's metrics; `recording.event(kind, payload)` adds a named
+event, and `recording.report()` returns a `RecordingReport` after the block.
+
+**Specs in tests.** A test imports a script's specs and launches one:
+`from plant import MICROGRIDS`, then `mc.launch(MICROGRIDS[0])`. `run` does not
+run under pytest. `mc.load_topology(path)` reads a topology document (a
+`--topology` file) back into `MicrogridSpec` objects.
+
 ## Interactive use
 
-`python -m asyncio` gives a REPL where `await` works at the top level:
+`python -m asyncio` gives a REPL where `await` works at the top level.
+`mc.connect(url)` attaches to a simulator that is already running, such as one
+running a script, and yields its microgrids by id:
 
 ```python
 >>> import macrocosim as mc
+>>> from frequenz.quantities import Power
+>>> async with mc.connect("http://127.0.0.1:8801") as microgrids:
+...     await microgrids[7][2].power.set(Power.from_kilowatts(20))
+```
+
+Its microgrids are built from the simulator's copy of their specs, so look
+components up by id. Leaving the block leaves the simulator running. To start a
+private simulator from the REPL instead:
+
+```python
 >>> cm = mc.launch(spec); microgrid = await cm.__aenter__()
 >>> await microgrid.grid_power.read()
 ```
