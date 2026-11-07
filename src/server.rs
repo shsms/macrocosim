@@ -1,5 +1,5 @@
 //! gRPC server: implements the Frequenz Microgrid API on top of
-//! macrocosim's `MicrogridSite` + `Config`.
+//! macrocosim's `MicrogridSite` + `Engine`.
 //!
 //! Streaming telemetry is one tokio task per subscription; each task
 //! samples its component at the component's own `stream_interval` and
@@ -12,7 +12,7 @@ use prost_types::Timestamp;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::lisp::Config;
+use crate::engine::Engine;
 use crate::proto::common::metrics::Metric;
 
 /// Per the Frequenz Microgrid API, request_lifetime must fit in an
@@ -70,12 +70,12 @@ use crate::sim::{AugmentError, bounds::VecBounds};
 use crate::timeout_tracker::SetpointAxis;
 
 /// gRPC frontend for one microgrid. Each microgrid registered in
-/// `Config::microgrids` spawns its own server bound to its
+/// `Engine::microgrids` spawns its own server bound to its
 /// `MicrogridDef::grpc_port` and serving against its own
 /// `MicrogridSite`. The legacy single-microgrid binary still uses
 /// this — the registry just carries one entry (the default).
 pub struct MicrogridServer {
-    pub config: Config,
+    pub engine: Engine,
     /// Specific id of the microgrid this gRPC frontend represents.
     /// `get_microgrid` sources its response from here so each
     /// per-port server returns its own MicrogridInfo (matching the
@@ -89,9 +89,9 @@ pub struct MicrogridServer {
 }
 
 impl MicrogridServer {
-    pub fn new(config: Config, microgrid_id: u64, site: crate::sim::MicrogridSite) -> Self {
+    pub fn new(engine: Engine, microgrid_id: u64, site: crate::sim::MicrogridSite) -> Self {
         Self {
-            config,
+            engine,
             microgrid_id,
             site,
         }
@@ -229,7 +229,7 @@ impl MicrogridServer {
         let duration = resolve_lifetime(
             req.request_lifetime,
             SET_POWER_LIFETIME_MIN_S,
-            self.config.metadata().default_request_lifetime,
+            self.engine.metadata().default_request_lifetime,
         )?;
         // The gateway gates the value against the setpoint envelope
         // (own bounds ∩ children's), applies it and arms its lifetime
@@ -284,9 +284,9 @@ impl microgrid_server::Microgrid for MicrogridServer {
         // The MicrogridInfo response reports *this server's*
         // microgrid id. The display name comes from the registry
         // entry so each per-port server returns the right label.
-        let enterprise_id = self.config.metadata().enterprise_id;
+        let enterprise_id = self.engine.metadata().enterprise_id;
         let registry_name = self
-            .config
+            .engine
             .microgrids()
             .lock()
             .get(&self.microgrid_id)
@@ -393,7 +393,7 @@ impl microgrid_server::Microgrid for MicrogridServer {
         let ttl_s = resolve_lifetime(
             req.request_lifetime,
             SET_POWER_LIFETIME_MIN_S,
-            self.config.metadata().default_request_lifetime,
+            self.engine.metadata().default_request_lifetime,
         )
         .ok()
         .map(|d| d.as_secs());
@@ -638,7 +638,7 @@ impl microgrid_server::Microgrid for MicrogridServer {
         let lifetime = resolve_lifetime(
             req.request_lifetime,
             AUGMENT_LIFETIME_MIN_S,
-            self.config.metadata().default_augment_lifetime,
+            self.engine.metadata().default_augment_lifetime,
         )?;
         let now = chrono::Utc::now();
         let id = req.electrical_component_id;

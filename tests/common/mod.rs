@@ -8,8 +8,8 @@
 //! The fixture is in-process rather than out-of-process because:
 //! - cargo runs each `tests/<file>.rs` as its own binary already,
 //!   so OS-level isolation is overkill.
-//! - In-process tests can poke at `cfg.site()` directly when the
-//!   black-box gRPC / HTTP surface isn't enough.
+//! - In-process tests can poke at the engine's sites directly when
+//!   the black-box gRPC / HTTP surface isn't enough.
 //! - LOG_TAP and other process-level globals stay un-initialised in
 //!   tests, so the `/api/logs` endpoint just returns empty —
 //!   acceptable for a fixture.
@@ -23,8 +23,9 @@ use macrocosim::proto::microgrid::{
     ReceiveElectricalComponentTelemetryStreamRequest, microgrid_client::MicrogridClient,
 };
 use macrocosim::{
-    assets_server::AssetsServer, lisp::Config,
-    proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer, ui,
+    assets_server::AssetsServer, engine::Engine, lisp::Config,
+    proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer,
+    sim::MicrogridSite, ui,
 };
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -35,7 +36,8 @@ use tonic::transport::Server;
 static UNIQ: AtomicU64 = AtomicU64::new(0);
 
 /// A live macrocosim instance: gRPC + UI on OS-assigned localhost
-/// ports, plus the underlying [`Config`] for direct world inspection.
+/// ports, plus the underlying [`Engine`] for direct world inspection
+/// and the [`Config`] for driving it through Lisp.
 /// `Drop` aborts the registration listener and the UI / assets server
 /// tasks in `handles`; per-microgrid servers live in the runtimes and
 /// are never aborted. The temp dir cleans up via the held `TempDir`
@@ -49,6 +51,7 @@ pub struct TestServer {
     pub grpc_url: String,
     pub ui_url: String,
     pub assets_url: String,
+    pub engine: Engine,
     pub config: Config,
     /// Id of the default microgrid, the one `grpc_url` serves.
     pub mg_id: u64,
@@ -70,12 +73,13 @@ impl TestServer {
         std::fs::write(&path, wrapped).expect("write config");
 
         let config = Config::new(path.to_str().unwrap()).expect("config eval");
+        let engine = config.engine().clone();
         // Same startup path as the binary: the runtimes start every
         // registered microgrid, and the listener starts the ones a
         // test registers later. Ephemeral ports keep parallel tests
         // from colliding.
         let runtimes = macrocosim::runtime::MicrogridRuntimes::new(
-            config.clone(),
+            engine.clone(),
             macrocosim::runtime::RuntimeOptions {
                 ephemeral_ports: true,
                 bind_host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
@@ -90,7 +94,7 @@ impl TestServer {
         // Config::new, or the id an explicit form in `config_body`
         // chose).
         let default_mg_id = {
-            let reg = config.microgrids();
+            let reg = engine.microgrids();
             let r = reg.lock();
             r.keys().copied().next().expect("default microgrid entry")
         };
@@ -117,7 +121,7 @@ impl TestServer {
             .await
             .expect("bind assets port");
         let assets_addr = assets_listener.local_addr().expect("assets addr");
-        let assets_server = AssetsServer::new(config.clone());
+        let assets_server = AssetsServer::new(engine.clone());
         handles.push(tokio::spawn(async move {
             let _ = Server::builder()
                 .add_service(AssetsGrpcServer::new(assets_server))
@@ -154,11 +158,24 @@ impl TestServer {
             grpc_url: format!("http://{grpc_addr}"),
             ui_url: format!("http://{ui_addr}"),
             assets_url: format!("http://{assets_addr}"),
+            engine,
             config,
             mg_id: default_mg_id,
             handles,
             _tempdir: tempdir,
         }
+    }
+
+    /// The site of this server's microgrid, read from the registry.
+    #[allow(dead_code)]
+    pub fn site(&self) -> MicrogridSite {
+        self.engine
+            .microgrids()
+            .lock()
+            .get(&self.mg_id)
+            .expect("the default microgrid is registered")
+            .site
+            .clone()
     }
 
     /// URL of a route under this server's microgrid.

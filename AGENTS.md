@@ -79,6 +79,9 @@ is wiring the topology + animating the environment.
     scenarios, dispatches, …)
   - `state.rs` / `loopback.rs` / `events_ws.rs` — loopback client cache,
     gRPC loopback supervisor, WS event push
+  - `app_state.rs` — `AppState`, the router's state: the `Engine`,
+    plus the `Config` for the handlers that evaluate Lisp; a handler
+    takes `State<Engine>` or `State<Config>`
 - `ui-assets/` — the SPA as hand-rolled ES modules (`app.js` is the
   entry; `topology.js`, `live.js`, `metrics-store.js`,
   `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,

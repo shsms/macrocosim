@@ -125,7 +125,7 @@ pub struct HistorySample {
 pub(super) const MICROGRID_HISTORY_CAP: usize = 1000;
 
 /// Enterprise map from microgrid id to its loopback state. Each
-/// `MicrogridServer` registered in `Config::microgrids` gets one
+/// `MicrogridServer` registered in `Engine::microgrids` gets one
 /// entry — the supervisor for each entry pulls samples through
 /// the matching microgrid's gRPC server and feeds the entry's
 /// per-stream cache.

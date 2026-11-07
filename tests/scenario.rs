@@ -89,10 +89,9 @@ async fn lambda_meter_power_resolves_through_http_eval() {
 
     let mut now = chrono::Utc::now();
     s.config.refresh_once();
-    s.config
-        .site()
+    s.site()
         .tick_once(now, std::time::Duration::from_millis(100));
-    s.config.site().record_history_snapshot(now);
+    s.site().record_history_snapshot(now);
 
     let topo = topology(&client, &s).await;
     // Telemetry isn't on the topology route; assert via the report's
@@ -107,10 +106,9 @@ async fn lambda_meter_power_resolves_through_http_eval() {
     eval_or_panic(&client, &s, "(setq curve 4321.0)").await;
     now += chrono::Duration::seconds(1);
     s.config.refresh_once();
-    s.config
-        .site()
+    s.site()
         .tick_once(now, std::time::Duration::from_millis(100));
-    s.config.site().record_history_snapshot(now);
+    s.site().record_history_snapshot(now);
     let peak = wait_for_peak(&client, &s, 4321.0, 1.0).await;
     assert!(
         (peak - 4321.0).abs() < 1.0,
@@ -122,10 +120,9 @@ async fn lambda_meter_power_resolves_through_http_eval() {
     eval_or_panic(&client, &s, "(set-meter-power 2 (lambda () 9999.0))").await;
     now += chrono::Duration::seconds(1);
     s.config.refresh_once();
-    s.config
-        .site()
+    s.site()
         .tick_once(now, std::time::Duration::from_millis(100));
-    s.config.site().record_history_snapshot(now);
+    s.site().record_history_snapshot(now);
     let peak = wait_for_peak(&client, &s, 9999.0, 1.0).await;
     assert!(
         (peak - 9999.0).abs() < 1.0,
@@ -160,12 +157,12 @@ async fn driver_run_aggregates_peak_charge_and_soc_stats() {
     let mut now = chrono::Utc::now();
     for _ in 0..2 {
         now += chrono::Duration::milliseconds(100);
-        s.config.site().tick_once(now, Duration::from_millis(100));
+        s.site().tick_once(now, Duration::from_millis(100));
     }
-    s.config.site().record_history_snapshot(now);
+    s.site().record_history_snapshot(now);
     now += chrono::Duration::seconds(10);
-    s.config.site().tick_once(now, Duration::from_secs(10));
-    s.config.site().record_history_snapshot(now);
+    s.site().tick_once(now, Duration::from_secs(10));
+    s.site().record_history_snapshot(now);
 
     let r = report(&client, &s).await;
 
@@ -251,7 +248,6 @@ async fn drive_boiler_sets_demand_via_scenario_compile() {
     .await;
 
     let r = s
-        .config
         .site()
         .get(9)
         .expect("boiler component")
@@ -281,8 +277,7 @@ async fn http_scenarios_stop_endpoint_restores_a_driven_knob() {
     eval_or_panic(&client, &s, "(scenario-start \"http-stop\")").await;
     eval_or_panic(&client, &s, "(set-meter-power 2 9000.0)").await;
     assert_eq!(
-        s.config
-            .site()
+        s.site()
             .get(2)
             .unwrap()
             .meter_drive()
@@ -306,8 +301,7 @@ async fn http_scenarios_stop_endpoint_restores_a_driven_knob() {
     );
 
     assert!(
-        s.config
-            .site()
+        s.site()
             .get(2)
             .unwrap()
             .meter_drive()

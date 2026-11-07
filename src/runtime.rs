@@ -21,7 +21,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::{TcpListenerStream, UnboundedReceiverStream};
 use tonic::transport::{Endpoint, Server, Uri};
 
-use crate::lisp::Config;
+use crate::engine::Engine;
 use crate::proto::microgrid::microgrid_server::MicrogridServer as MicrogridGrpcServer;
 use crate::server::MicrogridServer;
 use crate::sim::MicrogridSite;
@@ -93,7 +93,7 @@ struct Runtime {
 }
 
 struct Inner {
-    config: Config,
+    engine: Engine,
     options: RuntimeOptions,
     runtimes: Mutex<BTreeMap<u64, Runtime>>,
     /// Serializes `start`, so two callers cannot start one microgrid
@@ -110,22 +110,22 @@ pub struct MicrogridRuntimes {
 }
 
 impl MicrogridRuntimes {
-    /// Refuses a headless `Config`: wall-clock physics must never
+    /// Refuses a headless `Engine`: wall-clock physics must never
     /// start on one. Installs the port-pin check `make-microgrid`
-    /// asks on a reload, and refuses a `Config` that already has one:
-    /// one `Config` has one set of runtimes.
-    pub fn new(config: Config, options: RuntimeOptions) -> Result<Self, String> {
-        if config.is_headless() {
-            return Err("MicrogridRuntimes cannot run a headless Config".into());
+    /// asks on a reload, and refuses an `Engine` that already has
+    /// one: one `Engine` has one set of runtimes.
+    pub fn new(engine: Engine, options: RuntimeOptions) -> Result<Self, String> {
+        if engine.is_headless() {
+            return Err("MicrogridRuntimes cannot run a headless Engine".into());
         }
         let inner = Arc::new(Inner {
-            config: config.clone(),
+            engine: engine.clone(),
             options,
             runtimes: Mutex::new(BTreeMap::new()),
             start_lock: tokio::sync::Mutex::new(()),
         });
         let weak = Arc::downgrade(&inner);
-        config
+        engine
             .port_pins()
             .set(Arc::new(move |id| {
                 weak.upgrade().is_some_and(|inner| {
@@ -134,7 +134,7 @@ impl MicrogridRuntimes {
                     })
                 })
             }))
-            .map_err(|_| "this Config already has a MicrogridRuntimes")?;
+            .map_err(|_| "this Engine already has a MicrogridRuntimes")?;
         Ok(Self {
             inner: Some(inner),
             loopbacks: ui::new_microgrid_loopbacks(),
@@ -181,7 +181,7 @@ impl MicrogridRuntimes {
         // takes them in. The port is read under both, so a reload
         // cannot move it once this runtime is Starting.
         let (site, addr, generation) = {
-            let reg = inner.config.microgrids();
+            let reg = inner.engine.microgrids();
             let reg = reg.lock();
             let e = reg.get(&id).ok_or(StartError::NotRegistered(id))?;
             let site = e.site.clone();
@@ -231,7 +231,7 @@ impl MicrogridRuntimes {
             Entry::Occupied(_) => None,
         };
         if let Some(slot) = new_slot {
-            let server = MicrogridServer::new(inner.config.clone(), id, site.clone());
+            let server = MicrogridServer::new(inner.engine.clone(), id, site.clone());
             ui::spawn_microgrid_loopback(in_memory_client(server), slot, site.clone());
         }
         let listener = match tokio::net::TcpListener::bind(addr).await {
@@ -256,7 +256,7 @@ impl MicrogridRuntimes {
                 rt.status = Status::Running;
             }
         }
-        let server = MicrogridServer::new(inner.config.clone(), id, site);
+        let server = MicrogridServer::new(inner.engine.clone(), id, site);
         let handle = tokio::spawn(
             Server::builder()
                 .add_service(MicrogridGrpcServer::new(server))
@@ -275,7 +275,7 @@ impl MicrogridRuntimes {
         let Some(inner) = self.inner.clone() else {
             return tokio::spawn(async {});
         };
-        let mut rx = inner.config.subscribe_microgrid_registered();
+        let mut rx = inner.engine.subscribe_microgrid_registered();
         self.start_all(&inner).await;
         let me = self.clone();
         tokio::spawn(async move {
@@ -299,7 +299,7 @@ impl MicrogridRuntimes {
     /// `start` every id in the registry, lowest first, logging each
     /// error.
     async fn start_all(&self, inner: &Inner) {
-        let ids: Vec<u64> = inner.config.microgrids().lock().keys().copied().collect();
+        let ids: Vec<u64> = inner.engine.microgrids().lock().keys().copied().collect();
         for id in ids {
             if let Err(e) = self.start(id).await {
                 log::error!("Microgrid #{id}: {e}");
@@ -386,6 +386,7 @@ async fn server_end_reason(handle: JoinHandle<Result<(), tonic::transport::Error
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lisp::Config;
     use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
     const V6: IpAddr = IpAddr::V6(Ipv6Addr::LOCALHOST);
@@ -438,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn start_twice_returns_the_same_address() {
         let (cfg, _d) = config_with_mg(41, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg, opts(true)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
         let a = rt.start(41).await.unwrap().unwrap();
         let b = rt.start(41).await.unwrap().unwrap();
         assert_eq!(a, b);
@@ -451,7 +452,7 @@ mod tests {
         let port = free_v6_port();
         let holder = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
         let (cfg, _d) = config_with_mg(42, port);
-        let rt = MicrogridRuntimes::new(cfg, opts(false)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
         assert!(matches!(rt.start(42).await, Err(StartError::Bind { .. })));
         let v = rt.status(42).unwrap();
         assert_eq!(v.status, RuntimeStatus::Failed);
@@ -470,7 +471,7 @@ mod tests {
         let holder = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
         let (_dir, file) = mg_file(43, port);
         let cfg = Config::new(file.to_str().unwrap()).unwrap();
-        let rt = MicrogridRuntimes::new(cfg.clone(), opts(false)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
         assert!(matches!(rt.start(43).await, Err(StartError::Bind { .. })));
         let new_port = free_v6_port();
         std::fs::write(&file, mg_decl(43, new_port)).unwrap();
@@ -485,18 +486,18 @@ mod tests {
         let port = free_v6_port();
         let (_dir, file) = mg_file(44, port);
         let cfg = Config::new(file.to_str().unwrap()).unwrap();
-        let rt = MicrogridRuntimes::new(cfg.clone(), opts(false)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
         rt.start(44).await.unwrap();
         std::fs::write(&file, mg_decl(44, free_v6_port())).unwrap();
         cfg.load_file(&file).unwrap();
-        assert_eq!(cfg.microgrids().lock()[&44].def.grpc_port, port);
+        assert_eq!(cfg.engine().microgrids().lock()[&44].def.grpc_port, port);
     }
 
     #[tokio::test]
     async fn physics_starts_once_across_starts() {
         let (cfg, _d) = config_with_mg(45, free_v6_port());
-        let site = cfg.microgrids().lock()[&45].site.clone();
-        let rt = MicrogridRuntimes::new(cfg, opts(true)).unwrap();
+        let site = cfg.engine().microgrids().lock()[&45].site.clone();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
         rt.start(45).await.unwrap();
         rt.start(45).await.unwrap();
         assert!(!site.spawn_background(), "start left physics unstarted");
@@ -505,7 +506,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_id_errors_and_records_nothing() {
         let (cfg, _d) = config_with_mg(46, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg, opts(true)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
         assert!(matches!(
             rt.start(999).await,
             Err(StartError::NotRegistered(999))
@@ -514,22 +515,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_headless_config_is_refused() {
+    async fn a_headless_engine_is_refused() {
         let (_dir, path) = mg_file(54, free_v6_port());
         let (cfg, _clock) = Config::new_headless(path.to_str().unwrap()).unwrap();
-        assert!(MicrogridRuntimes::new(cfg, opts(true)).is_err());
+        assert!(MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).is_err());
     }
 
-    /// One Config holds one port-pin check, so a second runtimes
+    /// One Engine holds one port-pin check, so a second runtimes
     /// instance on it is refused and the first keeps answering.
     #[tokio::test]
-    async fn a_second_runtimes_on_one_config_is_refused() {
+    async fn a_second_runtimes_on_one_engine_is_refused() {
         let (cfg, _d) = config_with_mg(55, free_v6_port());
-        let first = MicrogridRuntimes::new(cfg.clone(), opts(true)).unwrap();
-        let second = MicrogridRuntimes::new(cfg.clone(), opts(true));
+        let first = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
+        let second = MicrogridRuntimes::new(cfg.engine().clone(), opts(true));
         assert!(second.is_err_and(|e| e.contains("already")));
         first.start(55).await.unwrap();
-        assert!(crate::sim::microgrids::port_pinned(&cfg.port_pins(), 55));
+        assert!(crate::sim::microgrids::port_pinned(
+            &cfg.engine().port_pins(),
+            55
+        ));
     }
 
     /// A runtime that is still starting holds its port, so a reload
@@ -537,8 +541,8 @@ mod tests {
     #[tokio::test]
     async fn a_starting_runtime_holds_its_port() {
         let (cfg, _d) = config_with_mg(56, free_v6_port());
-        let site = cfg.microgrids().lock()[&56].site.clone();
-        let rt = MicrogridRuntimes::new(cfg.clone(), opts(true)).unwrap();
+        let site = cfg.engine().microgrids().lock()[&56].site.clone();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
         rt.inner.as_ref().unwrap().runtimes.lock().insert(
             56,
             Runtime {
@@ -548,7 +552,10 @@ mod tests {
                 generation: 1,
             },
         );
-        assert!(crate::sim::microgrids::port_pinned(&cfg.port_pins(), 56));
+        assert!(crate::sim::microgrids::port_pinned(
+            &cfg.engine().port_pins(),
+            56
+        ));
     }
 
     #[tokio::test]
@@ -570,7 +577,7 @@ mod tests {
              :successors (list (%make-meter :id 2)))))"
         ));
         let cfg = Config::new(path.to_str().unwrap()).unwrap();
-        let rt = MicrogridRuntimes::new(cfg, opts(false)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
         assert!(matches!(rt.start(57).await, Err(StartError::Bind { .. })));
         let slot = rt.loopbacks().read().get(&57).cloned().unwrap();
         // The UI's graph handle builds over the in-memory channel.
@@ -602,7 +609,7 @@ mod tests {
     #[tokio::test]
     async fn the_listener_starts_microgrids_registered_later() {
         let (cfg, _d) = config_with_mg(48, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg.clone(), opts(true)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
         let _listener = rt.spawn_registration_listener().await;
         assert_eq!(rt.status(48).unwrap().status, RuntimeStatus::Running);
         cfg.eval(&mg_decl(49, free_v6_port())).unwrap();
@@ -623,7 +630,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_microgrid_restarts_on_its_first_address() {
         let (cfg, _d) = config_with_mg(52, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg, opts(true)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
         let a = rt.start(52).await.unwrap().unwrap();
         let inner = rt.inner.clone().unwrap();
         let generation = inner.runtimes.lock()[&52].generation;
@@ -641,7 +648,7 @@ mod tests {
     #[tokio::test]
     async fn a_replaced_site_stays_failed_when_the_old_server_ends() {
         let (cfg, _d) = config_with_mg(53, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg, opts(true)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
         rt.start(53).await.unwrap();
         let inner = rt.inner.clone().unwrap();
         let generation = {
@@ -667,7 +674,7 @@ mod tests {
     #[tokio::test]
     async fn a_server_that_returns_or_panics_marks_the_microgrid_failed() {
         let (cfg, _d) = config_with_mg(47, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg, opts(true)).unwrap();
+        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
         rt.start(47).await.unwrap();
         let inner = rt.inner.clone().unwrap();
         let generation = inner.runtimes.lock()[&47].generation;

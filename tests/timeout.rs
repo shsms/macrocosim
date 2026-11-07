@@ -41,14 +41,13 @@ async fn short_lifetime_setpoint_resets_after_expiry() {
 
     // Step 1: confirm the setpoint took effect. The command crosses
     // the gateway and device delays, so poll against a deadline.
-    let inv = s.config.site().get(200).unwrap();
+    let inv = s.site().get(200).unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let p_before = loop {
-        s.config
-            .site()
+        s.site()
             .tick_once(chrono::Utc::now(), Duration::from_millis(100));
         let p = inv
-            .telemetry(&s.config.site())
+            .telemetry(&s.site())
             .active_power_w
             .expect("active power present");
         if (p - 3000.0).abs() < 1.0 || tokio::time::Instant::now() >= deadline {
@@ -69,11 +68,10 @@ async fn short_lifetime_setpoint_resets_after_expiry() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let p_after = loop {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        s.config
-            .site()
+        s.site()
             .tick_once(chrono::Utc::now(), Duration::from_millis(100));
         let p = inv
-            .telemetry(&s.config.site())
+            .telemetry(&s.site())
             .active_power_w
             .expect("active power present");
         if p.abs() < 1.0 || tokio::time::Instant::now() >= deadline {

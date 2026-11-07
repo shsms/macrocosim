@@ -6,7 +6,7 @@
 use axum::{extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
-use crate::lisp::Config;
+use crate::engine::Engine;
 use crate::ui::api::{ApiError, Json, Mg, Path};
 
 /// JSON shape for one dispatch in the per-microgrid Dispatches view.
@@ -35,10 +35,10 @@ pub(in crate::ui) struct DispatchView {
 /// are monotonic, so descending id order matches. Returns `[]` for a
 /// registered microgrid with no dispatches.
 pub(in crate::ui) async fn dispatches(
-    State(config): State<Config>,
+    State(engine): State<Engine>,
     mg: Mg,
 ) -> Json<Vec<DispatchView>> {
-    let views = config
+    let views = engine
         .dispatches()
         .list_mg(mg.id)
         .iter()
@@ -121,7 +121,7 @@ fn recurrence_from_req(
 /// then goes through the same `DispatchStore::create` the gRPC server
 /// uses, so the construction rules are identical.
 pub(in crate::ui) async fn dispatch_create(
-    State(config): State<Config>,
+    State(engine): State<Engine>,
     mg: Mg,
     Json(req): Json<DispatchCreateReq>,
 ) -> Result<(StatusCode, Json<DispatchView>), ApiError> {
@@ -156,7 +156,7 @@ pub(in crate::ui) async fn dispatch_create(
         payload,
         recurrence,
     };
-    let dispatch = config
+    let dispatch = engine
         .dispatches()
         .create(mg.id, data, start_immediately)
         .map_err(dispatch_err_to_http)?;
@@ -179,12 +179,12 @@ pub(in crate::ui) struct DispatchSetActiveReq {
 }
 
 pub(in crate::ui) async fn dispatch_set_active(
-    State(config): State<Config>,
+    State(engine): State<Engine>,
     mg: Mg,
     Path(DispatchPath { dispatch_id }): Path<DispatchPath>,
     Json(req): Json<DispatchSetActiveReq>,
 ) -> Result<Json<DispatchView>, ApiError> {
-    let dispatch = config
+    let dispatch = engine
         .dispatches()
         .set_active(mg.id, dispatch_id, req.active)
         .map_err(dispatch_err_to_http)?;
@@ -192,12 +192,12 @@ pub(in crate::ui) async fn dispatch_set_active(
 }
 
 pub(in crate::ui) async fn dispatch_delete(
-    State(config): State<Config>,
+    State(engine): State<Engine>,
     mg: Mg,
     Path(DispatchPath { dispatch_id }): Path<DispatchPath>,
 ) -> Result<StatusCode, ApiError> {
     let mg_id = mg.id;
-    config
+    engine
         .dispatches()
         .remove(mg_id, dispatch_id)
         .ok_or_else(|| {

@@ -15,8 +15,11 @@
 //! - `api` — the error type every handler fails with, and the
 //!   extractors and fallbacks that answer axum's own failures with
 //!   it.
+//! - `app_state` — the router's state: the `Engine`, and the Lisp
+//!   `Config` for the handlers that evaluate Lisp.
 
 mod api;
+mod app_state;
 mod events_ws;
 mod handlers;
 mod loopback;
@@ -34,6 +37,7 @@ use axum::{
 };
 
 use crate::lisp::Config;
+use app_state::AppState;
 use events_ws::events_ws;
 
 /// Run the UI HTTP server on an already-bound listener.
@@ -141,7 +145,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .layer(Extension(runtimes.loopbacks()))
         .layer(Extension(runtimes))
         .layer(axum::middleware::from_fn(origin_guard))
-        .with_state(config)
+        .with_state(AppState::new(config))
 }
 
 /// Same-origin guard for the browser-facing surface.

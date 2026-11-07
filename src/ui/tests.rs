@@ -132,7 +132,7 @@ async fn index_serves_embedded_shell() {
 #[tokio::test]
 async fn scripts_listing_walks_the_state_dir_and_rejects_escapes() {
     let (cfg, _dir) = config_with("").await;
-    let root = cfg.state_dir().to_path_buf();
+    let root = cfg.engine().state_dir().to_path_buf();
     std::fs::create_dir_all(root.join("examples")).unwrap();
     std::fs::write(root.join("examples/demo.lisp"), "nil").unwrap();
     std::fs::write(root.join("notes.txt"), "not lisp").unwrap();
@@ -446,7 +446,7 @@ async fn site_eval_creates_a_microgrid() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(cfg.microgrids().lock().contains_key(&2300));
+    assert!(cfg.engine().microgrids().lock().contains_key(&2300));
 }
 
 /// A formula error is a 400; one with a kind keeps it beside
@@ -937,7 +937,7 @@ fn seed_dispatch(
 #[tokio::test]
 async fn dispatches_endpoint_lists_microgrid_dispatches_newest_first() {
     let (cfg, _dir) = config_with("").await;
-    let store = cfg.dispatches();
+    let store = cfg.engine().dispatches();
     seed_dispatch(&store, 2200, 1, "ALPHA", true);
     seed_dispatch(&store, 2200, 2, "PEAK_SHAVE", false);
     // A dispatch for another microgrid must not leak into 2200's list.
@@ -1021,7 +1021,7 @@ async fn dispatch_create_endpoint_stores_and_returns_view() {
         chrono::DateTime::parse_from_rfc3339(v["updated_at"].as_str().unwrap()).is_ok(),
         "{v}"
     );
-    assert_eq!(cfg.dispatches().list_mg(2200).len(), 1);
+    assert_eq!(cfg.engine().dispatches().list_mg(2200).len(), 1);
 }
 
 #[tokio::test]
@@ -1063,7 +1063,7 @@ async fn dispatch_start_that_is_not_rfc3339_is_400_naming_the_field() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(error_of(&body).contains("start"), "{}", error_of(&body));
-    assert!(cfg.dispatches().list_mg(2200).is_empty());
+    assert!(cfg.engine().dispatches().list_mg(2200).is_empty());
 }
 
 /// A create body with the old `start_ms` field is refused with 422
@@ -1081,7 +1081,7 @@ async fn dispatch_create_refuses_start_ms() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(error_of(&body).contains("start_ms"), "{}", error_of(&body));
-    assert!(cfg.dispatches().list_mg(2200).is_empty());
+    assert!(cfg.engine().dispatches().list_mg(2200).is_empty());
 }
 
 #[tokio::test]
@@ -1146,6 +1146,7 @@ async fn dispatch_create_endpoint_rejects_bad_target() {
 async fn dispatch_active_endpoint_pauses_and_resumes() {
     let (cfg, _dir) = config_with("").await;
     let id = cfg
+        .engine()
         .dispatches()
         .create(2200, active_dispatch("X"), true)
         .unwrap()
@@ -1165,7 +1166,8 @@ async fn dispatch_active_endpoint_pauses_and_resumes() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["active"], false);
     assert!(
-        !cfg.dispatches()
+        !cfg.engine()
+            .dispatches()
             .get(2200, id)
             .unwrap()
             .data
@@ -1184,7 +1186,8 @@ async fn dispatch_active_endpoint_pauses_and_resumes() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
-        cfg.dispatches()
+        cfg.engine()
+            .dispatches()
             .get(2200, id)
             .unwrap()
             .data
@@ -1197,6 +1200,7 @@ async fn dispatch_active_endpoint_pauses_and_resumes() {
 async fn dispatch_delete_endpoint_removes_then_404s() {
     let (cfg, _dir) = config_with("").await;
     let id = cfg
+        .engine()
         .dispatches()
         .create(2200, active_dispatch("X"), true)
         .unwrap()
@@ -1210,7 +1214,7 @@ async fn dispatch_delete_endpoint_removes_then_404s() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert!(cfg.dispatches().get(2200, id).is_none());
+    assert!(cfg.engine().dispatches().get(2200, id).is_none());
 
     // Deleting again is a 404.
     let (status, _) = call(cfg, delete_req(&format!("/api/mg/2200/dispatches/{id}"))).await;
@@ -1724,7 +1728,7 @@ async fn ui_created_microgrid_survives_a_restart() {
     .await;
     assert_eq!(st, StatusCode::OK);
     let auto_id = {
-        let reg = config.microgrids();
+        let reg = config.engine().microgrids();
         let r = reg.lock();
         let mut ids: Vec<u64> = r[&id].site.components().iter().map(|c| c.id()).collect();
         ids.retain(|i| *i != 300 && *i != 301);
@@ -1739,7 +1743,7 @@ async fn ui_created_microgrid_survives_a_restart() {
         Some(dir.to_path_buf()),
     )
     .unwrap();
-    let reg = cfg2.microgrids();
+    let reg = cfg2.engine().microgrids();
     let r = reg.lock();
     let e = r.get(&id).expect("microgrid survives the restart");
     assert_eq!(e.def.name, "persist me");
@@ -1884,13 +1888,13 @@ async fn create_lock_outlives_a_dropped_handler_until_the_load_ends() {
     handler.abort();
     assert!(handler.await.unwrap_err().is_cancelled());
     assert!(
-        config.create_lock().try_lock().is_err(),
+        config.engine().create_lock().try_lock().is_err(),
         "the lock must stay held while the load runs on"
     );
     release_tx.send(()).unwrap();
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        config.create_lock().lock_owned(),
+        config.engine().create_lock().lock_owned(),
     )
     .await
     .expect("the lock frees once the load ends");
@@ -1929,7 +1933,7 @@ async fn load_endpoint_offers_load_as_on_collision() {
     )
     .await;
     assert_eq!(st, StatusCode::OK);
-    assert!(config.microgrids().lock().contains_key(&suggested));
+    assert!(config.engine().microgrids().lock().contains_key(&suggested));
 }
 
 /// A load-as whose generated block registered but whose script
@@ -1962,7 +1966,7 @@ async fn load_as_reports_a_committed_partial_as_a_warning_not_a_conflict() {
         warning.contains("script section"),
         "the warning says what half failed: {warning}"
     );
-    assert!(config.microgrids().lock().contains_key(&41));
+    assert!(config.engine().microgrids().lock().contains_key(&41));
     assert!(dir.join("microgrids/41.lisp").exists(), "the copy is kept");
 }
 
@@ -1978,7 +1982,7 @@ async fn load_as_waits_for_a_create_in_flight() {
         "",
     );
     std::fs::write(dir.join("wait.lisp"), &text).unwrap();
-    let create_lock = config.create_lock();
+    let create_lock = config.engine().create_lock();
     let held = create_lock.lock().await;
     let pending = tokio::spawn(call(
         config.clone(),
@@ -1986,13 +1990,13 @@ async fn load_as_waits_for_a_create_in_flight() {
     ));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(
-        !config.microgrids().lock().contains_key(&45),
+        !config.engine().microgrids().lock().contains_key(&45),
         "the copy must not load while a create holds the lock"
     );
     drop(held);
     let (st, body) = pending.await.unwrap();
     assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    assert!(config.microgrids().lock().contains_key(&45));
+    assert!(config.engine().microgrids().lock().contains_key(&45));
 }
 
 /// Loading a snapshot as a new microgrid runs the same load-as, so it
@@ -2012,7 +2016,7 @@ async fn snapshot_load_as_waits_for_a_create_in_flight() {
     )
     .await;
     assert_eq!(st, StatusCode::OK);
-    let create_lock = config.create_lock();
+    let create_lock = config.engine().create_lock();
     let held = create_lock.lock().await;
     let pending = tokio::spawn(call(
         config.clone(),
@@ -2020,13 +2024,13 @@ async fn snapshot_load_as_waits_for_a_create_in_flight() {
     ));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(
-        !config.microgrids().lock().contains_key(&47),
+        !config.engine().microgrids().lock().contains_key(&47),
         "the copy must not load while a create holds the lock"
     );
     drop(held);
     let (st, body) = pending.await.unwrap();
     assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    assert!(config.microgrids().lock().contains_key(&47));
+    assert!(config.engine().microgrids().lock().contains_key(&47));
 }
 
 /// The committed-partial 200 must come from load_as KNOWING it
@@ -2095,14 +2099,28 @@ async fn undo_reverts_the_last_structural_edit() {
     .await;
     let (st, _) = call(config.clone(), post("/api/mg/30/undo", "")).await;
     assert_eq!(st, StatusCode::OK);
-    let site = config.microgrids().lock().get(&30).unwrap().site.clone();
+    let site = config
+        .engine()
+        .microgrids()
+        .lock()
+        .get(&30)
+        .unwrap()
+        .site
+        .clone();
     assert!(
         site.get(500).is_some() && site.get(501).is_none(),
         "one step undone"
     );
     let (st, _) = call(config.clone(), post("/api/mg/30/redo", "")).await;
     assert_eq!(st, StatusCode::OK);
-    let site = config.microgrids().lock().get(&30).unwrap().site.clone();
+    let site = config
+        .engine()
+        .microgrids()
+        .lock()
+        .get(&30)
+        .unwrap()
+        .site
+        .clone();
     assert!(site.get(501).is_some(), "redo restores");
 }
 
@@ -2147,7 +2165,14 @@ async fn snapshots_are_per_microgrid() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["id"], 31, "{v}");
     assert!(v.get("ok").is_none(), "{v}");
-    let site = config.microgrids().lock().get(&31).unwrap().site.clone();
+    let site = config
+        .engine()
+        .microgrids()
+        .lock()
+        .get(&31)
+        .unwrap()
+        .site
+        .clone();
     assert!(site.get(600).is_some(), "restore brings the meter back");
     // The ambient endpoint is gone.
     let (st, _) = call(config.clone(), get("/api/snapshots")).await;
@@ -2162,7 +2187,7 @@ async fn snapshots_are_per_microgrid() {
     )
     .await;
     assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    let registry = config.microgrids();
+    let registry = config.engine().microgrids();
     let reg = registry.lock();
     assert!(
         reg.get(&31).unwrap().site.get(600).is_some(),
@@ -2243,7 +2268,7 @@ async fn concurrent_creates_get_distinct_microgrids() {
             .unwrap()
     };
     assert_ne!(id_of(&a.1), id_of(&b.1), "each create gets its own id");
-    assert_eq!(config.microgrids().lock().len(), 3);
+    assert_eq!(config.engine().microgrids().lock().len(), 3);
 }
 
 /// An explicit port on the assets or dispatch server's port is
@@ -2251,8 +2276,11 @@ async fn concurrent_creates_get_distinct_microgrids() {
 #[tokio::test]
 async fn create_refuses_a_reserved_port() {
     let (config, _dir) = config_with("nil").await;
-    let ports = [config.assets_socket_addr(), config.dispatch_socket_addr()]
-        .map(|a| a.parse::<std::net::SocketAddr>().unwrap().port());
+    let ports = [
+        config.engine().assets_socket_addr(),
+        config.engine().dispatch_socket_addr(),
+    ]
+    .map(|a| a.parse::<std::net::SocketAddr>().unwrap().port());
     for port in ports {
         let (st, body) = call(
             config.clone(),
@@ -2337,7 +2365,7 @@ async fn the_list_counts_hidden_components() {
 /// Runtimes that really bind, on `[::1]`.
 fn live_runtimes(config: &Config, ephemeral_ports: bool) -> crate::runtime::MicrogridRuntimes {
     crate::runtime::MicrogridRuntimes::new(
-        config.clone(),
+        config.engine().clone(),
         crate::runtime::RuntimeOptions {
             ephemeral_ports,
             bind_host: std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
@@ -2437,7 +2465,7 @@ async fn adopt_refuses_a_file_declaring_two_microgrids() {
         "{}",
         error_of(&body)
     );
-    assert!(!config.microgrids().lock().get(&9).unwrap().managed);
+    assert!(!config.engine().microgrids().lock().get(&9).unwrap().managed);
 }
 
 /// Undo depths are readable without taking a step, and both stacks
@@ -2614,6 +2642,7 @@ async fn setpoints_resolve_per_microgrid() {
     };
     let site_of = |mg: u64| {
         config
+            .engine()
             .microgrids()
             .lock()
             .get(&mg)
@@ -2850,7 +2879,14 @@ async fn component_snapshot_reports_remaining_s_for_a_timed_setpoint() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let site = cfg.microgrids().lock().get(&2200).unwrap().site.clone();
+    let site = cfg
+        .engine()
+        .microgrids()
+        .lock()
+        .get(&2200)
+        .unwrap()
+        .site
+        .clone();
     site.log_setpoint(
         4,
         SetpointEvent {

@@ -853,7 +853,6 @@ async fn reactive_augmentation_is_accepted_and_narrows_the_stream() {
     // The journal keeps the axis: a Q augmentation is logged under
     // its own kind, not the active route's `augment_bounds`.
     let logged = s
-        .config
         .site()
         .setpoints_window(4, chrono::Utc::now() - chrono::Duration::minutes(1));
     let kinds: Vec<&str> = logged.iter().map(|e| e.kind.as_str()).collect();

@@ -138,12 +138,13 @@ async fn serve() {
         log::error!("Failed to eval boot scripts:\n{e}");
         std::process::exit(1);
     });
+    let engine = config.engine().clone();
 
     // Every microgrid runtime, boot-time and later, starts through
     // MicrogridRuntimes. The listener subscribes before the file
     // watcher starts, so no reload can register a microgrid unseen.
     let runtimes = MicrogridRuntimes::new(
-        config.clone(),
+        engine.clone(),
         RuntimeOptions {
             ephemeral_ports: args.ephemeral_ports,
             bind_host: Ipv6Addr::LOCALHOST.into(),
@@ -154,7 +155,7 @@ async fn serve() {
         std::process::exit(1);
     });
     let _listener = runtimes.spawn_registration_listener().await;
-    let boot_ids: Vec<u64> = config.microgrids().lock().keys().copied().collect();
+    let boot_ids: Vec<u64> = engine.microgrids().lock().keys().copied().collect();
     log::info!("Enterprise carries {} microgrid(s)", boot_ids.len());
     // `--emit-endpoints` promises every boot listener is up, so a
     // boot microgrid that failed to start exits the process.
@@ -184,7 +185,7 @@ async fn serve() {
     // Assets + dispatch: single enterprise-wide sockets (defaults
     // [::1]:9900 / [::1]:8900, lisp-overridable). --ephemeral-ports
     // zeroes the port for an OS-chosen one.
-    let mut assets_addr: SocketAddr = config.assets_socket_addr().parse().unwrap_or_else(|e| {
+    let mut assets_addr: SocketAddr = engine.assets_socket_addr().parse().unwrap_or_else(|e| {
         log::error!("invalid assets socket addr: {e}");
         std::process::exit(1);
     });
@@ -192,7 +193,7 @@ async fn serve() {
         assets_addr.set_port(0);
     }
     let (assets_listener, assets_addr) = bind_or_exit(assets_addr, "PlatformAssets").await;
-    let mut dispatch_addr: SocketAddr = config.dispatch_socket_addr().parse().unwrap_or_else(|e| {
+    let mut dispatch_addr: SocketAddr = engine.dispatch_socket_addr().parse().unwrap_or_else(|e| {
         log::error!("invalid dispatch socket addr: {e}");
         std::process::exit(1);
     });
@@ -210,7 +211,7 @@ async fn serve() {
             "microgrids": boot_ids
                 .iter()
                 .filter_map(|id| {
-                    let name = config.microgrids().lock().get(id)?.def.name.clone();
+                    let name = engine.microgrids().lock().get(id)?.def.name.clone();
                     let addr = runtimes.status(*id)?.grpc_addr?;
                     Some(serde_json::json!({ "id": id, "name": name, "grpc_addr": addr }))
                 })
@@ -256,10 +257,10 @@ async fn serve() {
     // PlatformAssets — its own listener, reachable regardless of which
     // microgrid the client picks.
     log::info!("PlatformAssets gRPC listening on {assets_addr}");
-    let cfg_for_assets = config.clone();
+    let engine_for_assets = engine.clone();
     tasks.spawn(async move {
         if let Err(e) = Server::builder()
-            .add_service(AssetsGrpcServer::new(AssetsServer::new(cfg_for_assets)))
+            .add_service(AssetsGrpcServer::new(AssetsServer::new(engine_for_assets)))
             .serve_with_incoming(TcpListenerStream::new(assets_listener))
             .await
         {
@@ -271,8 +272,8 @@ async fn serve() {
     // listener, one service fronting every microgrid (keyed by the
     // microgrid_id carried in each request).
     log::info!("MicrogridDispatch gRPC listening on {dispatch_addr}");
-    let dispatch_store = config.dispatches();
-    let dispatch_registry = config.microgrids();
+    let dispatch_store = engine.dispatches();
+    let dispatch_registry = engine.microgrids();
     tasks.spawn(async move {
         if let Err(e) = Server::builder()
             .add_service(DispatchGrpcServer::new(DispatchServer::new(

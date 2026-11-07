@@ -1,6 +1,6 @@
 //! gRPC server: implements the Frequenz Assets API
 //! (`frequenz.api.assets.v1.PlatformAssets`) on top of macrocosim's
-//! `MicrogridSite` registry + `Config`.
+//! `MicrogridSite` registry + `Engine`.
 //!
 //! Exposes the same topology data as `MicrogridServer`, just under the
 //! assets API surface. Each RPC looks up the requested `microgrid_id`
@@ -8,7 +8,7 @@
 //! entry's `MicrogridSite` — anything missing comes back as
 //! `NotFound`.
 
-use crate::lisp::Config;
+use crate::engine::Engine;
 use crate::proto::assets::{
     GetMicrogridRequest, GetMicrogridResponse, ListMicrogridElectricalComponentConnectionsRequest,
     ListMicrogridElectricalComponentConnectionsResponse, ListMicrogridElectricalComponentsRequest,
@@ -23,12 +23,12 @@ use prost_types::Timestamp;
 use std::time::SystemTime;
 
 pub struct AssetsServer {
-    pub config: Config,
+    pub engine: Engine,
 }
 
 impl AssetsServer {
-    pub fn new(config: Config) -> Self {
-        Self { config }
+    pub fn new(engine: Engine) -> Self {
+        Self { engine }
     }
 
     /// Resolve the registry entry for `requested` or return `NotFound`.
@@ -39,7 +39,7 @@ impl AssetsServer {
         &self,
         requested: u64,
     ) -> Result<(MicrogridDef, MicrogridSite), tonic::Status> {
-        let reg = self.config.microgrids();
+        let reg = self.engine.microgrids();
         let r = reg.lock();
         r.get(&requested)
             .map(|e| (e.def.clone(), e.site.clone()))
@@ -55,7 +55,7 @@ impl platform_assets_server::PlatformAssets for AssetsServer {
     ) -> Result<tonic::Response<GetMicrogridResponse>, tonic::Status> {
         let req = request.into_inner();
         let (def, _site) = self.lookup_microgrid(req.microgrid_id)?;
-        let enterprise_id = self.config.metadata().enterprise_id;
+        let enterprise_id = self.engine.metadata().enterprise_id;
         let now = Some(Timestamp::from(SystemTime::now()));
         Ok(tonic::Response::new(GetMicrogridResponse {
             microgrid: Some(Microgrid {

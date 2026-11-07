@@ -11,7 +11,7 @@ use axum::extract::ws::{Message, WebSocket};
 use axum::response::IntoResponse;
 use serde::Serialize;
 
-use crate::lisp::Config;
+use crate::engine::Engine;
 use crate::sim::events::SiteEvent;
 use crate::ui::api::WsUpgrade;
 
@@ -23,9 +23,9 @@ use crate::ui::api::WsUpgrade;
 /// A request that is not an upgrade gets a JSON error.
 pub(super) async fn events_ws(
     WsUpgrade(ws): WsUpgrade,
-    State(config): State<Config>,
+    State(engine): State<Engine>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| event_pump(socket, config))
+    ws.on_upgrade(move |socket| event_pump(socket, engine))
 }
 
 /// Wrap a SiteEvent with the originating microgrid id so the SPA
@@ -40,13 +40,14 @@ struct WireEvent<'a> {
     event: &'a SiteEvent,
 }
 
-async fn event_pump(mut socket: WebSocket, config: Config) {
+async fn event_pump(mut socket: WebSocket, engine: Engine) {
     use tokio::sync::broadcast::error::RecvError as BroadcastRecv;
     let mut log_rx = crate::ui_log::LOG_TAP.get().map(|t| t.subscribe());
-    // Enterprise-wide dispatch lifecycle changes. Wrapped in Option so
-    // a Closed (store dropped — shouldn't happen, it lives on Config)
-    // parks the branch instead of busy-looping, mirroring `log_rx`.
-    let mut dispatch_rx = Some(config.dispatches().subscribe());
+    // Enterprise-wide dispatch lifecycle changes. Wrapped in Option
+    // so a Closed (store dropped — shouldn't happen, it lives on the
+    // Engine) parks the branch instead of busy-looping, mirroring
+    // `log_rx`.
+    let mut dispatch_rx = Some(engine.dispatches().subscribe());
     // Subscribe to every microgrid's per-site event bus + the
     // enterprise-wide `microgrid_registered` channel. The initial
     // snapshot covers every entry present at connect time; the
@@ -93,9 +94,9 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
     // snapshot or on this receiver — never in neither. The
     // subscribed_ids dedup makes the overlap safe. Wrapped in an
     // Option so the select arm can park cleanly after Closed.
-    let mut registered_rx = Some(config.subscribe_microgrid_registered());
+    let mut registered_rx = Some(engine.subscribe_microgrid_registered());
     {
-        let reg = config.microgrids();
+        let reg = engine.microgrids();
         let r = reg.lock();
         for (id, entry) in r.iter() {
             forwarders.push(spawn_forwarder(
@@ -198,7 +199,7 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
             // Subscribers can lag if registrations burst past the
             // channel capacity — continue past Lagged because the
             // SPA can recover via reconnect, and Closed never
-            // fires since Config keeps the Sender alive for the
+            // fires since the Engine keeps the Sender alive for the
             // process lifetime.
             new_id = async {
                 match registered_rx.as_mut() {
@@ -212,7 +213,7 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
                         // already picked this id up. Drop the dupe.
                         continue;
                     }
-                    let entry = config.microgrids().lock().get(&id).cloned();
+                    let entry = engine.microgrids().lock().get(&id).cloned();
                     if let Some(e) = entry {
                         forwarders.push(spawn_forwarder(
                             id,
@@ -233,7 +234,7 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
                     log::warn!(
                         "ws: microgrid_registered channel lagged {n} ids; re-snapshotting registry",
                     );
-                    let entries: Vec<(u64, crate::sim::microgrids::MicrogridEntry)> = config
+                    let entries: Vec<(u64, crate::sim::microgrids::MicrogridEntry)> = engine
                         .microgrids()
                         .lock()
                         .iter()
@@ -250,7 +251,7 @@ async fn event_pump(mut socket: WebSocket, config: Config) {
                     }
                 }
                 Err(BroadcastRecv::Closed) => {
-                    // Config dropped its Sender; nothing more will
+                    // The Engine dropped its Sender; nothing more will
                     // arrive. Park this arm via the None branch of
                     // its future (awaiting pending() HERE would park
                     // the whole select loop, not just this arm) —

@@ -168,7 +168,7 @@ async fn structural_evals_rewrite_the_managed_microgrid_file() {
         .await
         .unwrap();
     let id = created["id"].as_u64().unwrap();
-    let path = s.config.state_dir().join(format!("microgrids/{id}.lisp"));
+    let path = s.engine.state_dir().join(format!("microgrids/{id}.lisp"));
     assert!(path.exists(), "create writes {}", path.display());
 
     for body in [
@@ -272,7 +272,7 @@ async fn site_import_creates_microgrid_with_working_formulas() {
 
     // The microgrid's file carries the export's physical
     // parameters, so they come back at every boot.
-    let saved = std::fs::read_to_string(s.config.state_dir().join(format!("microgrids/{id}.lisp")))
+    let saved = std::fs::read_to_string(s.engine.state_dir().join(format!("microgrids/{id}.lisp")))
         .unwrap();
     assert!(saved.contains(":capacity-wh 40000.0"), "{saved}");
     assert!(saved.contains(":rated-fuse-current-a 125"), "{saved}");
@@ -379,7 +379,7 @@ async fn site_import_refuses_a_taken_microgrid_id() {
         "{mgs}"
     );
     let path = s
-        .config
+        .engine
         .state_dir()
         .join(format!("microgrids/{wanted}.lisp"));
     let saved = std::fs::read_to_string(&path).unwrap();
@@ -391,7 +391,7 @@ async fn site_import_refuses_a_taken_microgrid_id() {
 
     // And no file was written under any OTHER id on the way out —
     // the refusal is not a silent fallback to the next free one.
-    let mut files: Vec<String> = std::fs::read_dir(s.config.state_dir().join("microgrids"))
+    let mut files: Vec<String> = std::fs::read_dir(s.engine.state_dir().join("microgrids"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();

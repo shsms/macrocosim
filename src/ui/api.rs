@@ -4,7 +4,7 @@
 
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection, StringRejection};
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
-use axum::extract::{FromRequest, FromRequestParts, Request};
+use axum::extract::{FromRef, FromRequest, FromRequestParts, Request};
 use axum::http::{Method, StatusCode, Uri, request::Parts};
 use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
@@ -196,14 +196,15 @@ pub(in crate::ui) struct Mg {
     pub site: crate::sim::MicrogridSite,
 }
 
-impl FromRequestParts<crate::lisp::Config> for Mg {
+impl<S> FromRequestParts<S> for Mg
+where
+    S: Send + Sync,
+    crate::engine::Engine: FromRef<S>,
+{
     type Rejection = ApiError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        config: &crate::lisp::Config,
-    ) -> Result<Self, ApiError> {
-        let params = axum::extract::RawPathParams::from_request_parts(parts, config)
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        let params = axum::extract::RawPathParams::from_request_parts(parts, state)
             .await
             .map_err(|e| ApiError::bad_request(e.body_text()))?;
         let raw = params
@@ -213,7 +214,7 @@ impl FromRequestParts<crate::lisp::Config> for Mg {
         let id: u64 = raw
             .parse()
             .map_err(|_| ApiError::bad_request(format!("invalid microgrid id: {raw:?}")))?;
-        let site = config
+        let site = crate::engine::Engine::from_ref(state)
             .microgrids()
             .lock()
             .get(&id)

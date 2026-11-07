@@ -23,13 +23,13 @@ async fn editing_config_lisp_rebuilds_the_world() {
     tokio::spawn(Config::clone(&s.config).watch_with_ready(Some(ready_tx)));
     ready_rx.await.expect("watch setup resolved");
 
-    let v0 = s.config.site().version();
+    let v0 = s.site().version();
     let path = s.config_path();
     // The handle the running physics task / per-port gRPC server
     // holds. Reload must rebuild the topology on THIS site, not a
     // fresh one — otherwise every runtime is orphaned.
     let live_site = s
-        .config
+        .engine
         .microgrids()
         .lock()
         .get(&9)
@@ -51,7 +51,7 @@ async fn editing_config_lisp_rebuilds_the_world() {
     // loudly rather than hanging if the watcher misfires.
     let mut versioned = false;
     for _ in 0..50 {
-        if s.config.site().version() > v0 {
+        if s.site().version() > v0 {
             versioned = true;
             break;
         }

@@ -398,7 +398,7 @@ async fn bounds_reads_agree_across_every_consumer() {
     s.config
         .eval_silent(&format!("(scenario-record-csv \"{}\")", csv_dir.display()))
         .unwrap();
-    let site = s.config.site();
+    let site = s.site();
     let now = chrono::Utc::now();
     site.record_history_snapshot(now);
     s.config.eval_silent("(scenario-stop-csv)").unwrap();
@@ -498,7 +498,6 @@ async fn valid_until_is_the_gateways_deadline() {
         .expect("valid_until");
     let valid_until = chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32).unwrap();
     let left = s
-        .config
         .site()
         .gateway()
         .remaining_lifetime(3, SetpointAxis::Active)

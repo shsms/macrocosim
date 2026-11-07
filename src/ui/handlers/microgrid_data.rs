@@ -7,7 +7,7 @@ use axum::{Extension, extract::State, http::StatusCode};
 use frequenz_microgrid::LogicalMeterHandle;
 use serde::Serialize;
 
-use crate::lisp::Config;
+use crate::engine::Engine;
 
 use super::super::state::{
     HistorySample, MicrogridLoopbacks, MicrogridSampleSnapshot, SharedMicrogrid,
@@ -142,8 +142,8 @@ pub(in crate::ui) struct ClockInfo {
     tz: &'static str,
 }
 
-pub(in crate::ui) async fn clock_info(State(config): State<Config>) -> Json<ClockInfo> {
+pub(in crate::ui) async fn clock_info(State(engine): State<Engine>) -> Json<ClockInfo> {
     Json(ClockInfo {
-        tz: config.tz_name(),
+        tz: engine.tz_name(),
     })
 }

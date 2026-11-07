@@ -12,6 +12,7 @@
 use axum::{extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
+use crate::engine::Engine;
 use crate::lisp::Config;
 use crate::runtime::{MicrogridRuntimes, RuntimeView};
 use crate::ui::api::{ApiError, Json, Mg};
@@ -26,11 +27,11 @@ pub(in crate::ui) struct MicrogridListEntry {
 }
 
 pub(in crate::ui) async fn microgrids_list(
-    State(config): State<Config>,
+    State(engine): State<Engine>,
     axum::Extension(runtimes): axum::Extension<MicrogridRuntimes>,
 ) -> Json<Vec<MicrogridListEntry>> {
     Json(
-        crate::sim::microgrids::snapshot(&config.microgrids())
+        crate::sim::microgrids::snapshot(&engine.microgrids())
             .into_iter()
             .map(|view| {
                 let runtime = runtimes.status(view.id);
