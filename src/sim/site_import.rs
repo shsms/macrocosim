@@ -37,7 +37,7 @@
 //! `:rated-upper-w`, same as an EV charger.
 
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// The `components.json` shape: `{"electricalComponents": [...]}`.
 #[derive(Deserialize)]
@@ -390,7 +390,7 @@ pub fn parse(
             return Err(format!("connection {src} → {dst} is a self-edge"));
         }
     }
-    if let Some((src, dst)) = cycle_edge(&edges) {
+    if let Some((src, dst)) = crate::spec::order::cycle_edge(&edges) {
         return Err(format!(
             "the connections contain a cycle (reachable through {src} → {dst})"
         ));
@@ -399,78 +399,6 @@ pub fn parse(
         components,
         connections: edges,
     })
-}
-
-/// Kahn topological sort over the connection edges; on a cycle,
-/// returns an edge between two of the unresolvable nodes so the
-/// error can name where to look.
-fn cycle_edge(edges: &[(u64, u64)]) -> Option<(u64, u64)> {
-    use std::collections::{BTreeMap, VecDeque};
-    let mut indegree: BTreeMap<u64, usize> = BTreeMap::new();
-    let mut out: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-    for &(src, dst) in edges {
-        indegree.entry(src).or_default();
-        *indegree.entry(dst).or_default() += 1;
-        out.entry(src).or_default().push(dst);
-    }
-    let mut queue: VecDeque<u64> = indegree
-        .iter()
-        .filter(|(_, d)| **d == 0)
-        .map(|(n, _)| *n)
-        .collect();
-    while let Some(n) = queue.pop_front() {
-        for &m in out.get(&n).into_iter().flatten() {
-            let d = indegree.get_mut(&m).expect("edge target has an indegree");
-            *d -= 1;
-            if *d == 0 {
-                queue.push_back(m);
-            }
-        }
-        indegree.remove(&n);
-    }
-    edges
-        .iter()
-        .copied()
-        .find(|(s, d)| indegree.contains_key(s) && indegree.contains_key(d))
-}
-
-/// Depth-first post-order visit over the parent → child edges: every
-/// child of `id` is emitted before `id` itself. `seen` stops a
-/// component reached from more than one parent, or through more than
-/// one path, from being pushed twice — and, because it is also
-/// checked on entry, from being *descended into* twice. That entry
-/// check is what keeps the walk linear: a component is marked only
-/// once its whole subtree has been emitted, so meeting a marked id
-/// again means that subtree is already in `ordered` and re-walking it
-/// would only rediscover the same nodes. Without it a chain of
-/// diamonds re-walks every shared subtree once per path into it,
-/// which is exponential in the chain's length (see
-/// `forms_walk_shared_subtrees_once`). `parse` has already rejected
-/// cycles (see `import_rejects_self_edges_and_cycles`), so the entry
-/// check is a performance guard, not the recursion's base case.
-///
-/// `calls` counts every entry, including the ones the memo turns
-/// straight back — that count is what the test asserts on, since the
-/// memo changes only the walk's cost, never its output.
-fn visit_post_order(
-    id: u64,
-    children: &HashMap<u64, Vec<u64>>,
-    seen: &mut HashSet<u64>,
-    ordered: &mut Vec<u64>,
-    calls: &mut u64,
-) {
-    *calls += 1;
-    if seen.contains(&id) {
-        return;
-    }
-    if let Some(kids) = children.get(&id) {
-        for &child in kids {
-            visit_post_order(child, children, seen, ordered, calls);
-        }
-    }
-    if seen.insert(id) {
-        ordered.push(id);
-    }
 }
 
 impl SiteImport {
@@ -482,35 +410,19 @@ impl SiteImport {
     }
 
     /// The order the components must be emitted in, and the number
-    /// of `visit_post_order` calls it took to work that out.
+    /// of walk steps it took to work that out (for
+    /// `forms_walk_shared_subtrees_once`).
     ///
     /// Children before parents, as an authored config registers them:
     /// Lisp evaluates :successors before the surrounding make-*, so an
     /// import must not tick an inverter before the battery it pushes
-    /// into. A post-order walk over the parent → child edges gives
-    /// that order; cycles were refused at parse time. A component in
-    /// no edge is its own whole subtree, so it is emitted at the point
-    /// the outer export-order loop reaches it — interleaved with the
-    /// connected components, not collected at the end.
-    ///
-    /// The call count is here for `forms_walk_shared_subtrees_once`.
-    /// Losing the entry memo does not change the order this returns,
-    /// only how long it takes: on a chain of 25 diamonds the walk
-    /// still finishes, in minutes, with exactly the same answer. So a
-    /// test that reads the output alone stays green on the regressed
-    /// walk, and the count is the one cheap thing that does not.
+    /// into. Cycles were refused at parse time. See
+    /// [`crate::spec::order::children_first`].
     fn ordered_ids_counting(&self) -> (Vec<u64>, u64) {
-        let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
-        for &(from, to) in &self.connections {
-            children.entry(from).or_default().push(to);
-        }
-        let mut ordered = Vec::with_capacity(self.components.len());
-        let mut seen = HashSet::new();
-        let mut calls = 0;
-        for c in &self.components {
-            visit_post_order(c.id, &children, &mut seen, &mut ordered, &mut calls);
-        }
-        (ordered, calls)
+        crate::spec::order::children_first_counting(
+            self.components.iter().map(|c| c.id),
+            &self.connections,
+        )
     }
 
     /// Renders one atomic form: `(progn (make-* …) … (connect …) …)`.

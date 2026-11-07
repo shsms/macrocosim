@@ -11,6 +11,16 @@ is wiring the topology + animating the environment.
   interpreter (registry, dispatch store, enterprise `Metadata` in
   `engine/metadata.rs`, grid frequency, clock, create lock); every
   server and handler that runs no Lisp takes one
+- `src/spec.rs` — the topology document (`TopologyDoc`,
+  `MicrogridSpec`, `ComponentSpec`): one flat JSON document of
+  microgrids, components and connections; `spec/defaults.rs` the
+  per-type `Defaults` table (the values of `sim/defaults.lisp`) and
+  `fill`; `spec/order.rs` the children-first walk and cycle check the
+  build and the site import share; `spec/build.rs` `build_topology`
+  (checks a spec and builds its components without touching a site)
+  and `runtime_from_modes`, which Lisp's make functions call too;
+  `spec/schema.rs` the JSON Schema, derived at run time. Lisp does
+  not use specs
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback) and its
   started / failed status

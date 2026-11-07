@@ -7,6 +7,7 @@ pub mod proto_conv;
 pub mod runtime;
 pub mod server;
 pub mod sim;
+pub mod spec;
 #[cfg(test)]
 pub(crate) mod test_dir;
 pub mod timefmt;

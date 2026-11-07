@@ -1093,13 +1093,24 @@ fn register_with_modes<C: crate::sim::SimulatedComponent + 'static>(
     command: Option<CommandMode>,
 ) -> Result<ComponentHandle, Error> {
     let id = component.id();
+    // Refuse a combination of modes before registering, with the
+    // same rules a topology spec is checked by.
+    crate::spec::runtime_from_modes(
+        id,
+        crate::spec::Modes {
+            operational_mode,
+            health,
+            telemetry_mode: telemetry,
+            command_mode: command,
+        },
+    )
+    .map_err(Error::invalid_argument)?;
     let h = site.register(component);
     // The operational mode (config) goes first: it derives the
     // runtime-knob defaults, which the explicit knob kwargs then
     // refine — and are validated against. A mode error after the
-    // register above must unregister again: make-* is atomic to its
-    // callers, and without the rollback a rejected form (say
-    // :operational-mode 'inactive :telemetry-mode 'normal) would
+    // register above must still unregister again: make-* is atomic
+    // to its callers, and without the rollback a rejected form would
     // leave a half-configured ghost that ticks physics and collides
     // with the retried :id.
     let modes = (|| {

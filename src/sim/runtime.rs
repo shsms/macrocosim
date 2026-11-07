@@ -9,7 +9,11 @@
 //! shouldn't know about.
 
 tulisp::AsSymbol! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+    #[derive(
+        Clone, Copy, Debug, PartialEq, Eq, Default,
+        serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+    )]
+    #[serde(rename_all = "snake_case")]
     pub enum Health {
         /// Component reports the physics-derived state code (ready /
         /// charging / discharging / …) and accepts setpoints normally.
@@ -24,7 +28,11 @@ tulisp::AsSymbol! {
 }
 
 tulisp::AsSymbol! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+    #[derive(
+        Clone, Copy, Debug, PartialEq, Eq, Default,
+        serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+    )]
+    #[serde(rename_all = "snake_case")]
     pub enum TelemetryMode {
         /// Emit samples at the component's stream interval (the default).
         #[default]
@@ -54,7 +62,11 @@ tulisp::AsSymbol! {
 }
 
 tulisp::AsSymbol! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+    #[derive(
+        Clone, Copy, Debug, PartialEq, Eq, Default,
+        serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+    )]
+    #[serde(rename_all = "snake_case")]
     pub enum CommandMode {
         /// Validate against bounds and apply.
         #[default]
@@ -77,7 +89,7 @@ tulisp::AsSymbol! {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ComponentRuntime {
     pub health: Health,
     pub telemetry: TelemetryMode,

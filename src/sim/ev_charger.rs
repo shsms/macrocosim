@@ -22,7 +22,11 @@ use crate::timeout_tracker::SetpointAxis;
 
 tulisp::AsSymbol! {
     /// What the charger offers when no command stands (or a TTL expired).
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    #[derive(
+        Clone, Copy, Debug, Default, PartialEq, Eq,
+        serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+    )]
+    #[serde(rename_all = "snake_case")]
     pub enum EvIdle {
         /// Offer nothing: the safe state the API's expiry semantics mean.
         #[default]

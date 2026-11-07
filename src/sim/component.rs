@@ -83,7 +83,11 @@ tulisp::AsSymbol! {
     /// (lifted 1:1 in `graph_adapter::lift_mode`): the local type
     /// carries the Lisp symbol conversion the foreign type can't.
     /// Keep `provides_telemetry` in sync with the graph crate's.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, Default,
+        serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+    )]
+    #[serde(rename_all = "snake_case")]
     pub enum OperationalMode {
         /// Not explicitly set; treated as full capability.
         #[default]
