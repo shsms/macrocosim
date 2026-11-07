@@ -1,5 +1,11 @@
 # Scenarios, revamped — a unified design
 
+*Superseded in 0.2.* Python scripts and recording replace the Lisp scenario
+framework this proposal describes: a scenario is an async function in a script,
+and `microgrid.record(...)` keeps the reporter. See
+[`docs/python-scripts.md`](../docs/python-scripts.md). The text below is kept as
+history.
+
 Status: proposal. Supersedes the two parallel scenario models that exist today
 (`define-scenario` day-stages and ad-hoc `(load …)` driver scripts).
 

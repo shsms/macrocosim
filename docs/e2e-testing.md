@@ -2,129 +2,136 @@
 
 Macrocosim is a high-fidelity stand-in for a real microgrid: it speaks the
 production Frequenz gRPC API (`Microgrid`, `PlatformAssets`,
-`MicrogridDispatchService`), runs real component physics, and drives scripted
-scenarios with built-in pass/fail assertions. That makes it a drop-in
-environment for a downstream control app's integration tests — your app talks to
-macrocosim exactly as it would to a real deployment.
+`MicrogridDispatchService`) and runs real component physics, while Python code
+drives the environment (load, PV, faults) and checks the result. That makes it
+a drop-in environment for a downstream control app's integration tests: your
+app talks to macrocosim exactly as it would to a real deployment.
 
-Macrocosim runs as a **separate process**; your app connects over gRPC. There's
-nothing to link or vendor — build the `macrocosim` + `macroctl` binaries from this
-repo (a published wheel / container image is planned, see todo.org §D5) and
-drive them from your CI.
+Macrocosim runs as a **separate process**, and your app connects over gRPC.
+There is nothing to link or vendor: `pip install macrocosim` installs the
+Python client together with the `macrocosim` and `macroctl` binaries.
 
 ## Two ways to test
 
-### 1. Deterministic, serverless gate (no app under test)
+Both run in real time. 0.1's deterministic, serverless gate
+(`macroctl scenario run --stepped`) is gone, with Lisp and the `macroctl
+scenario` commands: there is no stepped clock any more.
 
-If the thing you're asserting is the *simulation's* own behaviour — a scenario's
-`(check …)` assertions — run it headless on a stepped clock. Deterministic,
-faster than real time, no server, no app:
+### 1. From pytest
 
-```sh
-macroctl scenario run my-scenario \
-  --stepped --config graph.lisp --assert
-#  --until-s <s>   override the scenario's :length (fractions allowed)
-#  --step-s <s>    clock step in seconds (default 0.1)
+A test launches a private simulator for its microgrid with `mc.launch`, on
+free ports, starts your app against `microgrid.grpc_url`, drives the
+environment through the microgrid's knobs and asserts with `expect`:
+
+```python
+async def test_import_stays_under_the_cap(launch_microgrid) -> None:
+    microgrid = await launch_microgrid(SPEC)
+    app = await start_my_app(microgrid.grpc_url)  # your app, your fixture
+    await microgrid[LOAD].power.set(Power.from_kilowatts(60))
+    await microgrid.grid_power.expect(
+        mc.at_most(Power.from_kilowatts(40)),
+        timeout=timedelta(seconds=30),
+        hold_for=timedelta(seconds=10),
+    )
 ```
 
-This boots a headless simulator in-process, runs `my-scenario` to its `:length`,
-and exits non-zero if any `(check …)` failed. Reproducible with a `:seed`. Good
-for testing scenario fixtures themselves, or sim-side invariants.
+Each test gets its own simulator, so tests do not share state. The `launch_microgrid` fixture and the rest of the
+client are in the [Python README](../python/README.md#fixtures). A failing
+`expect` raises `ExpectationFailed`, and the simulator's log stays in the
+test's `tmp_path`.
 
-### 2. Live end-to-end with your app
+### 2. From a script
 
-The real integration test: macrocosim drives the environment (PV, load, faults)
-while *your app* reacts over gRPC, and a scenario asserts the resulting grid
-state.
+`macrocosim plant.py` runs a [script](python-scripts.md): its `MICROGRIDS`
+are the topology, and its `run` drives the environment and asserts with
+`expect`. The script's state is the verdict: `finished` when `run` returned,
+`crashed` when it raised, for example on a failed `expect`.
 
 ```sh
 # 1. boot the simulator; ephemeral ports keep parallel CI jobs from clashing,
-#    and the endpoints file is the readiness signal.
-macrocosim graph.lisp --ephemeral-ports --emit-endpoints=endpoints.json &
+#    and the endpoints file is the readiness signal. With a script, it is
+#    written once the script has sent its microgrids, or failed to load.
+macrocosim plant.py --ephemeral-ports --emit-endpoints=endpoints.json &
 SIM=$!
 # wait until bound; bail out if the simulator died at boot instead
 # of hanging the job until CI's global timeout.
 until [ -s endpoints.json ]; do kill -0 $SIM 2>/dev/null || exit 1; sleep 0.1; done
 
 GRPC=$(jq -r '.microgrids[0].grpc_addr' endpoints.json)   # e.g. [::1]:41979
-UI=$(jq -r '.ui' endpoints.json)                     # e.g. 127.0.0.1:33565
+UI=$(jq -r '.ui' endpoints.json)                          # e.g. 127.0.0.1:33565
 
 # 2. boot YOUR app against the simulator's gRPC address.
 my-control-app --microgrid "grpc://$GRPC" &
 APP=$!
 
-# 3. run a scenario live, block until it finishes, gate on its checks.
-macroctl --ui-addr "http://$UI" scenario run my-scenario --wait --assert
-RC=$?
+# 3. wait for the script's run to end, and gate on how it ended.
+while :; do
+  STATE=$(curl -s "http://$UI/api/runner" | jq -r '.child.state // "none"')
+  case $STATE in
+    finished) RC=0; break ;;
+    crashed|none) RC=1; break ;;
+  esac
+  sleep 1
+done
+curl -s "http://$UI/api/runner" | jq -r '.output[]'   # the script's last lines
 
 kill $APP $SIM
 exit $RC
 ```
 
-`scenario run … --wait` starts the scenario, blocks until it finishes (its
-`:length`, or `--until-s <secs>`), stops it, and with `--assert` exits non-zero on
-any failed `(check …)`. On failure, upload your app's logs and any recorded CSVs
-(`(scenario-record-csv …)`) as CI artifacts.
+`run` starts as soon as the simulator has the microgrids, so a script that
+needs your app connected first waits for it, for example by expecting the
+app's effect on a reading. A script that records with `csv=True` writes its
+CSV files under `recordings/` in the state directory (`--state-dir`, default
+the current directory); upload them, and your app's logs, as CI artifacts on
+failure.
 
-`--emit-endpoints` prints one JSON line of the resolved addresses — to a file
-(as above) or stdout if given no path:
+`--emit-endpoints` prints one JSON line of the resolved addresses, to a file
+(as above) or to stdout if given no path:
 
 ```json
-{"ui":"127.0.0.1:33565","microgrids":[{"id":9,"name":"demo","grpc_addr":"[::1]:41979"}],"assets":"[::1]:33881","dispatch":"[::1]:43253"}
+{"ui":"127.0.0.1:33565","microgrids":[{"id":9,"name":"demo","grpc_addr":"[::1]:41979"}],"assets":"[::1]:33881","dispatch":"[::1]:43253","version":"0.2.0"}
 ```
+
+`--topology graph.json` boots the microgrids of a topology document instead,
+with no script, for an app test that needs only a static site.
 
 ## Structuring fixtures
 
-A test case is a **(graph, scenario, app-config)** triple. Keep these fixtures in
-*your* repo — macrocosim is a generic engine that loads them.
+A test case is a **(graph, scenario, app-config)** triple. Keep these
+fixtures in *your* repo: macrocosim is a generic engine that runs them.
 
-- **One file per graph.** Define the topology once, then every scenario that
-  exercises it as a `(define-scenario …)` in the same file:
+- **One module per graph.** Define the topology once as `make_*` specs, and
+  every scenario that exercises it as an async function that takes the
+  microgrid. Tests import the specs and the scenarios; a script imports them
+  too, and runs one from `run`.
 
-  ```lisp
-  (make-microgrid :id 9 :grpc-port 8800 :topology (lambda () … ))
-  (define-scenario :name "cloud-fade"  :schedule 'relative :length "4min" …)
-  (define-scenario :name "pv-dropout"  …)
-  ```
+- **Parallelise at the test or CI-job level.** Each `mc.launch`, and each
+  `macrocosim` run with `--ephemeral-ports`, is an isolated simulator on its
+  own ports. This gives true isolation, independent retry, and parallelism
+  over the real-time runs.
 
-  No `(load "sim/…")` needed — the scenario DSL vocabulary (`define-scenario`,
-  `at` / `check` / `controller` / `drive-meter` / `drive-solar` / `timeline`,
-  `set-*`) is embedded in the binary.
-
-- **Parallelise at the CI-job level.** Run one isolated `macrocosim` + app pair
-  per `(graph, scenario)` — a CI matrix. With `--ephemeral-ports` the jobs don't
-  collide. This gives true isolation, independent retry, and parallelism over
-  the (real-time) live runs.
-
-- **Sequential fallback.** If spinning a process pair per case is too heavy, run
-  a graph's scenarios in sequence against one boot: `scenario run A --wait
-  --assert; scenario run B --wait --assert; …` — each `scenario-start` resets the
-  journal. Simpler infra; wall-clock is the sum of the runs.
-
-- **Multiple microgrids in one file** is for a single test case that is
+- **Several microgrids in one script** is for a single test case that is
   *genuinely* multi-microgrid (a fleet). It is **not** the way to parallelise
-  independent cases — a scenario is enterprise-wide (one at a time) and the
-  report reads one microgrid, so use CI-job parallelism for independent cases.
+  independent cases: they would share one simulator, and its grid frequency.
 
 ## Determinism
 
-The headless stepped gate (mode 1) is bit-reproducible with a `:seed`. The live
-gate (mode 2) is **real-time** by nature — your app is a black box on its own
-clock — so write `(check …)` assertions against **settled-state invariants with
-tolerance** (e.g. "import held at/under the cap ± slack" a comfortable margin
-after the perturbation), not exact transient values. Configure components with
-zero command-delay so steady state is reached quickly.
+Runs are **real time**: your app is a black box on its own clock. So assert
+**settled-state invariants with tolerance** (for example "import held at or
+under the cap, give or take a margin, for 10 s after the perturbation") with
+`expect(..., hold_for=...)`, not exact transient values. Configure components
+with zero command delay so steady state is reached quickly, and seed anything
+random (`random.Random(seed)`, the weather's `seed=`).
 
 ## Reference
 
-- `macrocosim <config>` — `--ui-port N` · `--ephemeral-ports` ·
-  `--emit-endpoints[=PATH]`.
-- `macroctl scenario run NAME` — `--stepped --config X [--until-s S] [--step-s S]`
-  (headless) · `--wait [--until-s S]` (live) · `--assert` (gate).
-- `macroctl scenario report [--assert]`, `macroctl scenario list`,
-  `macroctl --microgrid-id N --ui-addr …` (the global
-  `--microgrid-id` selects the microgrid for the readouts, default
-  the lowest id; `--assert` works only on the lowest microgrid,
-  where a scenario's checks land; `--addr` optionally overrides the
-  gRPC address).
-- [`scenarios/DESIGN.md`](../scenarios/DESIGN.md) — the scenario model.
+- `macrocosim [plant.py]`: `--topology PATH` · `--ui-port N` ·
+  `--ephemeral-ports` · `--emit-endpoints[=PATH]` · `--state-dir DIR` ·
+  `--python PATH`; `macrocosim --help` lists the rest.
+- `GET /api/runner`: the script's state (`child.state`), the result of its
+  last reload (`last_reload.result`) and its last lines of output.
+- `macroctl --ui-addr … [--microgrid-id N]`: the readouts (`list`,
+  `stream`, `pool`, `dashboard`) and commands (`set-power`,
+  `augment-bounds`, `dispatch`), for a look at the running simulator.
+- [`python-scripts.md`](python-scripts.md): scripts, reloads and recording.

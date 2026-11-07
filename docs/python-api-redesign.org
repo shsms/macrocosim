@@ -3,7 +3,9 @@
 #+STARTUP: showall
 
 *Superseded.* The 0.2 Python client replaced this sketch; see
-=python/README.md= for what shipped. The text below is kept as history.
+=python/README.md= for what shipped. Lisp is no longer the human-facing
+layer either: 0.2 removed it, and Python scripts declare and animate
+microgrids (=docs/python-scripts.md=). The text below is kept as history.
 
 Status: draft. This sketches the second generation of macrocosim's
 Python client. The first generation grew feature by feature while we
