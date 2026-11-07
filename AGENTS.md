@@ -415,6 +415,7 @@ UI").
   import, eval, format, symbols, defaults, logs, clock, frequency,
   scripts, scenarios).
   `POST /api/eval` evaluates with no microgrid in scope.
+  `GET /api/defaults` serves the spec `Defaults` table, read-only.
 - `GET /api/mg/{mg}/spec` answers a microgrid's stored spec, and
   `PUT` of a `MicrogridSpec` rebuilds it with carry (200 with the stored
   spec; 409 for a component id or a gRPC port another microgrid

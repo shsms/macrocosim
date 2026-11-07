@@ -496,23 +496,22 @@ async fn format_endpoint_pretty_prints_lisp() {
     );
 }
 
-/// The Defaults panel shows old keywords under their new names.
+/// `/api/defaults` serves the spec defaults table: one object per
+/// component type, keyed by its `"type"` tag, with JSON field names.
 #[tokio::test]
-async fn defaults_endpoint_shows_new_keyword_names() {
+async fn defaults_endpoint_serves_the_spec_table() {
     let (cfg, _dir) = config_with("").await;
-    cfg.eval("(setq meter-defaults '(:interval 500))").unwrap();
     let (status, body) = call(cfg, get("/api/defaults")).await;
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let meter = v["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["var_name"] == "meter-defaults")
-        .unwrap();
-    let value = meter["value"].as_str().unwrap();
-    assert!(value.contains(":interval-s 0.5"), "{value}");
-    assert!(!value.contains(":interval "), "{value}");
+    assert_eq!(
+        v["meter"],
+        json!({"interval_s": 0.2, "stream_jitter_pct": 4.0})
+    );
+    assert_eq!(v["grid_connection_point"]["rated_fuse_current_a"], 100);
+    assert_eq!(v["battery"]["health"], "ok");
+    assert_eq!(v["breaker"], json!({"stream_jitter_pct": 0.0}));
+    assert_eq!(v.as_object().unwrap().len(), 11, "{v}");
 }
 
 /// The REPL's completion list: every defined name, with its kind, signature

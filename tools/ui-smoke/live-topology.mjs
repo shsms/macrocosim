@@ -3885,7 +3885,7 @@ check(
 );
 
 // ── e2e: dialogs keep server errors inline ─────────────────────────
-// A failed load, snapshot save or Defaults save shows its error in place,
+// A failed load or snapshot save shows its error in place,
 // the dialog stays open and no toast is raised; trying again or reopening
 // clears the old error.
 const toastCount = () => page.evaluate(() => document.querySelectorAll("#toast-host .toast").length);
@@ -3947,21 +3947,20 @@ check(
   snapState.error === "Save failed: disk full" && snapState.open && snapState.toasts === 0,
   JSON.stringify(snapState),
 );
-await page.route("**/eval", (r) => r.fulfill({ status: 400, contentType: "application/json", body: '{"error":"bad form"}' }));
+// The Defaults panel shows the engine's table read-only.
 await page.click("#defaults-btn");
-await waitFor(() => page.evaluate(() => document.querySelector(".defaults-entry button") !== null), 8000).catch(() => null);
-toastsBefore = await toastCount();
-const defaultsVar = await page.evaluate(() => document.querySelector(".defaults-entry label").textContent);
-await page.click(".defaults-entry button");
-const defaultsError = await waitFor(() => shownError(".defaults-entry .form-error"), 8000).catch(() => null);
-const defaultsToasts = (await toastCount()) - toastsBefore;
-await page.unroute("**/eval");
+const defaultsShown = await waitFor(
+  () =>
+    page.evaluate(() => {
+      const heads = [...document.querySelectorAll(".defaults-entry h3")].map((h) => h.textContent);
+      return heads.includes("meter") && document.querySelector("#defaults-list textarea, #defaults-list button") === null
+        ? heads
+        : null;
+    }),
+  8000,
+).catch(() => null);
 await page.click("#defaults-btn");
-check(
-  "e2e: a failed Defaults save shows its error under the entry",
-  defaultsError === `${defaultsVar}: bad form` && defaultsToasts === 0,
-  JSON.stringify({ defaultsError, defaultsVar, defaultsToasts }),
-);
+check("e2e: the Defaults panel lists the defaults per type, read-only", defaultsShown !== null, JSON.stringify(defaultsShown));
 
 // ── e2e: the button kit ────────────────────────────────────────────
 // Header buttons are the secondary kind, the new-dispatch button the

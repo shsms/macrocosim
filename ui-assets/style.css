@@ -2342,20 +2342,20 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .defaults-entry {
   margin-bottom: var(--space-4);
 }
-.defaults-entry label {
-  display: block;
+.defaults-entry h3 {
   font-family: var(--font-mono);
   font-size: var(--text-md);
   color: var(--accent);
-  margin-bottom: var(--space-0);
+  margin: 0 0 var(--space-0);
 }
-.defaults-entry textarea {
-  width: 100%;
+.defaults-entry dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0 var(--space-2);
+  margin: 0;
   font-family: var(--font-mono);
-  resize: vertical;
-  box-sizing: border-box;
 }
-.defaults-entry button { margin-top: var(--space-1); }
+.defaults-entry dd { margin: 0; }
 
 .setpoints {
   margin-top: var(--space-4);

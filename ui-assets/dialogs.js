@@ -3,7 +3,6 @@
 // - Side-panel toggles for Defaults and the live Scenario report.
 
 import { escapeHtml, mutate } from "./app.js";
-import { evalText } from "./eval.js";
 import { bgFetch, getJson } from "./http.js";
 import { clearFormError, notify, showFormError } from "./notices.js";
 import { currentMgEntry, mgJson, readSelectedMg, scenarioMgId } from "./routing.js";
@@ -226,6 +225,8 @@ function renderScenarioEvents(events) {
 }
 
 
+// The defaults the engine fills into each component type's spec,
+// read-only: one block per type, one row per field it fills.
 async function renderDefaults(contentEl) {
   let data;
   try {
@@ -234,35 +235,20 @@ async function renderDefaults(contentEl) {
     notify(`Defaults unavailable: ${err.message}`);
     return;
   }
+  const blocks = Object.entries(data)
+    .map(([type, fields]) => {
+      const rows = Object.entries(fields)
+        .map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(JSON.stringify(v))}</dd>`)
+        .join("");
+      return `<div class="defaults-entry"><h3>${escapeHtml(type)}</h3><dl>${rows}</dl></div>`;
+    })
+    .join("");
   contentEl.innerHTML = `
-    <h2>Per-category defaults</h2>
+    <h2>Per-type defaults</h2>
     <p class="hint">
-      Edit a value (raw Lisp) and click Save to <code>setq</code> the
-      variable. Changes apply immediately and persist to
-      <code>enterprise.lisp</code>.
+      What the engine fills into a component's spec for each field the
+      spec leaves out.
     </p>
-    <div id="defaults-list"></div>
+    <div id="defaults-list">${blocks}</div>
   `;
-  const list = document.getElementById("defaults-list");
-  for (const e of data.entries) {
-    const block = document.createElement("div");
-    block.className = "defaults-entry";
-    // Size the textarea to the pair-per-line value and let long
-    // lines scroll horizontally instead of soft-wrapping mid-token.
-    const rows = Math.min(10, Math.max(3, e.value.split("\n").length + 1));
-    block.innerHTML = `
-      <label>${e.var_name}</label>
-      <textarea class="field" rows="${rows}" wrap="off" spellcheck="false">${escapeHtml(e.value)}</textarea>
-      <button class="btn btn-sm">Save</button>
-      <p class="form-error" hidden></p>
-    `;
-    const ta = block.querySelector("textarea");
-    const error = block.querySelector(".form-error");
-    block.querySelector("button").addEventListener("click", async () => {
-      clearFormError(error);
-      const result = await evalText(`(setq ${e.var_name} (quote ${ta.value}))`);
-      if (!result.ok) showFormError(error, `${e.var_name}: ${result.error}`);
-    });
-    list.appendChild(block);
-  }
 }
