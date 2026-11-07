@@ -273,6 +273,12 @@ async def ramp(meter: mc.Meter) -> None:
 task = asyncio.create_task(ramp(microgrid[LOAD]))
 ```
 
+Each `set` is one HTTP request. One simulator supports 1600 writes per second
+in total, across all its knobs and clients: the rate
+[`tools/write-rate.py`](../tools/write-rate.py) measured, rounded down, with the
+release binary writing ten meters from one task on a 4-core VM. Keep a loop
+under 10 Hz per knob.
+
 ## Errors
 
 | Error | Means |
