@@ -68,6 +68,12 @@ struct Args {
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,
 
+    /// The Python interpreter that exports a microgrid as a `.py`
+    /// module. Without it, `$MACROCOSIM_PYTHON`, then a `python` next
+    /// to this binary, then `python3` or `python` on `PATH`.
+    #[arg(long, value_name = "PATH")]
+    python: Option<PathBuf>,
+
     /// UI HTTP port (0 = OS-chosen). Ignored under --ephemeral-ports.
     #[arg(long, default_value_t = 8801)]
     ui_port: u16,
@@ -228,6 +234,9 @@ async fn serve() {
     });
     let engine = config.engine().clone();
     apply_enterprise_flags(&args, &engine);
+    if let Some(python) = &args.python {
+        engine.set_python(python.clone());
+    }
 
     // Every microgrid runtime, boot-time and later, starts through
     // MicrogridRuntimes. The listener subscribes before the file

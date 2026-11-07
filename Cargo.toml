@@ -16,7 +16,9 @@ tonic-prost = "0.14"
 tonic = "0.14.0"
 prost = "0.14.0"
 prost-types = "0.14.0"
-tokio = { version = "1.43.1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time"] }
+# `process`, `signal` and `io-util` run the script runner's child process
+# and the export (src/runner).
+tokio = { version = "1.43.1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "process", "signal", "io-util"] }
 tokio-stream = "0.1.15"
 tulisp = { git = "https://github.com/shsms/tulisp", rev = "42cf4432b166fd5e57050193b7fce2e24f48fdaa", features = ["sync", "etags"] }
 tulisp-fmt = "0.2"

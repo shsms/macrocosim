@@ -468,3 +468,38 @@ fn wrap_body(body: &str) -> String {
     };
     format!("(make-microgrid :id 2200 :grpc-port 8800 :topology (lambda () {inner}))")
 }
+
+/// The interpreter of `python/.venv`, where `uv sync` in `python/`
+/// installs the package. `None`, with a printed note, when it is
+/// missing; a panic instead under `MACROCOSIM_REQUIRE_PYTHON=1`,
+/// which CI sets.
+#[allow(dead_code)]
+pub fn venv_python() -> Option<PathBuf> {
+    let path = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/python/.venv/bin/python"
+    ));
+    if path.exists() {
+        return Some(path);
+    }
+    let note = format!("{} is missing; run `uv sync` in python/", path.display());
+    assert!(
+        std::env::var_os("MACROCOSIM_REQUIRE_PYTHON").is_none_or(|v| v != "1"),
+        "{note}"
+    );
+    eprintln!("skipped: {note}");
+    None
+}
+
+/// `doc`'s components sorted by id and its connections sorted, so two
+/// renderings of one microgrid compare equal.
+#[allow(dead_code)]
+pub fn normalized(mut microgrid: serde_json::Value) -> serde_json::Value {
+    if let Some(components) = microgrid["components"].as_array_mut() {
+        components.sort_by_key(|c| c["id"].as_u64());
+    }
+    if let Some(connections) = microgrid["connections"].as_array_mut() {
+        connections.sort_by_key(|c| (c[0].as_u64(), c[1].as_u64()));
+    }
+    microgrid
+}

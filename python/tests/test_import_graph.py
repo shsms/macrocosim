@@ -30,6 +30,7 @@ ORDER = [
     "_microgrid",
     "_launch",
     "_connect",
+    "export",
     "__init__",
 ]
 """A module may import only modules listed before it."""

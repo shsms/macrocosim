@@ -4,6 +4,7 @@ pub mod engine;
 pub mod lisp;
 pub mod proto;
 pub mod proto_conv;
+pub mod runner;
 pub mod runtime;
 pub mod server;
 pub mod sim;

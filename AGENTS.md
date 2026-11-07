@@ -36,6 +36,12 @@ is wiring the topology + animating the environment.
   (`0.2.0-alpha.0` is `0.2.0a0`), the form the Python package carries
 - `src/undo.rs` — `UndoHistory<T>`, the per-microgrid undo / redo
   stack (capped at 20 steps), generic over what one step stores
+- `src/runner.rs` — the script runner. `runner/python.rs` finds the
+  Python interpreter (`--python`, `$MACROCOSIM_PYTHON`, beside the
+  binary, `PATH`) and checks it once per engine: 3.11 or later with the
+  `macrocosim` package of the binary's version. The `.py` export
+  (`GET /api/mg/{mg}/spec.py`) pipes the stored spec into
+  `python -P -m macrocosim.export`, one export at a time
 - `src/watch.rs` — the debounced file watcher: `Files` watches a named
   set of files and re-arms them after an atomic save (the Lisp hot
   reload in `lisp/boot.rs`); `Tree` watches every directory under a

@@ -83,7 +83,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         },
         scripts::scripts_list,
         snapshots::{snapshots_list, snapshots_load, snapshots_save},
-        spec::{microgrid_delete, spec_get, spec_put, spec_schema},
+        spec::{microgrid_delete, spec_get, spec_put, spec_py, spec_schema},
         topology::topology,
         undo::{redo, undo, undo_depths},
         weather::{weather_delete, weather_get, weather_post},
@@ -92,6 +92,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .route("/", delete(microgrid_delete))
         .route("/topology", get(topology))
         .route("/spec", get(spec_get).put(spec_put))
+        .route("/spec.py", get(spec_py))
         .route("/eval", post(eval_for_mg))
         .route("/formula", get(formula))
         .route("/component/{id}", get(component))

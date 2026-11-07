@@ -18,6 +18,7 @@ use tokio::sync::broadcast;
 pub use metadata::Metadata;
 pub(crate) use metadata::reserved_ports_of;
 
+use crate::runner::python::Interpreter;
 use crate::sim::MicrogridSite;
 use crate::sim::clock::SharedClock;
 use crate::sim::dispatch::SharedDispatchStore;
@@ -94,6 +95,11 @@ pub struct Engine {
     /// Per-microgrid undo stacks of the specs a `PUT` replaced, for
     /// the microgrids with a stored spec. In memory only.
     pub(crate) spec_undo: Arc<Mutex<HashMap<u64, UndoHistory<MicrogridSpec>>>>,
+    /// The Python interpreter a script and the export run on, found
+    /// and checked on first use.
+    pub(crate) python: Arc<Interpreter>,
+    /// One export at a time: the permit a `.py` export holds.
+    pub(crate) exports: Arc<tokio::sync::Semaphore>,
 }
 
 impl Engine {
@@ -128,6 +134,8 @@ impl Engine {
             microgrid_registered: Arc::new(broadcast::channel(1024).0),
             microgrid_unloaded: Arc::new(broadcast::channel(1024).0),
             spec_undo: Arc::new(Mutex::new(HashMap::new())),
+            python: Arc::default(),
+            exports: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 
@@ -242,6 +250,20 @@ impl Engine {
             .lock()
             .get(&id)
             .map_or(UndoDepths { undo: 0, redo: 0 }, UndoHistory::depths)
+    }
+
+    /// Run scripts and exports on `path` (`--python`) instead of
+    /// looking for an interpreter. Only takes effect before the first
+    /// [`Self::python`].
+    pub fn set_python(&self, path: PathBuf) {
+        self.python.set_flag(path);
+    }
+
+    /// The checked Python interpreter, found on the first call; the
+    /// install message when there is none that passes. See
+    /// [`crate::runner::python`].
+    pub async fn python(&self) -> Result<PathBuf, String> {
+        self.python.get().await
     }
 
     /// Subscribe to `microgrid_registered` notifications.
