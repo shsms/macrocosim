@@ -361,13 +361,15 @@ check(
 );
 await page.click("#create-mg-close");
 
-// The load picker opens on microgrids/ — where managed files live.
+// The Lisp load picker opens on microgrids/ where managed files live,
+// and on the state dir itself without one, as here: the starter site
+// is a Python script.
 await page.click("#mglist-load-btn");
 const crumb = await waitFor(async () => {
   const t = (await page.textContent("#load-script-breadcrumb")) || "";
   return t.trim() ? t : null;
 });
-check("e2e: load dialog opens on the microgrids dir", /microgrids/.test(crumb), crumb);
+check("e2e: load dialog opens on the state dir", /state dir/.test(crumb), crumb);
 const listed = await page.$$eval("#load-script-list button", (bs) => bs.map((b) => b.textContent));
 check("e2e: load dialog lists that directory's entries", listed.length > 0, JSON.stringify(listed));
 check("e2e: the collision bar starts hidden", await page.locator("#load-script-collision").isHidden());
@@ -686,25 +688,21 @@ const loopbackText = await waitFor(async () => {
 check("e2e: the loopback pill shows no count", /^(✓ connected|⚠ connecting)$/.test(loopbackText), loopbackText);
 
 // ── e2e: the microgrid header's file state ────────────────────────
-// Adopt is the way out of read-only, so it shows exactly when the
-// file is unmanaged — checked against the listing rather than
-// against a hard-coded expectation, so it holds however the demo
-// example is shipped.
-const demoManaged = await page.evaluate(async () => {
+// The starter site comes from a Python script, so it has a spec: no
+// Lisp file to adopt, and its structure is editable.
+const demoHasSpec = await page.evaluate(async () => {
   const rows = await (await fetch("/api/microgrids")).json();
-  return rows.find((m) => m.id === 2200)?.managed;
+  return rows.find((m) => m.id === 2200)?.has_spec;
 });
-const headerState = await waitFor(async () => {
-  const s = await page.evaluate(() => ({
-    adopt: !document.getElementById("mg-adopt-btn").hidden,
-    chip: Boolean(document.querySelector("#mg-file-chips .unmanaged")),
-  }));
-  return s.adopt === !demoManaged ? s : null;
-}, 8000).catch(() => null);
+const headerState = await page.evaluate(() => ({
+  adopt: !document.getElementById("mg-adopt-btn").hidden,
+  chip: Boolean(document.querySelector("#mg-file-chips .unmanaged")),
+  palette: [...document.querySelectorAll("#palette .pal-btn")].every((b) => !b.disabled),
+}));
 check(
-  "e2e: Adopt + unmanaged chip show exactly when the file is unmanaged",
-  headerState !== null && headerState.chip === !demoManaged,
-  JSON.stringify({ demoManaged, headerState }),
+  "e2e: a microgrid with a spec shows no Adopt or unmanaged chip, and an enabled palette",
+  demoHasSpec === true && !headerState.adopt && !headerState.chip && headerState.palette,
+  JSON.stringify({ demoHasSpec, headerState }),
 );
 
 // Undo is the server's: Ctrl+Z posts to /api/mg/{mg}/undo instead of
@@ -796,49 +794,54 @@ check("e2e: the values pill's tooltip describes the flow colours", await page.ev
 }));
 
 // ── e2e: a live edge goes dead ────────────────────────────────────
-// Setting the consumer meter to 0 W takes its edge under the dead
-// band: the next flush must paint it back to the rest look, not
-// leave the last colour and width standing. A numeric set-meter-power
-// replaces the demo's scripted load curve for good (clear-meter-power
-// would only return the childless meter to measuring 0 W), so the
-// block leaves the meter at the curve's 17.5 kW mean: live, and
-// steadier for the blocks below that read it.
-// The eval endpoint answers 400 to a failed Lisp eval, so the
-// response status is what says the expression took.
-const evalMg = (expr) =>
-  page.evaluate(async (e) => {
-    const r = await fetch("/api/mg/2200/eval", { method: "POST", body: e });
-    return { status: r.status, ok: r.ok, ...(await r.json()) };
-  }, expr);
-const zeroed = await evalMg("(set-meter-power 100 0)");
-check("e2e: consumer meter set to 0 W", zeroed.status === 200 && zeroed.ok === true, JSON.stringify(zeroed));
-const deadConsumer = await waitFor(async () => {
-  const e = (await getEdges()).find((x) => x.id === "2-100");
+// Setting the CHP's meter (1007, a steady 2 kW export the script does
+// not animate) to 0 W takes its edge under the dead band: the next
+// flush must paint it back to the rest look, not leave the last
+// colour and width standing. The block puts the 2 kW back.
+// A typed write of the starter site's: `drive(id, body)` POSTs the
+// component's drive route, `postMg(suffix, body)` any route of 2200.
+const postMg = (suffix, body, method = "POST") =>
+  page.evaluate(
+    async ([suffix, body, method]) => {
+      const r = await fetch(`/api/mg/2200/${suffix}`, {
+        method,
+        headers: body === undefined ? {} : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: r.status, ok: r.ok, text: await r.text() };
+    },
+    [suffix, body, method],
+  );
+const drive = (id, body) => postMg(`component/${id}/drive`, body);
+const zeroed = await drive(1007, { power_w: 0 });
+check("e2e: the CHP meter set to 0 W", zeroed.status === 204, JSON.stringify(zeroed));
+const deadChp = await waitFor(async () => {
+  const e = (await getEdges()).find((x) => x.id === "2-1007");
   return e && e.direction === "dead" ? e : null;
 }, 10000).catch(() => null);
-check("e2e: the zeroed edge is painted dead", deadConsumer !== null, JSON.stringify(deadConsumer));
-check("e2e: a dead edge returns to the rest width and grey", deadConsumer !== null && looksRest(deadConsumer), JSON.stringify(deadConsumer));
-const restored = await evalMg("(set-meter-power 100 17500.0)");
-check("e2e: consumer meter set back to its mean load", restored.status === 200 && restored.ok === true, JSON.stringify(restored));
+check("e2e: the zeroed edge is painted dead", deadChp !== null, JSON.stringify(deadChp));
+check("e2e: a dead edge returns to the rest width and grey", deadChp !== null && looksRest(deadChp), JSON.stringify(deadChp));
+const restored = await drive(1007, { power_w: -2000 });
+check("e2e: the CHP meter set back to its 2 kW", restored.status === 204, JSON.stringify(restored));
 check(
   "e2e: the restored edge goes live again",
-  Boolean(await waitFor(async () => (await getEdges()).find((x) => x.id === "2-100" && isLive(x)), 15000).catch(() => null)),
+  Boolean(await waitFor(async () => (await getEdges()).find((x) => x.id === "2-1007" && isLive(x)), 15000).catch(() => null)),
 );
 
 // ── e2e: a topology refresh keeps the overlay ─────────────────────
-// An accepted eval broadcasts topology_changed → apply() diffs the
+// A status write broadcasts topology_changed → apply() diffs the
 // DataSets. The live labels and edge flow must survive the diff.
 const getApplyCount = () =>
   page.evaluate(async () => {
     const { topology } = await import("/assets/topology.js");
     return topology.debugApplyCount();
   });
+// Health ok on the main meter, which already is: it changes nothing
+// but tells every client to read the topology again.
+const bumpTopology = () => postMg("component/2/status", { health: "ok" });
 const appliesBefore = await getApplyCount();
-const evalRes = await page.evaluate(async () => {
-  const r = await fetch("/api/mg/2200/eval", { method: "POST", body: "(+ 1 1)" });
-  return r.status;
-});
-check("e2e: no-op eval accepted", evalRes === 200, `status ${evalRes}`);
+const bumpRes = await bumpTopology();
+check("e2e: a no-op status write is accepted", bumpRes.status === 204, JSON.stringify(bumpRes));
 // Wait for the refresh to land before asserting, so the check can't
 // pass against the pre-refresh DataSets.
 await waitFor(async () => (await getApplyCount()) > appliesBefore);
@@ -913,7 +916,16 @@ await page.evaluate(async () => { const { topology } = await import("/assets/top
 // no power through it has no power factor to show. Command it (the
 // setpoint expires on its own, so re-runs start from the same
 // state) and wait for the ramp to reach the live overlay.
-const setpointOk = (await evalMg("(set-active-power 1001 -8000 :lifetime-s 60)")).ok;
+// An active-power setpoint inside the simulator. Setpoints come from
+// the app under test over gRPC; until Lisp goes, its eval is the one
+// way this smoke can give one, so this is the smoke's last eval.
+const setActivePower = (id, w) =>
+  page.evaluate(
+    async ([id, w]) =>
+      (await fetch("/api/mg/2200/eval", { method: "POST", body: `(set-active-power ${id} ${w} :lifetime-s 60)` })).ok,
+    [id, w],
+  );
+const setpointOk = await setActivePower(1001, -8000);
 check("e2e: hover setup — inverter setpoint accepted", setpointOk === true, String(setpointOk));
 await waitFor(async () => {
   const e = await page.evaluate(async () => {
@@ -1329,12 +1341,12 @@ check(
 // Fill the knob the way a user does — fill + Enter, the keydown path
 // the input's own listener wires (inspect.js commits on Enter-keydown
 // only; blur/Esc restore the pre-edit value instead, on purpose). The
-// answer is read back with a direct eval from Node, so the assertion
-// lands on the sim's own state and not on anything the page happens
-// to be holding.
-const evalNumber = async (expr) => {
-  const r = await fetch(`${BASE}/api/mg/2200/eval`, { method: "POST", body: expr, signal: AbortSignal.timeout(5000) });
-  return r.ok ? Number((await r.json()).value) : Number.NaN;
+// answer is read back from the component's live telemetry on the
+// canvas, so the assertion lands on what the sim streams and not on
+// the knob's own text.
+const liveReading = async (id, field) => {
+  const e = await page.evaluate(async (id) => (await import("/assets/topology.js")).topology.debugLiveEntry(id), id);
+  return Number.isFinite(e?.[field]) ? e[field] : Number.NaN;
 };
 // The Component card that holds the knobs is folded by default
 // (CARD_DEFAULT_OPEN in inspect.js) — open it, or Playwright's
@@ -1346,9 +1358,9 @@ if (!(await page.evaluate(() => document.getElementById("card-component")?.class
 await page.fill('.knob-input[data-token="meter-reactive-power"]', "500");
 await page.press('.knob-input[data-token="meter-reactive-power"]', "Enter");
 const knobQ = await waitFor(async () => {
-  const q = await evalNumber(`(component-reactive-power ${meterId})`);
+  const q = await liveReading(meterId, "q");
   return Math.abs(q - 500) < 1 ? q : null;
-}, 10000).catch(() => evalNumber(`(component-reactive-power ${meterId})`));
+}, 10000).catch(() => liveReading(meterId, "q"));
 check("e2e: the reactive knob writes through to the sim", Math.abs(knobQ - 500) < 1, String(knobQ));
 // inspect.js's Enter-commit contract (~519-521): on success the
 // commit handler remembers the committed text as the new "live"
@@ -1402,18 +1414,11 @@ check(
 // Leave the meter as we found it: clear the reactive override so
 // later sections (and anything appended after this one) aren't
 // coupled to this section's 500 VAr state.
-const reactiveCleared = await (async () => {
-  const r = await fetch(`${BASE}/api/mg/2200/eval`, {
-    method: "POST",
-    body: `(clear-meter-reactive ${meterId})`,
-    signal: AbortSignal.timeout(5000),
-  });
-  return r.ok;
-})();
+const reactiveCleared = (await drive(meterId, { clear_reactive: true })).ok;
 check("e2e: the reactive override is cleared at the end of the section", reactiveCleared === true, String(reactiveCleared));
 
 // ── e2e: the meter power knob's measure button clears an override ─
-// Reuses `meterId` and `evalNumber` from above (still selected), and
+// Reuses `meterId` and `liveReading` from above (still selected), and
 // the Component card the reactive-knob section above already opened
 // (fill/click need it open, or Playwright's actionability check
 // times out against a display:none row).
@@ -1428,7 +1433,7 @@ const measureHidden = () =>
       ?.querySelector(".knob-measure-btn")?.hidden,
   );
 const childrenP = await waitFor(async () => {
-  const p = await evalNumber(`(component-active-power ${meterId})`);
+  const p = await liveReading(meterId, "p");
   return Number.isFinite(p) ? p : null;
 });
 check("e2e: the power measure button starts hidden", (await measureHidden()) === true);
@@ -1441,7 +1446,7 @@ await page.fill('.knob-input[data-token="meter-power"]', String(OVERRIDE_P));
 await page.press('.knob-input[data-token="meter-power"]', "Enter");
 await page.evaluate(() => document.activeElement?.blur());
 const overrideP = await waitFor(async () => {
-  const p = await evalNumber(`(component-active-power ${meterId})`);
+  const p = await liveReading(meterId, "p");
   return Math.abs(p - OVERRIDE_P) < 1 ? p : null;
 });
 check("e2e: the power knob overrides the meter's live P", Math.abs(overrideP - OVERRIDE_P) < 1, String(overrideP));
@@ -1459,16 +1464,16 @@ check(
   await waitFor(async () => (await measureHidden()) === true),
 );
 // The demo's hidden consumer meter (id 100, one of this meter's
-// children) drives ±500 W of per-tick random jitter plus a slow
-// 15-min sine (examples/starter-site.lisp; the edge-flow block above
-// pins it to a steady 17.5 kW, but the other children still move) —
-// the round trip can't land on the exact pre-override reading, so
+// children) carries ±500 W of random jitter plus a slow 15-min sine,
+// set every second by examples/starter_site.py, and the other
+// children move too — the round trip can't land on the exact
+// pre-override reading, so
 // this compares with a generous threshold, same idiom as the boiler
 // section's power-level checks below.
 const clearedP = await waitFor(async () => {
-  const p = await evalNumber(`(component-active-power ${meterId})`);
+  const p = await liveReading(meterId, "p");
   return Number.isFinite(p) && Math.abs(p - childrenP) < 2500 ? p : null;
-}, 10000).catch(() => evalNumber(`(component-active-power ${meterId})`));
+}, 10000).catch(() => liveReading(meterId, "p"));
 check(
   "e2e: clearing the power knob returns the meter to its children's sum",
   Math.abs(clearedP - childrenP) < 2500,
@@ -1504,7 +1509,7 @@ if (!(await page.evaluate(() => document.getElementById("card-ev")?.classList.co
 }
 const evText = () =>
   page.evaluate(() => document.querySelector("#card-ev .fold-body")?.textContent ?? "");
-// The car the demo file plugged, read back through the inspector.
+// The car the demo script plugged, read back through the inspector.
 const bootText = await waitFor(async () => {
   const t = await evText();
   return /sedan/.test(t) ? t : null;
@@ -1519,12 +1524,12 @@ check("e2e: an unplugged charger says so", /no EV/i.test(emptyText ?? ""), empty
 await page.selectOption("#ev-preset", "city");
 await page.fill("#ev-soc", "20");
 await page.focus("#ev-soc");
-// Any eval bumps the topology version, and the refresh re-renders the
+// A status write bumps the topology version, and the refresh re-renders the
 // inspector; the half-filled form must come through it untouched, or
 // a refresh landing between the typing and the click (the unplug's
 // own, say) plugs the default car instead.
 const appliesBeforeEvRefresh = await getApplyCount();
-const evRefreshEval = await evalMg("(+ 1 1)");
+const evRefreshEval = await bumpTopology();
 const evRefreshed = await waitFor(async () => (await getApplyCount()) > appliesBeforeEvRefresh, 5000).catch(() => null);
 await new Promise((r) => setTimeout(r, 300));
 const formAfterRefresh = await page.evaluate(() => ({
@@ -1549,19 +1554,12 @@ const pluggedText = await waitFor(async () => {
   return !/no EV/i.test(t) && /city/.test(t) ? t : null;
 }).catch(() => null);
 check("e2e: plugging a city car shows it in the card", /city/.test(pluggedText ?? "") && /1 phase/.test(pluggedText ?? ""), pluggedText);
-const evOk = await (async () => {
-  const r = await fetch(`${BASE}/api/mg/2200/eval`, {
-    method: "POST",
-    body: `(set-active-power ${chargerId} 22000 :lifetime-s 60)`,
-    signal: AbortSignal.timeout(5000),
-  });
-  return r.ok;
-})();
+const evOk = await setActivePower(chargerId, 22000);
 check("e2e: a 22 kW command is accepted on the charger", evOk === true, String(evOk));
 // A city car is 1-phase/32 A — 230 V × 32 A ≈ 7.36 kW — so the draw
 // lands well under the 22 kW asked for however generous the command.
 const drawW = await waitFor(async () => {
-  const p = await evalNumber(`(component-active-power ${chargerId})`);
+  const p = await liveReading(chargerId, "p");
   return p > 7000 ? p : null;
 }, 20000).catch(() => null);
 check("e2e: the 1-phase car tops out near 7.4 kW", drawW != null && drawW > 7000 && drawW < 7500, String(drawW));
@@ -1616,16 +1614,32 @@ await page.evaluate(async () => {
 // 0.025 kg/s ≈ 56.4 kW here), and the boiler's own pressure state can
 // decline the allotment back toward zero once it drifts above the
 // 8 bar target. Fresh fixture ids (9901/9902), clear of the demo's
-// (1, 2, 100, 1000, 1001) and the import section's (9801/9802,
-// 99401-99406). Connected the way the demo wires a branch meter: a
-// new meter hangs off the site's main meter (2), the boiler hangs off
-// that meter — same (connect parent child) shape as starter-site.lisp.
+// and the import section's (99401-99406). Connected the way the demo
+// wires a branch meter: a new meter hangs off the site's main meter
+// (2), the boiler hangs off that meter. Added with one PUT of the
+// starter site's spec.
 const BOILER_ID = 9901;
 const BOILER_METER_ID = 9902;
+const putSpec = (change) =>
+  page.evaluate(async (change) => {
+    const spec = await (await fetch("/api/mg/2200/spec")).json();
+    // biome-ignore lint/security/noGlobalEval: the change is this smoke's own code
+    (0, eval)(change)(spec);
+    const r = await fetch("/api/mg/2200/spec", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(spec),
+    });
+    return { status: r.status, ok: r.ok };
+  }, change.toString());
 const boilerSetupOk = (
-  await evalMg(
-    `(make-meter :id ${BOILER_METER_ID}) (make-steam-boiler :id ${BOILER_ID} :demand-kg-per-s 0.025) (connect 2 ${BOILER_METER_ID}) (connect ${BOILER_METER_ID} ${BOILER_ID})`,
-  )
+  await putSpec((spec) => {
+    spec.components.push(
+      { type: "meter", id: 9902 },
+      { type: "steam_boiler", id: 9901, demand_kg_per_s: 0.025 },
+    );
+    spec.connections.push([2, 9902], [9902, 9901]);
+  })
 ).ok;
 check("e2e: boiler fixture created behind its own meter", boilerSetupOk === true, String(boilerSetupOk));
 await waitFor(async () => (await getModels()).some((m) => m.id === BOILER_ID), 15000);
@@ -1681,7 +1695,7 @@ check(
 // Allotment flow: demand was set at construction, BEFORE this
 // setpoint — with demand 0 the dynamic band is [0, 0] and nothing
 // flows no matter what set-active-power asks for.
-const boilerPowerOk = (await evalMg(`(set-active-power ${BOILER_ID} 50000.0)`)).ok;
+const boilerPowerOk = await setActivePower(BOILER_ID, 50000);
 check("e2e: the boiler's active-power setpoint is accepted", boilerPowerOk === true, String(boilerPowerOk));
 const boilerDrawing = await waitFor(async () => {
   const e = await page.evaluate(async (id) => {
@@ -1700,7 +1714,7 @@ check(
 // electricity, so consumption decays back toward zero. Decay back to
 // the target takes ~16 min at this demand — far outside the smoke's
 // timescale, so "declined" is stable for this assertion.
-const boilerPressureOk = (await evalMg(`(set-boiler-pressure ${BOILER_ID} 9.5)`)).ok;
+const boilerPressureOk = (await drive(BOILER_ID, { pressure_bar: 9.5 })).ok;
 check("e2e: the pressure poke is accepted", boilerPressureOk === true, String(boilerPressureOk));
 const boilerDeclined = await waitFor(async () => {
   const e = await page.evaluate(async (id) => {
@@ -1715,6 +1729,65 @@ check(
   JSON.stringify(boilerDeclined),
 );
 
+await page.evaluate(async () => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([]);
+});
+
+// ── e2e: editing through the spec ─────────────────────────────────
+// Every structural edit reads the microgrid's spec, changes it here and
+// PUTs it back: a palette add takes the lowest free id from 5000, a
+// connect and a delete are one PUT each, and undo walks the server's
+// spec stack.
+const specIds = () =>
+  page.evaluate(async () => (await (await fetch("/api/mg/2200/spec")).json()).components.map((c) => c.id));
+const specConnections = () =>
+  page.evaluate(async () => (await (await fetch("/api/mg/2200/spec")).json()).connections);
+const idsBeforeAdd = await specIds();
+const specPuts = [];
+const onSpecPut = (r) => {
+  if (r.method() === "PUT" && new URL(r.url()).pathname === "/api/mg/2200/spec") specPuts.push(r.url());
+};
+page.on("request", onSpecPut);
+await page.click("#add-toggle");
+await page.click('#palette .pal-btn[data-type="meter"]:not([data-hidden])');
+const addedId = await waitFor(async () => (await specIds()).find((id) => !idsBeforeAdd.includes(id)) ?? null, 10000).catch(
+  () => null,
+);
+await page.click("#add-panel-close");
+check(
+  "e2e: a palette add PUTs the spec with the lowest free id from 5000",
+  addedId != null && addedId >= 5000 && specPuts.length === 1,
+  JSON.stringify({ addedId, puts: specPuts.length }),
+);
+check(
+  "e2e: the added component shows on the canvas",
+  Boolean(await waitFor(async () => (await getModels()).some((m) => m.id === addedId), 10000).catch(() => null)),
+);
+await page.evaluate(async (id) => (await import("/assets/spec-edit.js")).connect(2, id), addedId);
+const connectedTo = await waitFor(
+  async () => ((await specConnections()).some(([f, t]) => f === 2 && t === addedId) ? true : null),
+  10000,
+).catch(() => false);
+check("e2e: a connect adds the edge to the spec", connectedTo === true);
+await page.evaluate(async () => (await import("/assets/editor.js")).undoMgr.undo());
+const undoneConnect = await waitFor(
+  async () => {
+    const conns = await specConnections();
+    return !conns.some(([f, t]) => f === 2 && t === addedId) && (await specIds()).includes(addedId) ? true : null;
+  },
+  10000,
+).catch(() => false);
+check("e2e: undo takes the connect back and keeps the component", undoneConnect === true);
+await page.evaluate(async (id) => {
+  const { topology } = await import("/assets/topology.js");
+  topology.select([id]);
+}, addedId);
+await page.evaluate(async () => (await import("/assets/editor.js")).deleteSelection());
+const deleted = await waitFor(async () => (!(await specIds()).includes(addedId) ? true : null), 10000).catch(() => false);
+check("e2e: deleting the selection removes the component from the spec", deleted === true);
+page.off("request", onSpecPut);
+check("e2e: each edit was one PUT", specPuts.length === 3, String(specPuts.length));
 await page.evaluate(async () => {
   const { topology } = await import("/assets/topology.js");
   topology.select([]);
@@ -1842,10 +1915,10 @@ await page.evaluate(() => localStorage.removeItem("macrocosim-topology-live"));
 // ── e2e: weather panel ──────────────────────────────────────────────
 // Runs LAST: the weather this section installs (and the sunrise/sunset
 // override below) persists on the site for the rest of the run.
-// The starter site's PV (id 200) passes :sunlight-pct explicitly and is
-// driven by a set-solar-sunlight source (examples/starter-site.lisp), so
-// it's Manual and its power does not follow weather — assert the panel's own
-// site-% readout, not inverter power.
+// The starter site's PV (id 200) has a sunlight set in its spec, which
+// examples/starter_site.py moves every second, so its power does not
+// follow the weather — assert the panel's own site-% readout, not
+// inverter power.
 // A first answer that fails says why, rather than "loading weather…".
 await page.route("**/weather", (r) => r.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' }));
 await page.click("#weather-btn");
@@ -1865,8 +1938,8 @@ check("e2e: a weather panel whose first answer fails says why", weatherUnavailab
 // Opened again, the panel asks at once rather than at its next poll.
 await page.click("#weather-btn");
 await page.click("#weather-btn");
-// starter-site.lisp never calls (make-weather) — the site starts with
-// no weather, so the panel opens on its empty state.
+// starter_site.py installs no weather — the site starts with none,
+// so the panel opens on its empty state.
 await waitFor(async () => (await page.locator("#weather-create").count()) > 0, 10000);
 await page.click("#weather-create");
 // Creating installs the default sky; the panel repaints from the POST
@@ -2132,126 +2205,6 @@ const replBox = await page.evaluate(() => {
   return { w: r.width, gap: r.left - l.right, bottomDiff: r.bottom - l.bottom };
 });
 check("e2e: the REPL panel spawns 560px wide, 8px to the right of the Logs panel along the bottom", Math.abs(replBox.w - 560) <= 1 && Math.abs(replBox.gap - 8) <= 1 && Math.abs(replBox.bottomDiff) <= 1, JSON.stringify(replBox));
-await page.fill("#repl-input", "(+ 1 2)");
-await page.keyboard.press("Control+Enter");
-const replOut = await waitFor(async () => {
-  const t = await page.evaluate(() => document.getElementById("repl-entries").textContent);
-  return /\b3\b/.test(t) ? t : null;
-}, 10000);
-check("e2e: an eval in the REPL panel lands its result in the output band", /\b3\b/.test(replOut ?? ""), replOut);
-// A function an eval defines completes once the eval answers, even when the
-// eval fails after defining it.
-await page.fill("#repl-input", '(progn (defun smoke-sym-fn (a) "Smoke doc." a) (error "smoke-after-defun"))');
-await page.keyboard.press("Control+Enter");
-await waitFor(async () =>
-  await page.evaluate(() => [...document.querySelectorAll("#repl-output .repl-error")].some((e) => e.textContent.includes("smoke-after-defun")) || null), 10000).catch(() => null);
-await page.type("#repl-input", "(smoke-sym-");
-const definedNow = await waitFor(async () =>
-  await page.evaluate(() => document.getElementById("repl-completions").textContent.includes("smoke-sym-fn") || null), 5000).catch(() => null);
-check("e2e: a function an eval defines shows up in completion", definedNow === true);
-await page.keyboard.press("Escape"); // dismisses the popup
-// A word already at the cursor opens no popup when the input gets focus, even
-// after typing before the input lost it. The hint line shows once the read
-// that the focus starts has ended.
-await page.type("#repl-input", "x");
-await page.evaluate(() => {
-  const i = document.getElementById("repl-input");
-  i.value = "(set-meter-power";
-  document.getElementById("repl-hint").textContent = "";
-  i.blur();
-  i.focus();
-});
-const hinted = await waitFor(async () =>
-  await page.evaluate(() => document.getElementById("repl-hint").textContent.startsWith("(set-meter-power ID") || null), 5000).catch(() => null);
-const entries = await page.evaluate(() => document.querySelectorAll("#repl-completions li").length);
-check("e2e: focusing the REPL input opens no popup for the word already there", hinted === true && entries === 0, JSON.stringify({ hinted, entries }));
-await page.fill("#repl-input", "");
-await page.type("#repl-input", "(make-");
-const popup = await waitFor(async () =>
-  await page.evaluate(() => {
-    const box = document.getElementById("repl-popup");
-    const ul = document.getElementById("repl-completions");
-    if (box.hidden || ul.children.length === 0) return null;
-    const u = box.getBoundingClientRect();
-    const card = document.getElementById("repl").getBoundingClientRect();
-    return { entries: ul.children.length, top: u.top - card.top, bottom: card.bottom - u.bottom };
-  }), 5000).catch(() => null);
-check("e2e: the completion popup fits inside the default-sized REPL card", popup !== null && popup.entries > 5 && popup.top >= 0 && popup.bottom >= 0, JSON.stringify(popup));
-await page.keyboard.press("Escape"); // dismisses the popup
-await page.fill("#repl-input", "");
-// The popup opens over the word being completed: its left edge moves with the
-// word. A popup as wide as the input sits at its left edge wherever the word
-// is, so the card is made wide enough for the popup to move.
-const setReplWidth = async (px) => {
-  await page.evaluate((w) => { document.getElementById("repl").style.width = w; }, `${px}px`);
-  await new Promise((r) => setTimeout(r, 1000));
-};
-await setReplWidth(1000);
-const popupLeft = async (text) => {
-  await page.fill("#repl-input", "");
-  await page.type("#repl-input", text);
-  return await waitFor(async () =>
-    await page.evaluate(() => {
-      const box = document.getElementById("repl-popup");
-      if (box.hidden) return null;
-      return { left: box.getBoundingClientRect().left - document.getElementById("repl-input").getBoundingClientRect().left };
-    }), 5000).catch(() => null);
-};
-const leftAtStart = await popupLeft("(smoke-sym-");
-await page.keyboard.press("Escape"); // dismisses the popup
-const leftIndented = await popupLeft("        (smoke-sym-");
-await page.keyboard.press("Escape"); // dismisses the popup
-await page.fill("#repl-input", "");
-await setReplWidth(560);
-check("e2e: the completion popup opens over the word being completed", leftAtStart !== null && leftIndented !== null && leftIndented.left - leftAtStart.left >= 40, JSON.stringify({ leftAtStart, leftIndented }));
-// Where a call takes a key, typing a `:` offers its keys. Nothing is offered
-// before that, so Enter there still starts a new line.
-await page.type("#repl-input", "(make-battery ");
-await new Promise((r) => setTimeout(r, 300));
-const noKeyPopup = await page.evaluate(() => document.getElementById("repl-popup").hidden);
-await page.keyboard.press("Enter");
-const afterEnter = await page.evaluate(() => document.getElementById("repl-input").value);
-check("e2e: at a key with nothing typed, no popup opens and Enter starts a new line", noKeyPopup && afterEnter.startsWith("(make-battery \n"), JSON.stringify({ noKeyPopup, afterEnter }));
-await page.type("#repl-input", ":i");
-const offeredKeys = await waitFor(async () =>
-  await page.evaluate(() => {
-    const keys = [...document.querySelectorAll("#repl-completions li")].map((li) => li.textContent);
-    return keys.includes(":id") ? keys : null;
-  }), 5000).catch(() => null);
-check("e2e: typing : at a key of make-battery offers its keys", offeredKeys !== null && offeredKeys.every((k) => k.startsWith(":i")), JSON.stringify(offeredKeys));
-await page.keyboard.press("Escape"); // dismisses the popup
-await page.fill("#repl-input", "");
-// The popup shows the selected name's signature and docstring, from
-// /api/symbols; after completing it, the hint line marks the argument the
-// cursor is on.
-await page.type("#repl-input", "(set-meter-po");
-const docPane = await waitFor(async () =>
-  await page.evaluate(() => {
-    const doc = document.getElementById("repl-doc").textContent;
-    return doc.includes("(set-meter-power ID POWER-W)") ? doc : null;
-  }), 5000).catch(() => null);
-check("e2e: the completion popup shows the selected name's signature and docstring", /Make meter ID report/.test(docPane ?? ""), docPane);
-// A right click on a name picks nothing; a click picks it, and the focus
-// stays in the input.
-await page.click("#repl-completions li:nth-child(2)", { button: "right" });
-check("e2e: a right click on a completion picks nothing", (await page.evaluate(() => document.getElementById("repl-input").value)) === "(set-meter-po)");
-await page.click("#repl-completions li:nth-child(2)");
-const afterClick = await page.evaluate(() => ({
-  value: document.getElementById("repl-input").value,
-  focused: document.activeElement?.id === "repl-input",
-}));
-check("e2e: a click on a completion picks it and keeps the focus in the input", afterClick.value === "(set-meter-power-factor)" && afterClick.focused, JSON.stringify(afterClick));
-await page.fill("#repl-input", "");
-await page.type("#repl-input", "(set-meter-po");
-await waitFor(async () =>
-  await page.evaluate(() => document.querySelectorAll("#repl-completions li").length > 0 || null), 5000).catch(() => null);
-await page.keyboard.press("Tab");
-await page.type("#repl-input", " 1001 ");
-const hintNow = await page.evaluate(() => ({
-  text: document.getElementById("repl-hint").textContent,
-  arg: document.querySelector("#repl-hint .repl-hint-arg")?.textContent ?? null,
-}));
-check("e2e: the hint line marks the argument the cursor is on, with the docstring's first line", hintNow.arg === "POWER-W" && hintNow.text.startsWith("(set-meter-power ID POWER-W)") && hintNow.text.includes("Make meter ID"), JSON.stringify(hintNow));
 await page.fill("#repl-input", "");
 await page.keyboard.press("Escape");
 check("e2e: Escape in the REPL input closes the panel", (await panelOpen("repl")) === false);
@@ -2578,183 +2531,11 @@ await page.keyboard.press("Escape");
 await page.keyboard.press("1");
 await page.click(DEMO_CARD).catch(() => {});
 
-// The scenario both Scenarios-panel blocks below run: pv-dropout only
-// retunes PV 200's sunlight, a knob the scenario hands back when it
-// stops.
-const SMOKE_SCENARIO = "pv-dropout";
+// The smoke no longer drives the REPL or runs a Lisp scenario: the
+// starter site is a Python script, edited through its spec.
 // A waitForResponse predicate for a `method` request to `path`.
 const pathIs = (path, method = "GET") => (r) => new URL(r.url()).pathname === path && r.request().method() === method;
 
-// ── e2e: the Scenarios panel with no microgrid selected ──────────
-// A fresh #scenarios has no selection; the panel reads the lowest
-// registered microgrid's journal, and leaves the selection and the
-// route alone.
-{
-  const lowestMg = await page.evaluate(async () =>
-    Math.min(...(await (await fetch("/api/microgrids")).json()).map((m) => m.id)),
-  );
-  await page.goto(`${BASE}/#scenarios`, { waitUntil: "networkidle" });
-  const read = page.waitForResponse(pathIs(`/api/mg/${lowestMg}/scenario`), { timeout: 10000 }).catch(() => null);
-  await page.reload({ waitUntil: "networkidle" });
-  const readRes = await read;
-  check(
-    "e2e: with no microgrid selected, the Scenarios panel reads the lowest microgrid's scenario",
-    readRes?.status() === 200,
-    JSON.stringify({ lowestMg, status: readRes?.status() }),
-  );
-  await page.click(`.sc-row:has(.sc-row-name:text-is("${SMOKE_SCENARIO}")) .sc-row-actions button`);
-  const state = () =>
-    page.evaluate((n) => {
-      const rows = [...document.querySelectorAll(".sc-row")];
-      const mine = rows.find((r) => r.querySelector(".sc-row-name")?.textContent === n);
-      const others = rows.filter((r) => r !== mine).map((r) => r.querySelector(".sc-row-actions button"));
-      return {
-        status: document.getElementById("sc-run-status")?.textContent,
-        badge: !!mine?.querySelector(".sc-badge.running"),
-        othersDisabled: others.length > 0 && others.every((b) => b?.textContent === "Run" && b.disabled),
-        chip: document.getElementById("active-scenarios")?.hidden === false,
-        selected: localStorage.getItem("macrocosim-selected-mg"),
-        hash: location.hash,
-      };
-    }, SMOKE_SCENARIO);
-  const running = await waitFor(async () => {
-    const s = await state();
-    return s.status === "running" && s.badge && s.othersDisabled && s.chip ? s : null;
-  }, 10000).catch(() => null);
-  const after = await state();
-  check(
-    "e2e: with no microgrid selected, a started scenario shows running and the other Run buttons are disabled",
-    running !== null,
-    JSON.stringify(after),
-  );
-  check(
-    "e2e: the Scenarios readout keeps the selection empty and the route on #scenarios",
-    after.selected === null && after.hash === "#scenarios",
-    JSON.stringify(after),
-  );
-  const stopped = page.waitForResponse(pathIs("/api/scenarios/stop", "POST"), { timeout: 10000 }).catch(() => null);
-  await page.click("#sc-run-stop");
-  const stoppedRes = await stopped;
-  const stoppedView = await waitFor(async () => {
-    const s = await state();
-    return s.status === "stopped" && !s.badge ? s : null;
-  }, 10000).catch(() => null);
-  check(
-    "e2e: with no microgrid selected, Stop ends the run",
-    stoppedRes?.status() === 204 && stoppedView !== null,
-    JSON.stringify({ status: stoppedRes?.status(), view: await state() }),
-  );
-}
-
-// ── e2e: the Scenarios panel, the Report panel and error display ──
-// The scenario readouts and the report are the selected microgrid's
-// (/api/mg/{mg}/scenario…); start and stop are site-wide, and stop
-// answers 204.
-await page.click('.mode-btn[data-mode="microgrids"]');
-await page.click(DEMO_CARD);
-const scenarioRead = page.waitForResponse(pathIs("/api/mg/2200/scenario"), { timeout: 10000 }).catch(() => null);
-await page.click('#mode-toggle .mode-btn[data-mode="scenarios"]');
-const scenarioReadRes = await scenarioRead;
-check(
-  "e2e: the Scenarios panel reads the selected microgrid's scenario",
-  scenarioReadRes?.status() === 200,
-  String(scenarioReadRes?.status()),
-);
-await page.click(`.sc-row:has(.sc-row-name:text-is("${SMOKE_SCENARIO}")) .sc-row-actions button`);
-const runView = () =>
-  page.evaluate(() => ({
-    name: document.getElementById("sc-run-name")?.textContent,
-    status: document.getElementById("sc-run-status")?.textContent,
-    hidden: document.getElementById("sc-run-view")?.hidden,
-  }));
-const runningView = await waitFor(async () => {
-  const v = await runView();
-  return v.hidden === false && v.name === SMOKE_SCENARIO && v.status === "running" ? v : null;
-}, 10000).catch(() => null);
-check("e2e: a started scenario shows as running in the run view", runningView !== null, JSON.stringify(await runView()));
-check(
-  "e2e: the running scenario's row carries the running badge",
-  await page.evaluate(
-    (n) =>
-      [...document.querySelectorAll(".sc-row")].some(
-        (r) => r.querySelector(".sc-row-name")?.textContent === n && r.querySelector(".sc-badge.running"),
-      ),
-    SMOKE_SCENARIO,
-  ),
-);
-// The Report panel reads the same microgrid's live report.
-const reportRead = page.waitForResponse(pathIs("/api/mg/2200/scenario/report"), { timeout: 10000 }).catch(() => null);
-await page.click("#scenario-report-btn");
-const reportReadRes = await reportRead;
-check("e2e: the Report panel fetches the selected microgrid's report", reportReadRes?.status() === 200, String(reportReadRes?.status()));
-const reportCard = await waitFor(async () => {
-  const t = await page.evaluate(() => document.querySelector("#sc-report-card .sc-report-dl")?.textContent ?? null);
-  return t && /elapsed/.test(t) ? t : null;
-}, 5000).catch(() => null);
-check("e2e: the Report panel renders the report", reportCard !== null, String(reportCard));
-await page.click("#scenario-report-btn");
-const stopPost = page.waitForResponse(pathIs("/api/scenarios/stop", "POST"), { timeout: 10000 }).catch(() => null);
-await page.click("#sc-run-stop");
-const stopRes = await stopPost;
-check("e2e: stopping the scenario answers 204", stopRes?.status() === 204, String(stopRes?.status()));
-const stoppedView = await waitFor(async () => {
-  const v = await runView();
-  return v.name === SMOKE_SCENARIO && v.status === "stopped" ? v : null;
-}, 10000).catch(() => null);
-check("e2e: the stopped scenario shows as stopped", stoppedView !== null, JSON.stringify(await runView()));
-// A failed eval shows the server's message in the REPL, never the
-// JSON body it came in.
-await page.evaluate(() => document.activeElement?.blur());
-await page.keyboard.press("`");
-await waitFor(async () => (await panelOpen("repl")) === true, 5000);
-await page.fill("#repl-input", '(error "smoke-boom")');
-await page.keyboard.press("Control+Enter");
-const replError = await waitFor(
-  async () => page.evaluate(() => [...document.querySelectorAll("#repl-output .repl-error")].at(-1)?.textContent ?? null),
-  10000,
-).catch(() => null);
-check(
-  "e2e: a failed REPL eval shows the error text, not its JSON",
-  /smoke-boom/.test(replError ?? "") && !replError.includes('{"error"'),
-  String(replError),
-);
-// Tab on text that does not parse shows the formatter's message in the REPL,
-// like an eval error: no toast, nothing logged.
-await dismissToasts();
-await page.fill("#repl-input", "(smoke-unparsed");
-await page.keyboard.press("Tab");
-const formatError = await waitFor(
-  () =>
-    page.evaluate(
-      () => [...document.querySelectorAll("#repl-output .repl-error")].map((e) => e.textContent).find((t) => t.startsWith("format:")) ?? null,
-    ),
-  5000,
-).catch(() => null);
-const formatToasts = await toastTexts();
-const formatLogged = formatError !== null && (await uiLogLines()).some((t) => t.includes(formatError.slice("format: ".length)));
-check(
-  "e2e: a Tab-format parse error shows in the REPL, not as a toast or a log line",
-  formatError !== null && formatToasts.length === 0 && !formatLogged,
-  JSON.stringify({ formatError, formatToasts, formatLogged }),
-);
-// A format that cannot reach the server shows there too, and is logged.
-await page.route("**/api/format*", (r) => r.abort());
-await page.keyboard.press("Tab");
-const formatDown = await waitFor(
-  () =>
-    page.evaluate(
-      () => [...document.querySelectorAll("#repl-output .repl-error")].map((e) => e.textContent).find((t) => t.startsWith("format: transport")) ?? null,
-    ),
-  5000,
-).catch(() => null);
-await page.unroute("**/api/format*");
-await page.fill("#repl-input", "");
-check(
-  "e2e: a Tab-format that cannot reach the server shows in the REPL and is logged",
-  formatDown !== null && (await uiLogCount(`ui: REPL: ${formatDown}`)) === 1,
-  String(formatDown),
-);
-await page.click("#repl .float-close");
 // A failed mutation's toast carries the server's message: redo with
 // nothing to redo answers 409.
 const redoPost = page.waitForResponse(pathIs("/api/mg/2200/redo", "POST"), { timeout: 10000 }).catch(() => null);
@@ -3918,7 +3699,7 @@ check(
 );
 
 // ── e2e: dialogs keep server errors inline ─────────────────────────
-// A failed load or snapshot save shows its error in place,
+// A failed load shows its error in place,
 // the dialog stays open and no toast is raised; trying again or reopening
 // clears the old error.
 const toastCount = () => page.evaluate(() => document.querySelectorAll("#toast-host .toast").length);
@@ -3958,26 +3739,17 @@ const clearedOnReopen = (await shownError("#load-script-error")) === null;
 await page.keyboard.press("Escape");
 check("e2e: a retry or a reopened dialog clears the old error", clearedOnRetry && clearedOnReopen, JSON.stringify({ clearedOnRetry, clearedOnReopen }));
 await openDemoTopology();
-await page.route("**/api/mg/*/snapshots", (r) =>
-  r.request().method() === "POST"
-    ? r.fulfill({ status: 500, contentType: "application/json", body: '{"error":"disk full"}' })
-    : r.continue(),
-);
+// Snapshots copy a Lisp file, which a microgrid with a spec has
+// none of: the dialog says so instead of offering a save.
 await page.click("#snapshots-btn");
-toastsBefore = await toastCount();
-await page.fill("#snapshot-name-input", "smoke-x");
-await page.click('#snapshot-save-form button[type="submit"]');
-const snapError = await waitFor(() => shownError("#snapshots-error"), 8000).catch(() => null);
-const snapState = {
-  error: snapError,
-  open: await page.evaluate(() => document.getElementById("snapshots-dialog").open),
-  toasts: (await toastCount()) - toastsBefore,
-};
-await page.unroute("**/api/mg/*/snapshots");
+const snapState = await page.evaluate(() => ({
+  hint: document.getElementById("snapshots-blocked").hidden ? null : document.getElementById("snapshots-blocked").textContent,
+  form: !document.getElementById("snapshot-save-form").hidden,
+}));
 await page.keyboard.press("Escape");
 check(
-  "e2e: a failed snapshot save shows its error in the dialog, which stays open",
-  snapState.error === "Save failed: disk full" && snapState.open && snapState.toasts === 0,
+  "e2e: the snapshots dialog explains a microgrid with a spec has no file to snapshot",
+  /no Lisp file/.test(snapState.hint ?? "") && !snapState.form,
   JSON.stringify(snapState),
 );
 // The Defaults panel shows the engine's table read-only.
@@ -4691,9 +4463,10 @@ const selectsAll = async () => {
   const n = await nodeCount();
   return n > 0 && (await selectedIds()).length === n;
 };
+// A delete is a PUT of the spec: none may go out.
 const removePosts = [];
 const onRemovePost = (r) => {
-  if (r.method() === "POST" && /remove-component/.test(r.postData() ?? "")) removePosts.push(r.postData());
+  if (r.method() === "PUT" && new URL(r.url()).pathname.endsWith("/spec")) removePosts.push(r.url());
 };
 page.on("request", onRemovePost);
 const nodesBefore = await nodeCount();
@@ -4734,12 +4507,11 @@ await new Promise((r) => setTimeout(r, 1000));
 page.off("request", onRemovePost);
 check(
   "e2e: Delete, Backspace, cut and select-all away from the canvas leave the selection alone",
-  demoManaged === true &&
-    picked.every(Boolean) &&
+  picked.every(Boolean) &&
     removePosts.length === 0 &&
     (await nodeCount()) === nodesBefore &&
     (await chpAloneSelected()),
-  JSON.stringify({ demoManaged, picked, removePosts, nodesBefore, after: await nodeCount() }),
+  JSON.stringify({ picked, removePosts, nodesBefore, after: await nodeCount() }),
 );
 // A jump to a node (the formula explorer's #N links) hands the
 // keyboard to the canvas.

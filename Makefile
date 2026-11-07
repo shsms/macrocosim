@@ -37,15 +37,16 @@ $(PLAYWRIGHT_STAMP):
 	npx playwright install chromium
 	@touch $@
 
-# The browser smokes against a scratch server on OS-chosen ports. The
-# server log is printed when the boot or a smoke fails; the scratch
-# state dir goes with the server.
+# The browser smokes against a scratch server on OS-chosen ports,
+# running examples/starter_site.py on the venv `uv sync` makes in
+# python/. The server log is printed when the boot or a smoke fails;
+# the scratch state dir goes with the server.
 ui-e2e: ui-e2e-deps
 	cargo build --bin macrocosim
-	@set -e; sd=$$(mktemp -d); mkdir "$$sd/microgrids"; \
-	  cp examples/starter-site.lisp "$$sd/microgrids/2200.lisp"; \
+	@set -e; sd=$$(mktemp -d); \
 	  $(TARGET_DIR)/debug/macrocosim --state-dir "$$sd" --ephemeral-ports \
-	      --emit-endpoints="$$sd/endpoints.json" "$$sd/microgrids/2200.lisp" \
+	      --emit-endpoints="$$sd/endpoints.json" \
+	      --python python/.venv/bin/python examples/starter_site.py \
 	      > "$$sd/server.log" 2>&1 & pid=$$!; \
 	  trap 'kill $$pid 2>/dev/null || :; rm -rf "$$sd"' EXIT; \
 	  for _ in $$(seq 1 30); do [ -s "$$sd/endpoints.json" ] && break; sleep 1; done; \

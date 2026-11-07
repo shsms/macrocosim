@@ -40,6 +40,9 @@ export function setupSnapshotsDialog() {
   // Why the dialog can't act, or null when it can.
   function blockedReason() {
     const entry = currentMgEntry();
+    if (entry?.has_spec) {
+      return `Microgrid #${readSelectedMg()} has no Lisp file to snapshot — export it as Python to keep it.`;
+    }
     if (entry && !entry.managed) {
       return `Microgrid #${readSelectedMg()} is an unmanaged file — Adopt it to snapshot its structure.`;
     }

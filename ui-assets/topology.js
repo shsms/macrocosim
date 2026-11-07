@@ -18,7 +18,6 @@
 
 import { setStatus } from "./app.js";
 import { showContextMenu } from "./editor.js";
-import { evalQuoted } from "./eval.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
 import { errorText } from "./http.js";
 import { blankLiveEntry, countText, DEAD_FLOW, deadBandW, edgeFlow } from "./live.js";
@@ -31,6 +30,7 @@ import {
   structureEditable,
   visibleSubview,
 } from "./routing.js";
+import { connect } from "./spec-edit.js";
 import { readStorage, removeStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
 
@@ -1033,7 +1033,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         });
         // Cmd+Tab / window switches swallow the keyup, leaving
         // addEdge mode permanently armed — the next node drag would
-        // silently eval a persisted (connect a b). Disarm on blur.
+        // silently connect two nodes. Disarm on blur.
         window.addEventListener("blur", () => {
           if (network) network.disableEditMode();
         });
@@ -2000,12 +2000,12 @@ export function createGraphCanvas(containerId, adapter = {}) {
 }
 
 // The Topology subview's canvas: full editing — Ctrl-drag connect
-// through the eval path, and the edit context menu.
+// through a spec edit, and the edit context menu.
 export const topology = createGraphCanvas("topology", {
   tooltip: false,
   hoverCard: true,
   onConnect(from, to) {
-    // Wiring is structure, so it needs a managed file. Refuse here
+    // Wiring is structure, so it needs a spec. Refuse here
     // rather than at the keydown that arms edit mode — the drag is
     // already finished by the time vis calls back, and a silent drop
     // would look like the canvas ate the gesture.
@@ -2013,7 +2013,7 @@ export const topology = createGraphCanvas("topology", {
       notify(READ_ONLY_TITLE);
       return;
     }
-    evalQuoted(`(connect ${from} ${to})`, "Connect failed");
+    connect(from, to);
   },
   onContextMenu: showContextMenu,
   onApply(data) {

@@ -174,8 +174,11 @@ is wiring the topology + animating the environment.
   from the top bar's theme chip), set as `data-theme` on `<html>`;
   code that draws with colours read from the tokens (the canvas, the
   charts) re-reads them in a `theme.onChange` listener;
-  `paste-forms.js` the DOM-free let* builder the editor's paste
-  evals, binding children before the parents that push into them;
+  `spec-edit.js` the editor's structural edits (read the selected
+  microgrid's spec, change it, `PUT` it, retrying once on a 409);
+  `ids.js` the ids new components take (the lowest free ones from
+  5000); `paste-forms.js` the DOM-free splice of a copied subgraph
+  into a spec under fresh ids, children before parents;
   `metrics-store.js` holds the derived-stream rings + the PF helpers
   and `metrics-panel.js` the floating charts panel that reads them;
   `chart-lib.js` the uPlot gate every chart builder asks first
@@ -508,7 +511,8 @@ every `tools/*-test.mjs` plus `boot-smoke.mjs`,
 which imports app.js under a DOM shim and catches TDZ / cycle /
 bad-export breakage a curl-200 can't see. `make ui-e2e` runs the
 Playwright smoke in `tools/ui-smoke/` against a scratch server on
-OS-chosen ports, the way CI does; `make ui-e2e-deps` installs its one
+OS-chosen ports that runs `examples/starter_site.py` (it needs
+`uv sync` in `python/` first), the way CI does; `make ui-e2e-deps` installs its one
 dependency, Playwright with a matching Chromium, into the gitignored
 `node_modules`.
 

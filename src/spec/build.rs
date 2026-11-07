@@ -549,6 +549,56 @@ mod tests {
         build(json).unwrap_err()
     }
 
+    /// The UI adds a palette button's `data-type` (hidden with
+    /// `data-hidden`) to the spec under a fresh id, so a typo in the
+    /// attribute only shows up on click. Every component type has a
+    /// button, and the hidden meter's alone is hidden.
+    #[test]
+    fn every_palette_button_builds_a_component() {
+        let html = include_str!("../../ui-assets/index.html");
+        let (_, rest) = html
+            .split_once("<div id=\"palette\">")
+            .expect("index.html has the palette");
+        let (palette, _) = rest
+            .split_once("</div>")
+            .expect("the palette div is closed");
+        assert!(
+            !palette.contains("<div"),
+            "a nested div truncates the scrape"
+        );
+        let buttons: Vec<(&str, bool)> = palette
+            .split("<button")
+            .skip(1)
+            .map(|b| {
+                let ty = b
+                    .split_once("data-type=\"")
+                    .and_then(|(_, r)| r.split('"').next())
+                    .expect("every palette button has a data-type");
+                (ty, b.contains("data-hidden"))
+            })
+            .collect();
+        let components: Vec<String> = buttons
+            .iter()
+            .enumerate()
+            .map(|(i, (ty, hidden))| {
+                let hidden = if *hidden { r#", "hidden": true"# } else { "" };
+                format!(r#"{{"type": "{ty}", "id": {}{hidden}}}"#, 5000 + i)
+            })
+            .collect();
+        let built = build(&format!(r#"{{"components": [{}]}}"#, components.join(", ")))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(built.components.len(), buttons.len());
+        let hidden: Vec<bool> = built.components.iter().map(|c| c.is_hidden()).collect();
+        assert_eq!(hidden.iter().filter(|h| **h).count(), 1, "{buttons:?}");
+        let types = serde_json::to_value(Defaults::default()).unwrap();
+        for ty in types.as_object().unwrap().keys() {
+            assert!(
+                buttons.iter().any(|(t, _)| t == ty),
+                "no palette button for {ty}"
+            );
+        }
+    }
+
     #[test]
     fn every_type_builds_from_a_minimal_spec() {
         let built = build(

@@ -4,17 +4,17 @@
 // form, and helpers around them.
 
 import { escapeHtml, mutate } from "./app.js";
-import { evalQuoted } from "./eval.js";
 import { OPERATIONAL_MODES, setStateKnob, showComponent } from "./inspect.js";
 import { notify } from "./notices.js";
-import { makeFnFor, pasteSource } from "./paste-forms.js";
+import { pasteIntoSpec, specTypeFor } from "./paste-forms.js";
 import { READ_ONLY_TITLE, readSelectedMg, structureEditable } from "./routing.js";
+import { addComponent, editSpec, removeComponents } from "./spec-edit.js";
 import { ALIGN_MODES, topology } from "./topology.js";
 
-// Structural edits rewrite the microgrid's file, so they are only
-// offered on a managed one. Every entry point — palette, context
-// menu, keyboard shortcut — goes through this, so a shortcut can't
-// slip past a greyed-out button.
+// Structural edits change the microgrid's spec, so they are only
+// offered on one that has a spec. Every entry point — palette,
+// context menu, keyboard shortcut — goes through this, so a shortcut
+// can't slip past a greyed-out button.
 function editable() {
   if (structureEditable()) return true;
   notify(READ_ONLY_TITLE);
@@ -40,10 +40,10 @@ export const clipboard = (() => {
   };
 })();
 
-// Undo / redo over the selected microgrid's managed file. The
-// history lives on the server (one stacked generated block per
-// structural edit), so there is nothing to record client-side and a
-// page reload — or a second tab — walks the same history.
+// Undo / redo over the selected microgrid's structure. The history
+// lives on the server (one stacked spec per PUT), so there is nothing
+// to record client-side and a page reload — or a second tab — walks
+// the same history.
 export const undoMgr = (() => {
   async function step(direction) {
     const mgId = readSelectedMg();
@@ -54,8 +54,9 @@ export const undoMgr = (() => {
     try {
       await mutate("POST", `/api/mg/${mgId}/${direction}`);
     } catch (e) {
-      // A 409 is "nothing left on that stack" or "unmanaged file" — the
-      // server's own wording says which, so pass it through.
+      // A 409 is "nothing left on that stack" (or, for a microgrid
+      // loaded from Lisp, an unmanaged file) — the server's own
+      // wording says which, so pass it through.
       notify(`${cap(direction)} failed: ${e.message}`);
     }
   }
@@ -93,7 +94,7 @@ export function copySelection() {
   }
   const snap = snapshotSelection(ids);
   if (!snap) return false;
-  const unknown = snap.components.find((c) => makeFnFor(c) == null);
+  const unknown = snap.components.find((c) => specTypeFor(c) == null);
   if (unknown) {
     notify(`Don't know how to copy a "${unknown.category}".`);
     return false;
@@ -104,15 +105,18 @@ export function copySelection() {
   return true;
 }
 
-// Paste the clipboard subgraph as one eval (one undo step); the
-// form comes from paste-forms.js.
+// Paste the clipboard subgraph as one spec edit (one undo step), its
+// components under fresh ids; the splice comes from paste-forms.js.
 export async function pasteClipboard() {
   if (!editable()) return;
   if (clipboard.isEmpty()) {
     notify("Clipboard is empty — copy something first.");
     return;
   }
-  await evalQuoted(pasteSource(clipboard.get()), "Paste failed");
+  const snap = clipboard.get();
+  await editSpec("Paste failed", (spec, ids) => {
+    pasteIntoSpec(spec, snap, ids);
+  }, snap.components.length);
 }
 
 export async function deleteSelection() {
@@ -122,9 +126,7 @@ export async function deleteSelection() {
     notify("Nothing selected to delete.");
     return;
   }
-  const removes = ids.map((id) => `(remove-component ${id})`).join(" ");
-  const src = `(progn ${removes})`;
-  await evalQuoted(src, "Delete failed");
+  await removeComponents(ids);
 }
 
 export async function cutSelection() {
@@ -231,9 +233,9 @@ export function showContextMenu(x, y) {
   const menu = document.getElementById("ctx-menu");
   const sel = topology.selectedIds();
   const items = [];
-  // Copy is a clipboard read, and the mode rows are runtime config —
-  // both stay on an unmanaged file. Cut / Delete / Paste rewrite the
-  // structure, so they only appear on a managed one.
+  // Copy is a clipboard read, and the mode rows are runtime state —
+  // both stay on a microgrid loaded from Lisp. Cut / Delete / Paste
+  // change the structure, so they only appear on one with a spec.
   const structural = structureEditable();
   if (sel.length) {
     items.push({ label: "Copy", shortcut: "Ctrl/Cmd+C", action: copySelection });
@@ -268,8 +270,8 @@ export function setupContextMenu() {
 }
 
 // The component palette: one button per variant, click to add. A
-// button's `data-make` is the inside of the make form it evals — the
-// make-* head plus any keyword args (`make-meter :hidden t`).
+// button's `data-type` is the spec type it adds, and `data-hidden`
+// marks a hidden one.
 export function setupAddForm() {
   document.getElementById("palette").addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".pal-btn");
@@ -277,16 +279,16 @@ export function setupAddForm() {
     if (!editable()) return;
     btn.disabled = true;
     try {
-      await evalQuoted(`(${btn.dataset.make})`, "Create failed");
+      await addComponent(btn.dataset.type, "hidden" in btn.dataset ? { hidden: true } : {});
     } finally {
       btn.disabled = false;
     }
   });
 }
 
-// Grey the whole Add-component palette out on an unmanaged
-// microgrid. Called on every microgrid-list refresh, so it tracks an
-// Adopt without the user having to reopen the panel.
+// Grey the whole Add-component palette out on a microgrid loaded from
+// Lisp. Called on every microgrid-list refresh, so it tracks the
+// selection without the user having to reopen the panel.
 export function refreshPaletteLock() {
   const palette = document.getElementById("palette");
   if (!palette) return;

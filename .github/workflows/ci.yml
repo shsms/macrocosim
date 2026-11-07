@@ -185,8 +185,8 @@ jobs:
       - name: pytest examples/pytest_demo
         run: uv run --no-sync pytest -q examples/pytest_demo
 
-  # Live browser smokes: boots the binary against a scratch starter-site
-  # microgrid (`make ui-e2e`, the same target AGENTS.md gives for
+  # Live browser smokes: boots the binary running the starter site's
+  # Python script (`make ui-e2e`, the same target AGENTS.md gives for
   # running the tools/ui-smoke/ scripts by hand) and drives the
   # real SPA with Playwright/Chromium — inspector knobs, dialogs, the
   # metrics panel, hover cards, the steam-boiler round trip end to end,
@@ -219,6 +219,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # The smoke's server runs examples/starter_site.py on
+      # python/.venv, which `uv sync` makes with the package in it.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: python/uv.lock
+
+      - name: Python venv for the starter site
+        working-directory: python
+        run: uv sync
 
       # Cache the downloaded Chromium build, keyed on the Makefile that
       # pins the Playwright version: a bumped pin misses the exact key

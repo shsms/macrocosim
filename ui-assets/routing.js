@@ -93,18 +93,18 @@ export function currentMgEntry() {
   return id == null ? null : mgFlags.get(id) || null;
 }
 
-// Permissive before the first listing lands (or for an id the
-// listing doesn't carry): greying the whole editor out on a
-// not-yet-known microgrid would claim "unmanaged file" about a file
-// we have not heard of. The server is the real gate — an edit to an
-// unmanaged file still evaluates, it just doesn't persist.
+// Whether the selected microgrid's structure can be edited: it has a
+// stored spec, which the editor changes and PUTs. One loaded from Lisp
+// has none and is read-only. Permissive before the first listing
+// lands (or for an id the listing doesn't carry): greying the whole
+// editor out on a not-yet-known microgrid would claim something we
+// have not heard; the server is the real gate.
 export function structureEditable() {
   const entry = currentMgEntry();
-  return entry == null || entry.managed === true;
+  return entry == null || entry.has_spec === true;
 }
 
-export const READ_ONLY_TITLE =
-  "unmanaged file — structure is read-only (Adopt to edit)";
+export const READ_ONLY_TITLE = "loaded from Lisp — the structure is read-only";
 
 // ─── Density toggle ────────────────────────────────────────────────────────
 // Compact (the default) or comfortable, set as data-density on <html>; the type

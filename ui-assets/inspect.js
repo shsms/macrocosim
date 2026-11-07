@@ -13,6 +13,7 @@ import { notify } from "./notices.js";
 import { powerColor, reactiveColor } from "./pill.js";
 import { mgJson, mgSend, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
+import { disconnect, rename } from "./spec-edit.js";
 import { readStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
 import { topology } from "./topology.js";
@@ -556,10 +557,10 @@ function renderInspect(d, parentIds, childIds) {
   // that would each read blank.
   const isGrid = d.category === "grid";
 
-  // Rename and disconnect rewrite the microgrid's file; on an
-  // unmanaged one they are shown but inert, with the reason on
-  // hover. Everything below them — modes, health, knobs — is
-  // runtime state and stays live either way.
+  // Rename and disconnect change the microgrid's spec; on one loaded
+  // from Lisp they are shown but inert, with the reason on hover.
+  // Everything below them — modes, health, knobs — is runtime state
+  // and stays live either way.
   const locked = !structureEditable();
   const lockAttrs = locked ? ` disabled title="${escapeHtml(READ_ONLY_TITLE)}"` : "";
   const renderEdgeRow = (id, dataAttr) => {
@@ -707,15 +708,31 @@ function renderInspect(d, parentIds, childIds) {
     </div>
   `;
 
-  // Wire form callbacks. Every action POSTs to /api/eval; the WS
-  // TopologyChanged refresh re-reads the form state from the server
-  // and re-renders this panel automatically. Mode/health/telemetry/
+  // Wire form callbacks. Rename and disconnect are spec edits, the
+  // knobs typed-route writes; the WS TopologyChanged refresh re-reads
+  // the form state from the server and re-renders this panel
+  // automatically. Mode/health/telemetry/
   // commands chip clicks are handled by the single delegated
   // listener on inspectEl, above — not wired per-render here.
-  document.getElementById("rename").addEventListener("change", (e) => {
-    const name = e.target.value.trim();
-    if (!name) return;
-    evalQuoted(`(rename-component ${d.id} "${jsToLispString(name)}")`);
+  // The name commits on Enter only, as the knobs do: a rename is a
+  // rebuild, which ends the streams and a running recording. Esc and a
+  // blur put the name back. An Enter that ends an input method's
+  // composition only confirms the text.
+  const renameInput = document.getElementById("rename");
+  renameInput.addEventListener("keydown", (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const name = renameInput.value.trim();
+      if (name && name !== d.name) rename(d.id, name);
+      renameInput.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      renameInput.blur();
+    }
+  });
+  renameInput.addEventListener("blur", () => {
+    renameInput.value = d.name;
   });
   // Edit-in-place: focus freezes the input's and its flag checkbox's
   // visible WRITES against live/snapshot updates (data-editing — read
@@ -797,12 +814,12 @@ function renderInspect(d, parentIds, childIds) {
   }
   for (const btn of inspectEl.querySelectorAll("[data-disconnect-from]")) {
     btn.addEventListener("click", () =>
-      evalQuoted(`(disconnect ${btn.dataset.disconnectFrom} ${d.id})`),
+      disconnect(Number(btn.dataset.disconnectFrom), d.id),
     );
   }
   for (const btn of inspectEl.querySelectorAll("[data-disconnect-to]")) {
     btn.addEventListener("click", () =>
-      evalQuoted(`(disconnect ${d.id} ${btn.dataset.disconnectTo})`),
+      disconnect(d.id, Number(btn.dataset.disconnectTo)),
     );
   }
   // Meter knob "measure" buttons — see the `clear` field on
