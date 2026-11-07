@@ -14,8 +14,11 @@ is wiring the topology + animating the environment.
   is every structural change to a microgrid with a stored spec:
   `create` builds and registers one, `rebuild` swaps in a new spec
   with carry (a component carries when its defaults-filled spec is
-  unchanged under the same id), `check_ids` keeps component ids unique
-  across the engine. A registry entry's `spec` is that stored spec, or
+  unchanged under the same id) and moves the gRPC server when
+  `grpc_port` changes, `unload` removes one (registry entry first,
+  then its runtime, scenario journal and CSV sinks, dispatches and
+  undo stacks, then the `microgrid_unloaded` broadcast),
+  `check_ids` keeps component ids unique across the engine. A registry entry's `spec` is that stored spec, or
   `None` for a Lisp-loaded microgrid; Lisp leaves an entry with a spec
   alone (reload, replay and save skip it, and a structural form on it
   is refused, which the eval routes answer with 409)
@@ -294,8 +297,9 @@ UI").
   stays in `server.rs`. Lock order: gateway → registry read guards →
   component locks; the gateway lock is never held across an `.await`.
   Outside all of them, the engine's `create_lock` (a tokio mutex) is
-  the one structural lock: create, import, load-as and a spec `PUT`
-  hold it, then the runtimes' `start_lock`, then the order above.
+  the one structural lock: create, import, load-as, a spec `PUT` and
+  an unload hold it, then the runtimes' `start_lock` (which `start`,
+  `stop` and `restart_grpc` take), then the order above.
 - **An axis is a `GatewayAxis` in the gateway plus a `DeviceAxis` in
   the component.** The chain is gateway delay → gateway ramp → device
   delay → output. Each step the gateway targets the armed command
@@ -371,11 +375,16 @@ UI").
   `POST /api/eval` evaluates with no microgrid in scope.
 - `GET /api/mg/{mg}/spec` answers a microgrid's stored spec, and
   `PUT` of a `MicrogridSpec` rebuilds it with carry (200 with the stored
-  spec; 409 for a component id another microgrid holds, 422 for an
-  invalid spec, a component without an id, or a changed `grpc_port`).
-  Both answer 409 `microgrid N was loaded from Lisp` for a microgrid
-  without one. A `PUT` stacks the replaced spec on the microgrid's spec
-  undo stack and marks a microgrid with a source file `unsaved`.
+  spec; 409 for a component id or a gRPC port another microgrid
+  holds, 422 for an invalid spec or a component without an id). A new
+  `grpc_port` moves the microgrid's gRPC server there.
+  `DELETE /api/mg/{mg}` unloads a microgrid (204): its streams end, its
+  gRPC port is free within about 2 s, its dispatches are deleted with
+  a `Deleted` event each, and its id and component ids are free.
+  All three answer 409 `microgrid N was loaded from Lisp` for a
+  microgrid without a spec. A `PUT` stacks the replaced spec on the
+  microgrid's spec undo stack and marks a microgrid with a source file
+  `unsaved`.
   `GET /api/spec/schema` serves the topology document's JSON Schema.
 - Everything about one microgrid lives under `/api/mg/{mg}/`, served
   by one nested router; the `Mg` extractor resolves `{mg}` and
@@ -493,7 +502,7 @@ and the process stays up (a boot-time bind failure still exits the
 binary); registering it again (reload, undo, snapshot restore, load)
 retries. A microgrid's address is fixed after its first successful
 bind; a reload adopts a changed `:grpc-port` only for one that never
-bound. `/api/microgrids` entries carry `runtime: {status, grpc_addr,
+bound, and a spec `PUT` with a new `grpc_port` rebinds it. `/api/microgrids` entries carry `runtime: {status, grpc_addr,
 error} | null`, and create / import / load-as / snapshot-as-new wait
 for the start and report it; the microgrid card shows the address and
 a "failed" chip. The UI's loopback client reads a private copy of the

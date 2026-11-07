@@ -78,12 +78,13 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         },
         scripts::scripts_list,
         snapshots::{snapshots_list, snapshots_load, snapshots_save},
-        spec::{spec_get, spec_put, spec_schema},
+        spec::{microgrid_delete, spec_get, spec_put, spec_schema},
         topology::topology,
         undo::{redo, undo, undo_depths},
         weather::{weather_get, weather_post},
     };
     let per_mg = Router::new()
+        .route("/", delete(microgrid_delete))
         .route("/topology", get(topology))
         .route("/spec", get(spec_get).put(spec_put))
         .route("/eval", post(eval_for_mg))

@@ -180,6 +180,20 @@ impl DispatchStore {
         removed
     }
 
+    /// Remove every dispatch of a microgrid, broadcasting `Deleted`
+    /// for each, and return them.
+    pub fn remove_mg(&self, microgrid_id: u64) -> Vec<pb::Dispatch> {
+        let mut guard = self.inner.write();
+        let removed: Vec<pb::Dispatch> = guard
+            .remove(&microgrid_id)
+            .map(|m| m.into_values().collect())
+            .unwrap_or_default();
+        for dispatch in &removed {
+            self.broadcast(microgrid_id, DispatchChange::Deleted, dispatch.clone());
+        }
+        removed
+    }
+
     /// Build and store a new dispatch from caller-supplied
     /// `DispatchData`, returning the stored `Dispatch`. This is the one
     /// construction path — the gRPC `CreateMicrogridDispatch` handler
@@ -579,6 +593,27 @@ mod tests {
         assert_eq!(removed.data.unwrap().r#type, "alpha");
         assert!(store.get(261, 1).is_none());
         assert_eq!(store.total(), 2);
+    }
+
+    #[test]
+    fn remove_mg_removes_only_that_microgrid_and_broadcasts_each() {
+        let store = new_store();
+        store.insert(261, dispatch(1, "alpha"));
+        store.insert(261, dispatch(2, "beta"));
+        store.insert(900, dispatch(3, "alpha"));
+        let mut rx = store.subscribe();
+        assert_eq!(store.remove_mg(261).len(), 2);
+        assert!(store.list_mg(261).is_empty());
+        assert_eq!(store.total(), 1);
+        for id in [1, 2] {
+            let ev = rx.try_recv().expect("deleted event");
+            assert_eq!(
+                (ev.microgrid_id, ev.change, ev.dispatch_id()),
+                (261, DispatchChange::Deleted, id)
+            );
+        }
+        assert!(rx.try_recv().is_err());
+        assert!(store.remove_mg(261).is_empty());
     }
 
     #[test]

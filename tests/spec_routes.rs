@@ -191,7 +191,7 @@ async fn a_put_keeps_the_microgrid_level_state() {
 }
 
 #[tokio::test]
-async fn a_put_refuses_a_taken_id_a_missing_id_and_a_new_port() {
+async fn a_put_refuses_a_taken_id_a_missing_id_and_a_taken_port() {
     let mut other = plant();
     other["id"] = json!(8);
     for c in other["components"].as_array_mut().unwrap() {
@@ -220,11 +220,15 @@ async fn a_put_refuses_a_taken_id_a_missing_id_and_a_new_port() {
     let (code, body) = put_spec(&client, &s, 7, &missing).await;
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
 
-    let (_, stored) = get_spec(&client, &s, 7).await;
+    let (_, stored) = get_spec(&client, &s, 8).await;
     let mut moved = plant();
-    moved["grpc_port"] = json!(stored["grpc_port"].as_u64().unwrap() + 1);
+    moved["grpc_port"] = stored["grpc_port"].clone();
     let (code, body) = put_spec(&client, &s, 7, &moved).await;
-    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(code, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("microgrid 8"),
+        "{body}"
+    );
 
     let (code, body) = put_spec(&client, &s, 7, &json!({"id": 7, "extra": 1})).await;
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY, "{body}");

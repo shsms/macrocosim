@@ -1,8 +1,8 @@
 //! Every structural change to a microgrid with a stored spec: create
-//! one, and rebuild one from a new spec, carrying the state of each
-//! component the change leaves as it was. Every caller holds the
-//! engine's create lock, the one structural lock, so the checks here
-//! hold until the change is in place.
+//! one, rebuild one from a new spec, carrying the state of each
+//! component the change leaves as it was, and unload one. Every
+//! caller holds the engine's create lock, the one structural lock, so
+//! the checks here hold until the change is in place.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -177,9 +177,12 @@ pub async fn create(
 /// Rebuild microgrid `id` from `spec`, carrying the state of every
 /// component whose defaults-filled spec is unchanged under the same
 /// id. Returns the spec it replaced. The site, its physics task and
-/// its servers keep running.
-pub fn rebuild(
+/// its servers keep running, except that a changed `grpc_port` moves
+/// the gRPC server to the new port; a failed bind there marks the
+/// runtime failed and does not fail the rebuild.
+pub async fn rebuild(
     engine: &Engine,
+    runtimes: &MicrogridRuntimes,
     id: u64,
     mut spec: MicrogridSpec,
 ) -> Result<MicrogridSpec, TopologyError> {
@@ -199,16 +202,20 @@ pub fn rebuild(
         }
         Some(_) => {}
     }
-    match spec.grpc_port {
-        None => spec.grpc_port = Some(port),
-        Some(p) if p != port => {
-            return Err(invalid(
-                id,
-                &format!("grpc_port cannot change from {port} to {p} while it runs"),
-            ));
+    let moved = match spec.grpc_port {
+        None => {
+            spec.grpc_port = Some(port);
+            None
         }
-        Some(_) => {}
-    }
+        Some(0) => return Err(invalid(id, "grpc_port must be 1..=65535")),
+        Some(p) if p != port => {
+            let reserved = engine.reserved_ports();
+            check_port(&engine.microgrids.lock(), &reserved, id, p)
+                .map_err(|c| TopologyError::Conflict(format!("gRPC port {p} {c}")))?;
+            Some(p)
+        }
+        Some(_) => None,
+    };
     check_ids(engine, &[&spec], &[id])?;
     let defaults = Defaults::default();
     let built = build_topology(&spec, &defaults).map_err(|e| invalid(id, e.message()))?;
@@ -221,14 +228,60 @@ pub fn rebuild(
         }
     }
     site.swap_topology(built, &carry);
-    let mut registry = engine.microgrids.lock();
-    let entry = registry
-        .get_mut(&id)
-        .ok_or(TopologyError::NotRegistered(id))?;
-    entry.def.name = display_name(&spec);
-    entry.def.tso.clone_from(&spec.tso);
-    entry.spec = Some(spec);
+    {
+        let mut registry = engine.microgrids.lock();
+        let entry = registry
+            .get_mut(&id)
+            .ok_or(TopologyError::NotRegistered(id))?;
+        entry.def.name = display_name(&spec);
+        entry.def.tso.clone_from(&spec.tso);
+        if let Some(p) = moved {
+            entry.def.grpc_port = p;
+        }
+        entry.spec = Some(spec);
+    }
+    if let Some(p) = moved
+        && let Err(e) = runtimes.restart_grpc(id, p).await
+    {
+        log::error!("Microgrid #{id}: {e}");
+    }
     Ok(old)
+}
+
+/// Unload microgrid `id`: take it out of the registry, which frees
+/// its id and its component ids, then stop its runtime (streams, gRPC
+/// servers, physics, sampler, loopback), end a running scenario
+/// journal and close its CSV sinks, delete its dispatches (each with
+/// a `Deleted` event), drop its undo stacks and announce it on
+/// `microgrid_unloaded`. A microgrid loaded from Lisp is refused.
+///
+/// The entry goes first, so a runtime start still queued for `id`
+/// finds nothing to start instead of restarting what is being
+/// stopped.
+pub async fn unload(
+    engine: &Engine,
+    runtimes: &MicrogridRuntimes,
+    id: u64,
+) -> Result<(), TopologyError> {
+    let entry = {
+        let mut registry = engine.microgrids.lock();
+        let entry = registry.get(&id).ok_or(TopologyError::NotRegistered(id))?;
+        if entry.spec.is_none() {
+            return Err(loaded_from_lisp(id));
+        }
+        registry.remove(&id).expect("checked above")
+    };
+    runtimes.stop(id).await;
+    let site = entry.site;
+    if site.scenario_is_running() {
+        site.scenario_stop(site.now(), None);
+    }
+    site.scenario_close_csv();
+    engine.dispatches.remove_mg(id);
+    engine.spec_undo.lock().remove(&id);
+    let _ = engine.microgrid_unloaded.send(id);
+    log::info!("Microgrid #{id} unloaded");
+    Ok(())
 }
 
 fn display_name(spec: &MicrogridSpec) -> String {
@@ -278,6 +331,14 @@ mod tests {
             .await
             .unwrap()
             .id
+    }
+
+    async fn rebuild_inert(
+        engine: &Engine,
+        id: u64,
+        spec: MicrogridSpec,
+    ) -> Result<MicrogridSpec, TopologyError> {
+        rebuild(engine, &MicrogridRuntimes::inert(), id, spec).await
     }
 
     fn site(engine: &Engine, id: u64) -> MicrogridSite {
@@ -382,7 +443,7 @@ mod tests {
             r#""id": 3, "initial_soc_pct": 50"#,
             r#""id": 3, "initial_soc_pct": 50, "capacity_wh": 1000"#,
         );
-        let replaced = rebuild(&engine, id, spec(&changed)).unwrap();
+        let replaced = rebuild_inert(&engine, id, spec(&changed)).await.unwrap();
         assert_eq!(replaced.components.len(), 5);
         assert_eq!(soc(&site, 3), 50.0, "changed: from the spec");
         assert_eq!(soc(&site, 5), 80.0, "unchanged: carried");
@@ -393,27 +454,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_rebuild_refuses_a_new_port_another_mg_and_lisp() {
+    async fn a_rebuild_moves_to_a_free_port_only() {
         let engine = engine();
         let id = create_plant(&engine).await;
-        let mut moved = spec(PLANT);
-        moved.grpc_port = Some(9999);
+        let mut zero = spec(PLANT);
+        zero.grpc_port = Some(0);
         assert!(matches!(
-            rebuild(&engine, id, moved),
+            rebuild_inert(&engine, id, zero).await,
             Err(TopologyError::Invalid(m)) if m.contains("grpc_port")
         ));
+        let other = create(
+            &engine,
+            &MicrogridRuntimes::inert(),
+            spec(r#"{"components": []}"#),
+            None,
+        )
+        .await
+        .unwrap();
+        let mut taken = spec(PLANT);
+        taken.grpc_port = Some(other.grpc_port);
+        assert!(matches!(
+            rebuild_inert(&engine, id, taken).await,
+            Err(TopologyError::Conflict(m)) if m.contains(&format!("microgrid {}", other.id))
+        ));
+        let mut moved = spec(PLANT);
+        moved.grpc_port = Some(9999);
+        rebuild_inert(&engine, id, moved).await.unwrap();
+        let registry = engine.microgrids.lock();
+        assert_eq!(registry[&id].def.grpc_port, 9999);
+        assert_eq!(registry[&id].spec.as_ref().unwrap().grpc_port, Some(9999));
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_refuses_another_mg_and_lisp() {
+        let engine = engine();
+        let id = create_plant(&engine).await;
         let mut other = spec(PLANT);
         other.id = Some(id + 1);
         assert!(matches!(
-            rebuild(&engine, id, other),
+            rebuild_inert(&engine, id, other).await,
             Err(TopologyError::Invalid(_))
         ));
         assert_eq!(
-            rebuild(&engine, 77, spec(PLANT)),
+            rebuild_inert(&engine, 77, spec(PLANT)).await,
             Err(TopologyError::NotRegistered(77))
         );
         engine.microgrids.lock().get_mut(&id).unwrap().spec = None;
-        assert_eq!(rebuild(&engine, id, spec(PLANT)), Err(loaded_from_lisp(id)));
+        assert_eq!(
+            rebuild_inert(&engine, id, spec(PLANT)).await,
+            Err(loaded_from_lisp(id))
+        );
+    }
+
+    /// An unload forgets the microgrid and everything kept for it,
+    /// and frees its ids for the next microgrid.
+    #[tokio::test]
+    async fn an_unload_frees_the_ids_and_drops_what_was_kept() {
+        let engine = engine();
+        let id = create_plant(&engine).await;
+        let site = site(&engine, id);
+        site.scenario_start("run".into(), site.now());
+        let dir = tempfile::TempDir::with_prefix("mc-unload-").unwrap();
+        assert!(site.scenario_open_csv(dir.path()).unwrap() > 0);
+        let dispatches = engine.dispatches();
+        let data = crate::proto::dispatch::DispatchData {
+            r#type: "x".into(),
+            ..Default::default()
+        };
+        let made = dispatches.create(id, data, true).unwrap();
+        engine.record_spec_undo(id, spec(PLANT));
+        assert_eq!(engine.spec_undo_depths(id).undo, 1);
+        let mut changes = dispatches.subscribe();
+        let mut unregistered = engine.subscribe_microgrid_unloaded();
+
+        unload(&engine, &MicrogridRuntimes::inert(), id)
+            .await
+            .unwrap();
+
+        assert!(!engine.microgrids.lock().contains_key(&id));
+        assert!(!site.scenario_is_running(), "the journal was stopped");
+        assert_eq!(site.scenario_close_csv(), 0, "the sinks were closed");
+        assert!(dispatches.list_mg(id).is_empty());
+        let ev = changes.try_recv().unwrap();
+        assert_eq!(ev.change, crate::sim::dispatch::DispatchChange::Deleted);
+        assert_eq!(ev.dispatch_id(), made.metadata.unwrap().dispatch_id);
+        assert_eq!(engine.spec_undo_depths(id).undo, 0);
+        assert_eq!(unregistered.try_recv().unwrap(), id);
+        // The id and the component ids are free again.
+        assert_eq!(create_plant(&engine).await, id);
+    }
+
+    #[tokio::test]
+    async fn an_unload_refuses_lisp_and_an_unknown_id() {
+        let engine = engine();
+        let id = create_plant(&engine).await;
+        let inert = MicrogridRuntimes::inert();
+        assert_eq!(
+            unload(&engine, &inert, 77).await,
+            Err(TopologyError::NotRegistered(77))
+        );
+        engine.microgrids.lock().get_mut(&id).unwrap().spec = None;
+        assert_eq!(unload(&engine, &inert, id).await, Err(loaded_from_lisp(id)));
+        assert!(engine.microgrids.lock().contains_key(&id));
     }
 
     #[tokio::test]
@@ -423,7 +565,7 @@ mod tests {
         let renumbered = PLANT
             .replace(r#""id": 5,"#, r#""id": 6,"#)
             .replace("[4, 5]", "[4, 6]");
-        rebuild(&engine, id, spec(&renumbered)).unwrap();
+        rebuild_inert(&engine, id, spec(&renumbered)).await.unwrap();
         let site = site(&engine, id);
         assert!(site.get(5).is_none() && site.get(6).is_some());
     }

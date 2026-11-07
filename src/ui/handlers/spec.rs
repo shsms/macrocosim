@@ -1,11 +1,14 @@
 //! A microgrid's stored spec: read it, replace it (a rebuild with
-//! carry), and the JSON Schema of the topology document.
+//! carry), unload the microgrid, and the JSON Schema of the topology
+//! document.
 
+use axum::Extension;
 use axum::extract::State;
 use axum::http::StatusCode;
 
 use crate::engine::Engine;
 use crate::engine::topology::{self, TopologyError};
+use crate::runtime::MicrogridRuntimes;
 use crate::spec::MicrogridSpec;
 use crate::ui::api::{ApiError, Json, Mg};
 
@@ -40,16 +43,17 @@ pub(in crate::ui) async fn spec_get(
 /// PUT /api/mg/{mg}/spec — rebuild the microgrid from the body,
 /// carrying the state of every component whose spec did not change.
 /// The spec it replaced goes on the microgrid's undo stack, and a
-/// microgrid that came from a file is marked unsaved. Answers the
-/// stored spec.
+/// microgrid that came from a file is marked unsaved. A new
+/// `grpc_port` moves the gRPC server. Answers the stored spec.
 pub(in crate::ui) async fn spec_put(
     State(engine): State<Engine>,
+    Extension(runtimes): Extension<MicrogridRuntimes>,
     mg: Mg,
     Json(spec): Json<MicrogridSpec>,
 ) -> Result<Json<MicrogridSpec>, ApiError> {
     let create_lock = engine.create_lock();
     let _structural = create_lock.lock().await;
-    let replaced = topology::rebuild(&engine, mg.id, spec)?;
+    let replaced = topology::rebuild(&engine, &runtimes, mg.id, spec).await?;
     engine.record_spec_undo(mg.id, replaced);
     let registry = engine.microgrids();
     let mut registry = registry.lock();
@@ -61,6 +65,20 @@ pub(in crate::ui) async fn spec_put(
     }
     let stored = entry.spec.clone().expect("a rebuilt microgrid has a spec");
     Ok(Json(stored))
+}
+
+/// DELETE /api/mg/{mg} — unload the microgrid: stop its runtime,
+/// delete its dispatches and forget it. 204 once it is gone; 409 for a
+/// microgrid loaded from Lisp.
+pub(in crate::ui) async fn microgrid_delete(
+    State(engine): State<Engine>,
+    Extension(runtimes): Extension<MicrogridRuntimes>,
+    mg: Mg,
+) -> Result<StatusCode, ApiError> {
+    let create_lock = engine.create_lock();
+    let _structural = create_lock.lock().await;
+    topology::unload(&engine, &runtimes, mg.id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /api/spec/schema — the JSON Schema of the topology document.

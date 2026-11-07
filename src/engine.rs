@@ -74,7 +74,8 @@ pub struct Engine {
     /// microgrid id and a port, then write and load a file:
     /// `POST /api/microgrids`, the import (held from its collision
     /// scan to the eval that registers its components),
-    /// `/api/load-as`, and a snapshot loaded as a new microgrid. The load cannot run under the registry
+    /// `/api/load-as`, and a snapshot loaded as a new microgrid; and
+    /// every change in [`topology`] (create, rebuild, unload). The load cannot run under the registry
     /// lock (it evaluates lisp), so one claim at a time is what keeps
     /// each route's validation authoritative. A plain `(load …)` or
     /// an eval of `(make-microgrid …)` takes its port as it registers
@@ -87,6 +88,9 @@ pub struct Engine {
     /// forwarder for the new site's event bus on the fly, and the
     /// runtimes so they start its gRPC server.
     pub(crate) microgrid_registered: Arc<broadcast::Sender<u64>>,
+    /// Fired when [`topology::unload`] has removed a microgrid. The
+    /// WS event pump drops its forwarder for the id and tells the UI.
+    pub(crate) microgrid_unloaded: Arc<broadcast::Sender<u64>>,
     /// Per-microgrid undo stacks of the specs a `PUT` replaced, for
     /// the microgrids with a stored spec. In memory only.
     pub(crate) spec_undo: Arc<Mutex<HashMap<u64, UndoHistory<MicrogridSpec>>>>,
@@ -122,6 +126,7 @@ impl Engine {
             // spinning up mid-burst still benefits from the extra
             // slack.
             microgrid_registered: Arc::new(broadcast::channel(1024).0),
+            microgrid_unloaded: Arc::new(broadcast::channel(1024).0),
             spec_undo: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -242,6 +247,11 @@ impl Engine {
     /// Subscribe to `microgrid_registered` notifications.
     pub fn subscribe_microgrid_registered(&self) -> broadcast::Receiver<u64> {
         self.microgrid_registered.subscribe()
+    }
+
+    /// Subscribe to `microgrid_unloaded` notifications.
+    pub fn subscribe_microgrid_unloaded(&self) -> broadcast::Receiver<u64> {
+        self.microgrid_unloaded.subscribe()
     }
 }
 
