@@ -40,7 +40,7 @@ from frequenz.quantities import Percentage, Power
 
 import macrocosim as mc
 import starter_site
-from starter_site import BATTERY, CONSUMER, SOLAR, animate, component, holding, plug_car
+from starter_site import BATTERY, CONSUMER, SOLAR, animate, holding, plug_car
 
 MICROGRIDS = starter_site.MICROGRIDS
 
@@ -54,7 +54,7 @@ CSV = False
 
 
 async def _spiky_load(microgrid: mc.Microgrid) -> None:
-    consumer = component(microgrid, CONSUMER)
+    consumer = microgrid[CONSUMER]
     while True:
         spike = kW(25) if time.time() % 900 > 800 else kW(0)
         await consumer.power.set(kW(5) + spike)
@@ -62,7 +62,7 @@ async def _spiky_load(microgrid: mc.Microgrid) -> None:
 
 
 async def _silent_solar(microgrid: mc.Microgrid, recording: mc.Recording) -> None:
-    solar = component(microgrid, SOLAR)
+    solar = microgrid[SOLAR]
     await asyncio.sleep(5 * 60)
     await solar.telemetry_mode.set(mc.TelemetryMode.SILENT)
     await solar.command_mode.set(mc.CommandMode.TIMEOUT)
@@ -70,7 +70,7 @@ async def _silent_solar(microgrid: mc.Microgrid, recording: mc.Recording) -> Non
 
 
 async def _cloud(microgrid: mc.Microgrid, recording: mc.Recording) -> None:
-    solar = component(microgrid, SOLAR)
+    solar = microgrid[SOLAR]
     await asyncio.sleep(10 * 60)
     await solar.sunlight.set(pct(30))
     await recording.event("cloud", "covered until minute 15")
@@ -80,7 +80,7 @@ async def _cloud(microgrid: mc.Microgrid, recording: mc.Recording) -> None:
 
 
 async def _battery_outages(microgrid: mc.Microgrid, recording: mc.Recording) -> None:
-    battery = component(microgrid, BATTERY)
+    battery = microgrid[BATTERY]
     while True:
         await asyncio.sleep(random.uniform(5 * 60, 10 * 60))
         await battery.health.set(mc.Health.ERROR)
@@ -96,8 +96,8 @@ async def stress_run(microgrid: mc.Microgrid) -> mc.RecordingReport:
     """Record the 30-minute stress run on the starter site and return its
     report. The animation of the starter site, if it runs in this process,
     leaves the consumer load and the sunlight to the run."""
-    solar = component(microgrid, SOLAR)
-    battery = component(microgrid, BATTERY)
+    solar = microgrid[SOLAR]
+    battery = microgrid[BATTERY]
     with holding(CONSUMER, SOLAR):
         try:
             async with microgrid.record("example-30min", csv=CSV) as recording:

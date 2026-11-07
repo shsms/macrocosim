@@ -351,7 +351,10 @@ running a script, and yields its microgrids by id:
 ```
 
 Its microgrids are built from the simulator's copy of their specs, so look
-components up by id. Leaving the block leaves the simulator running. To start a
+components up by id. Leaving the block leaves the simulator running. This is
+for one-off reads and writes: a write to a knob the script animates is
+overwritten by the animation a moment later, so scenarios belong in the
+script's `run`. To start a
 private simulator from the REPL instead:
 
 ```python

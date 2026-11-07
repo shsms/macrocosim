@@ -13,20 +13,9 @@ battery keeps its state of charge and the charger its car across the restart
 (see docs/python-scripts.md).
 
 Each scenario is an async function that takes the microgrid, records itself and
-returns the recording's report. To run one with the script, await it in ``run``
-beside the animation and save. To run one from a terminal while the script
-runs, start ``python -m asyncio`` in this directory with the same venv::
-
-    import macrocosim as mc
-    import starter_site
-
-    async with mc.connect("http://127.0.0.1:8801") as microgrids:
-        report = await starter_site.battery_degraded_fleet(microgrids[2200])
-
-From a terminal, a scenario cannot pause the script's animation, which runs in
-the script's process, so the two that drive the consumer load or the sunlight
-(`peak_evening_load`, `pv_dropout`) are overwritten within a second; run those
-with the script.
+returns the recording's report. Scenarios run inside the script, where they can
+pause the animation: to run one, await it in ``run`` beside the animation and
+save.
 """
 
 from __future__ import annotations
@@ -37,7 +26,7 @@ import math
 import random
 import time
 from collections.abc import Iterator
-from typing import Any, TypeVar, cast
+from typing import Any
 
 from frequenz.quantities import Energy, Frequency, Percentage, Power, Voltage
 
@@ -45,8 +34,6 @@ import macrocosim as mc
 
 kW = Power.from_kilowatts
 pct = Percentage.from_percent
-
-C = TypeVar("C", bound=mc.Component)
 
 # -----------------------------------------------------------------------------
 # Topology
@@ -93,17 +80,6 @@ MICROGRIDS = [
         id=2200, name="Starter site", tso="TN", grpc_port=8800, topology=GRID
     ),
 ]
-
-
-def component(microgrid: mc.Microgrid, spec: mc.ComponentSpec[C]) -> C:
-    """`spec`'s component in `microgrid`, found by its id.
-
-    ``microgrid[spec]`` matches spec objects by identity, and a microgrid from
-    `mc.connect` is built from the simulator's copy of the specs, so the
-    scenarios look components up by id to work from a terminal too.
-    """
-    assert spec.id is not None
-    return cast(C, microgrid[spec.id])
 
 
 # -----------------------------------------------------------------------------
@@ -153,7 +129,7 @@ async def _line_voltage(microgrid: mc.Microgrid) -> None:
 
 
 async def _sunlight(microgrid: mc.Microgrid) -> None:
-    solar = component(microgrid, SOLAR)
+    solar = microgrid[SOLAR]
     while True:
         if SOLAR not in HELD:
             await solar.sunlight.set(cloud_curve(time.time() % 600))
@@ -161,7 +137,7 @@ async def _sunlight(microgrid: mc.Microgrid) -> None:
 
 
 async def _consumer(microgrid: mc.Microgrid) -> None:
-    consumer = component(microgrid, CONSUMER)
+    consumer = microgrid[CONSUMER]
     while True:
         if CONSUMER not in HELD:
             await consumer.power.set(consumer_load(time.time() % 900))
@@ -181,7 +157,7 @@ async def plug_car(microgrid: mc.Microgrid) -> None:
     """Plug a car at 35 % into the charger. It idles until the app under test
     commands it."""
     try:
-        await component(microgrid, EV_CHARGER).plug("sedan", soc=pct(35))
+        await microgrid[EV_CHARGER].plug("sedan", soc=pct(35))
     except mc.Rejected as exc:
         # After a reload the charger carries its car over, and refuses another.
         print(f"plug('sedan') refused: {exc.text}")
@@ -208,8 +184,8 @@ async def run(microgrids: dict[int, mc.Microgrid]) -> None:
 async def peak_evening_load(microgrid: mc.Microgrid) -> mc.RecordingReport:
     """Consumer ramp, peak and wind-down with the PV gone; the battery has to
     discharge to cover. One step a minute, so it plays out in three."""
-    consumer = component(microgrid, CONSUMER)
-    solar = component(microgrid, SOLAR)
+    consumer = microgrid[CONSUMER]
+    solar = microgrid[SOLAR]
     with holding(CONSUMER, SOLAR):
         async with microgrid.record("peak-evening-load") as recording:
             await consumer.power.set(kW(12))
@@ -226,7 +202,7 @@ async def peak_evening_load(microgrid: mc.Microgrid) -> mc.RecordingReport:
 async def pv_dropout(microgrid: mc.Microgrid) -> mc.RecordingReport:
     """A cloud bank crosses the array: full sun, near-overcast, then clear, for
     checking that an app tracks the PV down and back up without overshooting."""
-    solar = component(microgrid, SOLAR)
+    solar = microgrid[SOLAR]
     with holding(SOLAR):
         async with microgrid.record("pv-dropout") as recording:
             await solar.sunlight.set(pct(80))
@@ -241,7 +217,7 @@ async def pv_dropout(microgrid: mc.Microgrid) -> mc.RecordingReport:
 async def battery_degraded_fleet(microgrid: mc.Microgrid) -> mc.RecordingReport:
     """The battery flips between ok and error; the pool's bounds should shrink
     while it is out and recover when it is back."""
-    battery = component(microgrid, BATTERY)
+    battery = microgrid[BATTERY]
     try:
         async with microgrid.record("battery-degraded-fleet") as recording:
             for health in (mc.Health.OK, mc.Health.ERROR, mc.Health.OK):
@@ -266,7 +242,7 @@ async def _restore_network(solar: mc.SolarInverter) -> None:
 async def flaky_network(microgrid: mc.Microgrid) -> mc.RecordingReport:
     """The solar inverter stops streaming and its commands time out for a
     minute, while it keeps producing."""
-    solar = component(microgrid, SOLAR)
+    solar = microgrid[SOLAR]
     try:
         async with microgrid.record("flaky-network") as recording:
             await _restore_network(solar)
@@ -300,9 +276,9 @@ async def cold_start(microgrid: mc.Microgrid) -> mc.RecordingReport:
     """Every commandable component starts in standby and comes online in turn:
     the battery inverter, then the PV, then the EV charger and the CHP."""
     waves = [
-        [component(microgrid, BATTERY_INVERTER)],
-        [component(microgrid, SOLAR)],
-        [component(microgrid, CHP), component(microgrid, EV_CHARGER)],
+        [microgrid[BATTERY_INVERTER]],
+        [microgrid[SOLAR]],
+        [microgrid[CHP], microgrid[EV_CHARGER]],
     ]
     try:
         async with microgrid.record("cold-start") as recording:
@@ -324,7 +300,7 @@ async def cold_start(microgrid: mc.Microgrid) -> mc.RecordingReport:
 async def off_grid_island(microgrid: mc.Microgrid) -> mc.RecordingReport:
     """The grid connection point fails for a minute, a forced island: the PV
     and the battery carry the load alone until it reconnects."""
-    grid = component(microgrid, GRID)
+    grid = microgrid[GRID]
     try:
         async with microgrid.record("off-grid-island") as recording:
             await grid.health.set(mc.Health.OK)

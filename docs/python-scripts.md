@@ -241,8 +241,9 @@ async def off_grid_island(plant: mc.Microgrid) -> mc.RecordingReport:
     return recording.report()
 ```
 
-Run a scenario from `run` (await it beside the animation and save), or from a
-terminal (see [Attaching a terminal](#attaching-a-terminal)).
+Scenarios belong in the script: run one from `run`, awaited beside the
+animation, and save. Only there can it pause the animation, which runs in the
+script's process.
 
 ## Recording
 
@@ -307,8 +308,12 @@ async with mc.connect("http://127.0.0.1:8801") as microgrids:
 The microgrids are built from the simulator's copy of their specs, so look
 components up by id (`plant[2]`): the spec objects of a script module you
 import are other objects. Leaving the block closes the connections and leaves
-the simulator running. A write from the terminal stands until the next write
-to the same knob, which may come from the script's animation a moment later.
+the simulator running.
+
+A terminal is for one-off reads and writes. A write stands until the next
+write to the same knob, so a write to a knob the script animates is
+overwritten by the animation a moment later. Scenarios belong in the script
+(see [Animation and scenarios](#animation-and-scenarios)).
 
 ## Specs in tests
 
