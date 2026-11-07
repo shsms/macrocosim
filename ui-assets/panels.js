@@ -22,6 +22,23 @@ import {
 // than a blank the user has to guess at.
 const FIRST_MICROGRID_ID = 2200;
 
+// The `unsaved` chip: a microgrid whose live structure its source does
+// not have. On a script's microgrid the UI edited, saving the script
+// replaces the edits; a microgrid made in the UI has no source at all;
+// a Lisp file's live edit could not be recorded in it.
+function unsavedChip(m) {
+  if (!m.unsaved) return "";
+  if (m.has_spec && m.source) {
+    const file = m.source.split(/[\\/]/).pop();
+    const title = `edited here: saving ${file} replaces these edits; export to keep them`;
+    return `<span class="mg-chip edited" title="${escapeHtml(title)}">edited here</span>`;
+  }
+  if (m.has_spec) {
+    return `<span class="mg-chip unsaved" title="in memory only: export to keep it">in memory only</span>`;
+  }
+  return `<span class="mg-chip unsaved" title="live edits this file could not record">unsaved</span>`;
+}
+
 const UNMANAGED_HINT =
   "hand-written file — macrocosim won't rewrite its structure until you Adopt it";
 
@@ -58,9 +75,7 @@ export const microgridsPanel = (() => {
         m.managed || m.has_spec
           ? ""
           : `<span class="mg-chip unmanaged" title="${escapeHtml(UNMANAGED_HINT)}">unmanaged</span>`,
-        m.unsaved
-          ? `<span class="mg-chip unsaved" title="live edits this file could not record">unsaved</span>`
-          : "",
+        unsavedChip(m),
         runtime?.status === "failed"
           ? `<span class="mg-chip failed" title="${escapeHtml(runtime.error ?? "")}">failed</span>`
           : "",
@@ -571,11 +586,72 @@ export const microgridsPanel = (() => {
       unmanaged
         ? `<span class="mg-chip unmanaged" title="${escapeHtml(UNMANAGED_HINT)}">unmanaged</span>`
         : "",
-      entry?.unsaved
-        ? `<span class="mg-chip unsaved" title="live edits this file could not record">unsaved</span>`
-        : "",
+      entry ? unsavedChip(entry) : "",
     ].join("");
     adopt.hidden = !unmanaged;
+    // Only a microgrid with a spec exports: one loaded from Lisp has
+    // its file.
+    for (const id of ["mg-copy-py-btn", "mg-save-py-btn"]) {
+      const btn = document.getElementById(id);
+      if (btn) btn.hidden = !entry?.has_spec;
+    }
+  }
+
+  // The selected microgrid as a Python module, from the engine's
+  // export (GET /api/mg/{mg}/spec.py). Throws with the server's
+  // message: 503 without a usable Python, 429 while another export
+  // runs.
+  async function exportPython() {
+    const id = readSelectedMg();
+    const res = await fetch(`/api/mg/${id}/spec.py`);
+    if (!res.ok) throw new Error(await errorText(res));
+    return { id, text: await res.text() };
+  }
+
+  // The clipboard write starts in the click itself, with the export
+  // as a promise: Safari and Firefox refuse a write that comes after
+  // an await. A browser without ClipboardItem writes the text once it
+  // has it, and one without a clipboard at all (a page served over
+  // plain http on another host) is told to use Save as .py. A failed
+  // export shows the export's own message, not the clipboard's.
+  async function copyAsPython() {
+    const id = readSelectedMg();
+    if (!navigator.clipboard) {
+      notify(
+        "Copy as Python needs the browser's clipboard, which a page served over plain http from another host does not get; use Save as .py.",
+      );
+      return;
+    }
+    const exported = exportPython();
+    try {
+      if (typeof ClipboardItem === "undefined") {
+        await navigator.clipboard.writeText((await exported).text);
+      } else {
+        const blob = exported.then(({ text }) => new Blob([text], { type: "text/plain" }));
+        await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+      }
+      notify(`Copied microgrid #${id} as Python.`, "success");
+    } catch (e) {
+      const err = await exported.then(
+        () => e,
+        (x) => x,
+      );
+      notify(`Copy as Python failed: ${err.message}`);
+    }
+  }
+
+  async function saveAsPython() {
+    try {
+      const { id, text } = await exportPython();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: "text/x-python" }));
+      a.download = `microgrid_${id}.py`;
+      a.click();
+      // Some browsers cancel a download whose URL goes at once.
+      setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+    } catch (e) {
+      notify(`Save as .py failed: ${e.message}`);
+    }
   }
 
   // Take a hand-written file over: macrocosim writes the live
@@ -696,6 +772,8 @@ export const microgridsPanel = (() => {
   // The header button is static markup, so one listener outlives
   // every renderBreadcrumb (which only flips its hidden flag).
   document.getElementById("mg-adopt-btn")?.addEventListener("click", adoptCurrent);
+  document.getElementById("mg-copy-py-btn")?.addEventListener("click", copyAsPython);
+  document.getElementById("mg-save-py-btn")?.addEventListener("click", saveAsPython);
   return { refresh, removed };
 })();
 

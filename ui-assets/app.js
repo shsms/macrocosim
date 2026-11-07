@@ -1,11 +1,11 @@
 // Phase-1 SPA. Renders the topology route with vis-network, and on
 // node selection shows category-appropriate live charts in the
 // floating inspector. Visual editing (add / connect / rename /
-// delete) + REPL + Defaults / Scenarios all hang off the same
-// /api/eval mutation path so anything done in the UI is also
+// delete) changes the microgrid's spec over PUT, and the knobs go
+// through the typed routes, so anything done in the UI is also
 // scriptable from outside.
 
-import { pulseBar, setupThemeChip, setupZoneChip } from "./chrome.js";
+import { pulseBar, setupScriptChip, setupThemeChip, setupZoneChip } from "./chrome.js";
 import {
   setupDefaultsToggle,
   setupHelpButton,
@@ -497,6 +497,7 @@ async function init() {
   setupThemeChip();
   await zone.init();
   setupZoneChip();
+  setupScriptChip();
   pulseBar.setup();
   await refreshTopology();
   // WS push: refresh the topology (so the canvas reflects the

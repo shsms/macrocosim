@@ -3,7 +3,7 @@
 // the log panel, the Logs panel's head, and its load-time backfill.
 
 import { dispatchesPanel, setStatus } from "./app.js";
-import { pulseBar } from "./chrome.js";
+import { onScriptStatusEvent, pulseBar } from "./chrome.js";
 import { onReachedAgain } from "./connection.js";
 import { getJson } from "./http.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
@@ -168,6 +168,8 @@ export function openWebSocket(onTopologyChanged, onMicrogridUnloaded, onOpen = (
         }
         lastConfigError = { message: ev.message, tsMs };
         notify(ev.message);
+      } else if (ev.kind === "script_status") {
+        onScriptStatusEvent(ev);
       } else if (ev.kind === "microgrid_unloaded") {
         onMicrogridUnloaded(ev.microgrid_id);
       } else if (ev.kind === "dispatch_changed") {

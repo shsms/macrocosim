@@ -153,7 +153,8 @@ is wiring the topology + animating the environment.
   entry; `topology.js`, `live.js`, `metrics-store.js`,
   `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
   `events-ws.js` (the events socket's pump, the Logs panel's head and
-  its backfill),
+  its backfill), `chrome.js` (the top bar: the zone and theme chips,
+  the script chip with its status popover, the system pulse),
   `repl-symbols.js` (the names the REPL completes and describes, from
   `/api/symbols`, which lists every name the interpreter defines with its
   kind, signature and docstring),

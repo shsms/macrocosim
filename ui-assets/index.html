@@ -61,6 +61,9 @@
         </span>
       </section>
       <span class="spacer"></span>
+      <button type="button" class="pulse-chip script-chip" id="script-chip"
+              popovertarget="script-popover" hidden>script</button>
+      <div id="script-popover" class="script-popover" popover></div>
       <button type="button" id="repl-btn" class="btn"
               title="Lisp REPL against the selected microgrid — backtick opens it from anywhere">REPL</button>
       <button type="button" id="logs-btn" class="btn" title="The server's log tail">Logs</button>
@@ -90,6 +93,10 @@
         <button type="button" id="mg-adopt-btn" class="btn"
                 title="Write the live structure into this file so macrocosim may rewrite it from now on"
                 hidden>Adopt</button>
+        <button type="button" id="mg-copy-py-btn" class="btn"
+                title="Copy this microgrid as a Python module, to paste into a script" hidden>Copy as Python</button>
+        <button type="button" id="mg-save-py-btn" class="btn"
+                title="Download this microgrid as a Python module" hidden>Save as .py</button>
         <span class="spacer"></span>
         <nav id="mg-subtoggle" aria-label="microgrid view">
           <button type="button" class="mode-btn" data-subview="topology">Topology</button>
@@ -574,7 +581,8 @@
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a button and a component appears under the lowest free id from 5000, with a color dot matching its node's category colour. <em>hidden meter</em> adds a meter the gRPC topology leaves out (its node draws dashed). Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC); the grid node shows the grid frequency, amber from 0.1 Hz away from 50 Hz and red from 0.2 Hz. Edges take the colour of the direction power actually flows (blue import, green export) and thicken with its magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — the values the engine fills into each component type's spec, read-only, in its own panel.</li>
-          <li><strong>Editing</strong> — every structural edit changes the microgrid's spec and rebuilds it; a component whose spec did not change keeps its state. A microgrid loaded from Lisp is read-only. An <em>unmanaged</em> chip marks a hand-written Lisp file; hit <em>Adopt</em> in the microgrid bar to take it over. An <em>unsaved</em> chip means a live edit the microgrid's source does not have.</li>
+          <li><strong>Editing</strong> — every structural edit changes the microgrid's spec and rebuilds it; a component whose spec did not change keeps its state. A microgrid loaded from Lisp is read-only. An <em>edited here</em> chip marks a script's microgrid edited in the UI: saving the script replaces those edits, so export them to keep them. An <em>in memory only</em> chip marks a microgrid made here. <em>Copy as Python</em> and <em>Save as .py</em> in the microgrid bar export it as a Python module. An <em>unmanaged</em> chip marks a hand-written Lisp file; hit <em>Adopt</em> in the microgrid bar to take it over.</li>
+          <li><strong>Script chip</strong> — in the top bar while the engine runs a script: its state, and on a click the last reload and the script's recent output.</li>
         </ul>
         <h4>REPL</h4>
         <ul class="help-list">
