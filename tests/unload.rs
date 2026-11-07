@@ -5,7 +5,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{TestServer, get_spec, put_spec};
+use common::{TestServer, WsClient, get_spec, put_spec};
 use macrocosim::proto::microgrid::microgrid_client::MicrogridClient;
 use macrocosim::proto::microgrid::{
     ListElectricalComponentsRequest, ReceiveElectricalComponentTelemetryStreamRequest,
@@ -256,4 +256,61 @@ async fn a_put_with_a_new_grpc_port_moves_the_server() {
     assert_ne!(new, old);
     drop(std::net::TcpListener::bind(&old).expect("the old port is free"));
     assert_eq!(component_ids(&new).await, vec![1, 2, 3, 4]);
+}
+
+/// The events socket tells the UI a microgrid was removed, and
+/// follows a microgrid created again under the same id right after:
+/// its events arrive, though the two notices may reach the socket in
+/// either order.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_events_socket_follows_an_unload_and_a_recreate() {
+    let s = TestServer::start_spec(doc(vec![plant()])).await;
+    let mut ws = WsClient::connect(&s.ui_url).await;
+    // A sample from microgrid 7 proves the socket follows it.
+    ws.wait_for(Duration::from_secs(10), "event from microgrid 7", |ev| {
+        ev["microgrid_id"] == 7
+    })
+    .await;
+
+    let (code, body) = delete(&reqwest::Client::new(), &s, 7).await;
+    assert_eq!(code, StatusCode::NO_CONTENT, "{body}");
+    let mut again = plant();
+    again["components"] = json!([
+        {"type": "grid_connection_point", "id": 1},
+        {"type": "meter", "id": 50, "power_w": 1000.0}
+    ]);
+    again["connections"] = json!([[1, 50]]);
+    create(&s, spec(again)).await;
+
+    let (mut removed, mut new_sample) = (false, false);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !(removed && new_sample) {
+            let ev = ws.next_json().await;
+            if ev["microgrid_id"] != 7 {
+                continue;
+            }
+            removed |= ev["kind"] == "microgrid_unloaded";
+            new_sample |= ev["kind"] == "sample" && ev["component_id"] == 50;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("removed: {removed}, a sample of 50: {new_sample}"));
+}
+
+/// A plain unload reaches the events socket as `microgrid_unloaded`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_events_socket_names_the_unloaded_microgrid() {
+    let s = TestServer::start_spec(doc(vec![plant()])).await;
+    let mut ws = WsClient::connect(&s.ui_url).await;
+    ws.wait_for(Duration::from_secs(10), "event from microgrid 7", |ev| {
+        ev["microgrid_id"] == 7
+    })
+    .await;
+
+    let (code, body) = delete(&reqwest::Client::new(), &s, 7).await;
+    assert_eq!(code, StatusCode::NO_CONTENT, "{body}");
+    ws.wait_for(Duration::from_secs(10), "microgrid_unloaded for 7", |ev| {
+        ev["kind"] == "microgrid_unloaded" && ev["microgrid_id"] == 7
+    })
+    .await;
 }

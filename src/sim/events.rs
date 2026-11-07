@@ -131,6 +131,11 @@ pub enum SiteEvent {
         /// `"created"` / `"updated"` / `"deleted"`.
         change: &'static str,
     },
+    /// The microgrid named by the `WireEvent` wrapper's
+    /// `microgrid_id` was unloaded. Emitted by the WS event pump from
+    /// the engine's `microgrid_unloaded` broadcast; the SPA drops
+    /// its card and leaves a view of it.
+    MicrogridUnloaded,
     /// A runtime knob changed — REPL, scenario, typed control API, or the
     /// web UI; all writes funnel through the defuns or the control
     /// handlers, and both emit this. The inspector refreshes its
@@ -233,5 +238,9 @@ mod tests {
             message: "m".into(),
         });
         assert_eq!(log["ts"], "2026-10-06T12:00:00.000Z");
+        assert_eq!(
+            json(&SiteEvent::MicrogridUnloaded),
+            serde_json::json!({"kind": "microgrid_unloaded"})
+        );
     }
 }

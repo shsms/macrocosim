@@ -559,20 +559,23 @@ async function init() {
   // one refresh 300 ms later.
   let topologyBurstTimer = null;
   let topologyBurstPending = false;
-  openWebSocket((_v) => {
-    if (topologyBurstTimer !== null) {
-      topologyBurstPending = true;
-      return;
-    }
-    onTopologyChanged();
-    topologyBurstTimer = setTimeout(() => {
-      topologyBurstTimer = null;
-      if (topologyBurstPending) {
-        topologyBurstPending = false;
-        onTopologyChanged();
+  openWebSocket(
+    (_v) => {
+      if (topologyBurstTimer !== null) {
+        topologyBurstPending = true;
+        return;
       }
-    }, 300);
-  });
+      onTopologyChanged();
+      topologyBurstTimer = setTimeout(() => {
+        topologyBurstTimer = null;
+        if (topologyBurstPending) {
+          topologyBurstPending = false;
+          onTopologyChanged();
+        }
+      }, 300);
+    },
+    (id) => microgridsPanel.removed(id),
+  );
   setupRepl();
 }
 

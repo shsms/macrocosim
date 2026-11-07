@@ -115,7 +115,10 @@ is wiring the topology + animating the environment.
   - `handlers/` — HTTP handlers, one file per topic (topology, eval,
     scenarios, dispatches, …)
   - `state.rs` / `loopback.rs` / `events_ws.rs` — loopback client cache,
-    gRPC loopback supervisor, WS event push
+    gRPC loopback supervisor, WS event push (one forwarder per
+    microgrid, reconciled against the registry on every registered or
+    unloaded notice, so a microgrid created again under an
+    unloaded id is followed)
   - `app_state.rs` — `AppState`, the router's state: the `Engine`,
     plus the `Config` for the handlers that evaluate Lisp; a handler
     takes `State<Engine>` or `State<Config>`
@@ -380,7 +383,9 @@ UI").
   `grpc_port` moves the microgrid's gRPC server there.
   `DELETE /api/mg/{mg}` unloads a microgrid (204): its streams end, its
   gRPC port is free within about 2 s, its dispatches are deleted with
-  a `Deleted` event each, and its id and component ids are free.
+  a `Deleted` event each, its id and component ids are free, and the
+  events socket sends `microgrid_unloaded` for it, on which the SPA
+  drops its card and leaves a view of it.
   All three answer 409 `microgrid N was loaded from Lisp` for a
   microgrid without a spec. A `PUT` stacks the replaced spec on the
   microgrid's spec undo stack and marks a microgrid with a source file

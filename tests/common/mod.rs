@@ -386,6 +386,73 @@ pub async fn first_bounds(
     .expect("a sample carrying bounds")
 }
 
+/// A minimal WebSocket client for `/ws/events`: the handshake, then
+/// server text frames (never masked).
+#[allow(dead_code)]
+pub struct WsClient {
+    stream: tokio::net::TcpStream,
+}
+
+#[allow(dead_code)]
+impl WsClient {
+    pub async fn connect(ui_url: &str) -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let host = ui_url.trim_start_matches("http://");
+        let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
+        let request = format!(
+            "GET /ws/events HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\n\
+             Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(stream.read_u8().await.unwrap());
+        }
+        let head = String::from_utf8_lossy(&head);
+        assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+        Self { stream }
+    }
+
+    /// The next text frame, parsed as JSON.
+    pub async fn next_json(&mut self) -> serde_json::Value {
+        use tokio::io::AsyncReadExt;
+        loop {
+            let b0 = self.stream.read_u8().await.unwrap();
+            let len = match self.stream.read_u8().await.unwrap() & 0x7f {
+                126 => u64::from(self.stream.read_u16().await.unwrap()),
+                127 => self.stream.read_u64().await.unwrap(),
+                n => u64::from(n),
+            };
+            let mut payload = vec![0; len as usize];
+            self.stream.read_exact(&mut payload).await.unwrap();
+            if b0 & 0x0f == 1 {
+                return serde_json::from_slice(&payload).unwrap();
+            }
+        }
+    }
+
+    /// The first event `pred` accepts within `within`; panics naming
+    /// `what` when none comes.
+    pub async fn wait_for(
+        &mut self,
+        within: std::time::Duration,
+        what: &str,
+        mut pred: impl FnMut(&serde_json::Value) -> bool,
+    ) -> serde_json::Value {
+        tokio::time::timeout(within, async {
+            loop {
+                let event = self.next_json().await;
+                if pred(&event) {
+                    return event;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no {what} within {within:?}"))
+    }
+}
+
 /// Wrap a test body in `(make-microgrid …)` if the body doesn't
 /// already register one. Tests that care about the microgrid's id
 /// supply their own `(make-microgrid …)` form; everything else gets

@@ -8,7 +8,7 @@ mod common;
 use std::time::Duration;
 
 use chrono::DateTime;
-use common::{TestServer, eval_or_panic};
+use common::{TestServer, WsClient, eval_or_panic};
 use serde_json::Value;
 
 const TINY_TOPOLOGY: &str = r#"
@@ -1138,51 +1138,6 @@ async fn a_repl_registered_microgrid_is_running() {
         }
         assert!(std::time::Instant::now() < deadline, "71 never ran: {list}");
         tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-/// A minimal WebSocket client for `/ws/events`: the handshake, then
-/// server text frames (never masked).
-struct WsClient {
-    stream: tokio::net::TcpStream,
-}
-
-impl WsClient {
-    async fn connect(ui_url: &str) -> Self {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let host = ui_url.trim_start_matches("http://");
-        let mut stream = tokio::net::TcpStream::connect(host).await.unwrap();
-        let request = format!(
-            "GET /ws/events HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\n\
-             Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n\
-             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
-        );
-        stream.write_all(request.as_bytes()).await.unwrap();
-        let mut head = Vec::new();
-        while !head.ends_with(b"\r\n\r\n") {
-            head.push(stream.read_u8().await.unwrap());
-        }
-        let head = String::from_utf8_lossy(&head);
-        assert!(head.starts_with("HTTP/1.1 101"), "{head}");
-        Self { stream }
-    }
-
-    /// The next text frame, parsed as JSON.
-    async fn next_json(&mut self) -> Value {
-        use tokio::io::AsyncReadExt;
-        loop {
-            let b0 = self.stream.read_u8().await.unwrap();
-            let len = match self.stream.read_u8().await.unwrap() & 0x7f {
-                126 => u64::from(self.stream.read_u16().await.unwrap()),
-                127 => self.stream.read_u64().await.unwrap(),
-                n => u64::from(n),
-            };
-            let mut payload = vec![0; len as usize];
-            self.stream.read_exact(&mut payload).await.unwrap();
-            if b0 & 0x0f == 1 {
-                return serde_json::from_slice(&payload).unwrap();
-            }
-        }
     }
 }
 

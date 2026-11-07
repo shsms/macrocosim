@@ -650,6 +650,15 @@ export const microgridsPanel = (() => {
     schedulePoll();
   }
 
+  // The server unloaded microgrid `id`: drop its card at once, then
+  // refetch the list, which leaves a view of `id` for the list unless
+  // the microgrid was created again meanwhile.
+  async function removed(id) {
+    cached = cached.filter((m) => m.id !== id);
+    renderAll();
+    await refresh();
+  }
+
   function schedulePoll() {
     if (pollTimer) clearInterval(pollTimer);
     if (document.body.dataset.mode !== "microgrids") return;
@@ -682,7 +691,7 @@ export const microgridsPanel = (() => {
   // The header button is static markup, so one listener outlives
   // every renderBreadcrumb (which only flips its hidden flag).
   document.getElementById("mg-adopt-btn")?.addEventListener("click", adoptCurrent);
-  return { refresh };
+  return { refresh, removed };
 })();
 
 // ─── Scenarios mode ─────────────────────────────────────────────────────────

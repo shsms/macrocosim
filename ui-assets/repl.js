@@ -641,7 +641,9 @@ export function setupRepl() {
 // have moved while we were away and the status line was overwritten. A first
 // open that went through is a no-op there because init() already awaited
 // refreshTopology before opening the WS.
-export function openWebSocket(onTopologyChanged) {
+//
+// `onMicrogridUnloaded(id)` runs when the server unloaded microgrid `id`.
+export function openWebSocket(onTopologyChanged, onMicrogridUnloaded) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${proto}//${location.host}/ws/events`;
   const MIN_DELAY = 1000;
@@ -698,7 +700,8 @@ export function openWebSocket(onTopologyChanged) {
       // exception is topology_changed with nothing selected: the list
       // view refreshes its microgrid cards on it. Enterprise-scoped
       // events (log, lagged) ship microgrid_id = undefined and pass through
-      // regardless.
+      // regardless, and so does microgrid_unloaded, which every view
+      // needs.
       const selectedMg = readSelectedMg();
       const perMg = ev.kind === "sample" || ev.kind === "microgrid_sample"
                  || ev.kind === "topology_changed" || ev.kind === "setpoint"
@@ -743,6 +746,8 @@ export function openWebSocket(onTopologyChanged) {
         }
         lastConfigError = { message: ev.message, tsMs };
         notify(ev.message);
+      } else if (ev.kind === "microgrid_unloaded") {
+        onMicrogridUnloaded(ev.microgrid_id);
       } else if (ev.kind === "dispatch_changed") {
         // The dispatch store changed for ev.microgrid_id; refetch only if
         // we're actually looking at that microgrid's Dispatches tab.
