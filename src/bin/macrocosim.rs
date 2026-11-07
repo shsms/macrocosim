@@ -1,8 +1,9 @@
-//! Headless macrocosim simulator: load `config.lisp`, spawn the
-//! physics tick, serve the Microgrid gRPC API.
-
+//! Headless macrocosim simulator: boot the microgrids of a topology
+//! document (`--topology`) or of Lisp scripts, spawn the physics tick,
+//! serve the Microgrid gRPC API and the UI.
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::Parser;
 use macrocosim::{
@@ -30,6 +31,37 @@ struct Args {
     /// Microgrids tab.
     scripts: Vec<PathBuf>,
 
+    /// Boot the microgrids of this topology document (JSON), each
+    /// built from its spec with the file as its source. Not with a
+    /// script.
+    #[arg(long, value_name = "PATH", conflicts_with = "scripts")]
+    topology: Option<PathBuf>,
+
+    /// The enterprise id every microgrid reports. Overrides
+    /// `enterprise.lisp`.
+    #[arg(long, value_name = "ID")]
+    enterprise_id: Option<u64>,
+
+    /// Address of the PlatformAssets gRPC server (default
+    /// `[::1]:9900`). Overrides `enterprise.lisp`.
+    #[arg(long, value_name = "ADDR")]
+    assets_addr: Option<SocketAddr>,
+
+    /// Address of the MicrogridDispatchService gRPC server (default
+    /// `[::1]:8900`). Overrides `enterprise.lisp`.
+    #[arg(long, value_name = "ADDR")]
+    dispatch_addr: Option<SocketAddr>,
+
+    /// Request lifetime of a setpoint that carries none, in seconds
+    /// (default 60). Overrides `enterprise.lisp`.
+    #[arg(long, value_name = "SECONDS", value_parser = parse_seconds)]
+    request_lifetime: Option<Duration>,
+
+    /// Lifetime of a bounds augmentation that carries none, in seconds
+    /// (default 5). Overrides `enterprise.lisp`.
+    #[arg(long, value_name = "SECONDS", value_parser = parse_seconds)]
+    augment_lifetime: Option<Duration>,
+
     /// Anchor directory for persistent state (enterprise.lisp,
     /// snapshots/, managed microgrid files) and for relative
     /// `(load …)` paths. Defaults to the current directory.
@@ -52,6 +84,62 @@ struct Args {
     /// positional. The machine-readable readiness signal.
     #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true, default_missing_value = "-")]
     emit_endpoints: Option<String>,
+}
+
+/// A non-negative, finite number of seconds.
+fn parse_seconds(text: &str) -> Result<Duration, String> {
+    let s: f64 = text.parse().map_err(|e| format!("{e}"))?;
+    Duration::try_from_secs_f64(s)
+        .map_err(|_| format!("{s} is not a non-negative number of seconds"))
+}
+
+/// Lay the enterprise flags over the settings `enterprise.lisp` gave.
+fn apply_enterprise_flags(args: &Args, engine: &macrocosim::engine::Engine) {
+    engine.update_metadata(|m| {
+        if let Some(id) = args.enterprise_id {
+            m.enterprise_id = id;
+        }
+        if let Some(addr) = args.assets_addr {
+            m.assets_socket_addr = addr.to_string();
+        }
+        if let Some(addr) = args.dispatch_addr {
+            m.dispatch_socket_addr = addr.to_string();
+        }
+        if let Some(d) = args.request_lifetime {
+            m.default_request_lifetime = d;
+        }
+        if let Some(d) = args.augment_lifetime {
+            m.default_augment_lifetime = d;
+        }
+    });
+}
+
+/// Build every microgrid of the topology document at `path`, with the
+/// file as its source, or log why not and exit.
+async fn boot_topology(
+    path: &std::path::Path,
+    engine: &macrocosim::engine::Engine,
+    runtimes: &MicrogridRuntimes,
+) {
+    use macrocosim::engine::topology;
+    let fail = |e: String| -> ! {
+        log::error!("--topology {}: {e}", path.display());
+        std::process::exit(1);
+    };
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| fail(e.to_string()));
+    let mut doc =
+        macrocosim::spec::TopologyDoc::from_json(&text).unwrap_or_else(|e| fail(e.to_string()));
+    let source = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let lock = engine.create_lock();
+    let _structural = lock.lock().await;
+    let specs: Vec<&macrocosim::spec::MicrogridSpec> = doc.microgrids.iter().collect();
+    topology::check_ids(engine, &specs, &[]).unwrap_or_else(|e| fail(e.to_string()));
+    for spec in doc.microgrids.drain(..) {
+        let created = topology::create(engine, runtimes, spec, Some(source.clone()))
+            .await
+            .unwrap_or_else(|e| fail(e.to_string()));
+        log::info!("Microgrid #{} built from {}", created.id, path.display());
+    }
 }
 
 /// Bind a TCP listener for `label`, or log and exit the process on
@@ -139,6 +227,7 @@ async fn serve() {
         std::process::exit(1);
     });
     let engine = config.engine().clone();
+    apply_enterprise_flags(&args, &engine);
 
     // Every microgrid runtime, boot-time and later, starts through
     // MicrogridRuntimes. The listener subscribes before the file
@@ -155,6 +244,9 @@ async fn serve() {
         std::process::exit(1);
     });
     let _listener = runtimes.spawn_registration_listener().await;
+    if let Some(path) = &args.topology {
+        boot_topology(path, &engine, &runtimes).await;
+    }
     let boot_ids: Vec<u64> = engine.microgrids().lock().keys().copied().collect();
     log::info!("Enterprise carries {} microgrid(s)", boot_ids.len());
     // `--emit-endpoints` promises every boot listener is up, so a
@@ -315,5 +407,36 @@ mod tests {
         assert!(a.state_dir.is_none());
         assert!(!a.ephemeral_ports);
         assert_eq!(a.scripts, vec![std::path::PathBuf::from("some.lisp")]);
+        assert!(a.topology.is_none() && a.enterprise_id.is_none());
+    }
+
+    #[test]
+    fn a_topology_takes_no_script() {
+        let a = Args::parse_from(["macrocosim", "--topology", "t.json"]);
+        assert_eq!(a.topology, Some(PathBuf::from("t.json")));
+        assert!(Args::try_parse_from(["macrocosim", "--topology", "t.json", "x.lisp"]).is_err());
+    }
+
+    #[test]
+    fn the_enterprise_flags_parse() {
+        let a = Args::parse_from([
+            "macrocosim",
+            "--enterprise-id",
+            "42",
+            "--assets-addr",
+            "[::1]:9911",
+            "--dispatch-addr",
+            "127.0.0.1:8911",
+            "--request-lifetime",
+            "30",
+            "--augment-lifetime",
+            "2.5",
+        ]);
+        assert_eq!(a.enterprise_id, Some(42));
+        assert_eq!(a.assets_addr, Some("[::1]:9911".parse().unwrap()));
+        assert_eq!(a.dispatch_addr, Some("127.0.0.1:8911".parse().unwrap()));
+        assert_eq!(a.request_lifetime, Some(Duration::from_secs(30)));
+        assert_eq!(a.augment_lifetime, Some(Duration::from_millis(2500)));
+        assert!(Args::try_parse_from(["macrocosim", "--request-lifetime", "-1"]).is_err());
     }
 }

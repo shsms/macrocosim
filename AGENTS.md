@@ -515,6 +515,13 @@ as one JSON line once bound (the readiness signal); the line carries
 `version`, the binary's version in PEP 440 form, so a client can tell
 a mismatched binary.
 
+`macrocosim --topology topology.json` boots the microgrids of a
+topology document instead of Lisp scripts (the two cannot be
+combined): each is built from its spec with the file as its source,
+and a bad document exits the binary. `--enterprise-id`,
+`--assets-addr`, `--dispatch-addr`, `--request-lifetime SECONDS` and
+`--augment-lifetime SECONDS` override what `enterprise.lisp` sets.
+
 `PlatformAssets` and `MicrogridDispatchService` each bind a single
 shared listener (they're enterprise-wide, keyed by `microgrid_id` per
 request): assets on `[::1]:9900`, dispatch on `[::1]:8900`. Override

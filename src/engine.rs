@@ -163,6 +163,12 @@ impl Engine {
         self.metadata.read().clone()
     }
 
+    /// Change the enterprise settings in place: what the binary's
+    /// enterprise flags do after `enterprise.lisp` loaded.
+    pub fn update_metadata(&self, f: impl FnOnce(&mut Metadata)) {
+        f(&mut self.metadata.write());
+    }
+
     pub fn assets_socket_addr(&self) -> String {
         self.metadata.read().assets_socket_addr.clone()
     }
