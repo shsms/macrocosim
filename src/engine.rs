@@ -7,11 +7,12 @@
 mod metadata;
 pub mod topology;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tokio::sync::broadcast;
 
 pub use metadata::Metadata;
@@ -23,6 +24,8 @@ use crate::sim::dispatch::SharedDispatchStore;
 use crate::sim::frequency::SharedFrequency;
 use crate::sim::microgrids::{PortPins, SharedMicrogrids};
 use crate::sim::sim_clock::NowSource;
+use crate::spec::MicrogridSpec;
+use crate::undo::{UndoDepths, UndoHistory};
 
 /// The simulator state every server and handler shares. Cheap to
 /// clone: each field is a handle on state behind an `Arc`.
@@ -84,6 +87,9 @@ pub struct Engine {
     /// forwarder for the new site's event bus on the fly, and the
     /// runtimes so they start its gRPC server.
     pub(crate) microgrid_registered: Arc<broadcast::Sender<u64>>,
+    /// Per-microgrid undo stacks of the specs a `PUT` replaced, for
+    /// the microgrids with a stored spec. In memory only.
+    pub(crate) spec_undo: Arc<Mutex<HashMap<u64, UndoHistory<MicrogridSpec>>>>,
 }
 
 impl Engine {
@@ -116,6 +122,7 @@ impl Engine {
             // spinning up mid-burst still benefits from the extra
             // slack.
             microgrid_registered: Arc::new(broadcast::channel(1024).0),
+            spec_undo: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -202,9 +209,28 @@ impl Engine {
         self.port_pins.clone()
     }
 
-    /// The create-serialization lock — see the field doc.
-    pub(crate) fn create_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+    /// The one structural lock — see the field doc. Every caller of
+    /// [`topology`] holds it.
+    pub fn create_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
         self.create_lock.clone()
+    }
+
+    /// Stack `replaced`, the spec a rebuild of microgrid `id` just
+    /// replaced, as its newest undo step.
+    pub(crate) fn record_spec_undo(&self, id: u64, replaced: MicrogridSpec) {
+        self.spec_undo
+            .lock()
+            .entry(id)
+            .or_default()
+            .record(replaced);
+    }
+
+    /// How deep microgrid `id`'s spec undo stacks are.
+    pub fn spec_undo_depths(&self, id: u64) -> UndoDepths {
+        self.spec_undo
+            .lock()
+            .get(&id)
+            .map_or(UndoDepths { undo: 0, redo: 0 }, UndoHistory::depths)
     }
 
     /// Subscribe to `microgrid_registered` notifications.

@@ -22,6 +22,8 @@ use macrocosim::proto::common::metrics::{Bounds, Metric};
 use macrocosim::proto::microgrid::{
     ReceiveElectricalComponentTelemetryStreamRequest, microgrid_client::MicrogridClient,
 };
+use macrocosim::runtime::MicrogridRuntimes;
+use macrocosim::spec::TopologyDoc;
 use macrocosim::{
     assets_server::AssetsServer, engine::Engine, lisp::Config,
     proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer,
@@ -55,6 +57,7 @@ pub struct TestServer {
     pub config: Config,
     /// Id of the default microgrid, the one `grpc_url` serves.
     pub mg_id: u64,
+    pub runtimes: MicrogridRuntimes,
     handles: Vec<JoinHandle<()>>,
     _tempdir: TempDir,
 }
@@ -161,9 +164,54 @@ impl TestServer {
             engine,
             config,
             mg_id: default_mg_id,
+            runtimes,
             handles,
             _tempdir: tempdir,
         }
+    }
+
+    /// [`Self::start`] with the Lisp starter, then every microgrid of
+    /// `doc` built from its spec through `engine::topology::create`,
+    /// with `source` as its file. `mg_id` and `grpc_url` are those of
+    /// the first spec microgrid.
+    #[allow(dead_code)]
+    pub async fn start_spec_from(doc: TopologyDoc, source: Option<PathBuf>) -> Self {
+        let mut server = Self::start("").await;
+        let lock = server.engine.create_lock();
+        let _structural = lock.lock().await;
+        let mut first = None;
+        for spec in doc.microgrids {
+            let created = macrocosim::engine::topology::create(
+                &server.engine,
+                &server.runtimes,
+                spec,
+                source.clone(),
+            )
+            .await
+            .expect("create a microgrid from its spec");
+            first.get_or_insert(created);
+        }
+        let first = first.expect("the document has a microgrid");
+        server.mg_id = first.id;
+        let addr = first
+            .runtime
+            .and_then(|r| r.grpc_addr)
+            .expect("the spec microgrid started");
+        server.grpc_url = format!("http://{addr}");
+        server
+    }
+
+    /// [`Self::start_spec_from`] with no source file: microgrids made
+    /// as the UI makes them.
+    #[allow(dead_code)]
+    pub async fn start_spec(doc: TopologyDoc) -> Self {
+        Self::start_spec_from(doc, None).await
+    }
+
+    /// The temp dir this server runs in.
+    #[allow(dead_code)]
+    pub fn dir(&self) -> &std::path::Path {
+        self._tempdir.path()
     }
 
     /// The site of this server's microgrid, read from the registry.
@@ -218,6 +266,86 @@ pub async fn eval_or_panic(client: &reqwest::Client, s: &TestServer, body: &str)
     assert!(
         status.is_success() && json["value"].is_string(),
         "eval {body} failed: {status} {json}",
+    );
+}
+
+/// `GET /api/mg/{mg}/spec`: the status and the body.
+#[allow(dead_code)]
+pub async fn get_spec(
+    client: &reqwest::Client,
+    s: &TestServer,
+    mg: u64,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let r = client
+        .get(format!("{}/api/mg/{mg}/spec", s.ui_url))
+        .send()
+        .await
+        .unwrap();
+    (r.status(), r.json().await.unwrap())
+}
+
+/// `PUT /api/mg/{mg}/spec` with `spec`: the status and the body.
+#[allow(dead_code)]
+pub async fn put_spec(
+    client: &reqwest::Client,
+    s: &TestServer,
+    mg: u64,
+    spec: &serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let r = client
+        .put(format!("{}/api/mg/{mg}/spec", s.ui_url))
+        .json(spec)
+        .send()
+        .await
+        .unwrap();
+    (r.status(), r.json().await.unwrap())
+}
+
+/// `POST /api/mg/{mg}/component/{id}/drive` with `body`; panics
+/// unless it succeeds.
+#[allow(dead_code)]
+pub async fn drive(
+    client: &reqwest::Client,
+    s: &TestServer,
+    mg: u64,
+    id: u64,
+    body: serde_json::Value,
+) {
+    post_ok(client, s, mg, id, "drive", body).await;
+}
+
+/// `POST /api/mg/{mg}/component/{id}/status` with `body`; panics
+/// unless it succeeds.
+#[allow(dead_code)]
+pub async fn status(
+    client: &reqwest::Client,
+    s: &TestServer,
+    mg: u64,
+    id: u64,
+    body: serde_json::Value,
+) {
+    post_ok(client, s, mg, id, "status", body).await;
+}
+
+async fn post_ok(
+    client: &reqwest::Client,
+    s: &TestServer,
+    mg: u64,
+    id: u64,
+    route: &str,
+    body: serde_json::Value,
+) {
+    let r = client
+        .post(format!("{}/api/mg/{mg}/component/{id}/{route}", s.ui_url))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let code = r.status();
+    assert!(
+        code.is_success(),
+        "{route} {id} {body}: {code} {}",
+        r.text().await.unwrap_or_default()
     );
 }
 

@@ -183,6 +183,12 @@ pub fn rebuild(
     id: u64,
     mut spec: MicrogridSpec,
 ) -> Result<MicrogridSpec, TopologyError> {
+    let (site, old, port) = {
+        let registry = engine.microgrids.lock();
+        let entry = registry.get(&id).ok_or(TopologyError::NotRegistered(id))?;
+        let old = entry.spec.clone().ok_or_else(|| loaded_from_lisp(id))?;
+        (entry.site.clone(), old, entry.def.grpc_port)
+    };
     match spec.id {
         None => spec.id = Some(id),
         Some(other) if other != id => {
@@ -193,12 +199,6 @@ pub fn rebuild(
         }
         Some(_) => {}
     }
-    let (site, old, port) = {
-        let registry = engine.microgrids.lock();
-        let entry = registry.get(&id).ok_or(TopologyError::NotRegistered(id))?;
-        let old = entry.spec.clone().ok_or_else(|| loaded_from_lisp(id))?;
-        (entry.site.clone(), old, entry.def.grpc_port)
-    };
     match spec.grpc_port {
         None => spec.grpc_port = Some(port),
         Some(p) if p != port => {

@@ -367,6 +367,14 @@ UI").
   import, eval, format, symbols, defaults, logs, clock, scripts,
   scenarios).
   `POST /api/eval` evaluates with no microgrid in scope.
+- `GET /api/mg/{mg}/spec` answers a microgrid's stored spec, and
+  `PUT` of a `MicrogridSpec` rebuilds it with carry (200 with the stored
+  spec; 409 for a component id another microgrid holds, 422 for an
+  invalid spec, a component without an id, or a changed `grpc_port`).
+  Both answer 409 `microgrid N was loaded from Lisp` for a microgrid
+  without one. A `PUT` stacks the replaced spec on the microgrid's spec
+  undo stack and marks a microgrid with a source file `unsaved`.
+  `GET /api/spec/schema` serves the topology document's JSON Schema.
 - Everything about one microgrid lives under `/api/mg/{mg}/`, served
   by one nested router; the `Mg` extractor resolves `{mg}` and
   answers 404 `microgrid {mg} not registered` itself.

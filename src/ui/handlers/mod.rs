@@ -20,6 +20,7 @@ pub(in crate::ui) mod microgrids;
 pub(in crate::ui) mod scenarios;
 pub(in crate::ui) mod scripts;
 pub(in crate::ui) mod snapshots;
+pub(in crate::ui) mod spec;
 pub(in crate::ui) mod topology;
 pub(in crate::ui) mod undo;
 pub(in crate::ui) mod weather;
