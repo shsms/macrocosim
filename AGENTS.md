@@ -241,6 +241,13 @@ is wiring the topology + animating the environment.
   (`macrocosim [script …]`); a bare boot loads worlds on demand via
   `(load …)` / the Microgrids tab, and `--state-dir` anchors
   `microgrids/`, `enterprise.lisp`, `snapshots/`, and relative paths
+- `examples/starter_site.py` — the same world as a Python script
+  (`macrocosim examples/starter_site.py`): `MICROGRIDS`, the animation
+  in `run`, and the seven scenarios as async functions;
+  `examples/scenario_driving.py` imports it for a 30-minute recorded
+  stress run. `tests/parity.rs` checks that both starter sites serve
+  the same topology. `python/pyproject.toml` puts `examples/` on ty's
+  and ruff's first-party paths, since the scripts import each other
 
 ## Managed microgrid files
 

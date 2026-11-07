@@ -41,9 +41,17 @@ python-source = "src"
 [tool.ruff]
 line-length = 90
 target-version = "py311"
+# First-party code, for sorting imports: the package and the repository's
+# example scripts, which import each other.
+src = [".", "src", "../examples"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ty.environment]
+# The repository's example scripts import each other, as the script runner
+# lets them: it puts a script's own directory on the import path.
+extra-paths = ["../examples"]
 
 [tool.pytest.ini_options]
 # The suite only; CI runs examples/pytest_demo separately.

@@ -109,13 +109,13 @@ jobs:
       # which would defeat `--no-install-project` above and kick off
       # the maturin build after all.
       - name: Ruff lint
-        run: uv run --no-sync ruff check src tests examples
+        run: uv run --no-sync ruff check src tests examples ../examples ../tools/write-rate.py
 
       - name: Ruff format
-        run: uv run --no-sync ruff format --check src tests examples
+        run: uv run --no-sync ruff format --check src tests examples ../examples ../tools/write-rate.py
 
       - name: Type check (ty, all rules as errors)
-        run: uv run --no-sync ty check --error all src examples
+        run: uv run --no-sync ty check --error all src examples ../examples ../tools/write-rate.py
 
   # Run the Python test suite: the unit tests and the live tests that
   # boot a real server, on Python 3.13 (the dev pin in
