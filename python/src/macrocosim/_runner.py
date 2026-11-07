@@ -20,11 +20,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
-import runpy
 import signal
 import sys
 import threading
 import traceback
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -75,22 +75,34 @@ def _start_watchdog(fd: int) -> None:
 
 
 def _print_error(exc: BaseException) -> None:
-    """Print `exc`'s traceback without the frames of this module and of
-    `runpy`, which only say how the script was run."""
+    """Print `exc`'s traceback without the frames of this module, which only say
+    how the script was run."""
     tb = exc.__traceback__
-    while tb is not None and tb.tb_frame.f_code.co_filename in (__file__, runpy.__file__):
+    while tb is not None and tb.tb_frame.f_code.co_filename == __file__:
         tb = tb.tb_next
     traceback.print_exception(type(exc), exc, tb)
 
 
 def _load(script: Path) -> tuple[list[MicrogridSpec], Callable[..., Any]]:
-    """Run `script` and read its ``MICROGRIDS`` and ``run``."""
+    """Run `script` as ``__main__``, as ``python plant.py`` would, and read its
+    ``MICROGRIDS`` and ``run``.
+
+    The script's module stays ``sys.modules["__main__"]`` while ``run`` runs, so
+    its classes pickle and its type hints resolve, and ``sys.argv`` is
+    ``[script]``.
+    """
     sys.path.insert(0, str(script.parent))
+    sys.argv = [str(script)]
+    module = types.ModuleType("__main__")
+    module.__file__ = str(script)
+    sys.modules["__main__"] = module
     try:
-        namespace = runpy.run_path(str(script))
+        code = compile(script.read_bytes(), str(script), "exec")
+        exec(code, module.__dict__)
     except BaseException as exc:
         _print_error(exc)
         raise _NotLoaded() from None
+    namespace = module.__dict__
     name = script.name
     expected = (
         "a list of MicrogridSpec (make_microgrid), each with an id: "

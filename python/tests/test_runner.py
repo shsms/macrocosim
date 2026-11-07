@@ -212,6 +212,75 @@ async def test_the_scripts_directory_is_importable(tmp_path: Path) -> None:
     assert await _run(path, _Engine()) == EXIT_FINISHED
 
 
+async def test_the_script_runs_as_main(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _script(
+        tmp_path,
+        """
+        import macrocosim as mc
+        MICROGRIDS = [mc.make_microgrid(id=1, topology=mc.make_grid_connection_point())]
+
+        async def run(microgrids):
+            pass
+
+        if __name__ == "__main__":
+            print("main block ran")
+        """,
+    )
+    assert await _run(path, _Engine()) == EXIT_FINISHED
+    assert "main block ran" in capsys.readouterr().out
+
+
+async def test_the_script_sees_only_its_own_path_in_argv(tmp_path: Path) -> None:
+    path = _script(
+        tmp_path,
+        """
+        import argparse
+        import sys
+        import macrocosim as mc
+        MICROGRIDS = [mc.make_microgrid(id=1, topology=mc.make_grid_connection_point())]
+        ARGV = list(sys.argv)
+
+        async def run(microgrids):
+            assert ARGV == [__file__], ARGV
+
+        if __name__ == "__main__":
+            argparse.ArgumentParser().parse_args()
+        """,
+    )
+    assert await _run(path, _Engine()) == EXIT_FINISHED
+
+
+async def test_the_scripts_module_stays_main_while_run_runs(tmp_path: Path) -> None:
+    path = _script(
+        tmp_path,
+        """
+        from __future__ import annotations
+
+        import pickle
+        import typing
+        from dataclasses import dataclass
+
+        import macrocosim as mc
+
+        MICROGRIDS = [mc.make_microgrid(id=1, topology=mc.make_grid_connection_point())]
+
+        class Kilowatts(float):
+            pass
+
+        @dataclass
+        class Cfg:
+            power: Kilowatts
+
+        async def run(microgrids):
+            assert typing.get_type_hints(Cfg) == {"power": Kilowatts}
+            assert pickle.loads(pickle.dumps(Cfg(Kilowatts(3.0)))) == Cfg(Kilowatts(3.0))
+        """,
+    )
+    assert await _run(path, _Engine()) == EXIT_FINISHED
+
+
 def test_the_output_is_utf8_whatever_the_locale(tmp_path: Path) -> None:
     path = _script(
         tmp_path,
