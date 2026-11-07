@@ -15,3 +15,4 @@ pub mod timeout_tracker;
 pub mod tokio_runtime;
 pub mod ui;
 pub mod ui_log;
+pub mod version;

@@ -21,6 +21,8 @@ is wiring the topology + animating the environment.
   and `runtime_from_modes`, which Lisp's make functions call too;
   `spec/schema.rs` the JSON Schema, derived at run time. Lisp does
   not use specs
+- `src/version.rs` — `VERSION`, the crate version in PEP 440 form
+  (`0.2.0-alpha.0` is `0.2.0a0`), the form the Python package carries
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback) and its
   started / failed status
@@ -482,7 +484,9 @@ port with `--ui-port N`, or pass `--ephemeral-ports` to bind the UI
 and every gRPC / assets / dispatch listener on OS-chosen ports
 (parallel CI instances). A routable `--ui-bind` host is still on the
 roadmap. Add `--emit-endpoints=PATH` to write the resolved addresses
-as one JSON line once bound (the readiness signal).
+as one JSON line once bound (the readiness signal); the line carries
+`version`, the binary's version in PEP 440 form, so a client can tell
+a mismatched binary.
 
 `PlatformAssets` and `MicrogridDispatchService` each bind a single
 shared listener (they're enterprise-wide, keyed by `microgrid_id` per

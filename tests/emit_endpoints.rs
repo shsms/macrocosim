@@ -46,4 +46,9 @@ fn each_microgrid_lists_its_grpc_addr() {
     let addr = mg0["grpc_addr"].as_str().expect("grpc_addr is a string");
     assert!(addr.contains(':'), "{addr}");
     assert!(mg0.get("grpc").is_none(), "{v}");
+    assert_eq!(
+        v["version"],
+        macrocosim::version::pep440(env!("CARGO_PKG_VERSION")),
+        "{v}"
+    );
 }

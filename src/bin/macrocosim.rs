@@ -218,6 +218,7 @@ async fn serve() {
                 .collect::<Vec<_>>(),
             "assets": assets_addr.to_string(),
             "dispatch": dispatch_addr.to_string(),
+            "version": *macrocosim::version::VERSION,
         })
         .to_string();
         if target == "-" {
