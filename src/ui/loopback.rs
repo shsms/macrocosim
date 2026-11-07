@@ -39,7 +39,8 @@ use super::state::{
 /// slot's `Microgrid` holds a clone too. A dropped client closes its
 /// instructions channel, and frequenz-microgrid's
 /// `MicrogridClientActor` busy-spins at 100 % CPU on a closed channel
-/// (tracked upstream in frequenz-microgrid-rs).
+/// (tracked upstream in frequenz-microgrid-rs), so whoever aborts the
+/// returned task keeps a clone of `client` for good.
 ///
 /// `site` is the sink the forwarders publish to via
 /// [`MicrogridSite::broadcast_microgrid_sample`]; the existing `/ws/events`
@@ -50,7 +51,7 @@ pub fn spawn_microgrid_loopback(
     client: MicrogridClientHandle,
     slot: SharedMicrogrid,
     site: MicrogridSite,
-) {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         // Subscribe BEFORE the initial build. The build can take a
         // while (the graph build loops until it succeeds), and a
@@ -59,7 +60,22 @@ pub fn spawn_microgrid_loopback(
         // pre-change graph until the NEXT mutation, silently.
         let events = site.subscribe_events();
         run_supervisor(client, slot, site, events).await;
-    });
+    })
+}
+
+/// Stop what [`spawn_microgrid_loopback`] started: the supervisor,
+/// awaited so no build is still writing to `slot`, then the
+/// forwarders and the `Microgrid` in `slot`. The caller keeps the
+/// client (see [`spawn_microgrid_loopback`]).
+pub async fn stop_microgrid_loopback(supervisor: JoinHandle<()>, slot: Option<SharedMicrogrid>) {
+    supervisor.abort();
+    let _ = supervisor.await;
+    if let Some(slot) = slot {
+        for h in slot.forwarders.lock().drain(..) {
+            h.abort();
+        }
+        slot.microgrid.write().take();
+    }
 }
 
 /// Build a fresh `Microgrid` and wire up its forwarders. Same code

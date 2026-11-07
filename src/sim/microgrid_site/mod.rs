@@ -25,6 +25,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 
 use tokio::sync::broadcast;
+use tokio::task::JoinHandle;
 
 use crate::sim::EnergyAccum;
 use crate::sim::component::OperationalMode;
@@ -45,6 +46,14 @@ mod scenarios;
 mod swap;
 
 pub use swap::CarryPlan;
+
+/// The two tasks [`MicrogridSite::spawn_background`] starts, which
+/// [`MicrogridSite::stop_background`] ends.
+#[derive(Debug)]
+pub struct BackgroundTasks {
+    pub physics: JoinHandle<()>,
+    pub sampler: JoinHandle<()>,
+}
 
 pub(crate) use scenarios::{ScenarioReport, ScenarioSummary};
 
@@ -1354,22 +1363,33 @@ impl MicrogridSite {
     }
 
     /// Start the physics tick and the history sampler, once per site:
-    /// `false` when they already run.
-    pub fn spawn_background(&self) -> bool {
+    /// their handles, or `None` when they already run.
+    pub fn spawn_background(&self) -> Option<BackgroundTasks> {
         if self.inner.background_spawned.swap(true, Ordering::SeqCst) {
-            return false;
+            return None;
         }
-        self.clone().spawn_physics();
-        self.clone().spawn_history_sampler();
-        true
+        Some(BackgroundTasks {
+            physics: self.clone().spawn_physics(),
+            sampler: self.clone().spawn_history_sampler(),
+        })
+    }
+
+    /// Abort the physics tick and the history sampler `background`
+    /// holds and wait for both to end; a later `spawn_background`
+    /// starts them again.
+    pub async fn stop_background(&self, background: BackgroundTasks) {
+        background.physics.abort();
+        background.sampler.abort();
+        let _ = background.physics.await;
+        let _ = background.sampler.await;
+        self.inner.background_spawned.store(false, Ordering::SeqCst);
     }
 
     /// Spawn the physics loop. Returns immediately. The loop holds an
-    /// `Arc` clone of the MicrogridSite, so the MicrogridSite cannot drop until the
-    /// task exits — and right now there is no exit path. That's fine
-    /// for the long-running binary but means tests that need a clean
-    /// shutdown should call `tick_once` directly instead.
-    pub fn spawn_physics(self) {
+    /// `Arc` clone of the MicrogridSite, so the MicrogridSite cannot
+    /// drop until the task ends; it runs until its handle aborts it.
+    /// Tests that need no task call `tick_once` directly instead.
+    pub fn spawn_physics(self) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut last = Utc::now();
             let mut interval = tokio::time::interval(self.physics_tick());
@@ -1394,7 +1414,7 @@ impl MicrogridSite {
                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 }
             }
-        });
+        })
     }
 
     // ─── Setpoint event log ──────────────────────────────────────────

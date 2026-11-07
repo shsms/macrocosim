@@ -28,7 +28,7 @@ impl MicrogridSite {
     /// management (cancel-on-reload, re-spawn-per-component) for
     /// little chart-side benefit. 1 Hz × 600-sample capacity = 10
     /// minutes of history per series, plenty for the v1 charts.
-    pub fn spawn_history_sampler(self) {
+    pub fn spawn_history_sampler(self) -> tokio::task::JoinHandle<()> {
         let cadence = Duration::from_secs(1);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(cadence);
@@ -37,7 +37,7 @@ impl MicrogridSite {
                 interval.tick().await;
                 self.record_history_snapshot(Utc::now());
             }
-        });
+        })
     }
 
     /// Take one snapshot pass: read every component's telemetry and

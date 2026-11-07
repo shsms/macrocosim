@@ -34,8 +34,10 @@ is wiring the topology + animating the environment.
 - `src/undo.rs` — `UndoHistory<T>`, the per-microgrid undo / redo
   stack (capped at 20 steps), generic over what one step stores
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
-  microgrid (physics, history, gRPC server, UI loopback) and its
-  started / failed status
+  microgrid (physics, history, gRPC server, UI loopback), its
+  started / failed status, and the handles of the tasks it started:
+  `stop` ends them all and forgets the runtime, `restart_grpc` moves
+  the gRPC server to a new port
 - `src/sim/` — components + scheduler
   - `component.rs` — `SimulatedComponent` trait, `ComponentHandle`,
     `Telemetry`; `component/` holds the capability traits
