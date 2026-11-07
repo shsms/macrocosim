@@ -7,11 +7,11 @@
 
 import { escapeHtml, inspectEl } from "./app.js";
 import { chartAxis, chartColors, requireUplot } from "./chart-lib.js";
-import { evalQuoted, jsToLispString } from "./eval.js";
 import { deadBandW, formatScaled } from "./live.js";
 import { metricsStore } from "./metrics-store.js";
+import { notify } from "./notices.js";
 import { powerColor, reactiveColor } from "./pill.js";
-import { mgJson, READ_ONLY_TITLE, structureEditable } from "./routing.js";
+import { mgJson, mgSend, READ_ONLY_TITLE, structureEditable } from "./routing.js";
 import { openPanel } from "./side-panel.js";
 import { readStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
@@ -207,83 +207,93 @@ export const OPERATIONAL_MODES = [
 export const ACCEPTS_SETPOINTS = new Set(["battery", "inverter", "ev-charger", "chp", "steam-boiler"]);
 
 // Per-category runtime knobs the inspector exposes as numeric
-// inputs. Each one binds to an existing Lisp setter — so this is
-// just UI sugar over what the REPL could already do. Construction-
-// time args (capacity, rated bounds, …) aren't here because most
-// aren't runtime-mutable on the underlying component yet.
-// `dynamic: true` knobs accept either a numeric literal or a Lisp
-// expression (lambda, quoted symbol, …) — the underlying defun
-// dispatches on input kind. Inputs with `dynamic` render as text,
-// everything else as numeric. See the renderInspect Knobs block.
-// `unit`, on a dynamic knob only, labels the resolved per-tick value
-// line paintKnobEntry shows beneath an expression's printed source —
-// see knobDisplay/paintKnobEntry below.
+// inputs. Each one is a field of the component's typed drive route
+// (`field`), and `token` is the knob name the server's snapshot and
+// knob_changed events use for it. Construction-time args (capacity,
+// rated bounds, …) aren't here: they are the spec's, and change with
+// the structure.
+// `dynamic: true` knobs may be driven by a Lisp expression on a
+// microgrid loaded from Lisp; their input is text, so it can show that
+// expression, and a commit takes a number. `unit`, on a dynamic knob
+// only, labels the resolved per-tick value line paintKnobEntry shows
+// beneath an expression's printed source — see knobDisplay/
+// paintKnobEntry below.
 // `group` places each knob in the Component card: "config" rows are
 // device configuration (a Config sub-section of their own), anything
 // else is an environment/simulation driver and joins the Simulation
 // rows — a meter's sources and a PV's sunlight steer what the sim
 // produces, the same family as health/telemetry.
-// `clear`, on a meter knob only, names the Lisp defun a small
-// "measure" button next to the input calls to drop the override and
-// hand the reading back to the children's sum (clear-meter-power /
-// clear-meter-reactive — Task 3). The button is hidden until the
-// token actually carries a live override; see the knobRow/
+// `clear`, on a meter knob only, names the drive field a small
+// "measure" button next to the input sets to drop the override and
+// hand the reading back to the children's sum. The button is hidden
+// until the token actually carries a live override; see the knobRow/
 // paintKnobEntry/setKnobText comments below for the show/hide
-// discipline. Reactive power and power factor share one clear defun
-// (one slot server-side, mutually exclusive readings) so both rows
-// carry the same `clear` value.
+// discipline. Reactive power and power factor share one clear (one
+// slot server-side, mutually exclusive readings) so both rows carry
+// the same `clear` value. The solar sunlight's clear hands the
+// sunlight back to the site's weather; its reading is there whether
+// driven or not, so its button always shows (`clearAlways`), and
+// `clearAction` names what it does in a failure toast.
 const KNOBS_BY_CATEGORY = {
   meter: [
     {
-      label: "power (W or expr)",
-      defun: "set-meter-power",
+      label: "power (W)",
+      token: "meter-power",
+      field: "power_w",
       dynamic: true,
       unit: "W",
-      clear: "clear-meter-power",
+      clear: "clear_power",
     },
     {
-      label: "reactive power (VAr or expr)",
-      defun: "set-meter-reactive-power",
+      label: "reactive power (VAr)",
+      token: "meter-reactive-power",
+      field: "reactive_power_var",
       dynamic: true,
       unit: "VAr",
-      clear: "clear-meter-reactive",
+      clear: "clear_reactive",
     },
     {
       label: "power factor (0–1]",
-      defun: "set-meter-power-factor",
+      token: "meter-power-factor",
+      field: "power_factor",
       flag: "leading",
-      clear: "clear-meter-reactive",
+      clear: "clear_reactive",
     },
   ],
   // No direct VAr-setpoint input here: reactive power on an inverter
-  // is driven by control apps over the gRPC API (the REPL still has
-  // set-reactive-power). The inspector carries only component config
-  // and measurements — the API-driven setpoint shows up read-only as
-  // the Power card's marker + TTL row and in the setpoint log.
+  // is driven by control apps over the gRPC API. The inspector carries
+  // only component config and measurements — the API-driven setpoint
+  // shows up read-only as the Power card's marker + TTL row and in the
+  // setpoint log.
   inverter: [
-    { label: "reactive PF limit", defun: "set-reactive-pf-limit", group: "config" },
-    { label: "reactive apparent (VA)", defun: "set-reactive-apparent-va", group: "config" },
+    { label: "reactive PF limit", token: "reactive-pf-limit", field: "reactive_pf_limit", group: "config" },
+    {
+      label: "reactive apparent (VA)",
+      token: "reactive-apparent-va",
+      field: "reactive_apparent_va",
+      group: "config",
+    },
   ],
   "steam-boiler": [
     {
-      label: "demand (kg/s or expr)",
-      defun: "set-boiler-demand-kg-per-s",
+      label: "demand (kg/s)",
       token: "boiler-demand",
+      field: "steam_demand_kg_per_s",
       dynamic: true,
       unit: "kg/s",
     },
-    { label: "pressure (bar)", defun: "set-boiler-pressure", unit: "bar" },
+    { label: "pressure (bar)", token: "boiler-pressure", field: "pressure_bar", unit: "bar" },
   ],
 };
 
 function knobsFor(d) {
   const knobs = [...(KNOBS_BY_CATEGORY[d.category] || [])];
-  // Solar inverters also get a sunlight knob — driven by the same
-  // (set-solar-sunlight ID PCT) defun the cloud-curve timer uses.
+  // Solar inverters also get a sunlight knob.
   if (d.category === "inverter" && d.subtype === "solar") {
     knobs.unshift({
-      label: "sunlight (% or expr)",
-      defun: "set-solar-sunlight",
+      label: "sunlight (%)",
+      token: "solar-sunlight",
+      field: "sunlight_pct",
       dynamic: true,
       unit: "%",
     });
@@ -334,13 +344,36 @@ function selectField(knob, current, options, disabledReason = null) {
   return `<select class="field field-sm" data-knob="${knob}"${attrs}>${opts}</select>`;
 }
 
-// Chip knob token → the same Lisp setter the old <select> onchange
-// handlers called.
-const KNOB_DEFUNS = {
-  "operational-mode": "set-component-operational-mode",
-  health: "set-component-health",
-  "telemetry-mode": "set-component-telemetry-mode",
-  "command-mode": "set-component-command-mode",
+// One request to a typed route of the selected microgrid (a path
+// under /api/mg/{mg}/), with a refusal toasted as `${label}: ${error}`.
+// Resolves to whether it went through. Nothing is repainted here: the
+// WS knob_changed / topology_changed events the write sends do that.
+export async function sendKnob(method, suffix, body, label) {
+  try {
+    await mgSend(method, suffix, body);
+    return true;
+  } catch (err) {
+    notify(`${label}: ${err.message}`);
+    return false;
+  }
+}
+
+// Set one state knob of component `id` (a STATE_KNOBS token) to
+// `value`: the operational mode through /runtime, the others through
+// /status.
+export function setStateKnob(id, knob, value) {
+  const field = STATE_KNOBS[knob];
+  if (!field) return Promise.resolve(false);
+  const route = knob === "operational-mode" ? "runtime" : "status";
+  return sendKnob("POST", `component/${id}/${route}`, { [field]: value }, `Set ${knob}`);
+}
+
+// Chip / select knob token → the field of the typed route that sets it.
+const STATE_KNOBS = {
+  "operational-mode": "operational_mode",
+  health: "health",
+  "telemetry-mode": "telemetry_mode",
+  "command-mode": "command_mode",
 };
 
 // One delegated click listener for every chip row the panel will
@@ -358,10 +391,8 @@ export function setupInspectorChips() {
   inspectEl.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-knob][data-value]");
     if (!btn || btn.disabled) return;
-    const defun = KNOB_DEFUNS[btn.dataset.knob];
     const id = inspectEl.dataset.inspectId;
-    if (!defun || !id) return;
-    evalQuoted(`(${defun} ${id} '${btn.dataset.value})`);
+    if (id) setStateKnob(id, btn.dataset.knob, btn.dataset.value);
   });
   // The state <select>s (mode / telemetry / commands) go through the
   // same delegation: change bubbles, and the select's own value is
@@ -369,10 +400,8 @@ export function setupInspectorChips() {
   inspectEl.addEventListener("change", (e) => {
     const sel = e.target.closest("select[data-knob]");
     if (!sel) return;
-    const defun = KNOB_DEFUNS[sel.dataset.knob];
     const id = inspectEl.dataset.inspectId;
-    if (!defun || !id) return;
-    evalQuoted(`(${defun} ${id} '${sel.value})`);
+    if (id) setStateKnob(id, sel.dataset.knob, sel.value);
   });
 }
 
@@ -393,8 +422,8 @@ function saveCardOpen(name, open) {
 //
 // The charger's own telemetry deliberately says nothing about the car
 // in it, so this card reads the simulator's private view over
-// component/{id}/ev instead and writes back through plug-ev /
-// unplug-ev — the same eval path every other inspector control uses.
+// component/{id}/ev instead and writes back through POST / DELETE on
+// the same path.
 // The preset catalog is the server's (`presets`, sent plugged or not),
 // never a copy of it here: a car added to the catalog shows up in this
 // dropdown without a UI change.
@@ -482,16 +511,15 @@ async function refreshEvCard(id) {
   // so the numeric fields need none of the knob rows' spinner/wheel
   // handling (see AGENTS.md's UI input convention).
   document.getElementById("ev-plug")?.addEventListener("click", async () => {
-    const preset = document.getElementById("ev-preset").value;
+    const body = { preset: document.getElementById("ev-preset").value };
     const soc = document.getElementById("ev-soc").value.trim();
     const target = document.getElementById("ev-target").value.trim();
-    const args = `${soc ? ` :soc-pct ${soc}` : ""}${target ? ` :target-soc-pct ${target}` : ""}`;
-    const res = await evalQuoted(`(plug-ev ${id} '${preset}${args})`, "Plug in failed");
-    if (res.ok) refreshEvCard(id);
+    if (soc) body.soc_pct = Number(soc);
+    if (target) body.target_soc_pct = Number(target);
+    if (await sendKnob("POST", `component/${id}/ev`, body, "Plug in failed")) refreshEvCard(id);
   });
   document.getElementById("ev-unplug")?.addEventListener("click", async () => {
-    const res = await evalQuoted(`(unplug-ev ${id})`, "Unplug failed");
-    if (res.ok) refreshEvCard(id);
+    if (await sendKnob("DELETE", `component/${id}/ev`, undefined, "Unplug failed")) refreshEvCard(id);
   });
 }
 
@@ -549,14 +577,14 @@ function renderInspect(d, parentIds, childIds) {
   const knobs = knobsFor(d);
   const knobRow = (k) => {
       const inputAttrs = k.dynamic
-        ? `type="text" placeholder="value or (lambda () ...)"`
+        ? `type="text" inputmode="decimal" placeholder="value"`
         : `type="number" step="any" placeholder="value"`;
       // `k.flag`, when set, renders a checkbox alongside the input
       // for an optional boolean arg (e.g. power factor's LEADING).
       // The checkbox by itself never submits anything — it only
       // qualifies whatever value is next entered into the input, at
-      // which point the change handler below reads it and appends
-      // it to the eval'd expression.
+      // which point the change handler below reads it and sends it
+      // beside the value.
       const flagHtml = k.flag
         ? `<label class="knob-flag"><input type="checkbox" class="knob-flag-input" /> ${escapeHtml(k.flag)}</label>`
         : "";
@@ -583,7 +611,7 @@ function renderInspect(d, parentIds, childIds) {
         : "";
       return `<dt>${escapeHtml(k.label)}</dt><dd>
         <input ${inputAttrs} class="field field-sm knob-input"
-               data-defun="${k.defun}"${k.token ? ` data-token="${k.token}"` : ""}${k.dynamic ? ` data-dynamic="1" data-unit="${escapeHtml(k.unit || "")}"` : ""} />${exprChipHtml}${flagHtml}${measureBtnHtml}${resolvedHtml}
+               data-token="${k.token}" data-field="${k.field}"${k.flag ? ` data-flag="${k.flag}"` : ""}${k.dynamic ? ` data-dynamic="1" data-unit="${escapeHtml(k.unit || "")}"` : ""} />${exprChipHtml}${flagHtml}${measureBtnHtml}${resolvedHtml}
       </dd>`;
     };
   const configKnobsHtml = knobs.filter((k) => k.group === "config").map(knobRow).join("");
@@ -625,6 +653,7 @@ function renderInspect(d, parentIds, childIds) {
             : ""}
           ${simKnobsHtml}
         </dl>
+        <p class="hint">Mode, health, telemetry and commands set here are live values: the next structural edit, undo or script save puts them back to the spec.</p>
         <p class="hint" id="knob-readback-hint" hidden></p>
       </div>
     </div>
@@ -692,15 +721,15 @@ function renderInspect(d, parentIds, childIds) {
   // visible WRITES against live/snapshot updates (data-editing — read
   // by paintKnobEntry/setKnobText, which still keep dataset.live/the
   // flag's own dataset.live current underneath so nothing newer is
-  // lost). Enter commits via evalQuoted and, on success, remembers
+  // lost). Enter commits a number to the drive route and, on success, remembers
   // the committed text (and flag state) as the new "live" baseline
   // (data-live) instead of clearing the field. Esc and a plain blur
   // both restore data-live (input text AND flag checked state), so
   // anything typed but never committed — or rejected by the server —
   // reverts rather than sticking around.
   // A sibling `.knob-flag-input`, if this knob has one, qualifies the
-  // committed value as an optional trailing `t` arg (e.g. power
-  // factor's LEADING).
+  // committed value: its `data-flag` field goes beside it (power
+  // factor's `leading`).
   for (const inp of inspectEl.querySelectorAll(".knob-input")) {
     inp.dataset.live = inp.value;
     const flag = inp.closest("dd")?.querySelector(".knob-flag-input");
@@ -726,11 +755,25 @@ function renderInspect(d, parentIds, childIds) {
       if (e.key === "Enter") {
         e.preventDefault();
         const v = inp.value.trim();
+        const label = inp.closest("dd")?.previousElementSibling?.textContent ?? inp.dataset.field;
+        // A number field reads "" for text it cannot parse (Firefox
+        // lets letters be typed); `badInput` tells that from empty.
+        if (inp.validity?.badInput) {
+          notify(`${label}: not a number`);
+          inp.value = inp.dataset.live ?? "";
+          return;
+        }
         if (v === "") return;
-        evalQuoted(
-          `(${inp.dataset.defun} ${d.id} ${v}${flag?.checked ? " t" : ""})`,
-        ).then((res) => {
-          if (!res.ok) {
+        const n = Number(v);
+        if (!Number.isFinite(n)) {
+          notify(`${label}: ${JSON.stringify(v)} is not a number`);
+          inp.value = inp.dataset.live ?? "";
+          return;
+        }
+        const body = { [inp.dataset.field]: n };
+        if (flag) body[inp.dataset.flag] = flag.checked;
+        sendKnob("POST", `component/${d.id}/drive`, body, `Set ${label}`).then((ok) => {
+          if (!ok) {
             inp.value = inp.dataset.live ?? "";
             if (flag) flag.checked = flag.dataset.live === "1";
             return;
@@ -738,13 +781,12 @@ function renderInspect(d, parentIds, childIds) {
           inp.dataset.live = v;
           if (flag) flag.dataset.live = flag.checked ? "1" : "0";
           if (inp.dataset.dynamic === "1") {
-            const isExpr = !(v !== "" && Number.isFinite(Number(v)));
-            toggleExprChip(inp, isExpr);
-            // The actual resolved-value reading arrives shortly via
-            // the WS knob_changed event (paintKnobEntry); until then,
-            // a just-committed plain number can't be showing a stale
-            // resolved line from a previous expression.
-            if (!isExpr) paintResolved(inp, false, null);
+            // The actual reading arrives shortly via the WS
+            // knob_changed event (paintKnobEntry); until then, a
+            // just-committed number can't be showing a stale expr chip
+            // or resolved line from a previous expression.
+            toggleExprChip(inp, false);
+            paintResolved(inp, false, null);
           }
         });
       } else if (e.key === "Escape") {
@@ -764,11 +806,18 @@ function renderInspect(d, parentIds, childIds) {
     );
   }
   // Meter knob "measure" buttons — see the `clear` field on
-  // KNOBS_BY_CATEGORY. The WS knob_changed broadcast the clear defun
+  // KNOBS_BY_CATEGORY. The WS knob_changed broadcast the clear
   // triggers is what actually blanks the input and hides the button
   // again (paintKnobEntry, via inspectorLive.applyKnob).
   for (const btn of inspectEl.querySelectorAll(".knob-measure-btn")) {
-    btn.addEventListener("click", () => evalQuoted(`(${btn.dataset.clear} ${d.id})`));
+    btn.addEventListener("click", () =>
+      sendKnob(
+        "POST",
+        `component/${d.id}/drive`,
+        { [btn.dataset.clear]: true },
+        btn.dataset.action,
+      ),
+    );
   }
 
   // Component, EV, Power, and Setpoints cards: persisted per-card fold
@@ -1035,8 +1084,7 @@ function paintAugmented(flags) {
 }
 
 // Prefill every knob input from a snapshot's `knobs` list, keyed by
-// stripping the input's own `set-` defun prefix down to the server's
-// token (set-meter-power → meter-power, …).
+// the input's `data-token`.
 // An input with `data-editing` (the user has it focused) still gets
 // its `dataset.live` refreshed — only the visible input/chip/checkbox
 // write is skipped — matching the same freeze setKnobText/
@@ -1068,9 +1116,8 @@ function applySnapshot(id, snap) {
   // across a re-fetch instead of blanking the marker for a beat.
   const prevAxes = liveState && liveState.id === id ? liveState.axes : null;
   const knobEntries = new Map();
-  for (const input of inspectEl.querySelectorAll(".knob-input[data-defun]")) {
-    const token = input.dataset.token ?? input.dataset.defun.replace(/^set-/, "");
-    knobEntries.set(token, { input });
+  for (const input of inspectEl.querySelectorAll(".knob-input[data-token]")) {
+    knobEntries.set(input.dataset.token, { input });
   }
   liveState = {
     id,

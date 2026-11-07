@@ -3463,6 +3463,34 @@ async fn control_drive_broadcasts_knob_changed() {
     );
 }
 
+/// A status or runtime write tells the UI to read the topology again,
+/// since its payload carries the states; a refused one does not.
+#[tokio::test]
+async fn state_writes_bump_the_topology_version() {
+    let (cfg, _dir) = config_with("(%make-meter :id 7)").await;
+    let site = cfg.site();
+    let before = site.version();
+    for (route, body) in [
+        ("status", r#"{"health": "standby"}"#),
+        ("runtime", r#"{"operational_mode": "inactive"}"#),
+    ] {
+        let (status, _) = call(
+            cfg.clone(),
+            post_json(&format!("/api/mg/2200/component/7/{route}"), body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{route}");
+    }
+    assert_eq!(site.version(), before + 2);
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/component/7/status", r#"{"health": "sleepy"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(site.version(), before + 2);
+}
+
 /// The JSON of every `knob_changed` for `knob` on the bus, as the
 /// WebSocket sends it.
 fn knob_events_json(
@@ -3497,8 +3525,8 @@ async fn drive_knob_changed_value_is_a_number() {
     assert_eq!(evs[0]["unit"], "W");
 }
 
-/// `POST .../runtime` sends the mode's token as the value, with no
-/// unit.
+/// `POST .../runtime` sends the mode's snake_case name as the value,
+/// with no unit.
 #[tokio::test]
 async fn runtime_route_sends_knob_changed_with_the_mode() {
     let (cfg, _dir) = config_with("(%make-meter :id 7)").await;

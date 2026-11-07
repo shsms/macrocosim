@@ -25,6 +25,17 @@ export async function getJson(path, source = null) {
   return res.json();
 }
 
+// The fetch options of a `method` request; `body`, when given, is
+// sent as JSON.
+export function jsonInit(method, body) {
+  const init = { method };
+  if (body !== undefined) {
+    init.headers = { "content-type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  return init;
+}
+
 // Sources whose HTTP error is already in the logs panel; a source leaves
 // when it succeeds again.
 const loggedHttp = new Set();

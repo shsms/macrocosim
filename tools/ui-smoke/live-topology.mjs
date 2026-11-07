@@ -1284,14 +1284,14 @@ await page.evaluate(async (id) => {
   const { topology } = await import("/assets/topology.js");
   topology.select([id]);
 }, meterId);
-const knobDefuns = await waitFor(async () => {
-  const ds = await page.evaluate(() => [...document.querySelectorAll(".knob-input")].map((i) => i.dataset.defun));
+const knobTokens = await waitFor(async () => {
+  const ds = await page.evaluate(() => [...document.querySelectorAll(".knob-input")].map((i) => i.dataset.token));
   return ds.length ? ds : null;
 });
-check("e2e: meter reactive knobs present", knobDefuns.includes("set-meter-reactive-power") && knobDefuns.includes("set-meter-power-factor"), JSON.stringify(knobDefuns));
+check("e2e: meter reactive knobs present", knobTokens.includes("meter-reactive-power") && knobTokens.includes("meter-power-factor"), JSON.stringify(knobTokens));
 check(
   "e2e: the power-factor knob carries its leading flag",
-  await page.evaluate(() => Boolean(document.querySelector('.knob-input[data-defun="set-meter-power-factor"]')?.closest("dd")?.querySelector(".knob-flag-input"))),
+  await page.evaluate(() => Boolean(document.querySelector('.knob-input[data-token="meter-power-factor"]')?.closest("dd")?.querySelector(".knob-flag-input"))),
 );
 // Fill the knob the way a user does — fill + Enter, the keydown path
 // the input's own listener wires (inspect.js commits on Enter-keydown
@@ -1310,8 +1310,8 @@ const evalNumber = async (expr) => {
 if (!(await page.evaluate(() => document.getElementById("card-component")?.classList.contains("open")))) {
   await page.click("#card-component [data-fold-toggle]");
 }
-await page.fill('.knob-input[data-defun="set-meter-reactive-power"]', "500");
-await page.press('.knob-input[data-defun="set-meter-reactive-power"]', "Enter");
+await page.fill('.knob-input[data-token="meter-reactive-power"]', "500");
+await page.press('.knob-input[data-token="meter-reactive-power"]', "Enter");
 const knobQ = await waitFor(async () => {
   const q = await evalNumber(`(component-reactive-power ${meterId})`);
   return Math.abs(q - 500) < 1 ? q : null;
@@ -1331,7 +1331,7 @@ check("e2e: the reactive knob writes through to the sim", Math.abs(knobQ - 500) 
 // assertion pass for the wrong reason.
 const rememberedLive = await waitFor(async () =>
   (await page.evaluate(
-    () => document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]').dataset.live,
+    () => document.querySelector('.knob-input[data-token="meter-reactive-power"]').dataset.live,
   )) === "500"
     ? "500"
     : null,
@@ -1349,10 +1349,10 @@ check("e2e: the knob remembers the committed value", rememberedLive === "500", `
 // pressing Enter, a value the field already held and the blur
 // listener's own restore-to-data-live would also have produced — so
 // deleting that listener couldn't have turned it red.
-await page.fill('.knob-input[data-defun="set-meter-reactive-power"]', "999");
+await page.fill('.knob-input[data-token="meter-reactive-power"]', "999");
 await page.evaluate(() => document.activeElement?.blur());
 const afterBlur = await page.evaluate(
-  () => document.querySelector('.knob-input[data-defun="set-meter-reactive-power"]').value,
+  () => document.querySelector('.knob-input[data-token="meter-reactive-power"]').value,
 );
 check(
   "e2e: blurring an uncommitted edit snaps the knob back to the committed value",
@@ -1361,7 +1361,7 @@ check(
 );
 // (Not exercised: the power-factor knob's .knob-flag-input rides the
 // same blur path (flag.checked = flag.dataset.live === "1"), but that
-// checkbox only exists on set-meter-power-factor, a different knob
+// checkbox only exists on meter-power-factor, a different knob
 // from the one this section already has open/selected — covering it
 // here would mean switching knobs mid-section rather than reusing
 // this one, so it's left for a future section instead.)
@@ -1390,7 +1390,7 @@ check("e2e: the reactive override is cleared at the end of the section", reactiv
 const measureHidden = () =>
   page.evaluate(() =>
     document
-      .querySelector('.knob-input[data-defun="set-meter-power"]')
+      .querySelector('.knob-input[data-token="meter-power"]')
       ?.closest("dd")
       ?.querySelector(".knob-measure-btn")?.hidden,
   );
@@ -1404,8 +1404,8 @@ check("e2e: the power measure button starts hidden", (await measureHidden()) ===
 // its visible text stays frozen against the WS repaint the clear
 // below depends on (paintKnobEntry).
 const OVERRIDE_P = 424242;
-await page.fill('.knob-input[data-defun="set-meter-power"]', String(OVERRIDE_P));
-await page.press('.knob-input[data-defun="set-meter-power"]', "Enter");
+await page.fill('.knob-input[data-token="meter-power"]', String(OVERRIDE_P));
+await page.press('.knob-input[data-token="meter-power"]', "Enter");
 await page.evaluate(() => document.activeElement?.blur());
 const overrideP = await waitFor(async () => {
   const p = await evalNumber(`(component-active-power ${meterId})`);
@@ -1416,9 +1416,9 @@ check(
   "e2e: the measure button appears once the override is live",
   await waitFor(async () => (await measureHidden()) === false),
 );
-await page.click('dd:has(.knob-input[data-defun="set-meter-power"]) .knob-measure-btn');
+await page.click('dd:has(.knob-input[data-token="meter-power"]) .knob-measure-btn');
 const blanked = await waitFor(async () =>
-  (await page.evaluate(() => document.querySelector('.knob-input[data-defun="set-meter-power"]').value)) === "" || null,
+  (await page.evaluate(() => document.querySelector('.knob-input[data-token="meter-power"]').value)) === "" || null,
 );
 check("e2e: the power knob blanks once cleared", blanked === true);
 check(
@@ -1601,14 +1601,14 @@ await page.evaluate(async (id) => {
   const { topology } = await import("/assets/topology.js");
   topology.select([id]);
 }, BOILER_ID);
-const boilerKnobDefuns = await waitFor(async () => {
-  const ds = await page.evaluate(() => [...document.querySelectorAll(".knob-input")].map((i) => i.dataset.defun));
-  return ds.includes("set-boiler-demand-kg-per-s") && ds.includes("set-boiler-pressure") ? ds : null;
+const boilerKnobTokens = await waitFor(async () => {
+  const ds = await page.evaluate(() => [...document.querySelectorAll(".knob-input")].map((i) => i.dataset.token));
+  return ds.includes("boiler-demand") && ds.includes("boiler-pressure") ? ds : null;
 });
 check(
   "e2e: the boiler inspector shows its demand and pressure knobs",
-  boilerKnobDefuns.includes("set-boiler-demand-kg-per-s") && boilerKnobDefuns.includes("set-boiler-pressure"),
-  JSON.stringify(boilerKnobDefuns),
+  boilerKnobTokens.includes("boiler-demand") && boilerKnobTokens.includes("boiler-pressure"),
+  JSON.stringify(boilerKnobTokens),
 );
 // Command mode: steam-boiler is in inspect.js's ACCEPTS_SETPOINTS, so
 // the commands selector renders alongside health/telemetry.
@@ -1620,12 +1620,12 @@ check(
 // installed at construction, pressure from the boiler's own state —
 // which starts pinned to the 8 bar target (no :initial-bar given).
 const demandKnob = await waitFor(async () => {
-  const v = await page.inputValue('.knob-input[data-defun="set-boiler-demand-kg-per-s"]');
+  const v = await page.inputValue('.knob-input[data-token="boiler-demand"]');
   return v || null;
 }, 10000);
 check("e2e: the demand knob is prefilled from construction", demandKnob === "0.025", demandKnob);
 const pressureKnob = await waitFor(async () => {
-  const v = await page.inputValue('.knob-input[data-defun="set-boiler-pressure"]');
+  const v = await page.inputValue('.knob-input[data-token="boiler-pressure"]');
   return v || null;
 }, 10000);
 check("e2e: the pressure knob is prefilled from the live target", pressureKnob === "8", pressureKnob);

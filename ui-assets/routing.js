@@ -7,7 +7,7 @@
 
 import { dispatchesPanel, setStatus } from "./app.js";
 import { pulseBar } from "./chrome.js";
-import { bgFetch, errorText, getJson } from "./http.js";
+import { bgFetch, errorText, getJson, jsonInit } from "./http.js";
 import { refitCharts, showComponent } from "./inspect.js";
 import { notify } from "./notices.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
@@ -51,6 +51,16 @@ export async function mgJson(suffix, opts, source = null) {
   if (res == null) throw new Error("no microgrid selected");
   if (!res.ok) throw new Error(await errorText(res));
   return res.json();
+}
+
+// A JSON request that changes something under `mgPath(suffix)`: the
+// body, when given, is sent as JSON. Throws with the server's message
+// on a refusal, or when no microgrid is selected.
+export async function mgSend(method, suffix, body) {
+  const res = await mgFetch(suffix, jsonInit(method, body));
+  if (res == null) throw new Error("no microgrid selected");
+  if (!res.ok) throw new Error(await errorText(res));
+  return res;
 }
 
 // The microgrid the scenario readouts show: the selected one, else

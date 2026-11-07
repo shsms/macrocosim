@@ -30,7 +30,7 @@ import {
   setupFormulaToggle,
 } from "./formula-panel.js";
 import { escapeHtml } from "./html.js";
-import { errorText } from "./http.js";
+import { errorText, jsonInit } from "./http.js";
 import { setupInspectorChips, showComponent } from "./inspect.js";
 import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
 import { clearFormError, notify } from "./notices.js";
@@ -157,12 +157,7 @@ function setupFloatingPanels() {
 // and the dispatch-form dialog: a non-2xx surfaces the server's
 // error text (the store's 400 / 404 messages) as a thrown Error.
 export async function mutate(method, path, body) {
-  const opts = { method };
-  if (body !== undefined) {
-    opts.headers = { "content-type": "application/json" };
-    opts.body = JSON.stringify(body);
-  }
-  const res = await fetch(path, opts);
+  const res = await fetch(path, jsonInit(method, body));
   if (!res.ok) throw new Error(await errorText(res));
   return res;
 }

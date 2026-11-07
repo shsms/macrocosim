@@ -5,7 +5,7 @@
 
 import { escapeHtml, mutate } from "./app.js";
 import { evalQuoted } from "./eval.js";
-import { OPERATIONAL_MODES, showComponent } from "./inspect.js";
+import { OPERATIONAL_MODES, setStateKnob, showComponent } from "./inspect.js";
 import { notify } from "./notices.js";
 import { makeFnFor, pasteSource } from "./paste-forms.js";
 import { READ_ONLY_TITLE, readSelectedMg, structureEditable } from "./routing.js";
@@ -197,18 +197,15 @@ export function showMenuItems(menu, items, x, y) {
   }
 }
 
-// Bulk operational-mode set: one progn over the whole selection, so
-// a single undo step covers the batch.
-// A config edit, not a runtime poke — it persists and re-derives the
-// runtime knobs server-side.
+// Bulk operational-mode set: one runtime write per selected
+// component. It changes the live mode, not the spec, so the next
+// structural edit puts the spec's mode back; the toast says so.
 async function setSelectionMode(ids, mode) {
-  const sets = ids
-    .map((id) => `(set-component-operational-mode ${id} '${mode})`)
-    .join(" ");
-  const data = await evalQuoted(`(progn ${sets})`, "Mode change failed");
-  if (data.ok) {
+  const results = await Promise.all(ids.map((id) => setStateKnob(id, "operational-mode", mode)));
+  const done = results.filter(Boolean).length;
+  if (done) {
     notify(
-      `Operational mode ${mode} for ${ids.length} component${ids.length > 1 ? "s" : ""}.`,
+      `Operational mode ${mode} for ${done} component${done > 1 ? "s" : ""}, until the next structural edit.`,
       "success",
     );
   }
@@ -219,7 +216,7 @@ async function setSelectionMode(ids, mode) {
 export function modeMenuItems(ids) {
   return OPERATIONAL_MODES.map((m, i) => ({
     label: `Mode: ${m.value}`,
-    title: m.hint,
+    title: `${m.hint}; live only: the next structural edit puts the spec's mode back`,
     separator: i === 0,
     action: () => setSelectionMode(ids, m.value),
   }));

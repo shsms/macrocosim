@@ -150,6 +150,9 @@ fn apply_status(
         site.set_telemetry_mode(id, m)
             .map_err(ApiError::bad_request)?;
     }
+    // The topology payload carries the states: tell the UI to read it
+    // again, as an accepted eval does.
+    site.bump_version();
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -487,6 +490,8 @@ fn apply_runtime(
         "operational-mode",
         KnobValue::Text(mode.symbol_name()),
     );
+    // The topology payload carries the modes, as for a status write.
+    site.bump_version();
     Ok(StatusCode::NO_CONTENT)
 }
 
