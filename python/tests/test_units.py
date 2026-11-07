@@ -24,14 +24,14 @@ pytestmark = pytest.mark.filterwarnings("error")
 @pytest.mark.parametrize(
     ("value", "wire", "suffix"),
     [
-        (Power.from_kilowatts(2), 2000.0, "-w"),
-        (ReactivePower.from_volt_amperes_reactive(150), 150.0, "-var"),
-        (ApparentPower.from_volt_amperes(3000), 3000.0, "-va"),
-        (Energy.from_kilowatt_hours(1), 1000.0, "-wh"),
-        (Percentage.from_percent(55.5), 55.5, "-pct"),
-        (Voltage.from_volts(800), 800.0, "-v"),
-        (Current.from_amperes(16), 16.0, "-a"),
-        (timedelta(milliseconds=200), 0.2, "-s"),
+        (Power.from_kilowatts(2), 2000.0, "_w"),
+        (ReactivePower.from_volt_amperes_reactive(150), 150.0, "_var"),
+        (ApparentPower.from_volt_amperes(3000), 3000.0, "_va"),
+        (Energy.from_kilowatt_hours(1), 1000.0, "_wh"),
+        (Percentage.from_percent(55.5), 55.5, "_pct"),
+        (Voltage.from_volts(800), 800.0, "_v"),
+        (Current.from_amperes(16), 16.0, "_a"),
+        (timedelta(milliseconds=200), 0.2, "_s"),
     ],
 )
 def test_every_row_converts_both_ways(value: object, wire: float, suffix: str) -> None:

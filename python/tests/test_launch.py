@@ -18,12 +18,17 @@ import macrocosim._launch as launch_module
 import macrocosim._spec as s
 from macrocosim._errors import LaunchError, MicrogridClosed
 from macrocosim._launch import _launch
-from macrocosim._process import _Handle
+from macrocosim._process import _Handle, client_version
 
 pytestmark = pytest.mark.filterwarnings("error")
 
 SPEC = s.make_microgrid(id=7, topology=s.make_grid_connection_point(id=1))
-ONE_MG = {"ui": "127.0.0.1:8801", "microgrids": [{"id": 7, "grpc_addr": "[::1]:4000"}]}
+VERSION = client_version()
+ONE_MG = {
+    "ui": "127.0.0.1:8801",
+    "microgrids": [{"id": 7, "grpc_addr": "[::1]:4000"}],
+    "version": VERSION,
+}
 
 
 class FakeProcess:
@@ -73,7 +78,7 @@ class Rig:
     ) -> _Handle:
         self.events.append("spawn")
         self.spawn_kwargs = {"binary": binary, "env": env, "state_dir": state_dir}
-        assert text.startswith("(make-microgrid")
+        assert json.loads(text)["schema_version"] == 1
         if state_dir is None:
             directory, temporary = self.tmp_path / "tmp-run", True
         else:
@@ -230,6 +235,26 @@ async def test_step5_malformed_endpoints(rig: Rig) -> None:
     with pytest.raises(LaunchError, match="endpoints file is not what the client"):
         async with rig.launch():
             pass
+    assert rig.process.terminated
+
+
+async def test_step5_a_binary_of_another_version(rig: Rig) -> None:
+    rig.endpoints = {**ONE_MG, "version": "0.1.9"}
+    with pytest.raises(LaunchError) as info:
+        async with rig.launch():
+            pass
+    assert str(info.value).startswith(
+        f"the simulator binary is version 0.1.9, and this client is version {VERSION}"
+    )
+    assert rig.process.terminated
+
+
+async def test_step5_a_binary_older_than_0_2(rig: Rig) -> None:
+    rig.endpoints = {k: v for k, v in ONE_MG.items() if k != "version"}
+    with pytest.raises(LaunchError, match="older than 0.2") as info:
+        async with rig.launch():
+            pass
+    assert f"this client is version {VERSION}" in str(info.value)
     assert rig.process.terminated
 
 

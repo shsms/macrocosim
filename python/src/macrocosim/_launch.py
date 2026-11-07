@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import shutil
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -33,6 +34,7 @@ from ._process import (
     _Handle,
     _MalformedEndpoints,
     _NotOneMicrogrid,
+    _VersionMismatch,
     log_tail,
     wait_endpoints,
 )
@@ -116,8 +118,9 @@ def _as_launch_error(
 ) -> LaunchError | None:
     """The `LaunchError` for a failure after the spawn: an early exit, no
     endpoints file or a malformed one, not exactly one microgrid in it, no
-    loopback connection, or an HTTP failure while checking it. ``None`` for any
-    other exception, which then propagates unchanged."""
+    loopback connection, a binary of another version, or an HTTP failure while
+    checking it. ``None`` for any other exception, which then propagates
+    unchanged."""
     after = f"{fmt_tail(tail)}{fmt_log(kept_log)}"
     timeout = fmt_duration(ready_timeout)
     if isinstance(exc, _ExitedEarly):
@@ -131,6 +134,17 @@ def _as_launch_error(
         text = (
             f"the simulator's endpoints file is not what the client expects ({exc}); "
             "do the client and the simulator binary match?"
+        )
+    elif isinstance(exc, _VersionMismatch) and exc.binary is None:
+        text = (
+            "the simulator binary is older than 0.2 (its endpoints file names no "
+            f"version); this client is version {exc.client}. Install the binary of "
+            "the same version"
+        )
+    elif isinstance(exc, _VersionMismatch):
+        text = (
+            f"the simulator binary is version {exc.binary}, and this client is "
+            f"version {exc.client}. Install the binary of the same version"
         )
     elif isinstance(exc, _NotOneMicrogrid):
         text = (
@@ -177,7 +191,8 @@ async def _launch(
     except FileNotFoundError as exc:
         raise LaunchError(str(exc), log_tail="", log_path=None) from exc
     try:
-        handle = _spawn(binary, render(spec), env=env, state_dir=directory)
+        text = json.dumps(render(spec), indent=2)
+        handle = _spawn(binary, text, env=env, state_dir=directory)
     except OSError as exc:
         raise LaunchError(
             f"could not start the simulator: {exc}", log_tail="", log_path=None

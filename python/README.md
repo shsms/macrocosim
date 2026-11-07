@@ -164,7 +164,7 @@ solar.
     only, for example `{"FAKETIME": "+3600", "LD_PRELOAD": ...}`. Only
     `FAKETIME` offsets are supported, not speed factors.
 *   `state_dir=` (absent or empty; created if absent) is where the simulator
-    runs: `config.lisp`, `endpoints.json` and `macrocosim.log`. It is kept, so
+    runs: `topology.json`, `endpoints.json` and `macrocosim.log`. It is kept, so
     pass pytest's `tmp_path` to keep the log of a failing test. Without it, a
     temporary directory is used and deleted, and error messages say so instead
     of naming a log.
@@ -286,7 +286,9 @@ uv run pytest examples/pytest_demo
 ```
 
 Point the tests at a local build instead of the wheel's binary with
-`MACROCOSIM_BIN=../target/release/macrocosim`.
+`MACROCOSIM_BIN=../target/release/macrocosim`. The binary must be built from the
+same version as the package: `launch` raises `LaunchError` naming both versions
+when they differ.
 
 ## License
 

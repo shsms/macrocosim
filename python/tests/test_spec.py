@@ -1,4 +1,4 @@
-"""Spec construction: types, checks, identity and `plist`."""
+"""Spec construction: types, checks, identity and `spec_wire_fields`."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from frequenz.quantities import (
 )
 
 import macrocosim._spec as s
-from macrocosim._enums import Health
+from macrocosim._enums import Health, TelemetryMode
 from macrocosim._errors import SpecError
 from macrocosim._units import UNITS
 
@@ -65,9 +65,12 @@ def test_constructors_take_keywords_only() -> None:
         s.make_meter(1)  # type: ignore[misc]
 
 
-def test_ergonomic_kwargs_map_to_plist_keys() -> None:
+def test_ergonomic_kwargs_map_to_json_keys() -> None:
     inv = s.make_battery_inverter(id=3, rated_lower=kW(-5), rated_upper=kW(5))
-    assert s.plist(inv) == [(":rated-lower-w", -5000.0), (":rated-upper-w", 5000.0)]
+    assert s.spec_wire_fields(inv) == [
+        ("rated_lower_w", -5000.0),
+        ("rated_upper_w", 5000.0),
+    ]
     bat = s.make_battery(
         id=4,
         capacity=Energy.from_kilowatt_hours(100),
@@ -75,28 +78,28 @@ def test_ergonomic_kwargs_map_to_plist_keys() -> None:
         rated_lower=kW(-30),
         rated_upper=kW(30),
     )
-    assert s.plist(bat) == [
-        (":capacity-wh", 100000.0),
-        (":initial-soc-pct", 50.0),
-        (":rated-lower-w", -30000.0),
-        (":rated-upper-w", 30000.0),
+    assert s.spec_wire_fields(bat) == [
+        ("capacity_wh", 100000.0),
+        ("initial_soc_pct", 50.0),
+        ("rated_lower_w", -30000.0),
+        ("rated_upper_w", 30000.0),
     ]
 
 
-def test_plist_keeps_field_order_base_fields_first() -> None:
+def test_wire_fields_keep_field_order_base_fields_first() -> None:
     m = s.make_meter(power=kW(2), name="load", health=Health.OK, hidden=True)
-    assert s.plist(m) == [
-        (":name", "load"),
-        (":health", Health.OK),
-        (":power-w", 2000.0),
-        (":hidden", True),
+    assert s.spec_wire_fields(m) == [
+        ("name", "load"),
+        ("health", "ok"),
+        ("power_w", 2000.0),
+        ("hidden", True),
     ]
 
 
-def test_plist_sends_current_as_whole_amperes() -> None:
+def test_wire_fields_send_current_as_whole_amperes() -> None:
     gcp = s.make_grid_connection_point(rated_fuse_current=Current.from_amperes(63))
-    [(key, value)] = s.plist(gcp)
-    assert key == ":rated-fuse-current-a"
+    [(key, value)] = s.spec_wire_fields(gcp)
+    assert key == "rated_fuse_current_a"
     assert value == 63 and type(value) is int
 
 
@@ -115,7 +118,7 @@ def test_a_bare_number_where_a_quantity_belongs_raises() -> None:
 
 def test_sunlight_takes_a_percentage() -> None:
     sun = s.make_solar_inverter(id=1, sunlight=Percentage.from_percent(80))
-    assert s.plist(sun) == [(":sunlight-pct", 80.0)]
+    assert s.spec_wire_fields(sun) == [("sunlight_pct", 80.0)]
     with pytest.raises(TypeError, match="sunlight"):
         s.make_solar_inverter(id=1, sunlight=80.0)  # type: ignore[arg-type]
 
@@ -211,12 +214,12 @@ def _fields() -> list[tuple[type, str, Any]]:
 @pytest.mark.parametrize(
     ("cls", "name", "hint"), _fields(), ids=lambda v: getattr(v, "__name__", str(v))
 )
-def test_lisp_key_suffix_matches_type(cls: type, name: str, hint: Any) -> None:
-    key = s.lisp_key(cls, name)
+def test_json_key_suffix_matches_type(cls: type, name: str, hint: Any) -> None:
+    key = s.json_key(cls, name)
     kinds = [a for a in typing.get_args(hint) if a is not type(None)]
     kind = kinds[0] if kinds else hint
     row = UNITS.get(kind)
-    base = ":" + name.replace("_", "-")
+    base = name
     if row is None:
         assert key == base
     else:
@@ -272,8 +275,8 @@ def test_the_base_class_cannot_be_built() -> None:
 
 
 def test_an_int_for_a_float_field_goes_out_as_a_float() -> None:
-    [(key, value)] = s.plist(s.make_meter(power_factor=1))
-    assert key == ":power-factor"
+    [(key, value)] = s.spec_wire_fields(s.make_meter(power_factor=1))
+    assert key == "power_factor"
     assert type(value) is float and value == 1.0
 
 
@@ -281,8 +284,8 @@ def test_a_timedelta_subclass_has_the_timedelta_unit() -> None:
     class Seconds(timedelta):
         pass
 
-    [(key, value)] = s.plist(s.make_meter(interval=Seconds(seconds=2)))
-    assert (key, value) == (":interval-s", 2.0)
+    [(key, value)] = s.spec_wire_fields(s.make_meter(interval=Seconds(seconds=2)))
+    assert (key, value) == ("interval_s", 2.0)
 
 
 def test_a_huge_int_in_a_quantity_field_is_a_type_error() -> None:
@@ -290,3 +293,24 @@ def test_a_huge_int_in_a_quantity_field_is_a_type_error() -> None:
         s.make_meter(power=10**5000)
     with pytest.raises(TypeError, match="^power must be Power, not list$"):
         s.make_meter(power=[10**5000])  # type: ignore[arg-type]
+
+
+def test_enum_members_go_out_in_snake_case() -> None:
+    m = s.make_meter(telemetry_mode=TelemetryMode.NOT_FOUND)
+    assert s.spec_wire_fields(m) == [("telemetry_mode", "not_found")]
+
+
+def test_a_microgrid_takes_a_grpc_port_and_a_physics_tick() -> None:
+    gcp = s.make_grid_connection_point()
+    mg = s.make_microgrid(
+        grpc_port=9000, physics_tick=timedelta(seconds=0.2), topology=gcp
+    )
+    assert (mg.grpc_port, mg.physics_tick) == (9000, timedelta(seconds=0.2))
+    with pytest.raises(SpecError, match="grpc_port must be between 1 and 65535"):
+        s.make_microgrid(grpc_port=70000, topology=gcp)
+    with pytest.raises(TypeError, match="grpc_port must be int"):
+        s.make_microgrid(grpc_port="9000", topology=gcp)  # type: ignore[arg-type]
+    with pytest.raises(SpecError, match="physics_tick must be positive"):
+        s.make_microgrid(physics_tick=timedelta(0), topology=gcp)
+    with pytest.raises(TypeError, match="physics_tick must be timedelta"):
+        s.make_microgrid(physics_tick=0.1, topology=gcp)  # type: ignore[arg-type]

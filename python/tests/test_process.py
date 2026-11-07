@@ -40,6 +40,15 @@ class PopenSpy:
         return FakeProcess()
 
 
+CLIENT = "9.9.9"
+
+
+@pytest.fixture(autouse=True)
+def client_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fixed client version, so the endpoints files below can match it."""
+    monkeypatch.setattr(p, "client_version", lambda: CLIENT)
+
+
 @pytest.fixture
 def popen(monkeypatch: pytest.MonkeyPatch) -> PopenSpy:
     spy = PopenSpy()
@@ -60,9 +69,9 @@ def test_spawn_lays_env_over_the_environment(
         "--ephemeral-ports",
         f"--emit-endpoints={state / 'endpoints.json'}",
         f"--state-dir={state}",
-        str(state / "config.lisp"),
+        f"--topology={state / 'topology.json'}",
     ]
-    assert (state / "config.lisp").read_text() == "(text)"
+    assert (state / "topology.json").read_text() == "(text)"
     assert handle.log_file == state / "macrocosim.log"
     assert handle.directory == state and not handle.temporary
 
@@ -85,13 +94,13 @@ def _record_encodings(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
     return seen
 
 
-def test_spawn_writes_the_config_as_utf_8(
+def test_spawn_writes_the_topology_as_utf_8(
     popen: PopenSpy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen = _record_encodings(monkeypatch)
     p.spawn("/bin/mc", '(name "Süd")', env=None, state_dir=tmp_path / "s")
     assert seen == ["utf-8"]
-    assert (tmp_path / "s" / "config.lisp").read_bytes() == '(name "Süd")'.encode()
+    assert (tmp_path / "s" / "topology.json").read_bytes() == '(name "Süd")'.encode()
 
 
 def test_spawn_without_env_inherits_the_environment(popen: PopenSpy) -> None:
@@ -177,10 +186,9 @@ def _handle(tmp_path: Path, returncode: int | None = None) -> p._Handle:
     )
 
 
-def _endpoints(tmp_path: Path, microgrids: list[dict[str, Any]]) -> None:
-    (tmp_path / "endpoints.json").write_text(
-        json.dumps({"ui": "127.0.0.1:8801", "microgrids": microgrids})
-    )
+def _endpoints(tmp_path: Path, microgrids: list[dict[str, Any]], **extra: object) -> None:
+    body = {"ui": "127.0.0.1:8801", "microgrids": microgrids, "version": CLIENT}
+    (tmp_path / "endpoints.json").write_text(json.dumps({**body, **extra}))
 
 
 async def test_wait_endpoints_returns_the_one_microgrid(tmp_path: Path) -> None:
@@ -225,6 +233,16 @@ async def test_wait_endpoints_needs_exactly_one_microgrid(
     with pytest.raises(p._NotOneMicrogrid) as info:
         await p.wait_endpoints(_handle(tmp_path), deadline=time.monotonic() + 5)
     assert info.value.count == count
+
+
+@pytest.mark.parametrize(("binary", "shown"), [("0.1.0", "0.1.0"), (None, None)])
+async def test_a_binary_of_another_version_raises(
+    tmp_path: Path, binary: str | None, shown: str | None
+) -> None:
+    _endpoints(tmp_path, [{"id": 7, "grpc_addr": "[::1]:4000"}], version=binary)
+    with pytest.raises(p._VersionMismatch) as info:
+        await p.wait_endpoints(_handle(tmp_path), deadline=time.monotonic() + 5)
+    assert (info.value.binary, info.value.client) == (shown, CLIENT)
 
 
 async def test_wait_endpoints_reports_an_early_exit(tmp_path: Path) -> None:

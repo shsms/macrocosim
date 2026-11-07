@@ -1,76 +1,40 @@
-"""Render a `MicrogridSpec` as the Lisp text the simulator boots from.
+"""Render a `MicrogridSpec` as the topology document the simulator boots from.
 
-Internal; imports `_spec` and `_units`. The topology is one flat ``let*`` with a
-binding per spec object, children before parents and every id written out, so a
-spec shared by two parents is built once and referred to twice. It calls the
-``make-*`` wrappers, so the simulator's defaults still apply.
+Internal; imports `_spec` and `_units`. The document lists every component once,
+children before parents and every id written out, then the parent → child
+connections, so a spec shared by two parents is one component in two
+connections. Fields left unset are left out, so the simulator's defaults apply.
 """
 
 from __future__ import annotations
 
-from enum import StrEnum
-from typing import Any, cast
+from typing import Any
 
-from ._spec import ComponentSpec, MicrogridSpec, children, plist
-from ._units import is_int_like, type_and_value
+from ._spec import MicrogridSpec, children, spec_wire_fields
+from ._units import to_wire
 
-
-def _lisp_string(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+SCHEMA_VERSION = 1
+"""The ``schema_version`` of the topology document this client writes."""
 
 
-def to_lisp_atom(value: object) -> str:
-    """Render one wire value (see `plist`) as the Lisp literal the simulator reads.
-
-    `bool` → ``t``/``nil``; a `StrEnum` → a quoted symbol; an `int` (an
-    `IntEnum` included) → its digits; a `float` → `repr`; a `str` → a quoted,
-    escaped string.
-    """
-    if isinstance(value, bool):
-        return "t" if value else "nil"
-    if isinstance(value, StrEnum):
-        return f"'{value}"
-    if is_int_like(value):
-        return str(int(cast("int", value)))
-    if isinstance(value, float):
-        return repr(value)
-    if isinstance(value, str):
-        return _lisp_string(value)
-    raise TypeError(f"cannot render {type_and_value(value)} as Lisp")
-
-
-def _form(spec: ComponentSpec[Any], ids: dict[ComponentSpec[Any], int]) -> str:
-    parts = [f"({spec._make}", f":id {ids[spec]}"]
-    for key, value in plist(spec):
-        parts.append(f"{key} {to_lisp_atom(value)}")
-    successors = children(spec)
-    if successors:
-        refs = " ".join(f"c{ids[child]}" for child in successors)
-        parts.append(f":successors (list {refs})")
-    return " ".join(parts) + ")"
-
-
-def render(spec: MicrogridSpec) -> str:
-    """The ``(make-microgrid ...)`` form for `spec`, ending in a newline."""
+def render(spec: MicrogridSpec) -> dict[str, Any]:
+    """The topology document, as JSON-ready data, holding `spec` alone."""
     ids = spec._ids
-    lines = ["(make-microgrid"]
+    microgrid: dict[str, Any] = {}
     if spec.id is not None:
-        lines.append(f" :id {int(spec.id)}")
+        microgrid["id"] = int(spec.id)
     if spec.name is not None:
-        lines.append(f" :name {_lisp_string(spec.name)}")
+        microgrid["name"] = spec.name
     if spec.tso is not None:
-        lines.append(f" :tso {_lisp_string(spec.tso)}")
-    lines.append(" :topology")
-    lines.append(" (lambda ()")
-
-    root = spec.topology
-    bindings = [f"(c{ids[c]} {_form(c, ids)})" for c in spec._order if c is not root]
-    if not bindings:
-        lines.append("   (let* ()")
-    else:
-        lines.append(f"   (let* ({bindings[0]}")
-        lines.extend(f"          {b}" for b in bindings[1:])
-        lines[-1] += ")"
-    lines.append(f"     {_form(root, ids)})))")
-    return "\n".join(lines) + "\n"
+        microgrid["tso"] = spec.tso
+    if spec.grpc_port is not None:
+        microgrid["grpc_port"] = int(spec.grpc_port)
+    if spec.physics_tick is not None:
+        microgrid["physics_tick_s"] = to_wire(spec.physics_tick)
+    microgrid["components"] = [
+        {"type": c._type, "id": ids[c], **dict(spec_wire_fields(c))} for c in spec._order
+    ]
+    microgrid["connections"] = [
+        [ids[parent], ids[child]] for parent in spec._order for child in children(parent)
+    ]
+    return {"schema_version": SCHEMA_VERSION, "microgrids": [microgrid]}

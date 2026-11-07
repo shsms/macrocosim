@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.metadata
 import json
 import os
 import shutil
@@ -72,6 +73,7 @@ LOG_TAIL_CHARS = 4000
 
 LOG_NAME = "macrocosim.log"
 ENDPOINTS_NAME = "endpoints.json"
+TOPOLOGY_NAME = "topology.json"
 
 
 @dataclass
@@ -119,7 +121,8 @@ def spawn(
     env: Mapping[str, str] | None,
     state_dir: Path | None,
 ) -> _Handle:
-    """Write `text` as the boot config and start `binary` on ephemeral ports.
+    """Write `text` as the topology document and start `binary` on ephemeral
+    ports, booting from it.
 
     Runs in `state_dir` (which must be absent or empty, and is kept) or in a new
     temporary directory. The child's output goes to a file, never a pipe: an
@@ -128,14 +131,14 @@ def spawn(
     """
     directory, temporary = _prepare_directory(state_dir)
     try:
-        config = directory / "config.lisp"
-        config.write_text(text, encoding="utf-8")
+        topology = directory / TOPOLOGY_NAME
+        topology.write_text(text, encoding="utf-8")
         argv = [
             binary,
             "--ephemeral-ports",
             f"--emit-endpoints={directory / ENDPOINTS_NAME}",
             f"--state-dir={directory}",
-            str(config),
+            f"--topology={topology}",
         ]
         child_env = None if env is None else {**os.environ, **env}
         with (directory / LOG_NAME).open("wb") as log:
@@ -177,6 +180,21 @@ class _MalformedEndpoints(Exception):
     """The endpoints file is not in the form this client reads."""
 
 
+class _VersionMismatch(Exception):
+    """The binary is not the client's version; `binary` is ``None`` when its
+    endpoints file names no version (a binary older than 0.2)."""
+
+    def __init__(self, binary: str | None, client: str) -> None:
+        super().__init__(binary, client)
+        self.binary = binary
+        self.client = client
+
+
+def client_version() -> str:
+    """This client's installed version, in PEP 440 form."""
+    return importlib.metadata.version("macrocosim")
+
+
 class _NotOneMicrogrid(Exception):
     def __init__(self, count: int) -> None:
         super().__init__(count)
@@ -209,13 +227,18 @@ def _read_endpoints(path: Path) -> Endpoints:
         if len(microgrids) != 1:
             raise _NotOneMicrogrid(len(microgrids))
         [mg] = microgrids
-        return Endpoints(
+        endpoints = Endpoints(
             ui=str(data["ui"]),
             microgrid_id=int(mg["id"]),
             grpc_addr=str(mg["grpc_addr"]),
         )
+        version = data.get("version")
     except WRONG_SHAPE as exc:
         raise _MalformedEndpoints(repr(exc)) from exc
+    client = client_version()
+    if version != client:
+        raise _VersionMismatch(None if version is None else str(version), client)
+    return endpoints
 
 
 def log_tail(handle: _Handle) -> str:

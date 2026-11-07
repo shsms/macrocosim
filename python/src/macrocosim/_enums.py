@@ -1,8 +1,8 @@
 """Enumerations for a component's configuration and runtime fault knobs.
 
 Internal; imports nothing from the package. Each member's value is the exact
-Lisp symbol and HTTP token the simulator expects (``src/sim/runtime.rs``,
-``src/sim/component.rs``).
+token the simulator's ``/status`` route takes (``src/sim/runtime.rs``,
+``src/sim/component.rs``); the topology JSON spells it in snake case.
 """
 
 from __future__ import annotations

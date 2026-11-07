@@ -6,7 +6,8 @@ under a second name. Specs compare and hash by identity: the same object under
 two parents is one shared component.
 
 Every field defaults to ``None``, meaning "use the simulator's default"; the
-defaults live in the simulator (``sim/defaults.lisp``), never here.
+defaults live in the simulator (``src/spec/defaults.rs``), never here. A field
+goes on the wire under its name plus the unit suffix of its type (`json_key`).
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import typing
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast
 
 from frequenz.quantities import (
@@ -62,8 +63,10 @@ promise no particular number."""
 MAX_ID = 2**63 - 1
 """The largest id the simulator reads (its ids are 64-bit signed)."""
 
-_NOT_PLIST = frozenset({"id", "successors"})
-"""Fields `render` writes itself rather than through `plist`."""
+_NOT_WIRE = frozenset({"id", "successors"})
+"""Fields `render` writes itself rather than through `spec_wire_fields`."""
+
+MAX_PORT = 65535
 
 
 def _spec_repr(spec: ComponentSpec[Any]) -> str:
@@ -94,8 +97,8 @@ def _microgrid_spec_repr(self: MicrogridSpec) -> str:
 class ComponentSpec(Generic[L]):
     """The fields every component category shares."""
 
-    _make: ClassVar[str]
-    """The Lisp constructor this spec renders to."""
+    _type: ClassVar[str]
+    """The component's ``type`` in the topology JSON."""
 
     id: int | None = None
     name: str | None = None
@@ -158,7 +161,7 @@ def _check_successors(spec: ComponentSpec[Any], value: object) -> None:
 class GridConnectionPointSpec(ComponentSpec["GridConnectionPoint"]):
     """Where the microgrid meets the grid; the root of every topology."""
 
-    _make: ClassVar[str] = "make-grid-connection-point"
+    _type: ClassVar[str] = "grid_connection_point"
 
     rated_fuse_current: Current | None = None
     rated_lower: Power | None = None
@@ -182,7 +185,7 @@ class GridConnectionPointSpec(ComponentSpec["GridConnectionPoint"]):
 class MeterSpec(ComponentSpec["Meter"]):
     """A meter. A leaf meter with `power` set stands for a load."""
 
-    _make: ClassVar[str] = "make-meter"
+    _type: ClassVar[str] = "meter"
 
     interval: timedelta | None = None
     power: Power | None = None
@@ -206,7 +209,7 @@ class MeterSpec(ComponentSpec["Meter"]):
 class BatterySpec(ComponentSpec["Battery"]):
     """A battery, under one or more battery inverters."""
 
-    _make: ClassVar[str] = "make-battery"
+    _type: ClassVar[str] = "battery"
 
     interval: timedelta | None = None
     capacity: Energy | None = None
@@ -223,7 +226,7 @@ class BatterySpec(ComponentSpec["Battery"]):
 class BatteryInverterSpec(ComponentSpec["BatteryInverter"]):
     """A battery inverter; its successors are batteries."""
 
-    _make: ClassVar[str] = "make-battery-inverter"
+    _type: ClassVar[str] = "battery_inverter"
 
     interval: timedelta | None = None
     successors: Sequence[ComponentSpec[Any]] | None = None
@@ -243,7 +246,7 @@ class SolarInverterSpec(ComponentSpec["SolarInverter"]):
     """A solar inverter with its array. Without `sunlight` it follows the site's
     weather; with it, it holds that sunlight until cleared."""
 
-    _make: ClassVar[str] = "make-solar-inverter"
+    _type: ClassVar[str] = "solar_inverter"
 
     interval: timedelta | None = None
     rated_lower: Power | None = None
@@ -265,18 +268,23 @@ class SolarInverterSpec(ComponentSpec["SolarInverter"]):
 class ChpSpec(ComponentSpec["Chp"]):
     """A combined heat and power unit: a passive part of the topology."""
 
-    _make: ClassVar[str] = "make-chp"
+    _type: ClassVar[str] = "chp"
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)
 class MicrogridSpec:
     """A microgrid: its id, name and TSO, and its topology, rooted at the grid
     connection point. Building one picks an id for each component spec that has
-    none; the specs themselves do not change."""
+    none; the specs themselves do not change.
+
+    `id` and `grpc_port` left out are chosen by the simulator; `physics_tick`
+    left out is 0.1 s."""
 
     id: int | None = None
     name: str | None = None
     tso: str | None = None
+    grpc_port: int | None = None
+    physics_tick: timedelta | None = None
     topology: GridConnectionPointSpec
 
     _order: tuple[ComponentSpec[Any], ...] = field(init=False, default=())
@@ -292,6 +300,20 @@ class MicrogridSpec:
             value = getattr(self, f)
             if value is not None:
                 check_type(f, value, str)
+        if self.grpc_port is not None:
+            check_type("grpc_port", self.grpc_port, int)
+            if not 0 < int(self.grpc_port) <= MAX_PORT:
+                raise SpecError(
+                    f"MicrogridSpec: grpc_port must be between 1 and {MAX_PORT}, "
+                    f"not {int(self.grpc_port)}"
+                )
+        if self.physics_tick is not None:
+            check_type("physics_tick", self.physics_tick, timedelta)
+            if self.physics_tick <= timedelta(0):
+                tick = self.physics_tick
+                raise SpecError(
+                    f"MicrogridSpec: physics_tick must be positive, not {tick}"
+                )
         if not isinstance(self.topology, GridConnectionPointSpec):
             raise TypeError(
                 "topology must be a GridConnectionPointSpec (make_grid_connection_point),"
@@ -388,14 +410,14 @@ def _field_kinds(cls: type) -> dict[str, Any]:
     return kinds
 
 
-def lisp_key(cls: type, name: str) -> str:
-    """The Lisp keyword for a spec field: kebab case plus its unit suffix."""
-    return _lisp_key(name, _field_kinds(cls)[name])
+def json_key(cls: type, name: str) -> str:
+    """The JSON field name for a spec field: its name plus its unit suffix."""
+    return _key_for_kind(name, _field_kinds(cls)[name])
 
 
-def _lisp_key(name: str, kind: object) -> str:
+def _key_for_kind(name: str, kind: object) -> str:
     suffix = suffix_of(kind) if isinstance(kind, type) else ""
-    return ":" + name.replace("_", "-") + suffix
+    return name + suffix
 
 
 def children(spec: ComponentSpec[Any]) -> tuple[ComponentSpec[Any], ...]:
@@ -409,7 +431,9 @@ def _wire(value: object, kind: object) -> object:
     unit = unit_of(value)
     if unit is not None:
         return unit.to_wire(value)
-    if isinstance(value, (bool, Enum, str)):
+    if isinstance(value, StrEnum):
+        return str(value)
+    if isinstance(value, (bool, str)):
         return value
     if is_int_like(value):
         number = int(cast("int", value))
@@ -418,20 +442,21 @@ def _wire(value: object, kind: object) -> object:
     return value
 
 
-def plist(spec: ComponentSpec[Any]) -> list[tuple[str, object]]:
-    """The Lisp key and wire value of each field that has a value, in field
-    order.
+def spec_wire_fields(spec: ComponentSpec[Any]) -> list[tuple[str, object]]:
+    """The JSON field name and wire value of each field that has a value, in
+    field order.
 
     `id` and `successors` are left out; `render` writes those itself. Values are
     base-unit floats, a whole-ampere `int` for `Current`, a `float` for a
-    `float` field given an `int`, and `bool`, `str` and enum members unchanged.
+    `float` field given an `int`, an enum member's value in snake case, and
+    `bool` and `str` unchanged.
     """
     cls = type(spec)
     pairs: list[tuple[str, object]] = []
     for name, kind in _field_kinds(cls).items():
-        if name in _NOT_PLIST:
+        if name in _NOT_WIRE:
             continue
         value = getattr(spec, name)
         if value is not None:
-            pairs.append((_lisp_key(name, kind), _wire(value, kind)))
+            pairs.append((_key_for_kind(name, kind), _wire(value, kind)))
     return pairs

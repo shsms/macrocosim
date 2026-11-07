@@ -1,7 +1,7 @@
 """Value types the client accepts, and how each crosses the wire.
 
 Internal; imports nothing from the package. One `_Unit` per supported value type
-gives the suffix its Lisp keys carry and the conversions to and from the
+gives the suffix its JSON field names carry and the conversions to and from the
 base-unit float on the wire.
 """
 
@@ -27,37 +27,37 @@ from frequenz.quantities import (
 
 @dataclass(frozen=True)
 class _Unit:
-    """How one value type is named in Lisp, and carried as a float."""
+    """How one value type is named on the wire, and carried as a float."""
 
     suffix: str
-    """Appended to a Lisp key (``power`` → ``:power-w``)."""
+    """Appended to a field name (``power`` → ``power_w``)."""
 
     to_wire: Callable[[Any], float]
     from_wire: Callable[[float], Any]
 
 
 UNITS: dict[type, _Unit] = {
-    Power: _Unit("-w", lambda v: v.as_watts(), Power.from_watts),
+    Power: _Unit("_w", lambda v: v.as_watts(), Power.from_watts),
     ReactivePower: _Unit(
-        "-var",
+        "_var",
         lambda v: v.as_volt_amperes_reactive(),
         ReactivePower.from_volt_amperes_reactive,
     ),
     ApparentPower: _Unit(
-        "-va", lambda v: v.as_volt_amperes(), ApparentPower.from_volt_amperes
+        "_va", lambda v: v.as_volt_amperes(), ApparentPower.from_volt_amperes
     ),
-    Energy: _Unit("-wh", lambda v: v.as_watt_hours(), Energy.from_watt_hours),
-    Percentage: _Unit("-pct", lambda v: v.as_percent(), Percentage.from_percent),
-    Voltage: _Unit("-v", lambda v: v.as_volts(), Voltage.from_volts),
-    Current: _Unit("-a", lambda v: v.as_amperes(), Current.from_amperes),
-    timedelta: _Unit("-s", lambda v: v.total_seconds(), lambda s: timedelta(seconds=s)),
+    Energy: _Unit("_wh", lambda v: v.as_watt_hours(), Energy.from_watt_hours),
+    Percentage: _Unit("_pct", lambda v: v.as_percent(), Percentage.from_percent),
+    Voltage: _Unit("_v", lambda v: v.as_volts(), Voltage.from_volts),
+    Current: _Unit("_a", lambda v: v.as_amperes(), Current.from_amperes),
+    timedelta: _Unit("_s", lambda v: v.total_seconds(), lambda s: timedelta(seconds=s)),
 }
 """Every value type with a unit. Floats, ints, bools, strings and enums have
 none and carry no suffix."""
 
 
 def suffix_of(kind: type) -> str:
-    """The Lisp key suffix for a field of type `kind` (``""`` for unitless)."""
+    """The field-name suffix for a field of type `kind` (``""`` for unitless)."""
     unit = UNITS.get(kind)
     return unit.suffix if unit else ""
 
