@@ -13,6 +13,7 @@ from frequenz.quantities import (
     ApparentPower,
     Current,
     Energy,
+    Frequency,
     Percentage,
     Power,
     ReactivePower,
@@ -27,6 +28,7 @@ from macrocosim import (
     MicrogridClosed,
     NoSample,
     OperationalMode,
+    Rejected,
     TelemetryMode,
     at_least,
     at_most,
@@ -402,3 +404,52 @@ async def test_grpc_url_reachable() -> None:
         finally:
             await client.disconnect()
     assert ids == {1000, 1001, 1002, 1003, 1004}
+
+
+async def test_runtime_knobs_reach_the_simulator() -> None:
+    charger = mc.make_ev_charger(id=1006)
+    meter = mc.make_meter(id=1004, power=kW(1))
+    spec = mc.make_microgrid(
+        id=7,
+        topology=mc.make_grid_connection_point(id=1000, successors=[meter, charger]),
+    )
+    async with launch(spec) as mg:
+        session = mg._session
+
+        await mg[charger].plug("city", soc=pct(25), phases=1)
+        ev = await session.get_json("/api/mg/7/component/1006/ev")
+        assert (ev["plugged"], ev["preset"], ev["soc_pct"]) == (True, "city", 25.0)
+        with pytest.raises(Rejected, match="already has an EV"):
+            await mg[charger].plug("city")
+        await mg[charger].unplug()
+        ev = await session.get_json("/api/mg/7/component/1006/ev")
+        assert ev["plugged"] is False
+
+        await mg[meter].operational_mode.set(OperationalMode.INACTIVE)
+        topology = await session.get_json("/api/mg/7/topology")
+        [entry] = [c for c in topology["components"] if c["id"] == 1004]
+        assert entry["operational_mode"] == "inactive"
+
+        volts = Voltage.from_volts
+        await mg.set_voltage_per_phase(volts(240), volts(235), volts(230))
+        with pytest.raises(Rejected, match="voltage_per_phase_v"):
+            await mg.set_voltage_per_phase(volts(240), volts(-1), volts(230))
+        await mg.set_sample_lag(timedelta(milliseconds=200))
+        await mg.cancel_streams()
+
+        hz = Frequency.from_hertz
+        await mg.frequency.set(hz(49.7))
+        frequency = await session.get_json("/api/frequency")
+        assert frequency["hz"] == pytest.approx(49.7, abs=1e-3)
+        assert frequency["override"]["nominal_hz"] == pytest.approx(49.7)
+        await mg.frequency.clear()
+        frequency = await session.get_json("/api/frequency")
+        assert frequency["override"] is None
+
+        await mg.set_weather(peak=pct(80), seed=3)
+        await mg.pass_cloud(pct(50), 60 * sec)
+        weather = await session.get_json("/api/mg/7/weather")
+        assert (weather["peak_pct"], len(weather["events"])) == (80.0, 1)
+        await mg.clear_weather()
+        with pytest.raises(Rejected, match="no weather"):
+            await mg.pass_cloud(pct(50), 60 * sec)

@@ -3,9 +3,9 @@ errors.
 
 Internal; imports `_errors`. Every request goes through `_Session`, which
 refuses to run once the microgrid is closed, and maps each failure to the error
-tree: a refused value or fault (400/409 from ``/drive`` or ``/status``) is
-`Rejected`, any other non-2xx answer or transport failure is `ServerError`, or
-`SimulatorExited` when the process is gone.
+tree: a refused write (400/409 from a ``POST`` or ``DELETE`` made for a user's
+call) is `Rejected`, any other non-2xx answer or transport failure is
+`ServerError`, or `SimulatorExited` when the process is gone.
 """
 
 from __future__ import annotations
@@ -117,14 +117,22 @@ class _Session:
         raises `ServerError`."""
         return await self.get_parsed(path, _require_json_object)
 
-    async def post_json(self, path: str, body: Mapping[str, Any], *, call: str) -> Any:
-        """POST `body` to `path`; the decoded body, or ``None`` for 204.
+    async def post_json(
+        self, path: str, body: Mapping[str, Any] | None, *, call: str
+    ) -> Any:
+        """POST `body` (nothing for ``None``) to `path`; the decoded body, or
+        ``None`` for 204.
 
         `call` describes the user's call (``"Meter 104 power.set(30 kW)"``). A
         400 or 409 answer means the simulator refused it, and raises `Rejected`
         with that description.
         """
         return await self._request("POST", path, json=body, call=call)
+
+    async def delete(self, path: str, *, call: str) -> Any:
+        """DELETE `path`; the decoded body, or ``None`` for 204. A 400 or 409
+        answer raises `Rejected`, as for `post_json`."""
+        return await self._request("DELETE", path, call=call)
 
     async def _request(
         self,

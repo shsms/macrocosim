@@ -2,7 +2,8 @@
 
 Internal; imports `_matchers`, `_sampling`, `_session`, `_units` and `_enums`. A
 signal reads through a source (a component's history, or an aggregate stream of
-the microgrid) and writes through the ``/drive`` and ``/status`` routes.
+the microgrid) and writes through the ``/drive``, ``/status`` and ``/runtime``
+routes; the engine-wide frequency writes through ``/api/frequency``.
 """
 
 from __future__ import annotations
@@ -10,14 +11,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Protocol, TypeVar
 
-from frequenz.quantities import Energy, Percentage, Power, ReactivePower
+from frequenz.quantities import Energy, Frequency, Percentage, Power, ReactivePower
 
-from ._enums import CommandMode, Health, TelemetryMode
+from ._enums import CommandMode, Health, OperationalMode, TelemetryMode
 from ._matchers import Matcher
 from ._sampling import (
     HOLD_MAX_AGGREGATE,
@@ -30,7 +30,15 @@ from ._sampling import (
     read,
 )
 from ._session import _Session
-from ._units import UNITS, MassFlow, Pressure, check_finite, check_type, to_wire
+from ._units import (
+    UNITS,
+    MassFlow,
+    Pressure,
+    check_finite,
+    check_type,
+    suffix_of,
+    to_wire,
+)
 
 Q = TypeVar("Q")
 V = TypeVar("V")
@@ -41,8 +49,9 @@ EXPECT_TIMEOUT = timedelta(seconds=10)
 
 @dataclass(frozen=True)
 class _Setter:
-    """How a component value is written: the route it is posted to (``drive`` or
-    ``status``), its field there, and the ``drive`` flag that clears it, if any."""
+    """How a component value is written: the route it is posted to (``drive``,
+    ``status`` or ``runtime``), its field there, and the ``drive`` flag that
+    clears it, if any."""
 
     route: str
     field: str
@@ -90,6 +99,10 @@ STEAM_DEMAND = _KnobDef(MassFlow, _Setter("drive", "steam_demand_kg_per_s"))
 HEALTH = _KnobDef(Health, _Setter("status", "health"))
 TELEMETRY_MODE = _KnobDef(TelemetryMode, _Setter("status", "telemetry_mode"))
 COMMAND_MODE = _KnobDef(CommandMode, _Setter("status", "command_mode"))
+OPERATIONAL_MODE = _KnobDef(OperationalMode, _Setter("runtime", "operational_mode"))
+
+FREQUENCY_PATH = "/api/frequency"
+"""The engine-level route of the grid frequency every microgrid shares."""
 
 AGGREGATES: tuple[_AggregateDef, ...] = (
     _AggregateDef("grid_power", "grid_power", Power),
@@ -215,6 +228,25 @@ def _knob_repr(self: Knob[Any]) -> str:
     return f"<{type(self).__name__} {self._writer.label}>"
 
 
+def wire_value(label: str, value: object, kind: type) -> Any:
+    """`value` checked against `kind` and finite, as it crosses the wire: the
+    base-unit float of a quantity or `timedelta`, else the value itself."""
+    check_type(label, value, kind)
+    check_finite(label, value)
+    return to_wire(value) if kind in UNITS else value
+
+
+def wire_body(label: str, fields: dict[str, tuple[object, type]]) -> dict[str, Any]:
+    """A JSON body from ``{name: (value, kind)}``: each field that is not
+    ``None``, named with its unit's suffix (``soc`` → ``soc_pct``) and checked
+    as `wire_value` does. `label` prefixes each field in messages."""
+    return {
+        name + suffix_of(kind): wire_value(f"{label} {name}", value, kind)
+        for name, (value, kind) in fields.items()
+        if value is not None
+    }
+
+
 class Signal(Generic[Q]):
     """A measured value: read it, or wait for it to match.
 
@@ -252,6 +284,17 @@ class Signal(Generic[Q]):
         await expect(self._source, matcher, timeout, hold_for, clock=self._clock)
 
 
+class _KnobWriter(Protocol):
+    """What a `Knob` writes through."""
+
+    label: str
+    """The attribute as messages name it (``Meter 11 power``)."""
+
+    async def set(self, value: object) -> None: ...
+
+    async def clear(self) -> None: ...
+
+
 class _Writer:
     """Posts one component attribute's sets and clears."""
 
@@ -279,9 +322,7 @@ class _Writer:
 
     async def set(self, value: object) -> None:
         """Check `value` against the attribute's type, then post it."""
-        check_type(self.label, value, self._kind)
-        check_finite(self.label, value)
-        wire = str(value) if isinstance(value, StrEnum) else to_wire(value)
+        wire = wire_value(self.label, value, self._kind)
         setter = self._setter
         await self._post(setter.route, {setter.field: wire}, f"set({value})")
 
@@ -289,6 +330,30 @@ class _Writer:
         """Post the ``drive`` flag that drops the set value."""
         assert self._setter.clear_flag is not None  # checked when the component builds it
         await self._post("drive", {self._setter.clear_flag: True}, "clear()")
+
+
+class _FrequencyWriter:
+    """Posts the engine-wide grid frequency's sets and clears to
+    `FREQUENCY_PATH`."""
+
+    def __init__(self, session: _Session, label: str) -> None:
+        self._session = session
+        self.label = label
+
+    async def set(self, value: object) -> None:
+        """Hold the frequency at `value`: set it now, and override the model
+        with one that pulls toward it with no noise."""
+        hz = wire_value(self.label, value, Frequency)
+        body = {"hz": hz, "override": {"nominal_hz": hz, "sigma_hz_per_sqrt_s": 0}}
+        await self._session.post_json(
+            FREQUENCY_PATH, body, call=f"{self.label}.set({value})"
+        )
+
+    async def clear(self) -> None:
+        """Drop the override; the base model drives the frequency again."""
+        await self._session.post_json(
+            FREQUENCY_PATH, {"clear_override": True}, call=f"{self.label}.clear()"
+        )
 
 
 class SettableSignal(Signal[Q]):
@@ -325,7 +390,7 @@ class Knob(Generic[V]):
     Can: `set`. Cannot: read, expect or clear.
     """
 
-    def __init__(self, writer: _Writer) -> None:
+    def __init__(self, writer: _KnobWriter) -> None:
         self._writer = writer
 
     __repr__ = _knob_repr
@@ -337,7 +402,7 @@ class Knob(Generic[V]):
 
 class ClearableKnob(Knob[V]):
     """A write-only setting that can go back to the simulator's own value (for
-    sunlight: the site's weather).
+    sunlight: the site's weather; for the frequency: its model).
 
     Can: `set`, `clear`. Cannot: read or expect.
     """

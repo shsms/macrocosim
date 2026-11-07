@@ -108,11 +108,11 @@ totals, and `microgrid[spec]` / `microgrid[id]`.
 
 | Live class | Read and expect | `set` | `clear()` | Fault knobs (write-only) |
 |---|---|---|---|---|
-| `Meter` | `power`, `reactive_power` | both | both | `health`, `telemetry_mode`, `command_mode` |
+| `Meter` | `power`, `reactive_power` | both | both | `health`, `telemetry_mode`, `command_mode`, `operational_mode` |
 | `Battery` | `soc` | `soc` | — | same |
 | `BatteryInverter` | `power` | — | — | same |
 | `SolarInverter` | `power` | `sunlight` (write-only) | `sunlight` | same |
-| `EvCharger` | `power` | — | — | same |
+| `EvCharger` | `power` | — | — | same; and `plug(preset, ...)`, `unplug()` |
 | `SteamBoiler` | `power`, `pressure` | `pressure`, `demand` (write-only) | — | same |
 | `GridConnectionPoint`, `Chp`, `WindTurbine`, `PowerTransformer`, `Breaker` | — | — | — | same |
 
@@ -158,6 +158,28 @@ limitation. Aggregates such as `microgrid.grid_power` are computed from the gRPC
 telemetry the app receives, and they do show every fault. Health and command
 faults change what the components do or what the app can command, so both kinds
 of read show their effect.
+
+`operational_mode` sets `telemetry_mode` to `NORMAL`, or `SILENT` without
+telemetry, and `command_mode` to `NORMAL`, or `ERROR` without control or while
+`health` is `ERROR`. Like every knob, it changes the running component, not the
+spec.
+
+**EV chargers.** `plug(preset, soc=..., target_soc=..., phases=...,
+max_current=..., capacity=..., taper_start=..., taper_floor=...)` plugs a car
+from the simulator's catalog in; the arguments change that preset's values.
+`unplug()` takes it away.
+
+**The microgrid's own knobs.** `set_voltage_per_phase(l1, l2, l3)`,
+`set_sample_lag(lag)` (shifts the timestamps the app receives into the past),
+`cancel_streams()`, `set_weather(sunrise=..., sunset=..., peak=...,
+cloud_mean_gap=..., cloud_depth=(lo, hi), cloud_duration=(lo, hi),
+cloud_ramp=(lo, hi), seed=...)`, `pass_cloud(depth, duration, ramp=None)` and
+`clear_weather()`. Weather, voltage and sample lag stay until changed.
+
+**The grid frequency** is one value for the whole simulator, shared by every
+microgrid in it. `microgrid.frequency.set(f)` holds it at `f`, and
+`clear()` hands it back to the frequency model, which
+`set_frequency_model(nominal=..., mean_rev_rate=..., sigma=...)` changes.
 
 **A category the topology lacks** reads 0: `pv_power` is 0 W on a site without
 solar.

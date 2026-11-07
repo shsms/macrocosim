@@ -1,23 +1,25 @@
 """Live components: what `microgrid[spec]` and `microgrid[id]` return.
 
-Internal; imports `_enums`, `_signals`, `_spec` and `_units`, and `_session` for typing
-only. Every live class has its `id` and the three write-only fault knobs; the
-rest are the signals its category publishes or accepts. A test only observes
-what the app under test commands: there are no setpoint calls here.
+Internal; imports `_enums`, `_signals`, `_spec` and `_units`, and `_session` for
+typing only. Every live class has its `id`, the three write-only fault knobs and
+its operational mode; the rest are the signals its category publishes or
+accepts, and an EV charger's plug. A test only observes what the app under test
+commands: there are no setpoint calls here.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from frequenz.quantities import Percentage, Power, ReactivePower
+from frequenz.quantities import Current, Energy, Percentage, Power, ReactivePower
 
 from . import _spec
-from ._enums import CommandMode, Health, TelemetryMode
+from ._enums import CommandMode, Health, OperationalMode, TelemetryMode
 from ._signals import (
     COMMAND_MODE,
     HEALTH,
     INVERTER_POWER,
+    OPERATIONAL_MODE,
     POWER,
     PRESSURE,
     REACTIVE,
@@ -30,13 +32,16 @@ from ._signals import (
     Knob,
     SettableSignal,
     Signal,
+    _component_path,
     _ComponentHistorySource,
     _KnobDef,
     _Setter,
     _SignalDef,
     _Writer,
+    wire_body,
+    wire_value,
 )
-from ._units import MassFlow, Pressure
+from ._units import MassFlow, Pressure, is_int_like
 
 if TYPE_CHECKING:
     from ._session import _Session
@@ -57,6 +62,9 @@ class Component:
             TELEMETRY_MODE, "telemetry_mode"
         )
         self._command_mode: Knob[CommandMode] = self._knob(COMMAND_MODE, "command_mode")
+        self._operational_mode: Knob[OperationalMode] = self._knob(
+            OPERATIONAL_MODE, "operational_mode"
+        )
 
     @property
     def id(self) -> int:
@@ -94,6 +102,18 @@ class Component:
     def command_mode(self) -> Knob[CommandMode]:
         """Write-only. How the component answers the app's commands."""
         return self._command_mode
+
+    @property
+    def operational_mode(self) -> Knob[OperationalMode]:
+        """Write-only. What the component offers: telemetry, control, both or
+        neither.
+
+        A `set` also sets `telemetry_mode` to `NORMAL`, or `SILENT` without
+        telemetry, and `command_mode` to `NORMAL`, or `ERROR` without control or
+        while `health` is `ERROR`. It changes the running component only; the
+        spec keeps its value.
+        """
+        return self._operational_mode
 
     def _label(self, attribute: str) -> str:
         return f"{type(self).__name__} {self._id} {attribute}"
@@ -233,6 +253,54 @@ class EvCharger(Component):
     def power(self) -> Signal[Power]:
         """Active power, read-only; positive while charging."""
         return self._power
+
+    async def plug(
+        self,
+        preset: str,
+        *,
+        soc: Percentage | None = None,
+        target_soc: Percentage | None = None,
+        phases: int | None = None,
+        max_current: Current | None = None,
+        capacity: Energy | None = None,
+        taper_start: Percentage | None = None,
+        taper_floor: Percentage | None = None,
+    ) -> None:
+        """Plug a car in: `preset` names one from the simulator's catalog, and
+        the other arguments change its values.
+
+        `target_soc` is 100 % unless given; `phases` is 1, 2 or 3, and another
+        int raises `ValueError`. Raises `Rejected` if a car is already plugged
+        in, the preset is unknown or a value is out of range.
+        """
+        label = self._label("plug")
+        if is_int_like(phases) and not 1 <= phases <= 3:
+            raise ValueError(f"{label}: phases must be 1, 2 or 3, not {phases}")
+        body = {"preset": wire_value(f"{label} preset", preset, str)}
+        body |= wire_body(
+            label,
+            {
+                "soc": (soc, Percentage),
+                "target_soc": (target_soc, Percentage),
+                "phases": (phases, int),
+                "max_current": (max_current, Current),
+                "capacity": (capacity, Energy),
+                "taper_start": (taper_start, Percentage),
+                "taper_floor": (taper_floor, Percentage),
+            },
+        )
+        await self._session.post_json(
+            _component_path(self._session, self._id, "ev"),
+            body,
+            call=f"{label}({preset!r})",
+        )
+
+    async def unplug(self) -> None:
+        """Unplug the car, if one is plugged in."""
+        await self._session.delete(
+            _component_path(self._session, self._id, "ev"),
+            call=f"{self._label('unplug')}()",
+        )
 
 
 class SteamBoiler(Component):

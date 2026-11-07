@@ -12,12 +12,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
-from typing import Any, Self
+from typing import Any, Self, TypeGuard
 
 from frequenz.quantities import (
     ApparentPower,
     Current,
     Energy,
+    Frequency,
     Percentage,
     Power,
     Quantity,
@@ -77,6 +78,7 @@ UNITS: dict[type, _Unit] = {
     Percentage: _Unit("_pct", lambda v: v.as_percent(), Percentage.from_percent),
     Voltage: _Unit("_v", lambda v: v.as_volts(), Voltage.from_volts),
     Current: _Unit("_a", lambda v: v.as_amperes(), Current.from_amperes),
+    Frequency: _Unit("_hz", lambda v: v.as_hertz(), Frequency.from_hertz),
     timedelta: _Unit("_s", lambda v: v.total_seconds(), lambda s: timedelta(seconds=s)),
     Pressure: _Unit("_bar", lambda v: v.as_bar(), Pressure.from_bar),
     MassFlow: _Unit(
@@ -174,7 +176,7 @@ def to_wire(value: object) -> float:
     return unit.to_wire(value)
 
 
-def is_int_like(value: object) -> bool:
+def is_int_like(value: object) -> TypeGuard[int]:
     """Whether `value` is an `int` (an `IntEnum` member included) but not a
     `bool`."""
     return isinstance(value, int) and not isinstance(value, bool)

@@ -181,3 +181,26 @@ async def test_a_success_whose_body_is_not_json_is_a_server_error() -> None:
     with pytest.raises(ServerError, match="answered 200 with a body that is not JSON"):
         await s.get_json("/x")
     await s.close()
+
+
+async def test_delete_returns_none_for_204_and_rejects_400_and_409() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path.endswith("/9/ev"):
+            return httpx.Response(400, json={"error": "component 9 is not a charger"})
+        return httpx.Response(204)
+
+    s = _session(handler)
+    path = "/api/mg/7/component/6/ev"
+    assert await s.delete(path, call="EvCharger 6 unplug()") is None
+    with pytest.raises(Rejected) as info:
+        await s.delete("/api/mg/7/component/9/ev", call="EvCharger 9 unplug()")
+    assert str(info.value) == (
+        "EvCharger 9 unplug() was rejected: component 9 is not a charger"
+    )
+    assert seen == [("DELETE", path), ("DELETE", "/api/mg/7/component/9/ev")]
+    await s.close()
+    with pytest.raises(MicrogridClosed):
+        await s.delete(path, call="x")

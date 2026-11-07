@@ -5,18 +5,30 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
 import httpx
 import pytest
 import pytest_asyncio
-from frequenz.quantities import Energy, Percentage, Power, ReactivePower
+from frequenz.quantities import (
+    Current,
+    Energy,
+    Frequency,
+    Percentage,
+    Power,
+    ReactivePower,
+    Voltage,
+)
 from sampling_fakes import FakeClock
 
-from macrocosim._enums import CommandMode, Health, TelemetryMode
+import macrocosim._spec as spec
+from macrocosim._components import Battery, EvCharger
+from macrocosim._enums import CommandMode, Health, OperationalMode, TelemetryMode
 from macrocosim._errors import ExpectationFailed, NoSample, Rejected, ServerError
 from macrocosim._matchers import at_least, at_most, between, near
+from macrocosim._microgrid import Microgrid
+from macrocosim._process import Endpoints
 from macrocosim._session import _Session
 from macrocosim._signals import (
     AGGREGATES,
@@ -312,3 +324,145 @@ async def test_an_answer_of_the_wrong_shape_is_a_server_error(srv: Server) -> No
         await source.fetch_hold(10)
     with pytest.raises(ServerError, match="did not expect"):
         await source.fetch(3)
+
+
+pct = Percentage.from_percent
+sec = timedelta(seconds=1)
+
+
+async def test_component_knobs_post_their_routes(srv: Server) -> None:
+    session = srv.session()
+    charger = EvCharger(session, 6)
+    await Battery(session, 4).operational_mode.set(OperationalMode.TELEMETRY_ONLY)
+    await charger.plug(
+        "city",
+        soc=pct(25),
+        target_soc=pct(80),
+        phases=1,
+        max_current=Current.from_amperes(16),
+        capacity=Energy.from_kilowatt_hours(40),
+        taper_start=pct(85),
+        taper_floor=pct(30),
+    )
+    await charger.plug("van")
+    await charger.unplug()
+    ev = "/api/mg/7/component/6/ev"
+    assert srv.requests == [
+        (
+            "POST",
+            "/api/mg/7/component/4/runtime",
+            {"operational_mode": "telemetry_only"},
+        ),
+        (
+            "POST",
+            ev,
+            {
+                "preset": "city",
+                "soc_pct": 25.0,
+                "target_soc_pct": 80.0,
+                "phases": 1,
+                "max_current_a": 16.0,
+                "capacity_wh": 40000.0,
+                "taper_start_pct": 85.0,
+                "taper_floor_pct": 30.0,
+            },
+        ),
+        ("POST", ev, {"preset": "van"}),
+        ("DELETE", ev, None),
+    ]
+
+
+def _microgrid(session: _Session) -> Microgrid:
+    endpoints = Endpoints(ui="127.0.0.1:8801", microgrid_id=7, grpc_addr="x:1")
+    topology = spec.make_microgrid(topology=spec.make_grid_connection_point(id=1))
+    return Microgrid._create(session, topology, endpoints)
+
+
+async def test_microgrid_knobs_post_their_routes(srv: Server) -> None:
+    mg = _microgrid(srv.session())
+    volts = Voltage.from_volts
+    hz = Frequency.from_hertz
+    await mg.set_voltage_per_phase(volts(231), volts(230), volts(229))
+    await mg.set_sample_lag(timedelta(milliseconds=1500))
+    await mg.cancel_streams()
+    await mg.frequency.set(hz(49.8))
+    await mg.frequency.clear()
+    await mg.set_frequency_model(nominal=hz(50), sigma=0.02)
+    await mg.set_weather(
+        sunrise=time(6, 30),
+        sunset=time(19),
+        peak=pct(90),
+        cloud_mean_gap=timedelta(minutes=10),
+        cloud_depth=(pct(20), pct(60)),
+        cloud_duration=(60 * sec, 600 * sec),
+        cloud_ramp=(10 * sec, 30 * sec),
+        seed=7,
+    )
+    await mg.pass_cloud(pct(50), 120 * sec)
+    await mg.pass_cloud(pct(50), 120 * sec, 5 * sec)
+    await mg.clear_weather()
+    weather = "/api/mg/7/weather"
+    assert srv.requests == [
+        ("POST", "/api/mg/7/grid", {"voltage_per_phase_v": [231.0, 230.0, 229.0]}),
+        ("POST", "/api/mg/7/sample-lag", {"sample_lag_s": 1.5}),
+        ("POST", "/api/mg/7/streams/cancel", None),
+        (
+            "POST",
+            "/api/frequency",
+            {"hz": 49.8, "override": {"nominal_hz": 49.8, "sigma_hz_per_sqrt_s": 0}},
+        ),
+        ("POST", "/api/frequency", {"clear_override": True}),
+        (
+            "POST",
+            "/api/frequency",
+            {"model": {"nominal_hz": 50.0, "sigma_hz_per_sqrt_s": 0.02}},
+        ),
+        (
+            "POST",
+            weather,
+            {
+                "peak_pct": 90.0,
+                "cloud_mean_gap_s": 600.0,
+                "seed": 7,
+                "sunrise": "06:30",
+                "sunset": "19:00",
+                "cloud_depth_pct": [20.0, 60.0],
+                "cloud_duration_s": [60.0, 600.0],
+                "cloud_ramp_s": [10.0, 30.0],
+            },
+        ),
+        ("POST", weather, {"pass_cloud": {"depth_pct": 50.0, "duration_s": 120.0}}),
+        (
+            "POST",
+            weather,
+            {"pass_cloud": {"depth_pct": 50.0, "duration_s": 120.0, "ramp_s": 5.0}},
+        ),
+        ("DELETE", weather, None),
+    ]
+    assert repr(mg.frequency) == ("<ClearableKnob Microgrid 7 frequency>")
+
+
+async def test_microgrid_knobs_check_their_arguments(srv: Server) -> None:
+    mg = _microgrid(srv.session())
+    with pytest.raises(TypeError, match="frequency must be Frequency"):
+        await mg.frequency.set(50.0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="set_sample_lag must be timedelta"):
+        await mg.set_sample_lag(1.5)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="sunrise must be a whole minute"):
+        await mg.set_weather(sunrise=time(6, 30, 15))
+    with pytest.raises(ValueError, match="cloud_depth must be a \\(low, high\\) pair"):
+        await mg.set_weather(cloud_depth=(pct(1),))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="cloud_ramp must be timedelta"):
+        await mg.set_weather(cloud_ramp=(1, 2))  # type: ignore[arg-type]
+    for seed in (-1, 2**64):
+        with pytest.raises(ValueError, match="seed must be 0 to 2\\*\\*64 - 1"):
+            await mg.set_weather(seed=seed)
+    assert srv.requests == []
+
+
+async def test_a_refused_microgrid_write_names_the_call(srv: Server) -> None:
+    srv.reply_status = 409
+    mg = _microgrid(srv.session())
+    with pytest.raises(Rejected) as info:
+        await mg.pass_cloud(pct(50), 60 * sec)
+    assert str(info.value) == ("Microgrid 7 pass_cloud(50 %) was rejected: refused here")

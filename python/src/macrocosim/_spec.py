@@ -520,7 +520,7 @@ def _wire(value: object, kind: object) -> object:
     if isinstance(value, (bool, str)):
         return value
     if is_int_like(value):
-        number = int(cast("int", value))
+        number = int(value)
         return float(number) if kind is float else number
     assert isinstance(value, float), value  # __post_init__ checked every field
     return value
