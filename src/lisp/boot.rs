@@ -13,13 +13,13 @@ use std::time::Duration;
 
 use notify::{RecommendedWatcher, Watcher};
 use parking_lot::{Mutex, RwLock};
-use tokio::sync::broadcast;
 use tulisp::{Error, SharedMut, TulispContext, TulispObject};
 
 use crate::sim::MicrogridSite;
 use crate::sim::microgrids::SiteRouter;
 
 use super::{Config, Metadata, defuns};
+use crate::engine::Engine;
 
 /// Why a [`Config::load_file`] call failed.
 ///
@@ -178,7 +178,7 @@ impl Config {
         // A stepped run has no UI and no REPL — nothing can load a
         // topology later, so an empty registry here is a dead run,
         // not a bare boot waiting for input.
-        if cfg.microgrids.lock().is_empty() {
+        if cfg.engine.microgrids.lock().is_empty() {
             return Err("config loaded but no (make-microgrid …) form ran — \
                  a headless run needs its config to register a microgrid"
                 .to_string());
@@ -191,51 +191,12 @@ impl Config {
     }
 
     fn new_inner(scripts: Vec<String>, state_dir: PathBuf, headless: bool) -> Result<Self, String> {
-        use std::sync::atomic::AtomicU64;
-        let mut ctx = TulispContext::new();
-        let enterprise_id_allocator =
-            Arc::new(AtomicU64::new(crate::sim::component::FIRST_AUTO_ID));
-        let site = MicrogridSite::with_id_allocator(enterprise_id_allocator.clone());
-        let metadata = Arc::new(RwLock::new(Metadata::default()));
-        let extra_watches = Arc::new(Mutex::new(HashSet::new()));
-        let clock = crate::sim::clock::new_clock();
-        let scenarios = crate::sim::scenarios::new_registry();
-        let microgrids = crate::sim::microgrids::new_registry();
-        let dispatches = crate::sim::dispatch::new_store();
-        let current_microgrid = crate::sim::microgrids::new_current_microgrid();
-        let loading = crate::sim::microgrids::new_loading_slot();
-        let router = SiteRouter::new(microgrids.clone(), current_microgrid.clone(), site.clone());
-        // Capacity = 1024 to absorb a mass-create burst (e.g. a
-        // script POST'ing /api/microgrids a few hundred times
-        // back-to-back) without lagging the WS event pump's
-        // receiver. Even on Lagged the pump re-snapshots the
-        // registry and back-fills forwarders, so capacity tuning is
-        // belt-and-suspenders — but a fresh subscriber spinning up
-        // mid-burst still benefits from the extra slack.
-        let microgrid_registered = Arc::new(broadcast::channel(1024).0);
-        let port_pins = crate::sim::microgrids::new_port_pins();
-        // Enterprise-wide grid frequency state — one OU process drives
-        // every MicrogridSite in the registry so they share the
-        // physically-correct same frequency. The driver task is
-        // spawned below; bootstrap site + future make-microgrid forms
-        // both attach to this slot.
-        let grid_frequency = crate::sim::frequency::new_shared();
-        site.set_grid_frequency(grid_frequency.clone());
-        // The wall-clock background loops (frequency driver, lisp
-        // refresh) are spawned only after the config evals
-        // successfully, below — a failed `Config::new` must not leave
-        // orphan loops ticking. A headless run never spawns them: it
-        // drives every tick itself, and the loops would race the
-        // stepped driver.
-
         // tulisp canonicalizes the load path, which requires the
         // directory to exist — create it up front so a fresh
         // `--state-dir` fails with a clear message (every other
         // consumer create_dir_all's lazily anyway).
         std::fs::create_dir_all(&state_dir)
             .map_err(|e| format!("state dir {} cannot be created: {e}", state_dir.display()))?;
-        ctx.set_load_path(Some(&state_dir))
-            .map_err(|e| format!("set_load_path({}): {e}", state_dir.display()))?;
 
         // Headless builds run the timer queue + scenario time on a
         // hand-advanced ManualClock so a scenario can be stepped
@@ -253,7 +214,31 @@ impl Config {
             ),
             None => crate::sim::sim_clock::NowSource::wall(),
         };
-        site.set_now_source(now.clone());
+
+        // The engine first, the interpreter around it. A live engine
+        // starts the grid frequency driver, which stops by itself if
+        // the eval below fails and the engine is dropped; a headless
+        // run never starts it, since it drives every tick itself.
+        let engine = Engine::new(state_dir.clone(), Metadata::default(), now.clone());
+
+        let mut ctx = TulispContext::new();
+        let site = MicrogridSite::with_id_allocator(engine.id_allocator());
+        engine.attach_site(&site);
+        let metadata = engine.metadata.clone();
+        let extra_watches = Arc::new(Mutex::new(HashSet::new()));
+        let scenarios = crate::sim::scenarios::new_registry();
+        let microgrids = engine.microgrids();
+        let current_microgrid = crate::sim::microgrids::new_current_microgrid();
+        let loading = crate::sim::microgrids::new_loading_slot();
+        let router = SiteRouter::new(microgrids.clone(), current_microgrid.clone(), site.clone());
+        // The Lisp refresh loop is spawned only after the config
+        // evals successfully, below — a failed `Config::new` must not
+        // leave orphan loops ticking. A headless run never spawns it:
+        // it drives every tick itself, and the loop would race the
+        // stepped driver.
+
+        ctx.set_load_path(Some(&state_dir))
+            .map_err(|e| format!("set_load_path({}): {e}", state_dir.display()))?;
 
         defuns::register_runtime(
             &mut ctx,
@@ -263,22 +248,16 @@ impl Config {
             microgrids.clone(),
             now.clone(),
         );
-        defuns::register_clock(&mut ctx, clock.clone());
+        defuns::register_clock(&mut ctx, engine.clock_handle());
         defuns::register_watches(&mut ctx, state_dir.clone(), extra_watches.clone());
         defuns::register_scenarios(&mut ctx, scenarios.clone());
         defuns::register_microgrids(
             &mut ctx,
-            microgrids.clone(),
+            engine.clone(),
             current_microgrid.clone(),
-            enterprise_id_allocator.clone(),
-            microgrid_registered.clone(),
-            grid_frequency.clone(),
             loading.clone(),
-            metadata.clone(),
-            port_pins.clone(),
-            now.clone(),
         );
-        defuns::register_frequency(&mut ctx, grid_frequency.clone());
+        defuns::register_frequency(&mut ctx, engine.grid_frequency.clone());
         crate::lisp::renames::register(&mut ctx);
 
         // tulisp-async gives the config DSL access to run-with-timer,
@@ -338,33 +317,23 @@ impl Config {
         // a fully successful eval — an error path returns here with
         // nothing ticking, exactly as before.
         let cfg = Self {
+            engine,
             // Filled in by `load_file` below, one canonicalized entry
             // per source file, so the same file spelled differently
             // (relative argv vs an absolute runtime `(load …)`) counts
             // once.
             source_files: Arc::new(Mutex::new(Vec::new())),
-            state_dir,
             ctx,
             site,
-            metadata,
             extra_watches,
-            clock,
             scenarios,
-            microgrids: microgrids.clone(),
-            dispatches,
             router,
             loading,
             current_microgrid,
-            enterprise_id_allocator,
-            import_lock: Arc::new(tokio::sync::Mutex::new(())),
-            create_lock: Arc::new(tokio::sync::Mutex::new(())),
             undo: super::undo::new_undo_histories(),
-            microgrid_registered,
             written_hashes: Arc::new(Mutex::new(std::collections::HashMap::new())),
             timer_handle: timer_handle.clone(),
-            now,
             sim_clock,
-            port_pins,
         };
 
         // Enterprise-wide state (enterprise id, timezone, socket
@@ -414,15 +383,12 @@ impl Config {
             log_topology_validation(&entry.site, &format!("boot (microgrid {id})"));
         }
 
-        // Wall-clock background loops, spawned only now that the
-        // config evaluated: an eval error returns above, and loops
-        // spawned earlier would keep ticking (and keep the registry
-        // Arcs alive) with no handle to stop them.
-        if !headless {
-            crate::sim::frequency::spawn_driver(grid_frequency.clone());
-        }
-
-        // Lisp refresh loop. One tokio task at 100 ms cadence holds
+        // Lisp refresh loop, spawned only now that the config
+        // evaluated: an eval error returns above, and a loop spawned
+        // earlier would keep ticking (and keep the registry Arcs
+        // alive) with no handle to stop it.
+        //
+        // One tokio task at 100 ms cadence holds
         // the interpreter lock once per pass, walks every registered
         // microgrid's components calling `refresh_inputs` (which
         // re-resolves any lambda-bound `:power-w` / `:sunlight-pct` / …
@@ -544,7 +510,7 @@ impl Config {
         if path.is_absolute() {
             path.to_path_buf()
         } else {
-            self.state_dir.join(path)
+            self.engine.state_dir.join(path)
         }
     }
 
@@ -572,7 +538,7 @@ impl Config {
             .map_err(|e| LoadError::Other(format!("{}: {e}", resolved.display())))?;
         let managed = parsed.generated.is_some();
 
-        let before: HashSet<u64> = self.microgrids.lock().keys().copied().collect();
+        let before: HashSet<u64> = self.engine.microgrids.lock().keys().copied().collect();
         // The canonical spelling is what the registry stores in
         // `source`, so every spelling of one file compares equal —
         // that comparison is what distinguishes a reload of this file
@@ -643,6 +609,7 @@ impl Config {
         self.note_source_file(canonical);
 
         let new_ids: Vec<u64> = self
+            .engine
             .microgrids
             .lock()
             .iter()
@@ -667,7 +634,7 @@ impl Config {
     /// is empty and the head's own `:id` is read instead.
     fn block_microgrid_id(&self, block: &str, before: &HashSet<u64>) -> Option<u64> {
         let new_ids: Vec<u64> = {
-            let reg = self.microgrids.lock();
+            let reg = self.engine.microgrids.lock();
             reg.keys()
                 .filter(|id| !before.contains(id))
                 .copied()
@@ -712,7 +679,7 @@ impl Config {
         // we write is free as of the same instant the id was.
         let reserved = self.reserved_ports();
         let free_port = {
-            let reg = self.microgrids.lock();
+            let reg = self.engine.microgrids.lock();
             if reg.contains_key(&new_id) {
                 return Err(LoadAsError::Other(format!(
                     "microgrid {new_id} is already registered"
@@ -729,7 +696,7 @@ impl Config {
         // nothing the copy declares can collide with a live
         // component, and `reserve_id` keeps the counter above the
         // explicit ids we just wrote.
-        let allocator = self.enterprise_id_allocator.clone();
+        let allocator = self.engine.id_allocator.clone();
         let rewritten = super::microgrid_file::remap_component_ids(&rewritten, || {
             allocator.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         })
@@ -792,7 +759,7 @@ impl Config {
     /// `(run-with-timer 0 …)` values are visible before the synthetic
     /// physics tick.
     pub fn refresh_once(&self) {
-        refresh_pass(&self.microgrids, &self.ctx, &self.timer_handle);
+        refresh_pass(&self.engine.microgrids, &self.ctx, &self.timer_handle);
     }
 
     /// Advance a headless simulation by `dt`: move the sim clock
@@ -811,8 +778,9 @@ impl Config {
         // Timers + dynamic inputs first (a `timeline` source reads
         // scenario-elapsed, now at the advanced sim-time), then physics.
         self.refresh_once();
-        let now = self.now.now();
+        let now = self.engine.now.now();
         let sites: Vec<MicrogridSite> = self
+            .engine
             .microgrids
             .lock()
             .values()
@@ -898,7 +866,7 @@ impl Config {
     /// --stepped`) can print + assert on it without a server or
     /// exposing the internal report type.
     pub fn scenario_report_json(&self) -> serde_json::Value {
-        serde_json::to_value(self.site().scenario_report(self.now.now())).unwrap_or_default()
+        serde_json::to_value(self.site().scenario_report(self.engine.now.now())).unwrap_or_default()
     }
 
     /// Spawn the Lisp refresh + timer-drain loop. Runs at 100 ms
@@ -1055,6 +1023,7 @@ impl Config {
         // server) hold these site handles, and the re-eval'd
         // `(make-microgrid …)` forms reuse them in place.
         for entry in self
+            .engine
             .microgrids
             .lock()
             .values()
@@ -1068,6 +1037,7 @@ impl Config {
         // re-load has none, and its rebuilt sites still need the
         // event.
         for (id, entry) in self
+            .engine
             .microgrids
             .lock()
             .iter()
@@ -1124,7 +1094,8 @@ impl Config {
         // and we want auto-allocated ids to keep starting at
         // FIRST_AUTO_ID across reloads (the comment on
         // MicrogridSite.next_id justifies why).
-        self.enterprise_id_allocator
+        self.engine
+            .id_allocator
             .store(crate::sim::component::FIRST_AUTO_ID, Ordering::Relaxed);
         // Keep the registry: the per-mg runtimes (physics tick, history
         // sampler, gRPC server, loopback client) each hold their entry's
@@ -1135,7 +1106,7 @@ impl Config {
         // ends up empty (its runtimes keep running against the empty
         // site — they can't be torn down without a restart — but it
         // stops ticking stale components).
-        for entry in self.microgrids.lock().values() {
+        for entry in self.engine.microgrids.lock().values() {
             entry.site.reset();
         }
         // Cancel every live timer centrally before the replay: each
@@ -1175,7 +1146,7 @@ impl Config {
                 .map_err(|e| e.to_string())?;
         }
         warn_orphaned_chp_defaults(ctx);
-        if self.microgrids.lock().is_empty() {
+        if self.engine.microgrids.lock().is_empty() {
             log::warn!("reload left the registry empty — no loaded file registers a microgrid");
         }
         // Tell UI subscribers the MicrogridSite rebuilt. Catches the
@@ -1185,7 +1156,7 @@ impl Config {
         // so per-mg UI subscribers all see the rebuild — the router-
         // resolved `cfg.site()` reads from the first registry entry,
         // not the bootstrap site we reset above.
-        for (id, entry) in self.microgrids.lock().iter() {
+        for (id, entry) in self.engine.microgrids.lock().iter() {
             log_topology_validation(&entry.site, &format!("reload (microgrid {id})"));
             entry.site.bump_version();
         }
@@ -1419,7 +1390,7 @@ impl Config {
             // Fan out to every REGISTRY site: the WS event pump only
             // spawns forwarders for registry entries, so a broadcast
             // on the bootstrap site's bus would reach no browser.
-            for entry in self.microgrids.lock().values() {
+            for entry in self.engine.microgrids.lock().values() {
                 entry.site.broadcast_config_error(msg.clone());
             }
         }

@@ -6,9 +6,6 @@
 //! the `:topology` lambda so nested make-* forms register into the
 //! new site.
 
-use std::sync::Arc;
-
-use tokio::sync::broadcast;
 use tulisp::{TulispContext, TulispObject};
 
 use crate::lisp::renames::Renamed;
@@ -41,22 +38,13 @@ tulisp::AsList! {
 /// (whose body's make-* calls then register into the new site
 /// via the router's per-call dispatch), and finally restores the
 /// previous pointer.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one installer wires every shared handle"
-)]
 pub(in crate::lisp) fn register(
     ctx: &mut TulispContext,
-    registry: crate::sim::microgrids::SharedMicrogrids,
+    engine: crate::engine::Engine,
     current: crate::sim::microgrids::CurrentMicrogrid,
-    id_allocator: Arc<std::sync::atomic::AtomicU64>,
-    registered_tx: Arc<broadcast::Sender<u64>>,
-    grid_frequency: crate::sim::frequency::SharedFrequency,
     loading: crate::sim::microgrids::LoadingSlot,
-    metadata: Arc<parking_lot::RwLock<crate::lisp::Metadata>>,
-    port_pins: crate::sim::microgrids::PortPins,
-    now: crate::sim::sim_clock::NowSource,
 ) {
+    let registry = engine.microgrids();
     // `(current-source-file)` — the file whose load is in flight, or
     // nil outside a load (a REPL eval). Scripts use it to resolve
     // sibling data files, and to tell "I was loaded" from "I was
@@ -271,7 +259,7 @@ pub(in crate::lisp) fn register(
             //
             // The assets and dispatch ports, read before the registry
             // lock so the two locks never nest.
-            let reserved = crate::lisp::reserved_ports_of(&metadata.read());
+            let reserved = engine.reserved_ports();
             let (id, reused) = {
                 let mut reg = registry.lock();
                 let id = match a.id {
@@ -313,7 +301,7 @@ pub(in crate::lisp) fn register(
                         let grpc_port = match a.grpc_port {
                             Some(p) if p as u16 != bound_port => {
                                 let p = p as u16;
-                                if crate::sim::microgrids::port_pinned(&port_pins, id) {
+                                if crate::sim::microgrids::port_pinned(&engine.port_pins, id) {
                                     log::warn!(
                                         "make-microgrid #{id}: :grpc-port {p} ignored — its \
                                          gRPC server holds :{bound_port} (restart to move it)"
@@ -357,14 +345,8 @@ pub(in crate::lisp) fn register(
                         // + every other microgrid — component ids stay
                         // globally unique across the registry without
                         // per-site coordination.
-                        let site = MicrogridSite::with_id_allocator(id_allocator.clone());
-                        // Same grid frequency source as every other site,
-                        // so their `frequency_hz` reads all return the same
-                        // OU value (one AC grid → one frequency).
-                        site.set_grid_frequency(grid_frequency.clone());
-                        // Same clock as the rest of the config: wall
-                        // time live, the sim clock headless.
-                        site.set_now_source(now.clone());
+                        let site = MicrogridSite::with_id_allocator(engine.id_allocator());
+                        engine.attach_site(&site);
                         (grpc_port, site, false)
                     }
                 };
@@ -406,10 +388,8 @@ pub(in crate::lisp) fn register(
                 return Err(e);
             }
             // Notify enterprise-wide subscribers (the WS event pump
-            // and the runtime listener). A reused registration is
-            // announced too, so a failed runtime gets another start;
-            // both subscribers ignore an id they already serve.
-            let _ = registered_tx.send(id);
+            // and the runtime listener).
+            engine.announce_registered(id);
             Ok(id as i64)
         },
     );

@@ -1,5 +1,6 @@
 pub mod assets_server;
 pub mod dispatch_server;
+pub mod engine;
 pub mod lisp;
 pub mod proto;
 pub mod proto_conv;

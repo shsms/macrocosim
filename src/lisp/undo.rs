@@ -189,7 +189,7 @@ impl Config {
     /// file, so a microgrid without one (unmanaged, or typed into the
     /// REPL) has no undo at all.
     fn managed_source(&self, id: u64) -> Result<PathBuf, String> {
-        let registry = self.microgrids.lock();
+        let registry = self.engine.microgrids.lock();
         let entry = registry
             .get(&id)
             .ok_or_else(|| format!("microgrid {id} not registered"))?;

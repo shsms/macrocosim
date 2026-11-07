@@ -7,6 +7,10 @@ is wiring the topology + animating the environment.
 ## Layout
 
 - `src/lib.rs` — module roots
+- `src/engine.rs` — `Engine`: the simulator state without an
+  interpreter (registry, dispatch store, enterprise `Metadata` in
+  `engine/metadata.rs`, grid frequency, clock, create lock); every
+  server and handler that runs no Lisp takes one
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback) and its
   started / failed status
@@ -51,7 +55,8 @@ is wiring the topology + animating the environment.
     `frequenz-microgrid-component-graph` nodes/edges (validation +
     the formula endpoint behind the formula explorer panel)
 - `src/lisp/` — config DSL glue
-  - `mod.rs` — `Config` (fields, accessors, reload)
+  - `mod.rs` — `Config` (the interpreter around an `Engine`;
+    fields, accessors, reload)
   - `boot.rs` — `Config::new`: interpreter setup, defun registration,
     tulisp-async wiring, background loops
   - `defuns/` — every `register_*` installer, one file per topic

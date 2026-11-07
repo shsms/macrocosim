@@ -145,7 +145,8 @@ impl Config {
     /// eval actually moved. Pokes (power, health, modes) don't touch
     /// the structural version, so they cost no file write.
     fn structural_versions(&self) -> Vec<(u64, u64)> {
-        self.microgrids
+        self.engine
+            .microgrids
             .lock()
             .iter()
             .map(|(id, e)| (*id, e.site.structural_version()))
@@ -165,7 +166,7 @@ impl Config {
             return;
         }
         let changed: Vec<(u64, bool, bool)> = {
-            let reg = self.microgrids.lock();
+            let reg = self.engine.microgrids.lock();
             reg.iter()
                 .filter(|(id, e)| {
                     let was = before.iter().find(|(bid, _)| bid == *id).map(|(_, v)| *v);
@@ -216,7 +217,7 @@ impl Config {
     /// is retried by the next structural edit.
     pub fn persist(&self, id: u64) -> std::io::Result<()> {
         let Some((def, site, path)) = ({
-            let reg = self.microgrids.lock();
+            let reg = self.engine.microgrids.lock();
             reg.get(&id).filter(|e| e.managed).and_then(|e| {
                 let path = e.source.clone()?;
                 Some((e.def.clone(), e.site.clone(), path))
@@ -373,7 +374,7 @@ impl Config {
     /// carry" — the UI renders it as an unsaved marker on the
     /// microgrid card.
     fn set_unsaved(&self, id: u64, unsaved: bool) {
-        if let Some(entry) = self.microgrids.lock().get_mut(&id) {
+        if let Some(entry) = self.engine.microgrids.lock().get_mut(&id) {
             entry.unsaved = unsaved;
         }
     }

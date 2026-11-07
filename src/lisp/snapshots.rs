@@ -51,7 +51,10 @@ impl Config {
     /// `snapshots/{mg_id}/` under the state dir. Created lazily by
     /// the first save.
     pub fn snapshots_dir_for(&self, mg_id: u64) -> PathBuf {
-        self.state_dir.join("snapshots").join(mg_id.to_string())
+        self.engine
+            .state_dir
+            .join("snapshots")
+            .join(mg_id.to_string())
     }
 
     /// Copy microgrid `mg_id`'s file to
@@ -145,7 +148,7 @@ impl Config {
     /// The managed file backing microgrid `mg_id`, or the reason
     /// there isn't one.
     fn managed_file_of(&self, mg_id: u64) -> Result<PathBuf, SnapshotError> {
-        let registry = self.microgrids.lock();
+        let registry = self.engine.microgrids.lock();
         let entry = registry
             .get(&mg_id)
             .ok_or_else(|| SnapshotError::NotFound(format!("microgrid {mg_id} not registered")))?;

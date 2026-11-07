@@ -135,17 +135,23 @@ pub fn new_shared() -> SharedFrequency {
 }
 
 /// Start the driver loop. Spawns one tokio task that ticks at
-/// `STEP_MS` and updates the shared state. Idempotent at the
-/// caller's discretion — calling twice would spawn two drivers,
-/// which is a bug (Config::new is the sole call site).
+/// `STEP_MS` and updates the shared state. Idempotent at the caller's
+/// discretion — calling twice would spawn two drivers, which is a bug
+/// (`Engine::new` is the sole call site). The task holds the state
+/// weakly and ends once every other holder has dropped it, so an
+/// engine whose boot failed leaves no loop behind.
 pub fn spawn_driver(state: SharedFrequency) {
     let dt_s = (STEP_MS as f32) / 1000.0;
+    let state = Arc::downgrade(&state);
     tokio::spawn(async move {
         let mut rng = SmallRng::from_entropy();
         let mut interval = tokio::time::interval(Duration::from_millis(STEP_MS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            let Some(state) = state.upgrade() else {
+                return;
+            };
             state.write().step(dt_s, &mut rng);
         }
     });

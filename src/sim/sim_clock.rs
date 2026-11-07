@@ -41,6 +41,11 @@ impl NowSource {
         Self(Arc::new(Inner::Sim { base, clock }))
     }
 
+    /// Whether `now()` reads the wall clock, as a live engine's does.
+    pub fn is_wall(&self) -> bool {
+        matches!(*self.0, Inner::Wall)
+    }
+
     pub fn now(&self) -> DateTime<Utc> {
         match &*self.0 {
             Inner::Wall => Utc::now(),
