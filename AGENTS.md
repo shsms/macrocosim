@@ -429,7 +429,9 @@ UI").
   All three answer 409 `microgrid N was loaded from Lisp` for a
   microgrid without a spec. A `PUT` stacks the replaced spec on the
   microgrid's spec undo stack and marks a microgrid with a source file
-  `unsaved`.
+  `unsaved`. `POST /api/mg/{mg}/undo` and `/redo` walk that stack for
+  a microgrid with a spec, rebuilding it with carry from each step
+  (`topology::step_undo`), and the Lisp file stack otherwise.
   `GET /api/spec/schema` serves the topology document's JSON Schema.
 - The typed knob routes do what the Lisp setters do:
   `POST /api/mg/{mg}/component/{id}/drive` (meter power and reactive

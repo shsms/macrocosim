@@ -137,14 +137,12 @@ pub(in crate::ui) async fn spec_put(
     let _structural = create_lock.lock().await;
     let replaced = topology::rebuild(&engine, &runtimes, mg.id, spec).await?;
     engine.record_spec_undo(mg.id, replaced);
+    topology::mark_edited(&engine, mg.id);
     let registry = engine.microgrids();
-    let mut registry = registry.lock();
+    let registry = registry.lock();
     let entry = registry
-        .get_mut(&mg.id)
+        .get(&mg.id)
         .ok_or_else(|| ApiError::not_registered(mg.id))?;
-    if entry.source.is_some() {
-        entry.unsaved = true;
-    }
     let stored = entry.spec.clone().expect("a rebuilt microgrid has a spec");
     Ok(Json(stored))
 }

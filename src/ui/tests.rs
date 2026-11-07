@@ -2859,6 +2859,132 @@ async fn undo_depths_track_edits() {
     assert_eq!(st, StatusCode::CONFLICT);
 }
 
+fn put_json(path: &str, body: &serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method(Method::PUT)
+        .uri(path)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// The ids of a spec's components, in its order.
+fn spec_ids(spec: &serde_json::Value) -> Vec<u64> {
+    spec["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_u64().unwrap())
+        .collect()
+}
+
+/// Undo and redo walk the spec stack of a microgrid with a stored
+/// spec, rebuilding it from each step, and mark a file's microgrid
+/// edited.
+#[tokio::test]
+async fn undo_and_redo_rebuild_a_spec_microgrid() {
+    let (config, _dir) = config_with("").await;
+    let runtimes = crate::runtime::MicrogridRuntimes::inert();
+    let doc = crate::spec::TopologyDoc::from_json(
+        r#"{"schema_version": 1, "microgrids": [{"id": 40, "components": [
+            {"type": "grid_connection_point", "id": 4001},
+            {"type": "meter", "id": 4002}], "connections": [[4001, 4002]]}]}"#,
+    )
+    .unwrap();
+    let spec = doc.microgrids.into_iter().next().unwrap();
+    crate::engine::topology::create(
+        config.engine(),
+        &runtimes,
+        spec,
+        Some(std::path::PathBuf::from("plant.py")),
+    )
+    .await
+    .unwrap();
+    let read = |config: Config| {
+        let runtimes = runtimes.clone();
+        async move {
+            let (st, body) = call_with(config, runtimes, get("/api/mg/40/spec")).await;
+            assert_eq!(st, StatusCode::OK);
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+        }
+    };
+    let depths = |config: Config| {
+        let runtimes = runtimes.clone();
+        async move {
+            let (_, body) = call_with(config, runtimes, get("/api/mg/40/undo")).await;
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            (
+                v["undo_depth"].as_u64().unwrap(),
+                v["redo_depth"].as_u64().unwrap(),
+            )
+        }
+    };
+    let (st, _) = call_with(
+        config.clone(),
+        runtimes.clone(),
+        post("/api/mg/40/undo", ""),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT, "nothing to undo yet");
+
+    let mut edited = read(config.clone()).await;
+    edited["components"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type": "meter", "id": 5000}));
+    edited["connections"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!([4002, 5000]));
+    let (st, body) = call_with(
+        config.clone(),
+        runtimes.clone(),
+        put_json("/api/mg/40/spec", &edited),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(depths(config.clone()).await, (1, 0));
+
+    let (st, body) = call_with(
+        config.clone(),
+        runtimes.clone(),
+        post("/api/mg/40/undo", ""),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        (v["undo_depth"].clone(), v["redo_depth"].clone()),
+        (json!(0), json!(1))
+    );
+    assert_eq!(spec_ids(&read(config.clone()).await), [4001, 4002]);
+    assert!(
+        config.engine().microgrids().lock()[&40]
+            .site
+            .get(5000)
+            .is_none()
+    );
+    assert!(config.engine().microgrids().lock()[&40].unsaved);
+
+    let (st, _) = call_with(
+        config.clone(),
+        runtimes.clone(),
+        post("/api/mg/40/redo", ""),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(spec_ids(&read(config.clone()).await), [4001, 4002, 5000]);
+    assert_eq!(depths(config.clone()).await, (1, 0));
+    let (st, body) = call_with(
+        config.clone(),
+        runtimes.clone(),
+        post("/api/mg/40/redo", ""),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert_eq!(error_of(&body), "microgrid 40 has nothing to redo");
+}
+
 // ─── same-origin guard + body limits ──────────────────────────────
 
 /// Browser-shaped request: `Host` plus, optionally, `Origin` — the

@@ -18,6 +18,7 @@ use crate::sim::microgrids::{
     next_free_id_in, next_free_port_in,
 };
 use crate::spec::{Defaults, MicrogridSpec, TopologyDoc, build_topology};
+use crate::undo::{Direction, UndoDepths};
 
 /// Why a structural change was refused. Nothing changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -260,6 +261,59 @@ async fn rebuild_replacing(
         log::error!("Microgrid #{id}: {e}");
     }
     Ok(old)
+}
+
+/// Mark microgrid `id` as edited here: a microgrid that came from a
+/// file now differs from it. A UI-created one is unsaved already.
+pub fn mark_edited(engine: &Engine, id: u64) {
+    if let Some(entry) = engine.microgrids.lock().get_mut(&id)
+        && entry.source.is_some()
+    {
+        entry.unsaved = true;
+    }
+}
+
+/// Take one step of microgrid `id`'s spec history in `dir`: rebuild
+/// it, with carry, from the newest spec on that stack, and stack the
+/// spec it replaced on the other one. A refused rebuild puts the step
+/// back, and nothing has changed. The caller holds the create lock.
+pub async fn step_undo(
+    engine: &Engine,
+    runtimes: &MicrogridRuntimes,
+    id: u64,
+    dir: Direction,
+) -> Result<UndoDepths, TopologyError> {
+    let step = engine
+        .spec_undo
+        .lock()
+        .get_mut(&id)
+        .and_then(|h| h.pop(dir));
+    let Some(step) = step else {
+        return Err(TopologyError::Conflict(format!(
+            "microgrid {id} has nothing to {dir}"
+        )));
+    };
+    match rebuild(engine, runtimes, id, step.clone()).await {
+        Ok(replaced) => {
+            engine
+                .spec_undo
+                .lock()
+                .entry(id)
+                .or_default()
+                .push(dir.opposite(), replaced);
+            mark_edited(engine, id);
+            Ok(engine.spec_undo_depths(id))
+        }
+        Err(e) => {
+            engine
+                .spec_undo
+                .lock()
+                .entry(id)
+                .or_default()
+                .push(dir, step);
+            Err(e)
+        }
+    }
 }
 
 /// Unload microgrid `id`: take it out of the registry, which frees
@@ -614,6 +668,37 @@ mod tests {
             "{err:?}"
         );
         assert_eq!(engine.microgrids.lock().len(), 1, "nothing was created");
+    }
+
+    /// An undo step whose spec another microgrid has since taken an
+    /// id from is refused and stays on its stack.
+    #[tokio::test]
+    async fn a_refused_undo_step_stays_on_its_stack() {
+        let engine = engine();
+        let id = create_plant(&engine).await;
+        let runtimes = MicrogridRuntimes::inert();
+        let mut smaller = spec(PLANT);
+        smaller.components.retain(|c| c.id() != Some(5));
+        smaller.connections.retain(|&(_, to)| to != 5);
+        let replaced = rebuild_inert(&engine, id, smaller).await.unwrap();
+        engine.record_spec_undo(id, replaced);
+        create(
+            &engine,
+            &runtimes,
+            spec(r#"{"id": 9, "components": [{"type": "meter", "id": 5}]}"#),
+            None,
+        )
+        .await
+        .unwrap();
+        let err = step_undo(&engine, &runtimes, id, Direction::Undo)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, TopologyError::Conflict(m) if m.contains("component id 5")),
+            "{err:?}"
+        );
+        assert_eq!(engine.spec_undo_depths(id), UndoDepths { undo: 1, redo: 0 });
+        assert!(site(&engine, id).get(5).is_none(), "nothing changed");
     }
 
     #[test]
