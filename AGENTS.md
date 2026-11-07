@@ -408,6 +408,17 @@ UI").
   `model` changes the keys of the base model it gives, `override`
   drives the frequency with a model whose missing keys come from the
   base model, and `clear_override` drops that override.
+- `POST /api/mg/{mg}/recording/start` (`name`, `csv`), `.../stop` and
+  `.../event` (`kind`, `payload`) record a microgrid on the journal the
+  Lisp scenarios use, whose `kind` says which owns it: a start is 409
+  while either runs, a Lisp `scenario-start` is refused while a
+  recording runs, a scenario stop leaves a recording alone, and only a
+  scenario snapshots knobs. A rebuild ends a recording and keeps its
+  report for one stop (`ended_by: "rebuild"`); an unload ends it with
+  the microgrid. CSV files go to
+  `<state_dir>/recordings/<mg>/<name>-<%Y%m%dT%H%M%SZ>/`. The
+  `GET .../recording`, `/events`, `/report` and `/csv` reads mirror the
+  `/scenario/...` ones; the report drops the check fields.
 - Everything about one microgrid lives under `/api/mg/{mg}/`, served
   by one nested router; the `Mg` extractor resolves `{mg}` and
   answers 404 `microgrid {mg} not registered` itself.

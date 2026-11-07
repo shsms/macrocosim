@@ -76,6 +76,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         microgrids::{
             adopt, load_file, load_file_as, microgrids_create, microgrids_import, microgrids_list,
         },
+        recording::{recording_event, recording_report, recording_start, recording_stop},
         scenarios::{
             scenario_csv_file, scenario_csv_list, scenario_events, scenario_report,
             scenario_summary, scenarios_list, scenarios_start, scenarios_stop,
@@ -124,6 +125,14 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .route("/scenario/report", get(scenario_report))
         .route("/scenario/csv", get(scenario_csv_list))
         .route("/scenario/csv/{file}", get(scenario_csv_file))
+        .route("/recording", get(scenario_summary))
+        .route("/recording/start", post(recording_start))
+        .route("/recording/stop", post(recording_stop))
+        .route("/recording/event", post(recording_event))
+        .route("/recording/events", get(scenario_events))
+        .route("/recording/report", get(recording_report))
+        .route("/recording/csv", get(scenario_csv_list))
+        .route("/recording/csv/{file}", get(scenario_csv_file))
         .route("/dispatches", get(dispatches).post(dispatch_create))
         .route("/dispatches/{dispatch_id}", delete(dispatch_delete))
         .route(

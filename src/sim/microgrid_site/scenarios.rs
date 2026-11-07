@@ -1,17 +1,21 @@
-//! Scenario lifecycle + reporting on a `MicrogridSite`.
+//! Scenario and recording lifecycle + reporting on a `MicrogridSite`.
 //!
-//! Three concerns live here:
+//! Four concerns live here:
 //!
 //! - The scenario journal: start / stop / record / events_since /
 //!   summary / report, plus the elapsed-time accessor.
+//! - Recording on the same journal: start / stop / event, with no
+//!   knob baseline and no checks, ended by a rebuild with its report
+//!   kept for the stop. The journal's `kind` says which of the two
+//!   owns it.
 //! - CSV sink open / close — paired with scenario start / stop so
 //!   the recorded files match the journal window.
-//! - The scenario-report shape and its SoC-stats helper.
+//! - The report shapes and their SoC-stats helper.
 //!
 //! All persistent state lives in `MicrogridSiteInner`; this file
 //! only adds methods.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -19,7 +23,7 @@ use serde::Serialize;
 use tulisp::TulispContext;
 
 use crate::sim::component::{KnobKind, ReactiveReading};
-use crate::sim::scenario::{ScenarioCheck, ScenarioEvent};
+use crate::sim::scenario::{EndedBy, JournalKind, ScenarioCheck, ScenarioEvent, ScenarioJournal};
 use crate::sim::scenario_csv::{CsvSink, CsvSinks};
 
 use super::MicrogridSite;
@@ -89,6 +93,63 @@ pub(crate) struct ScenarioReport {
     pub checks_failed: u64,
     /// Recent check results, oldest first (bounded ring).
     pub checks: Vec<ScenarioCheck>,
+}
+
+/// The report of a recording: the scenario report without its
+/// checks, with what ended the recording.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct RecordingReport {
+    /// The recording the report belongs to (`None` before any start).
+    pub name: Option<String>,
+    /// Seconds from the start to the end, or to now while it runs.
+    pub elapsed_s: f64,
+    /// `stop` or `rebuild` once the recording ended; `None` while it
+    /// runs, and for a journal a Lisp scenario owns.
+    pub ended_by: Option<EndedBy>,
+    pub peak_grid_w: f64,
+    pub peak_grid_var: f64,
+    pub site_pf_at_reactive_peak: Option<f64>,
+    pub total_battery_charged_wh: f64,
+    pub total_battery_discharged_wh: f64,
+    pub total_pv_produced_wh: f64,
+    pub per_battery: Vec<PerBatteryReport>,
+    pub per_pv: Vec<PerPvReport>,
+    pub soc_stats: Option<SocStats>,
+    pub grid_window_averages: Vec<WindowAverageEntry>,
+}
+
+/// Why a recording call was refused.
+#[derive(Debug)]
+pub(crate) enum RecordingError {
+    /// The journal is taken: a recording or a Lisp scenario runs.
+    Busy(JournalKind),
+    /// No recording runs (and, for a stop, no report waits).
+    NotRunning,
+    /// The CSV directory or a file in it could not be made.
+    Csv(std::io::Error),
+}
+
+/// Where a recording named `name` that starts at `now` writes its CSV
+/// files: `<state_dir>/recordings/<mg>/<name>-<UTC timestamp>/`. The
+/// name keeps ASCII letters, digits, `-` and `_`, every other
+/// character becomes `_`, and it is cut to 64 characters; the
+/// timestamp has no colons, so the name is valid on Windows too.
+pub(crate) fn recording_dir(state_dir: &Path, mg: u64, name: &str, now: DateTime<Utc>) -> PathBuf {
+    let name: String = name
+        .chars()
+        .take(64)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    state_dir
+        .join("recordings")
+        .join(mg.to_string())
+        .join(format!("{name}-{}", now.format("%Y%m%dT%H%M%SZ")))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -262,10 +323,16 @@ impl MicrogridSite {
     /// `scenario_snapshot_knob` self-gates on it, and the
     /// `(scenario-running-p)` defun exposes it to Lisp so the timer
     /// tracking in `sim/scenarios.lisp` needs no flag of its own to
-    /// keep in sync with the journal.
+    /// keep in sync with the journal. A running recording is not a
+    /// scenario.
     pub(crate) fn scenario_is_running(&self) -> bool {
         let g = self.inner.scenario.read();
-        g.started_at.is_some() && g.ended_at.is_none()
+        g.kind == JournalKind::Scenario && g.is_running()
+    }
+
+    /// Does a recording run right now?
+    pub(crate) fn recording_is_running(&self) -> bool {
+        self.inner.scenario.read().recording_is_running()
     }
 
     /// Capture `id`'s `kind` knob into the scenario's pre-run
@@ -342,8 +409,17 @@ impl MicrogridSite {
     /// pass and the knob-reading calls below never run while that
     /// lock is held, so there's no window where the baseline lock is
     /// held alongside a component's own lock.
+    ///
+    /// A running recording is left alone: no scenario runs beside it,
+    /// so there is nothing to stop or restore.
     pub(crate) fn scenario_stop(&self, now: DateTime<Utc>, ctx: Option<&mut TulispContext>) {
-        self.inner.scenario.write().stop(now);
+        {
+            let mut journal = self.inner.scenario.write();
+            if journal.recording_is_running() {
+                return;
+            }
+            journal.stop(now);
+        }
         self.scenario_close_csv();
         let baseline = std::mem::take(&mut *self.inner.scenario_knob_baseline.write());
         let mut restored: Vec<(u64, KnobKind)> = Vec::new();
@@ -485,72 +561,44 @@ impl MicrogridSite {
     /// snapshot. SoC stats are computed at fetch time from each
     /// battery's current telemetry — cheap, no accumulator needed.
     pub(crate) fn scenario_report(&self, now: DateTime<Utc>) -> ScenarioReport {
-        use crate::sim::Category;
+        let soc_stats = self.soc_stats();
+        // Read the checks under the SAME guard as the aggregates, so
+        // a scenario-start in between cannot attribute scenario A's
+        // numbers to scenario B's name — the exact mix-up the name
+        // field exists to prevent.
         let g = self.inner.scenario.read();
-        let mut total_charged = 0.0;
-        let mut total_discharged = 0.0;
-        let per_battery: Vec<PerBatteryReport> = g
-            .per_battery()
-            .iter()
-            .map(|(id, b)| {
-                total_charged += b.charge_wh;
-                total_discharged += b.discharge_wh;
-                PerBatteryReport {
-                    id: *id,
-                    charge_wh: b.charge_wh,
-                    discharge_wh: b.discharge_wh,
-                }
-            })
-            .collect();
-        let mut total_pv = 0.0;
-        let per_pv: Vec<PerPvReport> = g
-            .per_pv()
-            .iter()
-            .map(|(id, p)| {
-                total_pv += p.produced_wh;
-                PerPvReport {
-                    id: *id,
-                    produced_wh: p.produced_wh,
-                }
-            })
-            .collect();
-        let grid_window_averages: Vec<WindowAverageEntry> = g
-            .window_avgs()
-            .iter()
-            .map(|(secs, (sum, count))| WindowAverageEntry {
-                window_start: DateTime::<Utc>::from_timestamp(*secs, 0).unwrap_or_else(Utc::now),
-                avg_w: if *count > 0 {
-                    *sum / (*count as f64)
-                } else {
-                    0.0
-                },
-            })
-            .collect();
-        let checks: Vec<ScenarioCheck> = g.checks().cloned().collect();
-        let checks_passed = g.checks_passed();
-        let checks_failed = g.checks_failed();
-        // Read name/elapsed/peak under the SAME guard as the
-        // aggregates above. Re-reading them after drop(g) let a
-        // scenario-start in between attribute scenario A's numbers
-        // to scenario B's name — the exact mix-up the name field
-        // exists to prevent.
-        let name = g.name.clone();
-        let scenario_elapsed_s = g.elapsed_s(now);
-        let peak_grid_w = g.peak_grid_active_w();
-        // The peak-|Q| pair also carries the P alongside it, so PF is
-        // derived from ONE pairing rather than independently-peaked P
-        // and Q (which could pair values from different instants).
-        let peak_pq = g.peak_grid_pq();
-        drop(g);
-        let peak_grid_var = peak_pq.map(|(_, q)| q.abs()).unwrap_or(0.0);
-        let site_pf_at_reactive_peak = peak_pq.and_then(|(p, q)| {
-            let apparent = (p * p + q * q).sqrt();
-            (apparent != 0.0).then(|| p.abs() / apparent)
-        });
+        let r = journal_report(&g, now, soc_stats);
+        ScenarioReport {
+            name: r.name,
+            scenario_elapsed_s: r.elapsed_s,
+            peak_grid_w: r.peak_grid_w,
+            peak_grid_var: r.peak_grid_var,
+            site_pf_at_reactive_peak: r.site_pf_at_reactive_peak,
+            total_battery_charged_wh: r.total_battery_charged_wh,
+            total_battery_discharged_wh: r.total_battery_discharged_wh,
+            total_pv_produced_wh: r.total_pv_produced_wh,
+            per_battery: r.per_battery,
+            per_pv: r.per_pv,
+            soc_stats: r.soc_stats,
+            grid_window_averages: r.grid_window_averages,
+            checks_passed: g.checks_passed(),
+            checks_failed: g.checks_failed(),
+            checks: g.checks().cloned().collect(),
+        }
+    }
 
-        // SoC stats: walk every registered battery, read its
-        // current SoC. Out-of-band of the journal because it's
-        // current state, not an accumulator.
+    /// Aggregate metrics for `recording/report`: the journal's report
+    /// as it stands, whoever owns it.
+    pub(crate) fn recording_report(&self, now: DateTime<Utc>) -> RecordingReport {
+        let soc_stats = self.soc_stats();
+        journal_report(&self.inner.scenario.read(), now, soc_stats)
+    }
+
+    /// Stats over the current SoC of every registered battery. Out of
+    /// band of the journal because it is current state, not an
+    /// accumulator.
+    fn soc_stats(&self) -> Option<SocStats> {
+        use crate::sim::Category;
         let mut socs: Vec<f32> = Vec::new();
         for c in self.inner.components.read().iter() {
             if c.category() == Category::Battery
@@ -559,36 +607,169 @@ impl MicrogridSite {
                 socs.push(s);
             }
         }
-        let soc_stats = compute_soc_stats(&socs);
+        compute_soc_stats(&socs)
+    }
 
-        ScenarioReport {
-            name,
-            scenario_elapsed_s,
-            peak_grid_w,
-            peak_grid_var,
-            site_pf_at_reactive_peak,
-            total_battery_charged_wh: total_charged,
-            total_battery_discharged_wh: total_discharged,
-            total_pv_produced_wh: total_pv,
-            per_battery,
-            per_pv,
-            soc_stats,
-            grid_window_averages,
-            checks_passed,
-            checks_failed,
-            checks,
+    /// Start a recording named `name` at `now`, with CSV files in
+    /// `csv_dir` when one is given. Refused while a recording or a
+    /// Lisp scenario runs. A recording takes no knob snapshots and
+    /// keeps no checks, and drops a report a rebuild kept for an
+    /// earlier one.
+    ///
+    /// Everything happens under the journal's write guard, so two
+    /// starts, or a start and a stop, cannot interleave. The journal
+    /// lock is the outer one here: nothing that holds a component,
+    /// gateway or CSV lock takes the journal's.
+    pub(crate) fn recording_start(
+        &self,
+        name: String,
+        csv_dir: Option<&Path>,
+        now: DateTime<Utc>,
+    ) -> Result<(), RecordingError> {
+        let mut journal = self.inner.scenario.write();
+        if journal.is_running() {
+            return Err(RecordingError::Busy(journal.kind));
         }
+        if let Some(dir) = csv_dir {
+            self.scenario_open_csv(dir).map_err(RecordingError::Csv)?;
+        }
+        journal.start_recording(name, now);
+        Ok(())
+    }
+
+    /// Stop the running recording at `now` and close its CSV files;
+    /// its report says `ended_by: stop`. When a rebuild ended the
+    /// recording, answer the report it kept instead, once.
+    pub(crate) fn recording_stop(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<RecordingReport, RecordingError> {
+        let soc_stats = self.soc_stats();
+        let mut journal = self.inner.scenario.write();
+        if let Some(report) = journal.rebuild_report.take() {
+            return Ok(report);
+        }
+        if !journal.recording_is_running() {
+            return Err(RecordingError::NotRunning);
+        }
+        journal.stop(now);
+        journal.ended_by = Some(EndedBy::Stop);
+        self.scenario_close_csv();
+        Ok(journal_report(&journal, now, soc_stats))
+    }
+
+    /// End a running recording because the microgrid is being rebuilt:
+    /// close its CSV files and keep its report, read off the
+    /// components before they are replaced, for the next stop. A no-op
+    /// when no recording runs.
+    pub(crate) fn recording_end_for_rebuild(&self, now: DateTime<Utc>) {
+        let soc_stats = self.soc_stats();
+        let mut journal = self.inner.scenario.write();
+        if !journal.recording_is_running() {
+            return;
+        }
+        journal.stop(now);
+        journal.ended_by = Some(EndedBy::Rebuild);
+        self.scenario_close_csv();
+        journal.rebuild_report = Some(journal_report(&journal, now, soc_stats));
+    }
+
+    /// Add an event to the running recording. Returns its id.
+    pub(crate) fn recording_event(
+        &self,
+        kind: String,
+        payload: String,
+        now: DateTime<Utc>,
+    ) -> Result<u64, RecordingError> {
+        let mut journal = self.inner.scenario.write();
+        if !journal.recording_is_running() {
+            return Err(RecordingError::NotRunning);
+        }
+        Ok(journal.record(kind, payload, now))
+    }
+}
+
+/// The report of `g` at `now`, with `soc_stats` read beside it. Every
+/// journal figure comes from the one guard.
+fn journal_report(
+    g: &ScenarioJournal,
+    now: DateTime<Utc>,
+    soc_stats: Option<SocStats>,
+) -> RecordingReport {
+    let mut total_charged = 0.0;
+    let mut total_discharged = 0.0;
+    let per_battery: Vec<PerBatteryReport> = g
+        .per_battery()
+        .iter()
+        .map(|(id, b)| {
+            total_charged += b.charge_wh;
+            total_discharged += b.discharge_wh;
+            PerBatteryReport {
+                id: *id,
+                charge_wh: b.charge_wh,
+                discharge_wh: b.discharge_wh,
+            }
+        })
+        .collect();
+    let mut total_pv = 0.0;
+    let per_pv: Vec<PerPvReport> = g
+        .per_pv()
+        .iter()
+        .map(|(id, p)| {
+            total_pv += p.produced_wh;
+            PerPvReport {
+                id: *id,
+                produced_wh: p.produced_wh,
+            }
+        })
+        .collect();
+    let grid_window_averages: Vec<WindowAverageEntry> = g
+        .window_avgs()
+        .iter()
+        .map(|(secs, (sum, count))| WindowAverageEntry {
+            window_start: DateTime::<Utc>::from_timestamp(*secs, 0).unwrap_or_else(Utc::now),
+            avg_w: if *count > 0 {
+                *sum / (*count as f64)
+            } else {
+                0.0
+            },
+        })
+        .collect();
+    // The peak-|Q| pair also carries the P alongside it, so PF is
+    // derived from ONE pairing rather than independently-peaked P
+    // and Q (which could pair values from different instants).
+    let peak_pq = g.peak_grid_pq();
+    let peak_grid_var = peak_pq.map(|(_, q)| q.abs()).unwrap_or(0.0);
+    let site_pf_at_reactive_peak = peak_pq.and_then(|(p, q)| {
+        let apparent = (p * p + q * q).sqrt();
+        (apparent != 0.0).then(|| p.abs() / apparent)
+    });
+    RecordingReport {
+        name: g.name.clone(),
+        elapsed_s: g.elapsed_s(now),
+        ended_by: g.ended_by,
+        peak_grid_w: g.peak_grid_active_w(),
+        peak_grid_var,
+        site_pf_at_reactive_peak,
+        total_battery_charged_wh: total_charged,
+        total_battery_discharged_wh: total_discharged,
+        total_pv_produced_wh: total_pv,
+        per_battery,
+        per_pv,
+        soc_stats,
+        grid_window_averages,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::compute_soc_stats;
+    use super::{RecordingError, compute_soc_stats, recording_dir};
     use crate::sim::component::KnobKind;
     use crate::sim::dynamic_scalar::DynamicScalar;
     use crate::sim::events::SiteEvent;
     use crate::sim::meter::Meter;
     use crate::sim::microgrid_site::MicrogridSite;
+    use crate::sim::scenario::{EndedBy, JournalKind};
     use chrono::Utc;
     use std::time::Duration;
 
@@ -830,6 +1011,130 @@ mod tests {
         assert!(saw_power, "expected a meter-power KnobChanged");
         assert!(saw_reactive, "expected a meter-reactive-power KnobChanged");
         assert!(saw_pf, "expected a meter-power-factor KnobChanged");
+    }
+
+    fn meter_power(w: &MicrogridSite, id: u64) -> f32 {
+        w.get(id)
+            .unwrap()
+            .meter_drive()
+            .unwrap()
+            .meter_power_reading()
+            .unwrap()
+            .value
+    }
+
+    /// A recording takes no knob snapshot, and a scenario stop leaves
+    /// it running.
+    #[test]
+    fn a_recording_snapshots_nothing_and_outlives_a_scenario_stop() {
+        let w = MicrogridSite::new();
+        w.register(meter_with_power(8, 100.0));
+        let now = Utc::now();
+
+        w.recording_start("r".into(), None, now).unwrap();
+        assert!(w.recording_is_running());
+        assert!(!w.scenario_is_running(), "a recording is not a scenario");
+        w.scenario_snapshot_knob(8, KnobKind::MeterPower);
+        w.get(8)
+            .unwrap()
+            .meter_drive()
+            .unwrap()
+            .set_active_power_override(900.0);
+        w.scenario_stop(now, None);
+        assert!(w.recording_is_running(), "a scenario stop left it running");
+
+        let report = w.recording_stop(now).unwrap();
+        assert_eq!(report.name.as_deref(), Some("r"));
+        assert_eq!(report.ended_by, Some(EndedBy::Stop));
+        // With nothing running, a scenario stop drains the baseline; a
+        // snapshot taken during the recording would put 100 W back.
+        w.scenario_stop(now, None);
+        assert_eq!(meter_power(&w, 8), 900.0);
+    }
+
+    /// One journal: a start is refused while a recording or a
+    /// scenario runs, and stop and event need a running recording.
+    #[test]
+    fn a_recording_needs_the_journal_to_itself() {
+        let w = MicrogridSite::new();
+        let now = Utc::now();
+        assert!(matches!(
+            w.recording_stop(now),
+            Err(RecordingError::NotRunning)
+        ));
+        assert!(matches!(
+            w.recording_event("k".into(), "p".into(), now),
+            Err(RecordingError::NotRunning)
+        ));
+
+        w.scenario_start("s".into(), now);
+        assert!(matches!(
+            w.recording_start("r".into(), None, now),
+            Err(RecordingError::Busy(JournalKind::Scenario))
+        ));
+        assert!(matches!(
+            w.recording_stop(now),
+            Err(RecordingError::NotRunning)
+        ));
+        w.scenario_stop(now, None);
+
+        w.recording_start("r".into(), None, now).unwrap();
+        assert!(matches!(
+            w.recording_start("again".into(), None, now),
+            Err(RecordingError::Busy(JournalKind::Recording))
+        ));
+        assert_eq!(w.recording_event("k".into(), "p".into(), now).unwrap(), 0);
+        w.recording_stop(now).unwrap();
+        assert!(matches!(
+            w.recording_stop(now),
+            Err(RecordingError::NotRunning)
+        ));
+    }
+
+    /// A rebuild ends the recording, and the next stop collects the
+    /// report it kept, once. A scenario run in between leaves it.
+    #[test]
+    fn a_rebuild_keeps_the_report_for_one_stop() {
+        let w = MicrogridSite::new();
+        let now = Utc::now();
+        w.recording_start("r".into(), None, now).unwrap();
+        w.recording_end_for_rebuild(now);
+        assert!(!w.recording_is_running());
+        assert!(matches!(
+            w.recording_event("k".into(), "p".into(), now),
+            Err(RecordingError::NotRunning)
+        ));
+        w.scenario_start("s".into(), now);
+        w.scenario_stop(now, None);
+
+        let report = w.recording_stop(now).unwrap();
+        assert_eq!(report.name.as_deref(), Some("r"));
+        assert_eq!(report.ended_by, Some(EndedBy::Rebuild));
+        assert!(matches!(
+            w.recording_stop(now),
+            Err(RecordingError::NotRunning)
+        ));
+
+        // A new recording drops a report nobody collected.
+        w.recording_start("r2".into(), None, now).unwrap();
+        w.recording_end_for_rebuild(now);
+        w.recording_start("r3".into(), None, now).unwrap();
+        let report = w.recording_stop(now).unwrap();
+        assert_eq!(report.name.as_deref(), Some("r3"));
+        assert_eq!(report.ended_by, Some(EndedBy::Stop));
+    }
+
+    #[test]
+    fn a_recording_dir_has_a_safe_name_and_a_utc_timestamp() {
+        let now = chrono::DateTime::from_timestamp(1_791_288_000, 0).unwrap();
+        let dir = recording_dir(std::path::Path::new("/s"), 7, "../x y", now);
+        assert_eq!(
+            dir,
+            std::path::Path::new("/s/recordings/7/___x_y-20261006T120000Z")
+        );
+        let long = recording_dir(std::path::Path::new("/s"), 7, &"é".repeat(80), now);
+        let name = long.file_name().unwrap().to_str().unwrap();
+        assert_eq!(name, format!("{}-20261006T120000Z", "_".repeat(64)));
     }
 
     #[test]

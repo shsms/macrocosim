@@ -56,7 +56,9 @@ pub struct BackgroundTasks {
     pub sampler: JoinHandle<()>,
 }
 
-pub(crate) use scenarios::{ScenarioReport, ScenarioSummary};
+pub(crate) use scenarios::{
+    RecordingError, RecordingReport, ScenarioReport, ScenarioSummary, recording_dir,
+};
 
 /// Hard cap on per-component-per-metric ring buffer length. At the
 /// fixed 1 Hz history sampling cadence (see `spawn_history_sampler`)

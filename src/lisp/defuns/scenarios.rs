@@ -336,11 +336,34 @@ pub(super) fn register_lifecycle(
              set-meter-power, is recorded, so that scenario-stop can put it \
              back. This does not run the sections of a \
              define-scenario; the UI and macroctl scenario run do that. \
-             Return t.",
+             Return t.\n\n\
+             Signal an error, and start nothing, while a recording runs in \
+             any microgrid.",
         ),
         move |ctx: &mut TulispContext, name: String| -> Result<bool, Error> {
             let now = nowsrc.now();
-            let sites: Vec<_> = reg.lock().values().map(|e| e.site.clone()).collect();
+            let (ids, sites): (Vec<u64>, Vec<_>) = reg
+                .lock()
+                .iter()
+                .map(|(id, e)| (*id, e.site.clone()))
+                .unzip();
+            // A recording owns its microgrid's journal: refuse before
+            // anything is torn down or started.
+            let recording = if sites.is_empty() {
+                r.site()
+                    .recording_is_running()
+                    .then(|| "the current microgrid".to_string())
+            } else {
+                ids.iter()
+                    .zip(&sites)
+                    .find(|(_, s)| s.recording_is_running())
+                    .map(|(id, _)| format!("microgrid {id}"))
+            };
+            if let Some(place) = recording {
+                return Err(Error::os_error(format!(
+                    "scenario-start: a recording is running in {place}; stop it first"
+                )));
+            }
             // A run still in progress is torn down FIRST, here, in the
             // defun every start path goes through — `scenario--run`,
             // the UI's start route, a bare `(scenario-start …)` from a
@@ -406,7 +429,7 @@ pub(super) fn register_lifecycle(
              run is undone too. Other changes stay, such as setpoints, \
              health, frequency and weather.\n\n\
              scenario-elapsed, and the report's peaks and energy totals, stop \
-             changing. Return t.",
+             changing. A running recording is left alone. Return t.",
         ),
         move |ctx: &mut TulispContext| -> Result<bool, Error> {
             // Cancel the scenario's OWN agent/cue/check timers (see

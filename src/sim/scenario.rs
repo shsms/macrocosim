@@ -93,14 +93,42 @@ pub struct PvIntegrals {
     pub produced_wh: f64,
 }
 
+/// Who owns the journal: a Lisp scenario, which snapshots the knobs
+/// it drives and keeps checks, or a recording, which does neither.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum JournalKind {
+    #[default]
+    Scenario,
+    Recording,
+}
+
+/// What ended a recording: its own stop, or a rebuild of the
+/// microgrid, which ends it and keeps its report for the stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EndedBy {
+    Stop,
+    Rebuild,
+}
+
 /// Scenario journal: name + lifecycle + capped event ring + the
 /// metric accumulators the reporter exposes via
-/// `/api/mg/{mg}/scenario/report`.
+/// `/api/mg/{mg}/scenario/report` and `/api/mg/{mg}/recording/report`.
 #[derive(Debug, Default)]
 pub struct ScenarioJournal {
     pub name: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
+    /// Who started the journal last. Only a running `Scenario`
+    /// snapshots knobs, and a Lisp scenario stop leaves a running
+    /// `Recording` alone.
+    pub kind: JournalKind,
+    /// What ended the last recording; `None` while it runs and for a
+    /// scenario.
+    pub ended_by: Option<EndedBy>,
+    /// The final report of a recording a rebuild ended, kept until a
+    /// recording stop collects it once. Only a new recording drops it.
+    pub(crate) rebuild_report: Option<crate::sim::microgrid_site::RecordingReport>,
     events: VecDeque<ScenarioEvent>,
     next_id: u64,
     /// Maximum positive active power seen on the loopback's
@@ -169,6 +197,8 @@ impl ScenarioJournal {
         self.name = Some(name);
         self.started_at = Some(now);
         self.ended_at = None;
+        self.kind = JournalKind::Scenario;
+        self.ended_by = None;
         self.events.clear();
         self.peak_grid_active_w = 0.0;
         self.peak_grid_pq = None;
@@ -262,8 +292,22 @@ impl ScenarioJournal {
         }
     }
 
-    fn is_running(&self) -> bool {
+    /// Started and not yet stopped, whoever owns it.
+    pub fn is_running(&self) -> bool {
         self.started_at.is_some() && self.ended_at.is_none()
+    }
+
+    /// [`Self::start`] for a recording. A report a rebuild kept for
+    /// an earlier recording is dropped.
+    pub fn start_recording(&mut self, name: String, now: DateTime<Utc>) {
+        self.start(name, now);
+        self.kind = JournalKind::Recording;
+        self.rebuild_report = None;
+    }
+
+    /// A recording runs.
+    pub fn recording_is_running(&self) -> bool {
+        self.kind == JournalKind::Recording && self.is_running()
     }
 
     /// Accumulate one battery DC-power sample. Positive = charging,

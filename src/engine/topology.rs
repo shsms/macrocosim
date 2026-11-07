@@ -251,9 +251,9 @@ pub async fn rebuild(
 /// Unload microgrid `id`: take it out of the registry, which frees
 /// its id and its component ids, then stop its runtime (streams, gRPC
 /// servers, physics, sampler, loopback), end a running scenario
-/// journal and close its CSV sinks, delete its dispatches (each with
-/// a `Deleted` event), drop its undo stacks and announce it on
-/// `microgrid_unloaded`. A microgrid loaded from Lisp is refused.
+/// journal or recording and close its CSV sinks, delete its
+/// dispatches (each with a `Deleted` event), drop its undo stacks and
+/// announce it on `microgrid_unloaded`. A microgrid loaded from Lisp is refused.
 ///
 /// The entry goes first, so a runtime start still queued for `id`
 /// finds nothing to start instead of restarting what is being
@@ -276,6 +276,9 @@ pub async fn unload(
     if site.scenario_is_running() {
         site.scenario_stop(site.now(), None);
     }
+    // A recording ends with the microgrid; its report has no reader,
+    // since a later stop finds no microgrid.
+    let _ = site.recording_stop(site.now());
     site.scenario_close_csv();
     engine.dispatches.remove_mg(id);
     engine.spec_undo.lock().remove(&id);

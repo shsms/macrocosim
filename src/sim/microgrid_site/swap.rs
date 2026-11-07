@@ -26,8 +26,10 @@ impl MicrogridSite {
     /// Every component then takes its health, modes and name from its
     /// spec, and the site its physics tick. Commands, request
     /// lifetimes and augmentations are cleared, telemetry streams end,
-    /// and a running scenario journal is stopped. Weather, grid state
-    /// and sample lag stay as they are.
+    /// and a running scenario journal is stopped. A running recording
+    /// ends too, and keeps its report, read off the old components,
+    /// for its stop. Weather, grid state and sample lag stay as they
+    /// are.
     ///
     /// The component list, the id index and the connections change
     /// under one set of write guards, so a physics tick sees the
@@ -70,6 +72,9 @@ impl MicrogridSite {
         // ending them makes a client that subscribes again reach the
         // new set.
         self.cancel_all_streams();
+        // Before the components change: the recording's report reads
+        // the SoC of the batteries it recorded.
+        self.recording_end_for_rebuild(self.now());
         if self.scenario_is_running() {
             self.scenario_stop(self.now(), None);
         }
