@@ -373,8 +373,8 @@ UI").
 ## HTTP API
 
 - Whole-site routes live under `/api/` (microgrids, load, load-as,
-  import, eval, format, symbols, defaults, logs, clock, scripts,
-  scenarios).
+  import, eval, format, symbols, defaults, logs, clock, frequency,
+  scripts, scenarios).
   `POST /api/eval` evaluates with no microgrid in scope.
 - `GET /api/mg/{mg}/spec` answers a microgrid's stored spec, and
   `PUT` of a `MicrogridSpec` rebuilds it with carry (200 with the stored
@@ -397,10 +397,15 @@ UI").
   `reactive_apparent_va` and `reactive_pf_limit`), `.../status`
   (health, telemetry and command modes), `.../runtime`
   (`operational_mode`), `POST` and `DELETE .../component/{id}/ev`
-  (plug a catalog car in, unplug it), `POST /api/mg/{mg}/sample-lag`
-  and `POST /api/mg/{mg}/streams/cancel`. Each changes the live value,
-  never a stored spec, and a write a Lisp scenario can displace takes
-  its `scenario_snapshot_knob` first.
+  (plug a catalog car in, unplug it), `POST /api/mg/{mg}/sample-lag`,
+  `POST /api/mg/{mg}/streams/cancel` and `POST /api/mg/{mg}/grid`
+  (`voltage_per_phase_v`). Each changes the live value, never a stored
+  spec, and a write a Lisp scenario can displace takes its
+  `scenario_snapshot_knob` first. `GET` and `POST /api/frequency` read
+  and drive the frequency every microgrid shares: `hz` sets it now,
+  `model` changes the keys of the base model it gives, `override`
+  drives the frequency with a model whose missing keys come from the
+  base model, and `clear_override` drops that override.
 - Everything about one microgrid lives under `/api/mg/{mg}/`, served
   by one nested router; the `Mg` extractor resolves `{mg}` and
   answers 404 `microgrid {mg} not registered` itself.

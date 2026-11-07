@@ -14,6 +14,8 @@ pub(in crate::ui) mod dispatches;
 pub(in crate::ui) mod ev;
 pub(in crate::ui) mod eval;
 pub(in crate::ui) mod formula;
+pub(in crate::ui) mod frequency;
+pub(in crate::ui) mod grid;
 pub(in crate::ui) mod history;
 pub(in crate::ui) mod microgrid_data;
 pub(in crate::ui) mod microgrids;

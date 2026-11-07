@@ -285,6 +285,7 @@ async fn every_microgrid_route_shares_the_unregistered_404() {
         ("component/1/runtime", "{}"),
         ("component/1/ev", "{}"),
         ("weather", "{}"),
+        ("grid", "{}"),
         ("adopt", ""),
         ("undo", ""),
         ("redo", ""),
@@ -1785,6 +1786,113 @@ async fn streams_cancel_route_ends_the_open_streams() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(body.is_empty());
     assert_ne!(cfg.site().stream_cancel_epoch(), before);
+}
+
+/// `POST .../grid` sets each phase's voltage; a negative voltage is a
+/// 400, a list of two a 422, and neither changes it.
+#[tokio::test]
+async fn grid_route_sets_the_voltage_per_phase() {
+    let (cfg, _dir) = config_with("").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/grid",
+            r#"{"voltage_per_phase_v": [231, 229.5, 230]}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        cfg.site().grid_state().voltage_per_phase,
+        (231.0, 229.5, 230.0)
+    );
+
+    for (body, want) in [
+        (
+            r#"{"voltage_per_phase_v": [231, -1, 230]}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"voltage_per_phase_v": [231, 230]}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            r#"{"voltage_per_phase_v": [1, 2, 3], "frequency_hz": 50}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let (status, _) = call(cfg.clone(), post_json("/api/mg/2200/grid", body)).await;
+        assert_eq!(status, want, "{body}");
+    }
+    assert_eq!(
+        cfg.site().grid_state().voltage_per_phase,
+        (231.0, 229.5, 230.0)
+    );
+}
+
+/// `/api/frequency` reads and writes the shared frequency state: a
+/// model patch keeps the keys it leaves out, an override takes its
+/// missing keys from the base model rather than an earlier override,
+/// and `clear_override` drops it. A refused body changes nothing.
+#[tokio::test]
+async fn frequency_route_merges_the_model_and_the_override() {
+    let (cfg, _dir) = config_with("").await;
+    let read = |body: &[u8]| serde_json::from_slice::<serde_json::Value>(body).unwrap();
+    let (status, body) = call_json(cfg.clone(), get("/api/frequency")).await;
+    assert_eq!(status, StatusCode::OK);
+    let v = read(&body);
+    assert_eq!(v["model"]["nominal_hz"], 50.0, "{v}");
+    assert!(v["override"].is_null(), "{v}");
+    assert!(v["hz"].is_number(), "{v}");
+
+    let (status, body) = call_json(
+        cfg.clone(),
+        post_json("/api/frequency", r#"{"model": {"nominal_hz": 60}}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let v = read(&body);
+    assert_eq!(v["model"]["nominal_hz"], 60.0, "{v}");
+    assert_eq!(v["model"]["mean_rev_rate_per_s"], 0.05, "{v}");
+
+    let post_freq = |body: &'static str| call(cfg.clone(), post_json("/api/frequency", body));
+    let (status, _) = post_freq(r#"{"override": {"sigma_hz_per_sqrt_s": 0.5}}"#).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, body) =
+        post_freq(r#"{"hz": 49.5, "override": {"nominal_hz": 49.5, "sigma_hz_per_sqrt_s": 0}}"#)
+            .await;
+    let v = read(&body);
+    // The second override replaced the first: its sigma is the one
+    // given, and its rate the base model's.
+    assert_eq!(v["override"]["nominal_hz"], 49.5, "{v}");
+    assert_eq!(v["override"]["sigma_hz_per_sqrt_s"], 0.0, "{v}");
+    assert_eq!(v["override"]["mean_rev_rate_per_s"], 0.05, "{v}");
+    let hz = cfg.engine().grid_frequency.read().read_hz();
+    assert!((hz - 49.5).abs() < 1e-3, "{hz}");
+
+    for (body, want) in [
+        (
+            r#"{"model": {"sigma_hz_per_sqrt_s": -1}}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"override": {"nominal_hz": 50}, "clear_override": true}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"model": {"sigma": 1}}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (r#"{"frequency_hz": 50}"#, StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        let (status, _) = post_freq(body).await;
+        assert_eq!(status, want, "{body}");
+    }
+    assert!(cfg.engine().grid_frequency.read().override_model.is_some());
+
+    let (status, body) = post_freq(r#"{"clear_override": true}"#).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(read(&body)["override"].is_null());
 }
 
 /// Battery topology used by the formula tests:

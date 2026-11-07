@@ -639,6 +639,12 @@ impl MicrogridSite {
         *self.inner.grid_state.write() = state;
     }
 
+    /// Set the grid voltage of each phase, in V, keeping the rest of
+    /// the grid state.
+    pub fn set_voltage_per_phase(&self, volts: (f32, f32, f32)) {
+        self.inner.grid_state.write().voltage_per_phase = volts;
+    }
+
     // ─── Component registry + topology graph ─────────────────────────
     //
     // Components register via `register` / `register_arc` and land in

@@ -1282,3 +1282,49 @@ async fn typed_knob_routes_reach_the_site() {
         assert_eq!(send(post.clone(), path, Some(body)).await, 422, "{path}");
     }
 }
+
+/// The grid voltage and the shared frequency over a real socket: an
+/// override with no noise holds the frequency where it was set, every
+/// microgrid reads it, and clearing it hands the frequency back to
+/// the base model.
+#[tokio::test(flavor = "multi_thread")]
+async fn grid_and_frequency_routes_reach_the_site() {
+    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let client = reqwest::Client::new();
+    let post = |url: String, body: Value| {
+        let req = client.post(url).json(&body);
+        async move { req.send().await.unwrap() }
+    };
+
+    let r = post(
+        s.mg_url("grid"),
+        serde_json::json!({"voltage_per_phase_v": [240, 235, 230]}),
+    )
+    .await;
+    assert_eq!(r.status(), 204);
+    assert_eq!(
+        s.site().grid_state().voltage_per_phase,
+        (240.0, 235.0, 230.0)
+    );
+
+    let url = format!("{}/api/frequency", s.ui_url);
+    let r = post(
+        url.clone(),
+        serde_json::json!({"hz": 49.8, "override": {"nominal_hz": 49.8, "sigma_hz_per_sqrt_s": 0}}),
+    )
+    .await;
+    assert_eq!(r.status(), 200);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let v = json(&client, url.clone()).await;
+    assert!((v["hz"].as_f64().unwrap() - 49.8).abs() < 1e-3, "{v}");
+    let hz = s.site().grid_state().frequency_hz;
+    assert!((hz - 49.8).abs() < 1e-3, "{hz}");
+
+    let r = post(url.clone(), serde_json::json!({"clear_override": true})).await;
+    assert_eq!(r.status(), 200);
+    let v = json(&client, url.clone()).await;
+    assert!(v["override"].is_null(), "{v}");
+
+    let r = post(url, serde_json::json!({"hz": 50, "nominal_hz": 50})).await;
+    assert_eq!(r.status(), 422);
+}

@@ -67,6 +67,8 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         ev::{ev, ev_plug, ev_unplug},
         eval::{eval, eval_for_mg, format, symbols},
         formula::formula,
+        frequency::{frequency_get, frequency_post},
+        grid::grid_post,
         history::{history, setpoints},
         microgrid_data::{
             clock_info, metrics_formulas, metrics_history, metrics_latest, metrics_status,
@@ -104,6 +106,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .route("/sample-lag", post(sample_lag))
         .route("/streams/cancel", post(streams_cancel))
         .route("/weather", get(weather_get).post(weather_post))
+        .route("/grid", post(grid_post))
         .route("/metrics/status", get(metrics_status))
         .route("/metrics/latest", get(metrics_latest))
         .route("/metrics/history", get(metrics_history))
@@ -132,6 +135,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .route("/api/symbols", get(symbols))
         .route("/api/defaults", get(defaults))
         .route("/api/spec/schema", get(spec_schema))
+        .route("/api/frequency", get(frequency_get).post(frequency_post))
         .route("/api/logs", get(logs_backfill))
         .route("/api/clock", get(clock_info))
         .route("/api/scenarios", get(scenarios_list))

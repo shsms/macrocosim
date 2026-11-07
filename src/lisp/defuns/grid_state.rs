@@ -20,10 +20,8 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
              the phases. The default is 230 V on each phase. Return t.",
         ),
         move |p1: f64, p2: f64, p3: f64| -> Result<bool, Error> {
-            let w = r.site();
-            let mut state = w.grid_state();
-            state.voltage_per_phase = (p1 as f32, p2 as f32, p3 as f32);
-            w.set_grid_state(state);
+            r.site()
+                .set_voltage_per_phase((p1 as f32, p2 as f32, p3 as f32));
             Ok(true)
         },
     );
