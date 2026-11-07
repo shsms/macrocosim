@@ -17,6 +17,11 @@ EXPECTED_KIND: dict[type, tuple[str, str | None]] = {
     s.BatteryInverterSpec: ("inverter", "battery"),
     s.SolarInverterSpec: ("inverter", "solar"),
     s.ChpSpec: ("chp", None),
+    s.EvChargerSpec: ("ev-charger", None),
+    s.SteamBoilerSpec: ("steam-boiler", None),
+    s.WindTurbineSpec: ("wind-turbine", None),
+    s.PowerTransformerSpec: ("power-transformer", None),
+    s.BreakerSpec: ("breaker", None),
 }
 """(category, subtype) the server reports for each spec class."""
 

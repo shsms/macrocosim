@@ -17,9 +17,9 @@ from frequenz.quantities import (
 )
 
 import macrocosim._spec as s
-from macrocosim._enums import Health, TelemetryMode
+from macrocosim._enums import EvIdle, Health, TelemetryMode
 from macrocosim._errors import SpecError
-from macrocosim._units import UNITS
+from macrocosim._units import UNITS, MassFlow, Pressure
 
 pytestmark = pytest.mark.filterwarnings("error")
 
@@ -32,10 +32,20 @@ COMPONENT_SPECS = [
     s.BatteryInverterSpec,
     s.SolarInverterSpec,
     s.ChpSpec,
+    s.EvChargerSpec,
+    s.SteamBoilerSpec,
+    s.WindTurbineSpec,
+    s.PowerTransformerSpec,
+    s.BreakerSpec,
 ]
 
 
 def test_constructors_are_the_classes() -> None:
+    assert s.make_ev_charger is s.EvChargerSpec
+    assert s.make_steam_boiler is s.SteamBoilerSpec
+    assert s.make_wind_turbine is s.WindTurbineSpec
+    assert s.make_power_transformer is s.PowerTransformerSpec
+    assert s.make_breaker is s.BreakerSpec
     assert s.make_meter is s.MeterSpec
     assert s.make_microgrid is s.MicrogridSpec
     assert s.make_grid_connection_point is s.GridConnectionPointSpec
@@ -314,3 +324,37 @@ def test_a_microgrid_takes_a_grpc_port_and_a_physics_tick() -> None:
         s.make_microgrid(physics_tick=timedelta(0), topology=gcp)
     with pytest.raises(TypeError, match="physics_tick must be timedelta"):
         s.make_microgrid(physics_tick=0.1, topology=gcp)  # type: ignore[arg-type]
+
+
+def test_the_new_categories_go_out_under_their_json_names() -> None:
+    boiler = s.make_steam_boiler(
+        demand=MassFlow.from_kilograms_per_second(0.5),
+        target=Pressure.from_bar(8),
+        max=Pressure.from_bar(10),
+        initial=Pressure.from_bar(9),
+        capacity_wh_per_bar=1000,
+        wh_per_kg=700.0,
+    )
+    assert s.spec_wire_fields(boiler) == [
+        ("demand_kg_per_s", 0.5),
+        ("target_bar", 8.0),
+        ("max_bar", 10.0),
+        ("initial_bar", 9.0),
+        ("capacity_wh_per_bar", 1000.0),
+        ("wh_per_kg", 700.0),
+    ]
+    charger = s.make_ev_charger(phases=3, idle=EvIdle.FULL, resume_on_recovery=True)
+    assert s.spec_wire_fields(charger) == [
+        ("phases", 3),
+        ("idle", "full"),
+        ("resume_on_recovery", True),
+    ]
+    breaker = s.make_breaker(successors=[s.make_power_transformer()])
+    assert len(s.children(breaker)) == 1
+
+
+def test_an_ev_charger_is_wired_on_one_or_three_phases() -> None:
+    with pytest.raises(SpecError, match="phases must be 1 or 3, not 2"):
+        s.make_ev_charger(phases=2)
+    with pytest.raises(TypeError, match="pressure|target must be Pressure"):
+        s.make_steam_boiler(target=8.0)  # type: ignore[arg-type]

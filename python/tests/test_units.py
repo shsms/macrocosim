@@ -16,7 +16,14 @@ from frequenz.quantities import (
     Voltage,
 )
 
-from macrocosim._units import UNITS, check_finite, check_type, suffix_of
+from macrocosim._units import (
+    UNITS,
+    MassFlow,
+    Pressure,
+    check_finite,
+    check_type,
+    suffix_of,
+)
 
 pytestmark = pytest.mark.filterwarnings("error")
 
@@ -32,6 +39,8 @@ pytestmark = pytest.mark.filterwarnings("error")
         (Voltage.from_volts(800), 800.0, "_v"),
         (Current.from_amperes(16), 16.0, "_a"),
         (timedelta(milliseconds=200), 0.2, "_s"),
+        (Pressure.from_bar(8.5), 8.5, "_bar"),
+        (MassFlow.from_kilograms_per_second(0.25), 0.25, "_kg_per_s"),
     ],
 )
 def test_every_row_converts_both_ways(value: object, wire: float, suffix: str) -> None:

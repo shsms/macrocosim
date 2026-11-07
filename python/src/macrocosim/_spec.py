@@ -30,9 +30,11 @@ from frequenz.quantities import (
     Voltage,
 )
 
-from ._enums import CommandMode, Health, OperationalMode, TelemetryMode
+from ._enums import CommandMode, EvIdle, Health, OperationalMode, TelemetryMode
 from ._errors import SpecError
 from ._units import (
+    MassFlow,
+    Pressure,
     check_finite,
     check_type,
     is_int_like,
@@ -47,10 +49,15 @@ if TYPE_CHECKING:
     from ._components import (  # noqa: F401
         Battery,
         BatteryInverter,
+        Breaker,
         Chp,
+        EvCharger,
         GridConnectionPoint,
         Meter,
+        PowerTransformer,
         SolarInverter,
+        SteamBoiler,
+        WindTurbine,
     )
 
 L = TypeVar("L", bound=object)
@@ -272,6 +279,82 @@ class ChpSpec(ComponentSpec["Chp"]):
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)
+class EvChargerSpec(ComponentSpec["EvCharger"]):
+    """An EV charger. It starts with no car plugged in."""
+
+    _type: ClassVar[str] = "ev_charger"
+
+    interval: timedelta | None = None
+    rated_lower: Power | None = None
+    rated_upper: Power | None = None
+    command_delay: timedelta | None = None
+    ramp_rate_w_per_s: float | None = None
+    device_delay: timedelta | None = None
+    phases: int | None = None
+    """The phases it is wired on: 1 or 3."""
+    idle: EvIdle | None = None
+    resume_on_recovery: bool | None = None
+    """Keep the command through a health fault and ramp back to it."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.phases is not None and int(self.phases) not in (1, 3):
+            raise SpecError(f"{self!r}: phases must be 1 or 3, not {int(self.phases)}")
+
+
+@dataclass(frozen=True, eq=False, kw_only=True, repr=False)
+class SteamBoilerSpec(ComponentSpec["SteamBoiler"]):
+    """A hybrid gas and electric steam boiler. Without `initial` it starts at
+    its `target` pressure."""
+
+    _type: ClassVar[str] = "steam_boiler"
+
+    interval: timedelta | None = None
+    demand: MassFlow | None = None
+    """The steam demand."""
+    rated_lower: Power | None = None
+    rated_upper: Power | None = None
+    target: Pressure | None = None
+    """The pressure the gas burner holds; above 0."""
+    max: Pressure | None = None
+    """The highest pressure; at least `target`."""
+    initial: Pressure | None = None
+    capacity_wh_per_bar: float | None = None
+    """Energy to raise the pressure by 1 bar."""
+    wh_per_kg: float | None = None
+    """Energy to make 1 kg of steam."""
+    command_delay: timedelta | None = None
+    ramp_rate_w_per_s: float | None = None
+    device_delay: timedelta | None = None
+
+
+@dataclass(frozen=True, eq=False, kw_only=True, repr=False)
+class WindTurbineSpec(ComponentSpec["WindTurbine"]):
+    """A wind turbine. It has no physics of its own and produces no power; like
+    a CHP, it marks what the meter above it measures."""
+
+    _type: ClassVar[str] = "wind_turbine"
+
+
+@dataclass(frozen=True, eq=False, kw_only=True, repr=False)
+class PowerTransformerSpec(ComponentSpec["PowerTransformer"]):
+    """A power transformer: passive, it passes its successors' power up."""
+
+    _type: ClassVar[str] = "power_transformer"
+
+    successors: Sequence[ComponentSpec[Any]] | None = None
+
+
+@dataclass(frozen=True, eq=False, kw_only=True, repr=False)
+class BreakerSpec(ComponentSpec["Breaker"]):
+    """A breaker: passive, it passes its successors' power up."""
+
+    _type: ClassVar[str] = "breaker"
+
+    successors: Sequence[ComponentSpec[Any]] | None = None
+
+
+@dataclass(frozen=True, eq=False, kw_only=True, repr=False)
 class MicrogridSpec:
     """A microgrid: its id, name and TSO, and its topology, rooted at the grid
     connection point. Building one picks an id for each component spec that has
@@ -333,6 +416,11 @@ make_battery = BatterySpec
 make_battery_inverter = BatteryInverterSpec
 make_solar_inverter = SolarInverterSpec
 make_chp = ChpSpec
+make_ev_charger = EvChargerSpec
+make_steam_boiler = SteamBoilerSpec
+make_wind_turbine = WindTurbineSpec
+make_power_transformer = PowerTransformerSpec
+make_breaker = BreakerSpec
 
 
 def _assign_ids(

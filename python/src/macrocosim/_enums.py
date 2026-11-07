@@ -49,3 +49,12 @@ class OperationalMode(StrEnum):
     TELEMETRY_ONLY = "telemetry-only"
     CONTROL_ONLY = "control-only"
     CONTROL_AND_TELEMETRY = "control-and-telemetry"
+
+
+class EvIdle(StrEnum):
+    """What an EV charger offers the plugged car with no command standing."""
+
+    PAUSED = "paused"
+    """Nothing (the simulator's default)."""
+    FULL = "full"
+    """Its full rating."""

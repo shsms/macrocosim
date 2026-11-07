@@ -23,6 +23,11 @@ COMPONENT_SPECS = [
     s.BatteryInverterSpec,
     s.SolarInverterSpec,
     s.ChpSpec,
+    s.EvChargerSpec,
+    s.SteamBoilerSpec,
+    s.WindTurbineSpec,
+    s.PowerTransformerSpec,
+    s.BreakerSpec,
 ]
 
 MICROGRID_TREE = {"topology": {"components", "connections"}}

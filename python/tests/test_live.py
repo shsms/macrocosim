@@ -273,6 +273,60 @@ async def test_topology_matches_spec(build: Any) -> None:
         assert topology_problems(spec, await _topology(mg)) == []
 
 
+def _every_category() -> tuple[mc.MicrogridSpec, mc.SteamBoilerSpec, mc.EvChargerSpec]:
+    boiler = mc.make_steam_boiler(
+        **_knobs(),
+        demand=mc.MassFlow.from_kilograms_per_second(0.2),
+        rated_lower=W(0),
+        rated_upper=kW(500),
+        target=mc.Pressure.from_bar(8),
+        max=mc.Pressure.from_bar(10),
+        initial=mc.Pressure.from_bar(9),
+        capacity_wh_per_bar=2000.0,
+        wh_per_kg=700.0,
+        command_delay=timedelta(milliseconds=500),
+        ramp_rate_w_per_s=50000.0,
+        device_delay=timedelta(milliseconds=200),
+    )
+    charger = mc.make_ev_charger(
+        **_knobs(),
+        rated_lower=W(0),
+        rated_upper=kW(22),
+        phases=3,
+        idle=mc.EvIdle.FULL,
+        resume_on_recovery=True,
+    )
+    breaker = mc.make_breaker(
+        successors=[mc.make_power_transformer(successors=[mc.make_wind_turbine()])]
+    )
+    spec = mc.make_microgrid(
+        id=7,
+        grpc_port=None,
+        physics_tick=timedelta(milliseconds=50),
+        topology=mc.make_grid_connection_point(
+            successors=[
+                mc.make_meter(successors=[boiler]),
+                mc.make_meter(successors=[charger]),
+                mc.make_meter(successors=[breaker]),
+            ]
+        ),
+    )
+    return spec, boiler, charger
+
+
+async def test_every_category_boots() -> None:
+    spec, boiler, charger = _every_category()
+    async with launch(spec) as mg:
+        assert topology_problems(spec, await _topology(mg)) == []
+        assert isinstance(mg[charger], mc.EvCharger)
+        bar = mc.Pressure.from_bar
+        await mg[boiler].pressure.expect(between(bar(8), bar(9.5)), timeout=10 * sec)
+        await mg[boiler].demand.set(mc.MassFlow.from_kilograms_per_second(0))
+        await mg[boiler].pressure.set(bar(9.9))
+        await mg[boiler].pressure.expect(at_least(bar(9.8)), timeout=10 * sec)
+        await mg[boiler].health.set(Health.STANDBY)
+
+
 async def test_units() -> None:
     spec, load, inverter, battery = _downstream_like()
     async with launch(spec) as mg:

@@ -9,11 +9,16 @@ from frequenz.quantities import Power
 from macrocosim._components import (
     Battery,
     BatteryInverter,
+    Breaker,
     Chp,
     Component,
+    EvCharger,
     GridConnectionPoint,
     Meter,
+    PowerTransformer,
     SolarInverter,
+    SteamBoiler,
+    WindTurbine,
 )
 from macrocosim._session import _Session
 from macrocosim._signals import (
@@ -43,6 +48,11 @@ def _public(cls: type) -> set[str]:
         (Battery, {"soc"}),
         (BatteryInverter, {"power"}),
         (SolarInverter, {"power", "sunlight"}),
+        (EvCharger, {"power"}),
+        (SteamBoiler, {"power", "pressure", "demand"}),
+        (WindTurbine, set()),
+        (PowerTransformer, set()),
+        (Breaker, set()),
     ],
 )
 def test_each_class_has_exactly_its_members(cls: type, extra: set[str]) -> None:

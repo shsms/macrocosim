@@ -70,10 +70,12 @@ The file is in [`examples/pytest_demo/`](examples/pytest_demo/), which CI runs.
 
 Each `make_*` constructor returns an inert, frozen spec: `make_microgrid`,
 `make_grid_connection_point`, `make_meter`, `make_battery`,
-`make_battery_inverter`, `make_solar_inverter` and `make_chp`. A field left out
-uses the simulator's default. Values are typed:
+`make_battery_inverter`, `make_solar_inverter`, `make_chp`, `make_ev_charger`,
+`make_steam_boiler`, `make_wind_turbine`, `make_power_transformer` and
+`make_breaker`. A field left out uses the simulator's default. Values are typed:
 [frequenz-quantities](https://pypi.org/project/frequenz-quantities/) (`Power`,
-`Energy`, `Percentage`, ...) and `datetime.timedelta`; a bare number where a
+`Energy`, `Percentage`, ...), `datetime.timedelta`, and this package's
+`Pressure` (bar) and `MassFlow` (kg/s) for a steam boiler; a bare number where a
 quantity belongs is a `TypeError`.
 
 **Ids.** `id=` is optional on every component spec. No id means the test does
@@ -110,7 +112,9 @@ totals, and `microgrid[spec]` / `microgrid[id]`.
 | `Battery` | `soc` | `soc` | — | same |
 | `BatteryInverter` | `power` | — | — | same |
 | `SolarInverter` | `power` | `sunlight` (write-only) | `sunlight` | same |
-| `GridConnectionPoint`, `Chp` | — | — | — | same |
+| `EvCharger` | `power` | — | — | same |
+| `SteamBoiler` | `power`, `pressure` | `pressure`, `demand` (write-only) | — | same |
+| `GridConnectionPoint`, `Chp`, `WindTurbine`, `PowerTransformer`, `Breaker` | — | — | — | same |
 
 Every signal has `read(timeout=5 s)` and `expect(matcher, timeout=10 s,
 hold_for=None)`, with the matchers `near`, `between`, `at_most` and `at_least`:

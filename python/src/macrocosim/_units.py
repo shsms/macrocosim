@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import Enum
-from typing import Any
+from typing import Any, Self
 
 from frequenz.quantities import (
     ApparentPower,
@@ -20,9 +20,36 @@ from frequenz.quantities import (
     Energy,
     Percentage,
     Power,
+    Quantity,
     ReactivePower,
     Voltage,
 )
+
+
+class Pressure(Quantity, exponent_unit_map={0: "bar"}):
+    """A pressure, in bar: a steam boiler's pressure and its limits."""
+
+    @classmethod
+    def from_bar(cls, value: float) -> Self:
+        """A pressure of `value` bar."""
+        return cls._new(value)
+
+    def as_bar(self) -> float:
+        """The pressure in bar."""
+        return self._base_value
+
+
+class MassFlow(Quantity, exponent_unit_map={0: "kg/s"}):
+    """A mass flow, in kilograms per second: a steam boiler's steam demand."""
+
+    @classmethod
+    def from_kilograms_per_second(cls, value: float) -> Self:
+        """A flow of `value` kg/s."""
+        return cls._new(value)
+
+    def as_kilograms_per_second(self) -> float:
+        """The flow in kg/s."""
+        return self._base_value
 
 
 @dataclass(frozen=True)
@@ -51,6 +78,12 @@ UNITS: dict[type, _Unit] = {
     Voltage: _Unit("_v", lambda v: v.as_volts(), Voltage.from_volts),
     Current: _Unit("_a", lambda v: v.as_amperes(), Current.from_amperes),
     timedelta: _Unit("_s", lambda v: v.total_seconds(), lambda s: timedelta(seconds=s)),
+    Pressure: _Unit("_bar", lambda v: v.as_bar(), Pressure.from_bar),
+    MassFlow: _Unit(
+        "_kg_per_s",
+        lambda v: v.as_kilograms_per_second(),
+        MassFlow.from_kilograms_per_second,
+    ),
 }
 """Every value type with a unit. Floats, ints, bools, strings and enums have
 none and carry no suffix."""

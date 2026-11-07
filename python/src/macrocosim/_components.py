@@ -1,6 +1,6 @@
 """Live components: what `microgrid[spec]` and `microgrid[id]` return.
 
-Internal; imports `_enums`, `_signals` and `_spec`, and `_session` for typing
+Internal; imports `_enums`, `_signals`, `_spec` and `_units`, and `_session` for typing
 only. Every live class has its `id` and the three write-only fault knobs; the
 rest are the signals its category publishes or accepts. A test only observes
 what the app under test commands: there are no setpoint calls here.
@@ -19,8 +19,10 @@ from ._signals import (
     HEALTH,
     INVERTER_POWER,
     POWER,
+    PRESSURE,
     REACTIVE,
     SOC,
+    STEAM_DEMAND,
     SUNLIGHT,
     TELEMETRY_MODE,
     ClearableKnob,
@@ -34,6 +36,7 @@ from ._signals import (
     _SignalDef,
     _Writer,
 )
+from ._units import MassFlow, Pressure
 
 if TYPE_CHECKING:
     from ._session import _Session
@@ -218,6 +221,65 @@ class Chp(Component):
     the meter above it."""
 
 
+class EvCharger(Component):
+    """An EV charger. Its power is what the plugged car draws, within the limit
+    the app under test commands."""
+
+    def __init__(self, session: _Session, component_id: int):
+        super().__init__(session, component_id)
+        self._power: Signal[Power] = Signal(self._source(INVERTER_POWER, "power"))
+
+    @property
+    def power(self) -> Signal[Power]:
+        """Active power, read-only; positive while charging."""
+        return self._power
+
+
+class SteamBoiler(Component):
+    """A hybrid gas and electric steam boiler. The app under test commands its
+    electric power; the gas burner holds the pressure at its target."""
+
+    def __init__(self, session: _Session, component_id: int):
+        super().__init__(session, component_id)
+        self._power: Signal[Power] = Signal(self._source(INVERTER_POWER, "power"))
+        self._pressure: SettableSignal[Pressure] = self._settable(
+            SettableSignal, PRESSURE, "pressure"
+        )
+        self._demand: Knob[MassFlow] = self._knob(STEAM_DEMAND, "demand")
+
+    @property
+    def power(self) -> Signal[Power]:
+        """Electric power, read-only; positive when consuming."""
+        return self._power
+
+    @property
+    def pressure(self) -> SettableSignal[Pressure]:
+        """Steam pressure. A `set` is a one-time jump; the physics carries on
+        from the new value."""
+        return self._pressure
+
+    @property
+    def demand(self) -> Knob[MassFlow]:
+        """Write-only. The steam the site draws."""
+        return self._demand
+
+
+class WindTurbine(Component):
+    """A wind turbine. It has no physics and no signals of its own: a leaf that
+    completes the topology. To give it power, set the power of the meter above
+    it."""
+
+
+class PowerTransformer(Component):
+    """A power transformer. It has no physics and no signals of its own: it
+    passes its successors' power up to the meter above it."""
+
+
+class Breaker(Component):
+    """A breaker. It has no physics and no signals of its own: it passes its
+    successors' power up to the meter above it."""
+
+
 LIVE_CLASS: dict[type, type[Component]] = {
     _spec.GridConnectionPointSpec: GridConnectionPoint,
     _spec.MeterSpec: Meter,
@@ -225,5 +287,10 @@ LIVE_CLASS: dict[type, type[Component]] = {
     _spec.BatteryInverterSpec: BatteryInverter,
     _spec.SolarInverterSpec: SolarInverter,
     _spec.ChpSpec: Chp,
+    _spec.EvChargerSpec: EvCharger,
+    _spec.SteamBoilerSpec: SteamBoiler,
+    _spec.WindTurbineSpec: WindTurbine,
+    _spec.PowerTransformerSpec: PowerTransformer,
+    _spec.BreakerSpec: Breaker,
 }
 """The live class each spec class becomes."""

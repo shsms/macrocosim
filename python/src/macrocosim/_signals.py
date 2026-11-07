@@ -30,7 +30,7 @@ from ._sampling import (
     read,
 )
 from ._session import _Session
-from ._units import UNITS, check_finite, check_type, to_wire
+from ._units import UNITS, MassFlow, Pressure, check_finite, check_type, to_wire
 
 Q = TypeVar("Q")
 V = TypeVar("V")
@@ -85,6 +85,8 @@ REACTIVE = _SignalDef(
 SOC = _SignalDef(Percentage, "soc_pct", _Setter("drive", "soc_pct"))
 INVERTER_POWER = _SignalDef(Power, "active_power_w")
 SUNLIGHT = _KnobDef(Percentage, _Setter("drive", "sunlight_pct", "clear_sunlight"))
+PRESSURE = _SignalDef(Pressure, "pressure_bar", _Setter("drive", "pressure_bar"))
+STEAM_DEMAND = _KnobDef(MassFlow, _Setter("drive", "steam_demand_kg_per_s"))
 HEALTH = _KnobDef(Health, _Setter("status", "health"))
 TELEMETRY_MODE = _KnobDef(TelemetryMode, _Setter("status", "telemetry_mode"))
 COMMAND_MODE = _KnobDef(CommandMode, _Setter("status", "command_mode"))
