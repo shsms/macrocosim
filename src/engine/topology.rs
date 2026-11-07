@@ -6,7 +6,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 
 use super::Engine;
 use crate::runtime::{MicrogridRuntimes, RuntimeView};
@@ -16,7 +17,7 @@ use crate::sim::microgrids::{
     DEFAULT_MICROGRID_NAME, MicrogridDef, MicrogridEntry, check_port, component_owner,
     next_free_id_in, next_free_port_in,
 };
-use crate::spec::{Defaults, MicrogridSpec, build_topology};
+use crate::spec::{Defaults, MicrogridSpec, TopologyDoc, build_topology};
 
 /// Why a structural change was refused. Nothing changed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -184,7 +185,20 @@ pub async fn rebuild(
     engine: &Engine,
     runtimes: &MicrogridRuntimes,
     id: u64,
+    spec: MicrogridSpec,
+) -> Result<MicrogridSpec, TopologyError> {
+    rebuild_replacing(engine, runtimes, id, spec, &[id]).await
+}
+
+/// [`rebuild`], with the component ids the microgrids in `replacing`
+/// hold free for `spec`: a hello rebuilds several microgrids one
+/// after another, whose ids may move between them.
+async fn rebuild_replacing(
+    engine: &Engine,
+    runtimes: &MicrogridRuntimes,
+    id: u64,
     mut spec: MicrogridSpec,
+    replacing: &[u64],
 ) -> Result<MicrogridSpec, TopologyError> {
     let (site, old, port) = {
         let registry = engine.microgrids.lock();
@@ -216,7 +230,7 @@ pub async fn rebuild(
         }
         Some(_) => None,
     };
-    check_ids(engine, &[&spec], &[id])?;
+    check_ids(engine, &[&spec], replacing)?;
     let defaults = Defaults::default();
     let built = build_topology(&spec, &defaults).map_err(|e| invalid(id, e.message()))?;
     let mut carry = CarryPlan::default();
@@ -285,6 +299,187 @@ pub async fn unload(
     let _ = engine.microgrid_unloaded.send(id);
     log::info!("Microgrid #{id} unloaded");
     Ok(())
+}
+
+/// Apply the microgrids a script child sent in its hello: every one
+/// is built aside and checked first, then `stop_old` stops the old
+/// child, then each microgrid of `script` the hello no longer lists
+/// is unloaded, and each listed microgrid is rebuilt (registered) or
+/// created (new). Returns the ids applied, in the hello's order.
+///
+/// The checks: every microgrid has an id, used once in the hello; a
+/// registered id belongs to `script` (its `source`); no component id
+/// is used twice in the hello or held by a microgrid that is not
+/// `script`'s; no gRPC port is used twice or held by a microgrid the
+/// hello does not unload. A new microgrid without a port is given a
+/// free one here. On a refusal, or when `stop_old` refuses (the new
+/// child has exited), nothing has changed.
+///
+/// The applied microgrids lose their undo stacks and their `unsaved`
+/// mark: the script is their source again. The caller holds the
+/// create lock throughout.
+pub async fn apply_hello<F, Fut>(
+    engine: &Engine,
+    runtimes: &MicrogridRuntimes,
+    script: &Path,
+    doc: TopologyDoc,
+    stop_old: F,
+) -> Result<Vec<u64>, TopologyError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    let mut specs = doc.microgrids;
+    let mut ids = Vec::with_capacity(specs.len());
+    for (i, spec) in specs.iter().enumerate() {
+        let Some(id) = spec.id else {
+            return Err(TopologyError::Invalid(format!(
+                "microgrid {i} of the hello (counting from 0) has no id"
+            )));
+        };
+        if ids.contains(&id) {
+            return Err(TopologyError::Invalid(format!(
+                "microgrid {id} is in the hello twice"
+            )));
+        }
+        ids.push(id);
+    }
+    let defaults = Defaults::default();
+    for spec in &specs {
+        let id = spec.id.expect("checked above");
+        build_topology(spec, &defaults).map_err(|e| invalid(id, e.message()))?;
+    }
+    let reserved = engine.reserved_ports();
+    let (replacing, unloading) = {
+        let registry = engine.microgrids.lock();
+        let replacing: Vec<u64> = registry
+            .iter()
+            .filter(|(_, e)| e.spec.is_some() && e.source.as_deref() == Some(script))
+            .map(|(id, _)| *id)
+            .collect();
+        for &id in &ids {
+            if let Some(entry) = registry.get(&id)
+                && !replacing.contains(&id)
+            {
+                return Err(TopologyError::Conflict(format!(
+                    "microgrid {id} is not this script's: {}",
+                    match (&entry.spec, &entry.source) {
+                        (None, _) => "it was loaded from Lisp".to_string(),
+                        (Some(_), None) => "it was made in the UI".to_string(),
+                        (Some(_), Some(source)) => format!("it came from {}", source.display()),
+                    }
+                )));
+            }
+        }
+        let unloading: Vec<u64> = replacing
+            .iter()
+            .copied()
+            .filter(|id| !ids.contains(id))
+            .collect();
+        // The ports in use once the hello is applied: every
+        // registered microgrid's but the unloaded ones', each listed
+        // microgrid moving to its own.
+        let mut taken: BTreeMap<u16, u64> = BTreeMap::new();
+        for spec in &specs {
+            let id = spec.id.expect("checked above");
+            let port = match spec.grpc_port {
+                Some(0) => return Err(invalid(id, "grpc_port must be 1..=65535")),
+                Some(p) => p,
+                None => match registry.get(&id) {
+                    Some(entry) => entry.def.grpc_port,
+                    None => continue,
+                },
+            };
+            if reserved.contains(&port) {
+                return Err(TopologyError::Conflict(format!(
+                    "gRPC port {port} of microgrid {id} is an enterprise server's"
+                )));
+            }
+            if let Some(other) = taken.insert(port, id) {
+                return Err(TopologyError::Conflict(format!(
+                    "gRPC port {port} is in microgrid {other} and in microgrid {id}"
+                )));
+            }
+        }
+        for (&other, entry) in registry.iter() {
+            if ids.contains(&other) || unloading.contains(&other) {
+                continue;
+            }
+            if let Some(&id) = taken.get(&entry.def.grpc_port) {
+                return Err(TopologyError::Conflict(format!(
+                    "gRPC port {} is already microgrid {other}'s, so microgrid {id} \
+                     cannot take it",
+                    entry.def.grpc_port
+                )));
+            }
+        }
+        // A microgrid that moves takes a port its old holder still
+        // has while the hello is applied, one microgrid at a time.
+        for spec in &specs {
+            let id = spec.id.expect("checked above");
+            if let (Some(p), Some(entry)) = (spec.grpc_port, registry.get(&id))
+                && p != entry.def.grpc_port
+                && let Some((holder, _)) = registry
+                    .iter()
+                    .find(|(h, e)| **h != id && !unloading.contains(h) && e.def.grpc_port == p)
+            {
+                return Err(TopologyError::Conflict(format!(
+                    "gRPC port {p} is still microgrid {holder}'s; move microgrid {id} to it \
+                     in a later save"
+                )));
+            }
+        }
+        // New microgrids without a port take free ones now, so no
+        // later step can find its port taken.
+        let mut used: Vec<u16> = reserved.clone();
+        used.extend(taken.keys().copied());
+        for spec in &mut specs {
+            let id = spec.id.expect("checked above");
+            if spec.grpc_port.is_none() && !registry.contains_key(&id) {
+                let port = next_free_port_in(&registry, &used);
+                used.push(port);
+                spec.grpc_port = Some(port);
+            }
+        }
+        (replacing, unloading)
+    };
+    let refs: Vec<&MicrogridSpec> = specs.iter().collect();
+    check_ids(engine, &refs, &replacing)?;
+    stop_old().await.map_err(TopologyError::Conflict)?;
+
+    for &id in &unloading {
+        if let Err(e) = unload(engine, runtimes, id).await {
+            log::error!("Microgrid #{id}: the hello's unload failed: {e}");
+        }
+    }
+    for spec in specs {
+        let id = spec.id.expect("checked above");
+        let applied = if replacing.contains(&id) {
+            rebuild_replacing(engine, runtimes, id, spec, &replacing)
+                .await
+                .map(|_| ())
+        } else {
+            create(engine, runtimes, spec, Some(script.to_path_buf()))
+                .await
+                .map(|_| ())
+        };
+        if let Err(e) = applied {
+            log::error!("Microgrid #{id}: the hello's change failed: {e}");
+        }
+    }
+    {
+        let mut registry = engine.microgrids.lock();
+        for id in &ids {
+            if let Some(entry) = registry.get_mut(id) {
+                entry.unsaved = false;
+            }
+        }
+    }
+    let mut undo = engine.spec_undo.lock();
+    for id in &ids {
+        undo.remove(id);
+    }
+    Ok(ids)
 }
 
 fn display_name(spec: &MicrogridSpec) -> String {
@@ -559,6 +754,147 @@ mod tests {
         engine.microgrids.lock().get_mut(&id).unwrap().spec = None;
         assert_eq!(unload(&engine, &inert, id).await, Err(loaded_from_lisp(id)));
         assert!(engine.microgrids.lock().contains_key(&id));
+    }
+
+    fn hello(json: &str) -> TopologyDoc {
+        TopologyDoc::from_json(&format!(
+            r#"{{"schema_version": 1, "microgrids": [{json}]}}"#
+        ))
+        .unwrap()
+    }
+
+    async fn apply(
+        engine: &Engine,
+        script: &Path,
+        doc: TopologyDoc,
+    ) -> Result<Vec<u64>, TopologyError> {
+        apply_hello(engine, &MicrogridRuntimes::inert(), script, doc, || async {
+            Ok(())
+        })
+        .await
+    }
+
+    const NORTH: &str = r#"{"id": 61, "components": [
+        {"type": "grid_connection_point", "id": 1000},
+        {"type": "battery_inverter", "id": 11},
+        {"type": "battery", "id": 12, "initial_soc_pct": 50}
+    ], "connections": [[1000, 11], [11, 12]]}"#;
+    const SOUTH: &str = r#"{"id": 62, "components": [
+        {"type": "grid_connection_point", "id": 1001}
+    ]}"#;
+
+    /// A hello creates its microgrids with the script as their
+    /// source, then rebuilds them with carry, moves ids between them,
+    /// and unloads the one it no longer lists.
+    #[tokio::test]
+    async fn a_hello_creates_rebuilds_and_unloads_the_scripts_microgrids() {
+        let engine = engine();
+        let script = PathBuf::from("/s/plant.py");
+        let ids = apply(&engine, &script, hello(&format!("{NORTH}, {SOUTH}")))
+            .await
+            .unwrap();
+        assert_eq!(ids, vec![61, 62]);
+        {
+            let registry = engine.microgrids.lock();
+            for id in [61, 62] {
+                assert_eq!(registry[&id].source.as_deref(), Some(script.as_path()));
+                assert!(!registry[&id].unsaved);
+            }
+            assert_ne!(registry[&61].def.grpc_port, registry[&62].def.grpc_port);
+        }
+        let north = site(&engine, 61);
+        let battery = north.get(12).unwrap();
+        north.set_soc_pct(battery.as_ref(), 80.0).unwrap();
+        engine.record_spec_undo(61, spec(NORTH));
+        engine.microgrids.lock().get_mut(&61).unwrap().unsaved = true;
+
+        // South's root moves to 1002 and north takes 1001: ids move
+        // between the script's microgrids within one hello.
+        let north2 = NORTH
+            .replace(
+                r#"{"type": "grid_connection_point", "id": 1000}"#,
+                r#"{"type": "grid_connection_point", "id": 1000},
+                {"type": "meter", "id": 1001}"#,
+            )
+            .replace("[[1000, 11]", "[[1000, 1001], [1000, 11]");
+        let south2 = SOUTH.replace("1001", "1002");
+        apply(&engine, &script, hello(&format!("{north2}, {south2}")))
+            .await
+            .unwrap();
+        assert_eq!(soc(&north, 12), 80.0, "the battery carried");
+        assert!(north.get(1001).is_some());
+        assert!(site(&engine, 62).get(1002).is_some());
+        assert!(
+            !engine.microgrids.lock()[&61].unsaved,
+            "the script is its source again"
+        );
+        assert_eq!(
+            engine.spec_undo_depths(61).undo,
+            0,
+            "its undo stack is gone"
+        );
+
+        apply(&engine, &script, hello(&north2)).await.unwrap();
+        assert!(!engine.microgrids.lock().contains_key(&62), "unloaded");
+    }
+
+    #[tokio::test]
+    async fn a_hello_refuses_ids_that_are_not_the_scripts() {
+        let engine = engine();
+        let script = PathBuf::from("/s/plant.py");
+        let ui = create_plant(&engine).await;
+        let claim = format!(r#"{{"id": {ui}, "components": []}}"#);
+        let err = apply(&engine, &script, hello(&claim)).await.unwrap_err();
+        assert!(
+            matches!(&err, TopologyError::Conflict(m) if m.contains("it was made in the UI")),
+            "{err:?}"
+        );
+        // Component 3 is the UI microgrid's.
+        let taken = r#"{"id": 61, "components": [{"type": "grid_connection_point", "id": 3}]}"#;
+        let err = apply(&engine, &script, hello(taken)).await.unwrap_err();
+        assert!(
+            matches!(&err, TopologyError::Conflict(m) if m.contains("component id 3")),
+            "{err:?}"
+        );
+        let twice = apply(&engine, &script, hello(&format!("{SOUTH}, {SOUTH}")))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&twice, TopologyError::Invalid(m) if m.contains("twice")),
+            "{twice:?}"
+        );
+        let no_id = apply(&engine, &script, hello(r#"{"components": []}"#))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&no_id, TopologyError::Invalid(m) if m.contains("has no id")),
+            "{no_id:?}"
+        );
+        let ui_port = engine.microgrids.lock()[&ui].def.grpc_port;
+        let port = format!(r#"{{"id": 61, "grpc_port": {ui_port}, "components": []}}"#);
+        let err = apply(&engine, &script, hello(&port)).await.unwrap_err();
+        assert!(
+            matches!(&err, TopologyError::Conflict(m) if m.contains(&format!("gRPC port {ui_port}"))),
+            "{err:?}"
+        );
+        assert_eq!(engine.microgrids.lock().len(), 1, "nothing was applied");
+    }
+
+    #[tokio::test]
+    async fn a_hello_whose_child_exited_changes_nothing() {
+        let engine = engine();
+        let script = PathBuf::from("/s/plant.py");
+        let err = apply_hello(
+            &engine,
+            &MicrogridRuntimes::inert(),
+            &script,
+            hello(NORTH),
+            || async { Err("the script exited".to_string()) },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err, TopologyError::Conflict("the script exited".into()));
+        assert!(engine.microgrids.lock().is_empty());
     }
 
     #[tokio::test]
