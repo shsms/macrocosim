@@ -1,4 +1,4 @@
-//! Capture log lines so the SPA can render them above the REPL.
+//! Capture log lines so the SPA can render them in its Logs panel.
 //!
 //! `LogTap` plugs into `simplelog`'s `CombinedLogger` alongside the
 //! existing terminal logger — every emitted record both stays in the

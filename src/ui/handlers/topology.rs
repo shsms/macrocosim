@@ -36,9 +36,8 @@ struct ComponentSummary {
     subtype: Option<&'static str>,
     hidden: bool,
     /// Current runtime knob settings — Display impls on the enums map
-    /// to the same lowercase tokens the corresponding setter defuns
-    /// accept, so the UI's dropdowns can round-trip via /api/eval
-    /// without a string table.
+    /// to the same tokens the `status` and `runtime` routes accept,
+    /// so the UI's dropdowns round-trip without a string table.
     health: String,
     telemetry_mode: String,
     command_mode: String,

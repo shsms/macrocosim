@@ -1,8 +1,9 @@
 //! The hello a script child sends once its script has loaded, and the
 //! engine's answer: `POST /api/runner/hello`.
 
-use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
+
+use crate::engine::topology::TopologyError;
 
 /// `{"token": ..., "client_version": ..., "topology": {...}}`.
 #[derive(Clone, Debug, Deserialize)]
@@ -39,24 +40,11 @@ pub enum HelloError {
     Token,
     /// `client_version` is not the binary's (400).
     Version { client: String },
-    /// An invalid spec, a microgrid without an id, or an id used
-    /// twice inside the hello (422).
-    Invalid(String),
-    /// A microgrid id that is not this script's, a component id held
-    /// by another microgrid, or a gRPC port in use (409); also a
-    /// child that exited before its microgrids were applied.
-    Conflict(String),
-}
-
-impl HelloError {
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::Token => StatusCode::FORBIDDEN,
-            Self::Version { .. } => StatusCode::BAD_REQUEST,
-            Self::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::Conflict(_) => StatusCode::CONFLICT,
-        }
-    }
+    /// The microgrids are refused as a structural change is: an
+    /// invalid spec or a microgrid without an id (422), an id or a
+    /// port that is not the script's to take (409); also a child that
+    /// exited before its microgrids were applied (409).
+    Topology(TopologyError),
 }
 
 impl HelloRequest {
@@ -87,21 +75,14 @@ impl std::fmt::Display for HelloError {
                  version {}; install the package of the same version",
                 *crate::version::VERSION
             ),
-            Self::Invalid(m) | Self::Conflict(m) => f.write_str(m),
+            Self::Topology(e) => e.fmt(f),
         }
     }
 }
 
-impl From<crate::engine::topology::TopologyError> for HelloError {
-    fn from(e: crate::engine::topology::TopologyError) -> Self {
-        use crate::engine::topology::TopologyError;
-        match e {
-            TopologyError::Invalid(m) => Self::Invalid(m),
-            TopologyError::Conflict(m) => Self::Conflict(m),
-            TopologyError::NotRegistered(id) => {
-                Self::Conflict(format!("microgrid {id} is not registered"))
-            }
-        }
+impl From<TopologyError> for HelloError {
+    fn from(e: TopologyError) -> Self {
+        Self::Topology(e)
     }
 }
 

@@ -1,19 +1,13 @@
-// Microgrids landing-page list and Scenarios mode panel. Both
-// poll the corresponding /api endpoint, render a card grid, and
-// respond to clicks / WS pushes by re-fetching + re-rendering.
+// The Microgrids landing-page list: polls /api/microgrids, renders a
+// card grid, and responds to clicks / WS pushes by re-fetching +
+// re-rendering. Also the selected microgrid's header state and the
+// create, import and export flows.
 
 import { escapeHtml, mutate, selectMicrogrid } from "./app.js";
-import { refreshPaletteLock } from "./editor.js";
-import { bgFetch, errorText, getJson } from "./http.js";
+import { bgFetch, errorText } from "./http.js";
 import { countText } from "./live.js";
 import { clearFormError, notify, showFormError } from "./notices.js";
-import {
-  publishMgFlags,
-  readSelectedMg,
-  reconcileSelection,
-  renderReplMgChip,
-  scenarioMgId,
-} from "./routing.js";
+import { publishMgList, readSelectedMg, reconcileSelection } from "./routing.js";
 
 // Lowest id `POST /api/microgrids` allocates when none is asked
 // for (`DEFAULT_MICROGRID_ID` server-side). The create dialog
@@ -24,23 +18,16 @@ const FIRST_MICROGRID_ID = 2200;
 
 // The `unsaved` chip: a microgrid whose live structure its source does
 // not have. On a script's microgrid the UI edited, saving the script
-// replaces the edits; a microgrid made in the UI has no source at all;
-// a Lisp file's live edit could not be recorded in it.
+// replaces the edits; a microgrid made in the UI has no source at all.
 function unsavedChip(m) {
   if (!m.unsaved) return "";
-  if (m.has_spec && m.source) {
+  if (m.source) {
     const file = m.source.split(/[\\/]/).pop();
     const title = `edited here: saving ${file} replaces these edits; export to keep them`;
     return `<span class="mg-chip edited" title="${escapeHtml(title)}">edited here</span>`;
   }
-  if (m.has_spec) {
-    return `<span class="mg-chip unsaved" title="in memory only: export to keep it">in memory only</span>`;
-  }
-  return `<span class="mg-chip unsaved" title="live edits this file could not record">unsaved</span>`;
+  return `<span class="mg-chip unsaved" title="in memory only: export to keep it">in memory only</span>`;
 }
-
-const UNMANAGED_HINT =
-  "hand-written file — macrocosim won't rewrite its structure until you Adopt it";
 
 export const microgridsPanel = (() => {
   let cached = []; // last /api/microgrids snapshot
@@ -66,15 +53,10 @@ export const microgridsPanel = (() => {
       card.className = "mglist-card";
       card.dataset.id = m.id;
       const tso = m.tso ? `<span class="mg-tso">${escapeHtml(m.tso)}</span>` : "";
-      // Two file-state chips: `unmanaged` means macrocosim may not
-      // rewrite this Lisp file's structure (Adopt first), `unsaved`
-      // means an edit ran live that the file could not be given. A
-      // microgrid with a spec has no Lisp file to manage.
+      // The `unsaved` chip, and a `failed` one when its gRPC server
+      // did not start.
       const runtime = m.runtime;
       const chips = [
-        m.managed || m.has_spec
-          ? ""
-          : `<span class="mg-chip unmanaged" title="${escapeHtml(UNMANAGED_HINT)}">unmanaged</span>`,
         unsavedChip(m),
         runtime?.status === "failed"
           ? `<span class="mg-chip failed" title="${escapeHtml(runtime.error ?? "")}">failed</span>`
@@ -119,208 +101,6 @@ export const microgridsPanel = (() => {
       document.getElementById("import-files").click();
     });
     grid.appendChild(importCard);
-    // Trailing [▶ Load script…] card: opens the server-side file
-    // browser dialog, which POSTs /api/load so an on-disk lisp file
-    // (a microgrid file, or a script like examples/starter-site.lisp)
-    // builds its world at runtime — the on-demand path for a bare
-    // boot.
-    const loadCard = document.createElement("button");
-    loadCard.type = "button";
-    loadCard.className = "mglist-card mglist-new";
-    loadCard.id = "mglist-load-btn";
-    loadCard.title =
-      "Browse the server's state dir for a lisp script to load, or type a path";
-    loadCard.innerHTML = `<span class="mglist-plus">▶</span><span>Load script…</span>`;
-    loadCard.addEventListener("click", () => showLoadScriptDialog());
-    grid.appendChild(loadCard);
-  }
-
-  // POST /api/load for a state-dir-relative (or absolute) path.
-  // Returns true when the file loaded. A failure shows in the dialog's
-  // error line; a 409 collision — the file declares an id something
-  // else already loaded — renders the offer bar instead.
-  async function loadScript(path) {
-    collisionBar().hidden = true;
-    clearFormError(loadError());
-    let res;
-    try {
-      res = await fetch("/api/load", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path }),
-      });
-    } catch (e) {
-      showFormError(loadError(), `Load failed: ${e.message}`);
-      return false;
-    }
-    if (res.ok) {
-      // A file is allowed to register nothing — a driver-only script
-      // is exactly that — but from the Load picker it looks like a
-      // no-op, so say what happened rather than leaving a silently
-      // unchanged grid.
-      let loaded = null;
-      try {
-        loaded = (await res.json()).loaded;
-      } catch (_) {}
-      if (Array.isArray(loaded) && loaded.length === 0) {
-        notify("Loaded no microgrids — the file ran but registered nothing");
-      }
-      await refresh();
-      return true;
-    }
-    // A collision 409 carries `collision_id`, `managed` and
-    // `suggested_id` beside `error`; any other failure (a lisp
-    // error, a missing file) is just its message.
-    if (res.status === 409) {
-      const info = await res.clone().json().catch(() => null);
-      if (info && info.collision_id != null) {
-        renderCollision(path, info);
-        return false;
-      }
-    }
-    showFormError(loadError(), `Load failed: ${await errorText(res)}`);
-    return false;
-  }
-
-  const collisionBar = () => document.getElementById("load-script-collision");
-  const loadError = () => document.getElementById("load-script-error");
-
-  // The collision offer. A managed file can be copied under a free
-  // id mechanically (/api/load-as); a hand-written one can't — its
-  // id is wherever the author wrote it, so the only fix is editing
-  // the file.
-  function renderCollision(path, info) {
-    const bar = collisionBar();
-    bar.innerHTML = "";
-    bar.hidden = false;
-    const msg = document.createElement("span");
-    msg.textContent = info.managed
-      ? `microgrid ${info.collision_id} is already loaded — `
-      : `microgrid ${info.collision_id} is already loaded — edit the id in the file to load it alongside.`;
-    bar.appendChild(msg);
-    if (!info.managed) return;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn";
-    btn.textContent = `Load as ${info.suggested_id}`;
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      let resp = null;
-      try {
-        const res = await mutate("POST", "/api/load-as", {
-          path,
-          id: info.suggested_id,
-        });
-        resp = await res.json();
-      } catch (e) {
-        showFormError(loadError(), `Load failed: ${e.message}`);
-        btn.disabled = false;
-        return;
-      }
-      // The copy can load and still be half-built: its generated
-      // block registered, its script section then failed. That comes
-      // back as a success carrying a warning, because the microgrid
-      // IS live — say so rather than dropping it.
-      if (resp?.warning) notify(resp.warning);
-      warnFailedRuntime(resp?.id ?? info.suggested_id, resp?.runtime);
-      bar.hidden = true;
-      await refresh();
-      document.getElementById("load-script-dialog").close();
-      selectMicrogrid(info.suggested_id);
-    });
-    bar.appendChild(btn);
-  }
-
-  // Server-side file browser over GET /api/scripts. The browser's
-  // native picker can't drive this: it selects a client-side file
-  // and never reveals a server path, while the load needs the file
-  // on the server's disk (that's what reload replays and watch-file
-  // can watch). The free-text field covers paths outside the
-  // state-dir subtree the listing is confined to.
-  function showLoadScriptDialog() {
-    const dlg = document.getElementById("load-script-dialog");
-    const list = document.getElementById("load-script-list");
-    const crumb = document.getElementById("load-script-breadcrumb");
-
-    function fetchListing(dir) {
-      return getJson(`/api/scripts?dir=${encodeURIComponent(dir)}`);
-    }
-
-    function renderListing(data) {
-      crumb.textContent = `state dir${data.dir ? ` / ${data.dir}` : ""}`;
-      list.innerHTML = "";
-      const addRow = (label, onClick) => {
-        const li = document.createElement("li");
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "script-row";
-        btn.textContent = label;
-        btn.addEventListener("click", onClick);
-        li.appendChild(btn);
-        list.appendChild(li);
-      };
-      if (data.parent !== null) {
-        addRow("📁 ..", () => browse(data.parent));
-      }
-      for (const d of data.dirs) {
-        addRow(`📁 ${d}`, () => browse(data.dir ? `${data.dir}/${d}` : d));
-      }
-      for (const f of data.files) {
-        const rel = data.dir ? `${data.dir}/${f}` : f;
-        addRow(f, async () => {
-          if (await loadScript(rel)) dlg.close();
-        });
-      }
-      if (!data.dirs.length && !data.files.length) {
-        list.innerHTML = '<li class="hint">no .lisp files here</li>';
-      }
-    }
-
-    async function browse(dir) {
-      try {
-        renderListing(await fetchListing(dir));
-      } catch (e) {
-        showFormError(loadError(), `Listing failed: ${e.message}`);
-      }
-    }
-
-    // Open on microgrids/ — where managed files live, so the common
-    // case is one click. A state dir without that directory answers
-    // 4xx; fall back to the root listing.
-    async function browseDefault() {
-      try {
-        renderListing(await fetchListing("microgrids"));
-      } catch (_) {
-        await browse("");
-      }
-    }
-
-    collisionBar().hidden = true;
-    browseDefault();
-    dlg.showModal();
-  }
-
-  function setupLoadScriptDialog() {
-    const dlg = document.getElementById("load-script-dialog");
-    if (!dlg) return;
-    document
-      .getElementById("load-script-close")
-      .addEventListener("click", () => dlg.close());
-    dlg.addEventListener("click", (e) => {
-      if (e.target === dlg) dlg.close();
-    });
-    document
-      .getElementById("load-script-form")
-      .addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const input = document.getElementById("load-script-path");
-        const path = input.value.trim();
-        if (!path) return;
-        if (await loadScript(path)) {
-          input.value = "";
-          dlg.close();
-        }
-      });
   }
 
   // The lowest free microgrid id — the same choice the server makes
@@ -341,7 +121,7 @@ export const microgridsPanel = (() => {
     if (!dlg) return;
     document.getElementById("create-mg-name").value = "";
     // Pre-filled, not fixed: the server re-checks the id under the
-    // create lock, and a taken one comes back as the inline 409.
+    // structural lock, and a taken one comes back as the inline 409.
     document.getElementById("create-mg-id").value = String(nextFreeId());
     document.getElementById("create-mg-port").value = "";
     dlg.showModal();
@@ -407,7 +187,7 @@ export const microgridsPanel = (() => {
       document.getElementById("import-mg-name").value = "";
       // Pre-filled the way the create dialog pre-fills its id — the
       // lowest free one — and just as editable: the server re-checks
-      // under the create lock, and a taken one comes back as a 409.
+      // under the structural lock, and a taken one comes back as a 409.
       document.getElementById("import-mg-id").value = String(nextFreeId());
       dlg.showModal();
     }
@@ -573,28 +353,11 @@ export const microgridsPanel = (() => {
     renderHeaderState(entry);
   }
 
-  // The selected microgrid's file state in its header: the same two
-  // chips the cards carry, plus the Adopt button — the way out of
-  // read-only, so it only shows while there is something to adopt (a
-  // microgrid with a spec has none).
+  // The selected microgrid's file state in its header: the chip the
+  // card carries.
   function renderHeaderState(entry) {
     const chips = document.getElementById("mg-file-chips");
-    const adopt = document.getElementById("mg-adopt-btn");
-    if (!chips || !adopt) return;
-    const unmanaged = Boolean(entry) && !entry.managed && !entry.has_spec;
-    chips.innerHTML = [
-      unmanaged
-        ? `<span class="mg-chip unmanaged" title="${escapeHtml(UNMANAGED_HINT)}">unmanaged</span>`
-        : "",
-      entry ? unsavedChip(entry) : "",
-    ].join("");
-    adopt.hidden = !unmanaged;
-    // Only a microgrid with a spec exports: one loaded from Lisp has
-    // its file.
-    for (const id of ["mg-copy-py-btn", "mg-save-py-btn"]) {
-      const btn = document.getElementById(id);
-      if (btn) btn.hidden = !entry?.has_spec;
-    }
+    if (chips) chips.innerHTML = entry ? unsavedChip(entry) : "";
   }
 
   // The selected microgrid as a Python module, from the engine's
@@ -654,28 +417,6 @@ export const microgridsPanel = (() => {
     }
   }
 
-  // Take a hand-written file over: macrocosim writes the live
-  // structure into it as a generated block and may rewrite it from
-  // then on. Anything the block can't carry comes back as warnings,
-  // which are the whole point of the round trip — surface every one.
-  async function adoptCurrent() {
-    const id = readSelectedMg();
-    if (id == null) return;
-    const btn = document.getElementById("mg-adopt-btn");
-    btn.disabled = true;
-    try {
-      const res = await mutate("POST", `/api/mg/${id}/adopt`);
-      const { warnings } = await res.json();
-      notify(`Adopted microgrid #${id}.`, "success");
-      for (const w of warnings || []) notify(`Adopt warning: ${w}`);
-    } catch (e) {
-      notify(`Adopt failed: ${e.message}`);
-    } finally {
-      btn.disabled = false;
-    }
-    await refresh();
-  }
-
   // Shared by refresh() and the 5 s poll. A non-ok response keeps
   // the previous list. A fetch that fails outright (network-level)
   // blanks it for refresh() and keeps it for the poll
@@ -715,14 +456,11 @@ export const microgridsPanel = (() => {
     if (rows && readSelectedMg() === mg) reconcileSelection(rows);
   }
   function renderAll() {
+    // The smoke reads the list on screen here.
     window.__mgPanelCache = cached;
-    // Publish before rendering: the palette lock and the inspector's
-    // read-only gate both read the flags this call installs.
-    publishMgFlags(cached);
+    publishMgList(cached);
     renderList();
     renderBreadcrumb();
-    renderReplMgChip();
-    refreshPaletteLock();
   }
 
   async function refresh() {
@@ -766,358 +504,11 @@ export const microgridsPanel = (() => {
     if (files.length) importSiteFiles(files);
   });
 
-  setupLoadScriptDialog();
   setupCreateMgDialog();
   setupImportMgDialog();
-  // The header button is static markup, so one listener outlives
-  // every renderBreadcrumb (which only flips its hidden flag).
-  document.getElementById("mg-adopt-btn")?.addEventListener("click", adoptCurrent);
+  // The header buttons are static markup, so one listener each
+  // outlives every renderBreadcrumb.
   document.getElementById("mg-copy-py-btn")?.addEventListener("click", copyAsPython);
   document.getElementById("mg-save-py-btn")?.addEventListener("click", saveAsPython);
   return { refresh, removed };
-})();
-
-// ─── Scenarios mode ─────────────────────────────────────────────────────────
-//
-// Driven by /api/scenarios (snapshot) + the POST endpoints for
-// start / stop / next / prev / jump. Renders a 24-h horizontal
-// timeline strip with one block per stage, a "now" marker pinned
-// to the current local-hour, a stage-row list below, and Start /
-// Prev / Next / Stop controls in the header. Pollers refresh the
-// snapshot every 5 s while the mode is active — auto-advance
-// transitions and journal events otherwise wouldn't update the
-// timeline since they happen server-side without a WS push.
-// Driven by the unified registry: /api/scenarios (the registered
-// scenarios + their cue/check timeline) plus the journal readers
-// under /api/mg/{mg}: scenario (lifecycle), scenario/report (live
-// metrics + the scenario-expect ledger) and scenario/events
-// (activity feed). {mg} is the selected microgrid, else the lowest
-// registered id (`scenarioMgId`).
-// The journal tracks one scenario at a time; Run starts a scenario on
-// the wall clock, Stop ends it. Headless/deterministic runs are a
-// `macroctl scenario run --stepped` / CI concern, not a UI action.
-export const scenariosPanel = (() => {
-  let scenarios = []; // /api/scenarios snapshot
-  let summary = null; // mg scenario (running/last journal)
-  let report = null; // mg scenario/report
-  let events = []; // mg scenario/events
-  let csv = { dir: null, files: [] }; // mg scenario/csv
-  let readoutMg = null; // microgrid the readouts above came from
-  let pollTimer = null;
-
-  function listEl() { return document.getElementById("scenarios-list"); }
-
-  // The journal holds one scenario; it's running when a name is set and
-  // it hasn't ended. `journalName` is the name it currently reflects
-  // (running or just-stopped) — drives the last-run badge + run view.
-  function runningName() {
-    return summary?.name && !summary.ended_at ? summary.name : null;
-  }
-  function journalName() { return summary?.name || null; }
-  function scenarioByName(n) { return scenarios.find((s) => s.name === n) || null; }
-
-  function fmtSecs(s) {
-    if (s == null) return "open";
-    return s < 90 ? `${Math.round(s)}s` : `${Math.round(s / 60)}min`;
-  }
-  function mkBtn(label, onClick) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "btn";
-    b.textContent = label;
-    b.addEventListener("click", onClick);
-    return b;
-  }
-
-  // ── registered-scenario list ────────────────────────────────────────
-  function renderList() {
-    const el = listEl();
-    if (!el) return;
-    const countEl = document.getElementById("sc-count");
-    if (countEl) countEl.textContent = scenarios.length ? `${scenarios.length} registered` : "";
-    if (scenarios.length === 0) {
-      el.innerHTML =
-        `<p class="muted">No scenarios registered. Load a config that calls <code>define-scenario</code>.</p>`;
-      return;
-    }
-    const running = runningName();
-    el.innerHTML = "";
-    for (const s of scenarios) {
-      const isRunning = s.name === running;
-      const sections = [
-        s.has_setup ? "setup" : null,
-        s.n_drive ? `drive×${s.n_drive}` : null,
-        s.n_agents ? `agents×${s.n_agents}` : null,
-        s.n_cues ? `cues×${s.n_cues}` : null,
-        s.n_expect ? `checks×${s.n_expect}` : null,
-        s.records ? "rec" : null,
-      ].filter(Boolean).join(" · ");
-      const row = document.createElement("div");
-      row.className = "sc-row";
-      if (s.name === journalName()) row.classList.add("selected");
-      row.innerHTML = `
-        <div class="sc-row-main">
-          <span class="sc-row-name">${escapeHtml(s.name)}</span>
-          <span class="sc-row-meta">${s.schedule}/${s.clock} · ${fmtSecs(s.length_s)}${
-            s.seed != null ? ` · seed ${s.seed}` : ""
-          }</span>
-          <span class="sc-row-desc muted">${escapeHtml(s.description || "")}</span>
-        </div>
-        <div class="sc-row-sections muted">${sections}</div>
-        <div class="sc-row-badge">${badgeHtml(s.name, isRunning)}</div>
-        <div class="sc-row-actions"></div>
-      `;
-      const actions = row.querySelector(".sc-row-actions");
-      if (isRunning) {
-        actions.appendChild(mkBtn("Stop", stopRun));
-      } else {
-        const run = mkBtn("Run", () => startRun(s.name));
-        run.disabled = !!running; // one journal at a time
-        run.title = running ? `${running} is running — stop it first` : "Run live";
-        actions.appendChild(run);
-      }
-      el.appendChild(row);
-    }
-  }
-
-  function badgeHtml(name, isRunning) {
-    if (isRunning) return `<span class="sc-badge running">running</span>`;
-    // Last-run result lives on the single journal, so only the
-    // most-recently-run scenario carries a badge.
-    if (name === journalName() && summary?.ended_at && report) {
-      const p = report.checks_passed || 0;
-      const f = report.checks_failed || 0;
-      if (p + f === 0) return `<span class="sc-badge">ran</span>`;
-      return `<span class="sc-badge ${f === 0 ? "pass" : "fail"}">✓${p} ✗${f}</span>`;
-    }
-    return "";
-  }
-
-  // ── run view ────────────────────────────────────────────────────────
-  function renderRunView() {
-    const view = document.getElementById("sc-run-view");
-    if (!view) return;
-    const name = journalName();
-    const sc = name && scenarioByName(name);
-    if (!name || !sc) { view.hidden = true; return; }
-    view.hidden = false;
-
-    const running = runningName() === name;
-    const elapsed = report ? report.scenario_elapsed_s : summary ? summary.elapsed_s : 0;
-    document.getElementById("sc-run-name").textContent = name;
-    const status = document.getElementById("sc-run-status");
-    status.textContent = running ? "running" : "stopped";
-    status.className = `sc-badge ${running ? "running" : ""}`;
-    document.getElementById("sc-run-elapsed").textContent =
-      `${Math.round(elapsed || 0)}s${sc.length_s ? ` / ${fmtSecs(sc.length_s)}` : ""}`;
-    const stopBtn = document.getElementById("sc-run-stop");
-    if (stopBtn) stopBtn.disabled = !running;
-
-    renderRunTimeline(sc, elapsed || 0);
-    renderMetrics();
-    renderChecks();
-    renderEvents();
-    renderCsv();
-  }
-
-  // Cues + checks positioned over the run length; fired once elapsed
-  // passes their time, and checks coloured by their recorded result.
-  function renderRunTimeline(sc, elapsed) {
-    const track = document.getElementById("sc-run-timeline");
-    if (!track) return;
-    track.innerHTML = "";
-    const tl = sc.timeline || [];
-    if (tl.length === 0) {
-      track.innerHTML = `<span class="muted">no cues or checks</span>`;
-      return;
-    }
-    const span = sc.length_s || Math.max(...tl.map((t) => t.at_s), 1);
-    // Recorded checks arrive oldest-first; correlate to timeline checks
-    // (also oldest-first) by position.
-    const reportChecks = report?.checks || [];
-    let checkIdx = 0;
-    for (const t of tl) {
-      const dot = document.createElement("div");
-      dot.className = `sc-tl-mark sc-tl-${t.kind}`;
-      dot.style.left = `${Math.min(100, (t.at_s / span) * 100).toFixed(1)}%`;
-      let state = elapsed >= t.at_s ? "fired" : "pending";
-      let detail = "";
-      if (t.kind === "check") {
-        const rc = reportChecks[checkIdx++];
-        if (rc) {
-          state = rc.passed ? "pass" : "fail";
-          detail = ` — ${rc.expectation}${rc.actual != null ? ` (got ${rc.actual})` : ""}`;
-        }
-      }
-      dot.classList.add(`sc-tl-${state}`);
-      dot.title = `${t.label} @${t.at_s}s${detail}`;
-      track.appendChild(dot);
-    }
-  }
-
-  function renderMetrics() {
-    const el = document.getElementById("sc-run-metrics");
-    if (!el) return;
-    if (!report) { el.innerHTML = ""; return; }
-    const rows = [
-      ["peak import", `${(report.peak_grid_w / 1000).toFixed(1)} kW`],
-      ["battery charged", `${report.total_battery_charged_wh.toFixed(0)} Wh`],
-      ["battery discharged", `${report.total_battery_discharged_wh.toFixed(0)} Wh`],
-      ["PV produced", `${report.total_pv_produced_wh.toFixed(0)} Wh`],
-    ];
-    if (report.soc_stats) rows.push(["SoC mean", `${report.soc_stats.mean_pct.toFixed(0)}%`]);
-    el.innerHTML =
-      `<h3>metrics</h3>` +
-      rows.map(([k, v]) => `<div class="sc-metric"><span>${k}</span><b>${v}</b></div>`).join("");
-  }
-
-  function renderChecks() {
-    const el = document.getElementById("sc-run-checks");
-    if (!el) return;
-    const checks = report?.checks || [];
-    const head = `<h3>checks ${report ? `(${report.checks_passed}✓ ${report.checks_failed}✗)` : ""}</h3>`;
-    if (checks.length === 0) { el.innerHTML = `${head}<p class="muted">none yet</p>`; return; }
-    const rows = checks.map((c) =>
-      `<div class="sc-check ${c.passed ? "pass" : "fail"}">
-        <span>${c.passed ? "✓" : "✗"}</span>
-        <span>#${c.component_id} ${escapeHtml(c.metric)}</span>
-        <span class="muted">${escapeHtml(c.expectation)}${c.actual != null ? ` · got ${c.actual}` : ""}</span>
-      </div>`).join("");
-    el.innerHTML = `${head}${rows}`;
-  }
-
-  function renderEvents() {
-    const el = document.getElementById("sc-run-events");
-    if (!el) return;
-    if (events.length === 0) { el.innerHTML = `<h3>events</h3><p class="muted">none</p>`; return; }
-    const recent = events.slice(-12).reverse();
-    el.innerHTML =
-      `<h3>events</h3>` +
-      recent.map((e) =>
-        `<div class="sc-event"><code>${escapeHtml(e.kind)}</code> ${escapeHtml(String(e.payload))}</div>`,
-      ).join("");
-  }
-
-  function renderCsv() {
-    const el = document.getElementById("sc-run-csv");
-    if (!el) return;
-    if (!csv.files || csv.files.length === 0) { el.innerHTML = ""; return; }
-    const links = csv.files.map((f) => {
-      if (readoutMg == null) return `<span class="sc-csv-link">${escapeHtml(f)}</span>`;
-      const href = `/api/mg/${readoutMg}/scenario/csv/${encodeURIComponent(f)}`;
-      return `<a class="sc-csv-link" href="${href}" download>${escapeHtml(f)}</a>`;
-    }).join("");
-    el.innerHTML = `<h3>recorded csv${csv.dir ? ` <span class="muted">${escapeHtml(csv.dir)}</span>` : ""}</h3>${links}`;
-  }
-
-  function updateActiveChip() {
-    const chip = document.getElementById("active-scenarios");
-    if (!chip) return;
-    const name = runningName();
-    if (!name) { chip.hidden = true; chip.textContent = ""; return; }
-    chip.hidden = false;
-    chip.textContent = `running: ${name}`;
-    chip.title = "Click to view it in Scenarios mode";
-  }
-
-  // ── actions ─────────────────────────────────────────────────────────
-  async function startRun(name) {
-    try {
-      await mutate("POST", `/api/scenarios/${encodeURIComponent(name)}/start`);
-    } catch (err) {
-      notify(`run failed: ${err.message}`);
-    }
-    await refresh();
-  }
-  async function stopRun() {
-    try {
-      await mutate("POST", "/api/scenarios/stop");
-    } catch (err) {
-      notify(`stop failed: ${err.message}`);
-    }
-    await refresh();
-  }
-
-  function render() {
-    renderList();
-    renderRunView();
-    updateActiveChip();
-  }
-
-  // JSON body of `/api/mg/{mg}/{suffix}`, a background request named by
-  // its suffix; null when `mg` is null.
-  const getMgJson = async (mg, suffix) => {
-    if (mg == null) return null;
-    return getJson(`/api/mg/${mg}/${suffix}`, suffix);
-  };
-  // `scenarioMgId`, with a failed listing read as no microgrid.
-  const readoutMgId = () => scenarioMgId().catch(() => null);
-  const settled = (r, fallback) => (r.status === "fulfilled" ? r.value : fallback);
-
-  async function refresh() {
-    // Two stages of concurrent fetches: the journal reads depend on
-    // the summary's name, nothing else depends on anything — so
-    // latency is two round-trips, not five (three with no microgrid
-    // selected, where the summary waits on the listing).
-    const mgP = readoutMgId();
-    const [sc, sum] = await Promise.allSettled([
-      getJson("/api/scenarios", "scenarios"),
-      mgP.then((mg) => getMgJson(mg, "scenario")),
-    ]);
-    const mg = await mgP;
-    scenarios = settled(sc, []);
-    summary = settled(sum, null);
-    readoutMg = mg;
-    if (journalName()) {
-      const [rep, ev, cs] = await Promise.allSettled([
-        getMgJson(mg, "scenario/report"),
-        getMgJson(mg, "scenario/events?limit=50"),
-        getMgJson(mg, "scenario/csv"),
-      ]);
-      report = settled(rep, null);
-      events = settled(ev, null)?.events || [];
-      csv = settled(cs, null) ?? { dir: null, files: [] };
-    } else {
-      report = null;
-      events = [];
-      csv = { dir: null, files: [] };
-    }
-    render();
-    schedulePoll();
-  }
-
-  // Keep the header chip live from the one summary fetch when the
-  // Scenarios mode is hidden — the full 5-fetch refresh only runs
-  // while its panels are actually showing.
-  async function refreshChip() {
-    try {
-      summary = await getMgJson(await readoutMgId(), "scenario");
-    } catch (_) {
-      summary = null;
-    }
-    updateActiveChip();
-  }
-
-  function schedulePoll() {
-    if (pollTimer) return;
-    // Server-side scenario time + checks have no WS push, so the run
-    // view stays live on a 3 s poll while the mode shows. Hidden, only
-    // the header chip needs a signal — one summary fetch, and at a
-    // 15 s cadence: a scenario starting elsewhere is a coarse event,
-    // not something worth polling at run-view rates forever.
-    let tick = 0;
-    pollTimer = setInterval(() => {
-      if (document.body.dataset.mode === "scenarios") refresh();
-      else if (++tick % 5 === 0) refreshChip();
-    }, 3000);
-  }
-
-  function setup() {
-    document.getElementById("sc-run-stop")?.addEventListener("click", stopRun);
-    document.getElementById("active-scenarios")?.addEventListener("click", () => {
-      document.querySelector("#mode-toggle .mode-btn[data-mode='scenarios']")?.click();
-    });
-    refresh();
-  }
-  return { setup, refresh };
 })();

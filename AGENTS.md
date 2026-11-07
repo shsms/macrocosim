@@ -1,39 +1,38 @@
 # macrocosim
 
-A Rust microgrid simulator with a Lisp-driven config DSL. Reimplementation of
-microsim where component physics lives in Rust and Lisp's job
-is wiring the topology + animating the environment.
+A Rust microgrid simulator for testing downstream control apps. Component
+physics lives in Rust; a Python script declares the topology (a JSON topology
+document the engine builds) and animates the environment over the HTTP API.
+Reimplementation of microsim.
 
 ## Layout
 
 - `src/lib.rs` — module roots
-- `src/engine.rs` — `Engine`: the simulator state without an
-  interpreter (registry, dispatch store, enterprise `Metadata` in
-  `engine/metadata.rs`, grid frequency, clock, create lock); every
-  server and handler that runs no Lisp takes one. `engine/topology.rs`
-  is every structural change to a microgrid with a stored spec:
-  `create` builds and registers one, `rebuild` swaps in a new spec
-  with carry (a component carries when its defaults-filled spec is
-  unchanged under the same id) and moves the gRPC server when
-  `grpc_port` changes, `unload` removes one (registry entry first,
-  then its runtime, scenario journal and CSV sinks, dispatches and
-  undo stacks, then the `microgrid_unloaded` broadcast),
-  `check_ids` keeps component ids unique across the engine,
-  `apply_hello` applies a script child's microgrids (a registered id
-  must have the script as its `source`). A registry entry's `spec` is that stored spec, or
-  `None` for a Lisp-loaded microgrid; Lisp leaves an entry with a spec
-  alone (reload, replay and save skip it, and a structural form on it
-  is refused, which the eval routes answer with 409)
+- `src/engine.rs` — `Engine`: the simulator state every server and
+  handler shares (registry, dispatch store, enterprise `Metadata` in
+  `engine/metadata.rs`, grid frequency, the source of "now", the
+  structural lock, the spec undo stacks). `engine/topology.rs` is every
+  structural change to a microgrid, each taking a `Structural` guard on
+  that lock (`Engine::structural`): `create` builds and registers one,
+  `rebuild` swaps in a new spec with carry (a component carries when its
+  defaults-filled spec is unchanged under the same id, its name,
+  health and modes aside) and moves the gRPC server when `grpc_port` changes,
+  `edit` is a rebuild that also stacks the replaced spec for undo and
+  marks a file-backed microgrid unsaved, `unload` removes
+  one (registry entry first, then its runtime, recording and CSV sinks,
+  dispatches and undo stacks, then the `microgrid_unloaded`
+  broadcast), and `apply_hello` applies a script child's microgrids (a registered id
+  must have the script as its `source`). Every change keeps component
+  ids unique across the engine. A registry entry's `spec` is
+  the spec the microgrid was last built from, with every id filled in
 - `src/spec.rs` — the topology document (`TopologyDoc`,
   `MicrogridSpec`, `ComponentSpec`): one flat JSON document of
   microgrids, components and connections; `spec/defaults.rs` the
-  per-type `Defaults` table (the values of `sim/defaults.lisp`) and
-  `fill`; `spec/order.rs` the children-first walk and cycle check the
-  build and the site import share; `spec/build.rs` `build_topology`
-  (checks a spec and builds its components without touching a site)
-  and `runtime_from_modes`, which Lisp's make functions call too;
-  `spec/schema.rs` the JSON Schema, derived at run time. Lisp does
-  not use specs
+  per-type `Defaults` table (`GET /api/defaults`) and `fill`;
+  `spec/order.rs` the children-first walk and cycle check the build and
+  the site import share; `spec/build.rs` `build_topology` (checks a spec
+  and builds its components without touching a site) and `runtime_from_modes`;
+  `spec/schema.rs` the JSON Schema, derived at run time
 - `src/version.rs` — `VERSION`, the crate version in PEP 440 form
   (`0.2.0-alpha.0` is `0.2.0a0`), the form the Python package carries
 - `src/undo.rs` — `UndoHistory<T>`, the per-microgrid undo / redo
@@ -55,13 +54,14 @@ is wiring the topology + animating the environment.
   `$MACROCOSIM_PYTHON`, beside the binary, `PATH`) and checks it: 3.11
   or later with the `macrocosim` package of the binary's version. A
   passed check is kept for the engine's life; a failed one runs again
-  on the next script start or export. The `.py` export (`GET /api/mg/{mg}/spec.py`) pipes
+  on the next export (a script start checks once, and a failure exits).
+  The `.py` export (`GET /api/mg/{mg}/spec.py`) pipes
   the stored spec into `python -P -m macrocosim.export`, one export at
   a time
 - `src/watch.rs` — the debounced file watcher: `Files` watches a named
-  set of files and re-arms them after an atomic save (the Lisp hot
-  reload in `lisp/boot.rs`); `Tree` watches every directory under a
-  root that passes a filter, adding new ones
+  set of files and re-arms them after an atomic save; `Tree` watches
+  every directory under a root that passes a filter, adding new ones
+  (the script runner's)
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback), its
   started / failed status, and the handles of the tasks it started:
@@ -73,14 +73,23 @@ is wiring the topology + animating the environment.
     (`Controllable`, `DcStorage`, `ReactiveLimits`, and the knob
     traits `MeterDrive`, `SunlightDrive`, `SteamDrive`, `EvPort`),
     each reached through an accessor on `SimulatedComponent`
+  - `scalar.rs` — `Scalar`, an `f32` in an atomic: a knob the physics
+    tick reads and a write replaces (a meter's power, a boiler's
+    demand, a driven sunlight)
   - `microgrid_site/` — per-microgrid registry, physics tick, grid state,
-    topology (+ `history.rs` sampler, `scenarios.rs` event log,
+    topology (+ `history.rs` sampler, `recording.rs` the recording
+    journal's start / stop / event / report and its CSV sinks,
     `swap.rs` the rebuild with carry: `swap_topology` installs a built
     topology in place, restoring each matching component's
     `PhysicsState` and keeping its history and energy, while weather,
     grid state, sample lag and the UI's aggregate energy, keyed on the
     `energy_epoch` only `reset()` moves, stay)
-  - `microgrids.rs` — enterprise registry + per-mg routing
+  - `recording.rs` — `RecordingJournal`, the event ring and the
+    metric accumulators a recording's report reads; `recording_csv.rs`
+    its per-component CSV sinks
+  - `microgrids.rs` — the enterprise registry: `MicrogridEntry`
+    (definition, site, source file, `unsaved`, spec), id and port
+    allocation
   - `dispatch.rs` — enterprise dispatch store (per-`microgrid_id`, id
     allocator, lifecycle broadcast); backs the dispatch gRPC + UI
   - `bounds.rs` — `VecBounds`, `ComponentBounds` (the list of TTL
@@ -111,53 +120,35 @@ is wiring the topology + animating the environment.
   - `marker.rs` — no-physics categories (chp, wind turbine, power
     transformer, breaker); they classify the meters around them and
     pass their children's power up to the meter above
+  - `sim_clock.rs` — `NowSource` (the wall clock, or a fixed base plus
+    a `ManualClock` the physics tests advance by hand)
   - `site_import.rs` — microgrid API site-export JSON → the
     `MicrogridSpec` `/api/microgrids/import` creates, keeping the
     export's component ids
   - `graph_adapter.rs` — lifts a site into
     `frequenz-microgrid-component-graph` nodes/edges (validation +
     the formula endpoint behind the formula explorer panel)
-- `src/lisp/` — config DSL glue
-  - `mod.rs` — `Config` (the interpreter around an `Engine`;
-    fields, accessors, reload)
-  - `boot.rs` — `Config::new`: interpreter setup, defun registration,
-    tulisp-async wiring, background loops
-  - `defuns/` — every `register_*` installer, one file per topic
-    (clock, scenarios, microgrids, metadata, runtime_modes, …)
-  - `microgrid_file.rs` — text format for a managed microgrid file
-    (generated block + script section); `parse` / `compose` /
-    `render_block`
-  - `overrides.rs` — structural-eval persist-on-write: regenerates a
-    microgrid's managed file, or `enterprise.lisp` for enterprise-wide
-    state
-  - `undo.rs` — per-microgrid undo over the managed-file rewrites, on
-    the stack type in `src/undo.rs`
-  - `snapshots.rs` — per-mg snapshot save/load under `snapshots/{id}/`
-  - `make.rs` — `(make-*)` constructors via `AsList!`
-  - `handle.rs` — `ComponentHandle` as an opaque lisp value
 - `src/ui/` — embedded web UI server
   - `mod.rs` — axum router + serve entry points
   - `api.rs` — `ApiError`, the extractor wrappers (`Json`, `Query`,
-    `Path`, `Text`, `WsUpgrade`, `Mg`) and the JSON fallbacks
-  - `handlers/` — HTTP handlers, one file per topic (topology, eval,
-    scenarios, dispatches, …)
+    `Path`, `WsUpgrade`, `Mg`) and the JSON fallbacks
+  - `handlers/` — HTTP handlers, one file per topic (topology, spec,
+    control, recording, dispatches, …)
   - `state.rs` / `loopback.rs` / `events_ws.rs` — loopback client cache,
     gRPC loopback supervisor, WS event push (one forwarder per
     microgrid, reconciled against the registry on every registered or
     unloaded notice, so a microgrid created again under an
     unloaded id is followed)
-  - `app_state.rs` — `AppState`, the router's state: the `Engine`,
-    plus the `Config` for the handlers that evaluate Lisp; a handler
-    takes `State<Engine>` or `State<Config>`
+  - `app_state.rs` — `AppState`, the router's state: the `Engine`, the
+    `MicrogridRuntimes` and their loopback slots, the `.py` export's
+    interpreter (`Export`) and the script's supervisor (`Runner`); a
+    handler takes the part it uses, such as `State<Engine>`
 - `ui-assets/` — the SPA as hand-rolled ES modules (`app.js` is the
   entry; `topology.js`, `live.js`, `metrics-store.js`,
-  `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
+  `metrics-panel.js`, `inspect.js`, `routing.js`,
   `events-ws.js` (the events socket's pump, the Logs panel's head and
   its backfill), `chrome.js` (the top bar: the zone and theme chips,
   the script chip with its status popover, the system pulse),
-  `repl-symbols.js` (the names the REPL completes and describes, from
-  `/api/symbols`, which lists every name the interpreter defines with its
-  kind, signature and docstring),
   `dialogs.js`, `editor.js`, … own one concern each;
   `http.js` the failed-response reader (`errorText`, `getJson`) and
   `bgFetch`; `html.js` `escapeHtml`, with no DOM so the node tests can
@@ -165,10 +156,9 @@ is wiring the topology + animating the environment.
   `notices.js` toasts, form errors and the UI's log lines;
   `connection.js` whether the server can be reached, and its banner;
   `logs.js` the logs panel's rows; `storage.js` guarded localStorage;
-  `repl-keys.js` the REPL's history and Emacs keys, DOM-free;
-  `zone.js` the display zone (the sim zone or UTC, from the top bar's
-  zone chip) every shown time goes through: the formatters, `<time>`
-  elements it re-formats on a switch, uPlot's `tzDate`, and the
+  `zone.js` the display zone (the browser's local zone or UTC, from the
+  top bar's zone chip) every shown time goes through: the formatters,
+  `<time>` elements it re-formats on a switch, uPlot's `tzDate`, and the
   wall-time conversion for `datetime-local` fields; imported as
   `* as zone`, so call sites read `zone.fmtTime`, `zone.tzDate`;
   `theme.js` the colour theme (auto follows the OS, or light or dark
@@ -189,13 +179,13 @@ is wiring the topology + animating the environment.
   owns the node model and canvas renderer both graph canvases draw
   with, and the zoom tiers (full / hero / marker); `hovercard.js`
   the node hover card (pure model + DOM widget); `side-panel.js` the
-  card shell every panel (inspector, formulas, metrics, weather, REPL,
-  logs, Defaults, Report) opens in — static-markup cards are listed in
+  card shell every panel (inspector, formulas, metrics, weather, logs,
+  Defaults, Report) opens in — static-markup cards are listed in
   its `STATIC_PANELS` with their scroll band, which a card's measured
   floor (`floorOf`) holds at its min-height; per-panel width, spawn
   corner and first dock edge in `PANEL_DEFAULTS`; a card docks into the
   bottom or right strip (`#dock-bottom`, `#dock-right`) the first time it
-  opens (the REPL and logs at the bottom, the rest on the right) and
+  opens (the logs at the bottom, the rest on the right) and
   keeps the user's own dock or float choice after that
   (`STRIPS` holds each strip's ids, axis, sizes and the room it leaves
   the rest of main; `dockPanel(name, edge)` / `floatPanel` /
@@ -215,18 +205,16 @@ is wiring the topology + animating the environment.
     streams, with each chip reading out PF against its own P stream
     and an optional dashed PF overlay on a right-hand scale (both
     from `metrics-store.js` `pfValue` / `pfText`); the inspector's
-    knob table offers
-    `set-reactive-power` on inverters and `set-meter-reactive-power`
-    / `set-meter-power-factor` (with a `leading` checkbox) on meters.
+    knob table offers an inverter's reactive limits and a meter's
+    reactive power or power factor (with a `leading` checkbox).
 - `tools/ui-smoke/` — Playwright smoke scripts against a live server
   (`MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`
   points it at a server you already run). The e2e half drives the Starter site
-  (microgrid 2200) from a scratch state dir. `repl.mjs` drives the REPL's
-  history, Emacs keys and layout with real key presses, in Chromium or, given
-  `firefox` as its argument, Firefox (after `npx playwright install firefox`).
-  `make ui-e2e` boots one server and runs
-  both, and the `ui-e2e` job in `.github/workflows/ci.yml` does the same on
-  pushes to main and PRs targeting main.
+  (microgrid 2200) from a scratch state dir, and sends gRPC setpoints through
+  the `macroctl` binary named by `MACROCTL`. `make ui-e2e` builds both binaries,
+  boots one server and runs it, and the `ui-e2e` job in
+  `.github/workflows/ci.yml` does the same on pushes to main and PRs targeting
+  main.
 - `src/server.rs` — `Microgrid` gRPC service
 - `src/assets_server.rs` — `PlatformAssets` gRPC service (shared port)
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
@@ -235,116 +223,59 @@ is wiring the topology + animating the environment.
   `MetricSample`s
 - `src/timeout_tracker.rs` — request-lifetime deadlines on the site
   clock, owned by the gateway and expired on the physics tick
-- `src/tokio_runtime.rs` — the tokio runtime of `macrocosim`, with
-  thread stacks deep enough for its Lisp code
 - `src/bin/macrocosim.rs` — headless server
 - `src/bin/macroctl.rs` — clap-based client CLI
-- `sim/common.lisp` — Lisp helpers (`every`, `cancel-timers`,
-  `reset-state`); embedded into the binary with `defaults.lisp` +
-  `scenarios.lisp` as the prelude
-- `examples/starter-site.lisp` — self-contained demo world: generated
-  topology block + a script section with the environment animation
-  and the seven starter scenarios. Boot scripts are optional
-  (`macrocosim [script …]`); a bare boot loads worlds on demand via
-  `(load …)` / the Microgrids tab, and `--state-dir` anchors
-  `microgrids/`, `enterprise.lisp`, `snapshots/`, and relative paths
-- `examples/starter_site.py` — the same world as a Python script
+- `examples/starter_site.py` — the demo world as a Python script
   (`macrocosim examples/starter_site.py`): `MICROGRIDS`, the animation
   in `run`, and the seven scenarios as async functions;
   `examples/scenario_driving.py` imports it for a 30-minute recorded
-  stress run. `tests/parity.rs` checks that both starter sites serve
-  the same topology. `python/pyproject.toml` puts `examples/` on ty's
+  stress run. `python/pyproject.toml` puts `examples/` on ty's
   and ruff's first-party paths, since the scripts import each other
-
-## Managed microgrid files
-
-Each microgrid lives in one `.lisp` file: a macrocosim-generated
-block (`;;; macrocosim:generated` … `;;; macrocosim:end`) holding a
-full `(make-microgrid :id … :name … :grpc-port … :topology (lambda ()
-…))` — every component as a flat `%make-*` plus `connect` calls,
-rewritten from live state on every structural eval — followed by a
-hand-written script section that runs after the structure, in that
-microgrid's scope, on every load (scenarios, `set-meter-power`
-sources, `every` drivers; never component construction — the
-generated block owns structure, and constructing more in the script
-section collides with it on the next load).
-`microgrid_file::{parse,compose,render_block}` split / rejoin /
-derive the two sections. `(set-microgrid-name ID NAME)` and
-`(set-microgrid-tso ID TSO)` edit the head's own arguments and
-persist like any other structural edit; the `:grpc-port` has no
-setter on purpose — a bound gRPC address is fixed, so moving one
-needs an unload (a later sub-project).
-
-Files load explicitly — `(load "path.lisp")`, a boot-script arg, or
-the UI's Load — never implicitly. Loading a second file that declares
-an id already owned by a DIFFERENT file is a hard error naming the
-owner; re-loading the SAME file re-registers its microgrid in place,
-reusing the live site so its running physics / gRPC survive. A
-driver-only script — timers perturbing somebody else's world, no
-`(make-microgrid …)` of its own — is watched and hot-reloaded per
-file just like any other loaded file, but a *whole-world* reload
-(the undo/settings-failure path) only replays files that register a
-microgrid; a driver-only script sits out of that replay list.
-
-"Load as N" (`Config::load_as`, `POST /api/load-as`) answers that
-collision by copying the managed file to `microgrids/N.lisp` and
-re-numbering everything the enterprise makes unique: the head's
-`:id` becomes N, `:grpc-port` becomes a free one (the original's is
-held by its bound gRPC server), and every component in the
-`:topology` lambda gets a fresh `:id` off the enterprise allocator,
-with each `(connect a b)` moved to match. Without the component
-re-mint a copy of a *populated* live microgrid always fails
-("component id X is already registered in microgrid Y") — component
-ids are enterprise-unique and a generated block pins every one of
-them. Unmanaged files are refused: there is no generated block to
-re-number mechanically. Only the generated block is re-numbered —
-the hand-written script section is the author's and is copied
-verbatim, so any component id it names (a `set-meter-power` source,
-an `every` driver) still points at the ORIGINAL's components and
-has to be hand-fixed after a load-as.
-
-`enterprise.lisp` carries enterprise-wide state: id, timezone,
-request-lifetime bounds, the assets/dispatch socket addresses, and
-every `*-defaults` plist. `Config::persist_enterprise` rewrites it
-whenever an eval touches enterprise-wide state — same two-section
-shape as a microgrid file.
-
-Per-microgrid snapshots live under `snapshots/{microgrid_id}/{name}.lisp`
-(`src/lisp/snapshots.rs`) — a frozen copy of that microgrid's managed
-file; loading one writes it back over the live file and reloads just
-that microgrid. Undo (`src/lisp/undo.rs`) is per-microgrid too: one
-stack per mg id over the managed-file rewrites.
-
-The pre-migration overrides journal and `(load-overrides)` replay are
-gone. `load-overrides` survives only as a no-op deprecation shim in
-`sim/common.lisp` — a warning for any old, unmigrated file that still
-calls it ("this microgrid predates managed files — use Adopt in the
-UI").
+- `python/` — the `macrocosim` Python package: the spec dataclasses
+  (`_spec.py`, where each `make_*` constructor is its dataclass), the knob handles (`_components.py`,
+  `_signals.py`), recording, `launch` and `connect`, the script runner
+  (`_runner.py`) and the exporter (`export.py`)
 
 ## Architectural rules
 
-- **Lisp wires + animates the environment, Rust does physics.** Every
-  component's tick / ramp / SoC is in Rust. Lisp's only verbs are
-  `(make-*)` to build the graph and `(every …)` / `(run-with-timer …)` to
-  perturb grid state or flip runtime knobs over time.
+- **A script declares the topology and animates the environment, Rust
+  does physics.** Every component's tick / ramp / SoC is in Rust. A
+  script's only verbs are its `MICROGRIDS` (a topology document the
+  engine builds) and knob writes over the HTTP API, driven from
+  ordinary asyncio loops.
+- **Module style.** Rust 2018: a new module with children is `foo.rs`
+  beside a `foo/` directory, never `foo/mod.rs`. `sim/`,
+  `sim/inverter/`, `sim/microgrid_site/`, `ui/` and `ui/handlers/`
+  still use `mod.rs`.
 - **One gateway per microgrid holds every Microgrid API rule.** The
-  gRPC service and the Lisp setpoint / augmentation commands talk to
-  `site.gateway()`; the components are plain hardware with one command
-  input per power axis (`Controllable::set_command`). The gateway
-  validates (0 is always accepted; NaN never), arms request lifetimes
-  and stamps augmentations on the site clock, expires both on the
-  physics tick (`gateway.step` runs in `tick_once` before the
-  components), and refuses a command whose site was reset since its
-  lookup ("site was reset"). The protocol layer — fault gates,
-  over-bound fault injection, the setpoint journal, lifetime windows —
-  stays in `server.rs`. Lock order: gateway → registry read guards →
-  component locks; the gateway lock is never held across an `.await`.
-  Outside all of them, the engine's `create_lock` (a tokio mutex) is
-  the one structural lock: create, import, load-as, a spec `PUT`, an
-  unload and a script's hello hold it, then the runtimes' `start_lock`
-  (which `start`, `stop` and `restart_grpc` take), then the order
-  above. The script supervisor's own `ops` lock (a reload replacing the
-  pending child, a hello) is taken before `create_lock`.
+  gRPC service talks to `site.gateway()`; the components are plain
+  hardware with one command input per power axis
+  (`Controllable::set_command`). The gateway validates (0 is always
+  accepted; NaN never), arms request lifetimes and stamps augmentations
+  on the site clock, expires both on the physics tick (`gateway.step`
+  runs in `tick_once` before the components), and refuses a command
+  whose site was reset or rebuilt since its lookup ("site was reset").
+  The protocol layer — fault gates, over-bound fault injection, the
+  setpoint journal, lifetime windows — stays in `server.rs`.
+- **Lock order.** Outermost first:
+  1. the script supervisor's own `ops` lock (a reload replacing the
+     pending child, a hello);
+  2. the engine's structural lock, a `tokio::sync::Mutex`: create,
+     import, a spec `PUT`, undo, an unload and a script's hello hold
+     it, and every `topology` function takes its `Structural` guard. An
+     unload inside a hello runs under that hello's guard. The HTTP
+     routes run each change in its own task (`handlers::detached`), so
+     a client that hangs up cannot leave one half applied;
+  3. the runtimes' `start_lock` (a `tokio::sync::Mutex`, which `start`,
+     `stop` and `restart_grpc` take);
+  4. the gateway lock;
+  5. the registry (`parking_lot::Mutex`), taken briefly and never held
+     across an `.await`, then the runtimes' map;
+  6. component locks.
+
+  Knob writes take no structural lock: a write that finds its
+  component id gone answers 404. The gateway lock is never held across
+  an `.await`.
 - **An axis is a `GatewayAxis` in the gateway plus a `DeviceAxis` in
   the component.** The chain is gateway delay → gateway ramp → device
   delay → output. Each step the gateway targets the armed command
@@ -355,20 +286,20 @@ UI").
   share — a narrowing is followed at once, a widening is climbed at
   the ramp rate. The validation envelope is the rated band (P) or the
   `ReactiveCapability` at the last measured P (Q) ∩ live
-  augmentations; `:reactive-pf-limit` sets `k` in `|Q| ≤ k × |P|` — a
+  augmentations; `reactive_pf_limit` sets `k` in `|Q| ≤ k × |P|` — a
   ratio of apparent quantities, not true power factor. The device
   output is the delayed command clamped to the rated band and the
   current physical band, so a direct `Controllable::set_command` is
   capped too. A health trip snaps both to 0, empties the delay line,
   and clears the command unless
   `Controllable::keeps_command_through_fault` (PV active, a charger
-  with `:resume-on-recovery`). The EV charger's axis produces the
+  with `resume_on_recovery`). The EV charger's axis produces the
   *limit* it offers the plugged car, not the draw.
 - **The battery is hardware from 0 % to 100 %; the SoC window is the
   gateway's.** The battery's `tick` clamps the summed inverter pushes
   to the rated band, refusing charge at 100 % and discharge at 0 %.
   The gateway throttles each battery's bounds from its SoC
-  (`:soc-lower-pct`, `:soc-upper-pct`, `:soc-protect-margin-pct`, taper base 1.2,
+  (`soc_lower_pct`, `soc_upper_pct`, `soc_protect_margin_pct`, taper base 1.2,
   floor 0.3) and, each step, shares the room between the inverters
   pushing into it in proportion to their pushes (same sign only), so a
   running setpoint tapers and holds inside the window within one
@@ -380,51 +311,41 @@ UI").
   publishes 0 (P and Q) when it is tripped or when no healthy child
   took its push. Reactive power terminates at the inverter: a DC bus
   carries no Q. A meter's own reactive source is the real thing:
-  mutually-exclusive `:reactive-power-var` (a VAr constant, lambda, or
-  symbol) or `:power-factor` + `:leading` (true cos φ in `(0, 1]`,
-  deriving `Q = P·tan(acos(pf))` off the meter's own live P, negated
-  when leading). Like `:power-w`, a fixed numeric reactive source
-  freezes into the persisted managed file; a lambda or symbol source
-  doesn't, and leaves the meter unrenderable.
+  mutually-exclusive `reactive_power_var` or `power_factor` +
+  `leading` (true cos φ in `(0, 1]`, deriving `Q = P·tan(acos(pf))`
+  off the meter's own live P, negated when leading).
 - **Single physics tick, registration order = tick order.** `MicrogridSite::spawn_physics`
   runs one `tokio::time::interval` at `physics_tick_ms` and calls `tick()` on
-  every component in registration order. Children register first because Lisp
-  evaluates `:successors` before the surrounding `make-*`.
+  every component in registration order. The spec build registers children
+  before their parents (`spec::order`).
 - **Telemetry stream cadence is anchored to a target timestamp.** `next_due +=
   step` then `sleep until next_due`; re-anchor only when behind. Per-stream
-  `:stream-jitter-pct` perturbs each step; mean is exactly the configured
+  `stream_jitter_pct` perturbs each step; mean is exactly the configured
   interval.
 - **Site weather is one singleton per microgrid, not per-component.**
-  `(make-weather …)` installs a parametric clear-sky day (a sunrise/sunset
-  window, a sine peaking at `:peak-pct`) plus an optional ambient cloud
-  generator; `(set-weather …)` retunes any of it in place; `(pass-cloud
-  DEPTH DURATION &optional RAMP)` scripts one deterministic cloud;
-  `(weather-status)` reads the sky back as an alist (`src/lisp/defuns/weather.rs`,
-  `src/sim/weather.rs`). A solar inverter with no `:sunlight-pct` follows the
-  site's weather (`:weather-lag-s` / `:weather-jitter-pct` lag and roughen
-  the sample it reads — Follow-only; with no explicit lag each inverter
-  gets a stable id-derived 0–60 s offset so a cloud sweeps across a
-  multi-PV site, and `:weather-lag-s 0` opts out; `:array-peak-w` sizes
-  the DC array whichever source the sunlight comes from); passing
-  `:sunlight-pct` explicitly makes it Manual instead, and
-  `(clear-solar-sunlight ID)` is the way back to Follow.
-  `GET`/`POST /api/mg/{mg}/weather` mirror the same four doors for the
-  weather panel (day curve, live site-% readout, pass-a-cloud
-  trigger), which has no Lisp console of its own; a `seed` in the
-  `POST` rebuilds the weather as `:seed` does, and `DELETE` removes
-  the weather.
+  `POST /api/mg/{mg}/weather` installs a parametric clear-sky day (a sunrise/sunset window, a sine peaking at `peak_pct`)
+  plus an optional ambient cloud generator; a later `POST` retunes any
+  of it in place, and its `pass_cloud` scripts one deterministic cloud;
+  `GET` reads the sky back (`src/ui/handlers/weather.rs`,
+  `src/sim/weather.rs`). A solar inverter with no `sunlight_pct` follows
+  the site's weather (`weather_lag_s` / `weather_jitter_pct` lag and
+  roughen the sample it reads — with no explicit lag each inverter gets
+  a stable id-derived 0–60 s offset so a cloud sweeps across a multi-PV
+  site, and `weather_lag_s` 0 opts out; `array_peak_w` sizes the DC
+  array whichever source the sunlight comes from); a driven
+  `sunlight_pct` makes it manual instead, and the `drive` route's
+  `clear_sunlight` is the way back to following the weather. A `seed`
+  in the `POST` rebuilds the weather, and `DELETE` removes it.
 
 ## HTTP API
 
-- Whole-site routes live under `/api/` (microgrids, load, load-as,
-  import, eval, format, symbols, defaults, logs, clock, frequency,
-  scripts, scenarios).
-  `POST /api/eval` evaluates with no microgrid in scope.
+- Whole-site routes live under `/api/` (microgrids, import, defaults,
+  spec schema, logs, frequency, runner).
   `GET /api/defaults` serves the spec `Defaults` table, read-only.
   `POST /api/microgrids` creates the microgrids of a topology document
   (201 `{"microgrids": [{id, grpc_port, runtime}]}`), and
   `POST /api/microgrids/import` a microgrid from a site export; both
-  live in memory only, with a stored spec, and are `unsaved`.
+  live in memory only, and are `unsaved`.
 - `GET /api/mg/{mg}/spec` answers a microgrid's stored spec, and
   `PUT` of a `MicrogridSpec` rebuilds it with carry (200 with the stored
   spec; 409 for a component id or a gRPC port another microgrid
@@ -435,14 +356,12 @@ UI").
   a `Deleted` event each, its id and component ids are free, and the
   events socket sends `microgrid_unloaded` for it, on which the SPA
   drops its card and leaves a view of it.
-  All three answer 409 `microgrid N was loaded from Lisp` for a
-  microgrid without a spec. A `PUT` stacks the replaced spec on the
-  microgrid's spec undo stack and marks a microgrid with a source file
-  `unsaved`. `POST /api/mg/{mg}/undo` and `/redo` walk that stack for
-  a microgrid with a spec, rebuilding it with carry from each step
-  (`topology::step_undo`), and the Lisp file stack otherwise.
+  A `PUT` stacks the replaced spec on the microgrid's undo stack and
+  marks a microgrid with a source file `unsaved`. `POST
+  /api/mg/{mg}/undo` and `/redo` walk that stack, rebuilding it with
+  carry from each step (`topology::step_history`).
   `GET /api/spec/schema` serves the topology document's JSON Schema.
-- The typed knob routes do what the Lisp setters do:
+- The typed knob routes:
   `POST /api/mg/{mg}/component/{id}/drive` (meter power and reactive
   power, sunlight, SoC, steam demand and pressure, and an inverter's
   `reactive_apparent_va` and `reactive_pf_limit`), `.../status`
@@ -451,32 +370,29 @@ UI").
   (plug a catalog car in, unplug it), `POST /api/mg/{mg}/sample-lag`,
   `POST /api/mg/{mg}/streams/cancel` and `POST /api/mg/{mg}/grid`
   (`voltage_per_phase_v`). Each changes the live value, never a stored
-  spec, and a write a Lisp scenario can displace takes its
-  `scenario_snapshot_knob` first. `GET` and `POST /api/frequency` read
-  and drive the frequency every microgrid shares: `hz` sets it now,
-  `model` changes the keys of the base model it gives, `override`
-  drives the frequency with a model whose missing keys come from the
-  base model, and `clear_override` drops that override.
+  spec, and sends a `knob_changed` event. `GET` and `POST
+  /api/frequency` read and drive the frequency every microgrid shares:
+  `hz` sets it now, `model` changes the keys of the base model it
+  gives, `override` drives the frequency with a model whose missing
+  keys come from the base model, and `clear_override` drops that
+  override.
 - `POST /api/mg/{mg}/recording/start` (`name`, `csv`), `.../stop` and
-  `.../event` (`kind`, `payload`) record a microgrid on the journal the
-  Lisp scenarios use, whose `kind` says which owns it: a start is 409
-  while either runs, a Lisp `scenario-start` is refused while a
-  recording runs, a scenario stop leaves a recording alone, and only a
-  scenario snapshots knobs. A rebuild ends a recording and keeps its
+  `.../event` (`kind`, `payload`) record a microgrid: a start is 409
+  while a recording runs. A rebuild ends a recording and keeps its
   report for one stop (`ended_by: "rebuild"`); an unload ends it with
   the microgrid. CSV files go to
-  `<state_dir>/recordings/<mg>/<name>-<%Y%m%dT%H%M%SZ>/`. The
-  `GET .../recording`, `/events`, `/report` and `/csv` reads mirror the
-  `/scenario/...` ones; the report drops the check fields.
+  `<state_dir>/recordings/<mg>/<name>-<%Y%m%dT%H%M%SZ>/` (`-2`, `-3`, …
+  added when that directory exists).
+  `GET .../recording` (the summary), `/events`, `/report`, `/csv` and
+  `/csv/{file}` read it.
 - Everything about one microgrid lives under `/api/mg/{mg}/`, served
   by one nested router; the `Mg` extractor resolves `{mg}` and
   answers 404 `microgrid {mg} not registered` itself.
 - A path names a resource; a verb appears only for an action (start,
-  stop, load, load-as, import, adopt, undo, redo, drive,
-  snapshots/load, a dispatch's active). Ids that pick a microgrid,
-  component or dispatch are path segments; other query parameters
-  filter, window or tune the reply (`metric`, `window_s`, `since`,
-  `limit`, `width`, `dir`).
+  stop, import, undo, redo, drive, a dispatch's active). Ids that pick
+  a microgrid, component or dispatch are path segments; other query
+  parameters filter, window or tune the reply (`metric`, `window_s`,
+  `since`, `limit`, `width`, `dir`).
 - Field names follow [`docs/names-and-units.md`](docs/names-and-units.md):
   the unit is in the name (`power_w`, `soc_pct`, `remaining_s`), points
   in time are RFC 3339 (`ts`, `start`, `created_at`), chart series are
@@ -495,13 +411,25 @@ UI").
 
 ```sh
 cargo build
-cargo test                                # unit tests for bounds/ramp/decay
-cargo run --bin macrocosim examples/starter-site.lisp
+cargo test
+cd python && uv sync && cd ..
+cargo run --bin macrocosim -- --state-dir /tmp/mc --python python/.venv/bin/python examples/starter_site.py
 cargo run --bin macroctl -- info
 cargo run --bin macroctl -- tree
 cargo run --bin macroctl -- stream 1001 --samples 5
 cargo run --bin macroctl -- set-power 1001 5000
 ```
+
+The state directory (`--state-dir`, the current directory by default)
+must not hold 0.1's `enterprise.lisp` or `microgrids/*.lisp`, and a
+`.lisp` argument is refused too: the binary exits naming the files.
+
+The Rust tests that run a Python child use `python/.venv/bin/python`
+(run `uv sync` in `python/` first); they are skipped with a note when
+it is missing, and fail instead under `MACROCOSIM_REQUIRE_PYTHON=1`,
+which CI sets. In `python/`, `MACROCOSIM_BIN=../target/debug/macrocosim
+MACROCOSIM_REQUIRE_LIVE=1 uv run pytest` runs the client's live tests
+against this checkout's binary.
 
 `ui-assets/` changes: `make ui-test` runs biome over `ui-assets`
 (config in `biome.json`; `check` also runs the organizeImports assist,
@@ -549,56 +477,48 @@ one primary button. Toggles keep their own components (`.pill`, `.pulse-chip`,
 the kit replaced.
 
 UI layout convention: two bars sit above main, by scope. The top bar
-(`body > header`) holds what is site-wide: the modes, the running chip, the
-system pulse (`#pulse`), the REPL, Logs, Defaults, Report and help buttons, and
-the theme, density and zone chips. The microgrid bar (`#mg-header`, hidden on
-the list and in Scenarios) holds what belongs to the selected microgrid, its
-panel buttons and Snapshots included. The canvas strip (`#topology-controls`)
-holds only the canvas's own controls. Both bars wrap in a narrow window; the
-smoke checks the layout at 1024px wide.
+(`body > header`) holds what is site-wide: the running chip, the system pulse
+(`#pulse`), the Logs, Defaults, Report and help buttons, and the theme, density
+and zone chips. The microgrid bar (`#mg-header`, hidden on the list) holds what
+belongs to the selected microgrid, its panel buttons included. The canvas strip
+(`#topology-controls`) holds only the canvas's own controls. Both bars wrap in a
+narrow window; the smoke checks the layout at 1024px wide.
 
 UI error convention: a form or dialog shows a server error in its own
 `.form-error` through `showFormError` (`notices.js`) and stays open; a new try
 clears it with `clearFormError`, and closing a dialog clears its errors. A
 form's own check of its input shows through `showInputError`, which does not
 log. Any other action the user triggered toasts with `notify`, and an error
-toast stays until it is closed; the REPL keeps its eval and format errors in its
-transcript. A background loop fetches through `bgFetch(source, …)` (`http.js`),
-or `getJson` / `mgFetch` given a source: a request that cannot reach the server
-raises the "server unreachable" banner (`connection.js`) until one gets through,
-and an HTTP error is logged once per failure streak of that source. A dropped
-WebSocket writes "disconnected" into the header status, which its reopen clears.
-Each of these reaches the logs panel as a `ui: ` line too, except the input
-checks and the REPL's eval and format answers (a REPL transport error is
-logged). localStorage is read and written through `storage.js`, which keeps
-values in memory when the browser blocks it; `theme.js`, which reads the window
-it is given, and the pre-paint script in `index.html` keep their own guards.
+toast stays until it is closed. A background loop fetches through
+`bgFetch(source, …)` (`http.js`), or `getJson` / `mgFetch` given a source: a
+request that cannot reach the server raises the "server unreachable" banner
+(`connection.js`) until one gets through, and an HTTP error is logged once per
+failure streak of that source. A dropped WebSocket writes "disconnected" into
+the header status, which its reopen clears. Each of these reaches the logs
+panel as a `ui: ` line too, except the input checks. localStorage is read and
+written through `storage.js`, which keeps values in memory when the browser
+blocks it; `theme.js`, which reads the window it is given, and the pre-paint
+script in `index.html` keep their own guards.
 
 Each registered microgrid binds its own gRPC port; the first
 defaults to `[::1]:8800` and subsequent microgrids step by ten
 (`:8810`, `:8820`, …), skipping the assets and dispatch ports; an
-explicit `:grpc-port` on either is refused. Override via `:grpc-port`
-on `(make-microgrid …)`. `MicrogridRuntimes` starts every registered
-microgrid at boot and every one `make-microgrid` announces later. A
+explicit `grpc_port` on either is refused. Set it with `grpc_port`
+in the microgrid's spec. `topology::create` starts each microgrid's
+runtime through `MicrogridRuntimes`, at boot and later. A
 bind failure, or a server that ends, marks only that microgrid failed
 and the process stays up (a boot-time bind failure still exits the
-binary); registering it again (reload, undo, snapshot restore, load)
-retries. A microgrid's address is fixed after its first successful
-bind; a reload adopts a changed `:grpc-port` only for one that never
-bound, and a spec `PUT` with a new `grpc_port` rebinds it. `/api/microgrids` entries carry `runtime: {status, grpc_addr,
-error} | null`, and create / import / load-as / snapshot-as-new wait
-for the start and report it; the microgrid card shows the address and
-a "failed" chip. The UI's loopback client reads a private copy of the
-Microgrid service through an in-memory channel, so a microgrid's live
-data reaches the UI whether or not its public port is bound.
+binary); a microgrid unloaded and created again starts afresh, and a
+spec `PUT` with a new `grpc_port` rebinds the microgrid there.
+`/api/microgrids` entries carry `runtime: {status, grpc_addr, error} |
+null`, and create and import wait for the start and report it; the
+microgrid card shows the address and a "failed" chip. The UI's loopback
+client reads a private copy of the Microgrid service through an
+in-memory channel, so a microgrid's live data reaches the UI whether or
+not its public port is bound.
 macroctl's global `--microgrid-id` selects the microgrid for the
-gRPC commands, `dispatch`, `snapshot`, `pool`, `dashboard` and the
-scenario readouts (`summary`, `report`, `events`, `run --wait`);
-the default is the lowest id. `scenario list` / `load` are
-site-wide. `scenario start` / `stop` and a run's start and stop
-reach every microgrid's journal; `scenario event` and a scenario's
-checks and recordings land on the lowest microgrid, so `--assert`
-works only on that one. `--addr` names the gRPC server directly; with
+gRPC commands, `dispatch`, `pool` and `dashboard`; the default is the
+lowest id. `--addr` names the gRPC server directly; with
 `--microgrid-id` the lookup still runs and the two must agree. The
 UI server binds `127.0.0.1:8801` by default; override the
 port with `--ui-port N`, or pass `--ephemeral-ports` to bind the UI
@@ -610,16 +530,16 @@ as one JSON line once bound (the readiness signal); the line carries
 a mismatched binary.
 
 `macrocosim --topology topology.json` boots the microgrids of a
-topology document instead of Lisp scripts (the two cannot be
-combined): each is built from its spec with the file as its source,
-and a bad document exits the binary. `--enterprise-id`,
-`--assets-addr`, `--dispatch-addr`, `--request-lifetime SECONDS` and
-`--augment-lifetime SECONDS` override what `enterprise.lisp` sets.
+topology document instead of a script (the two cannot be combined):
+each is built from its spec with the file as its source, and a bad
+document exits the binary. `--enterprise-id`, `--assets-addr`,
+`--dispatch-addr`, `--request-lifetime SECONDS` and
+`--augment-lifetime SECONDS` set the enterprise settings.
 
 `PlatformAssets` and `MicrogridDispatchService` each bind a single
 shared listener (they're enterprise-wide, keyed by `microgrid_id` per
 request): assets on `[::1]:9900`, dispatch on `[::1]:8900`. Override
-via `(set-assets-socket-addr …)` / `(set-dispatch-socket-addr …)`.
+with `--assets-addr` / `--dispatch-addr`.
 Point the dispatch CLI at it with
 `--url 'grpc://[::1]:8900?ssl=false' --auth-key any` (auth is ignored),
 or use `macroctl dispatch {list,create,pause,resume,delete,get}`. The
@@ -630,19 +550,6 @@ so construction + validation stay identical.
 
 ## Dependencies
 
-- `tulisp = { git = "https://github.com/shsms/tulisp", rev = "…", features = ["sync", "etags"] }`
-  — upstream main at a pinned rev, until a tulisp release carries what this
-  repo needs. Then depend on that version and drop the `[patch.crates-io]`
-  entry.
-- `tulisp-async = "0.4"` — same-ctx timer primitives (`run-with-timer`, `cancel-timer`,
-  `sleep-for`). `TokioExecutor::new` calls `Handle::current()`, so
-  `Config::new` must be invoked inside a running tokio runtime.
-  `register` returns a `Handle`; the Lisp refresh loop owns one
-  clone and ticks it every pass — without that, no timer body ever
-  runs (the same-ctx model has no background firing thread). In a
-  headless `Config`, `refresh_once` and `sim_step` tick it.
-  A timer body's error goes to the log through the `Handle`'s body
-  error handler.
 - Proto roots are vendored under `submodules/`:
   - `submodules/frequenz-api-microgrid` (pinned at v0.18.1) — override
     with `MACROCOSIM_PROTO_ROOT` for a private mirror.
@@ -650,6 +557,8 @@ so construction + validation stay identical.
   - `submodules/frequenz-api-dispatch` (pinned at v1.0.0) — dispatch
     v1; imports the same vendored common v1alpha8, so no common of
     its own.
+- `schemars` is pinned to one minor version: a release may change the
+  JSON Schema it writes for the topology document.
 
 ## Adding a component type
 
@@ -661,154 +570,59 @@ so construction + validation stay identical.
    `idle_value`, `initial_value`, `keeps_command_through_fault`,
    `bounds_follow_physical_band`, `gateway_settings`) and keeps one
    `DeviceAxis` per axis; the gateway supplies validation,
-   lifetimes, augmentations and the ramp. Add the component to the
-   capability table test in `src/sim/component.rs`.
+   lifetimes, augmentations and the ramp. A component with state a
+   rebuild should keep implements `physics_state` /
+   `restore_physics_state`. Add the component to the capability table
+   test in `src/sim/component.rs`.
 2. Add to `src/sim/mod.rs` re-exports.
-3. Add a `%make-foo` defun in `src/lisp/make.rs` with `AsList!`-derived
-   args, calling `site.register(...)`. Note the leading `%` —
-   user-facing topology code calls `make-foo`, which dispatches here.
-   Register it as `("%make-foo", ["args"], primitive_doc(…))`.
-4. Add a `foo-defaults` plist + `(defun make-foo …)` wrapper to
-   `sim/defaults.lisp`. The wrapper `apply`s `%make-foo` to the
-   caller's args with the defaults plist `append`-ed after them; the
-   first occurrence of a key wins, so per-component plist values
-   override the defaults. Give the wrapper a docstring with a `Keys:`
-   list.
-5. (Optional) Override `subtype()` if proto needs `InverterType::Foo` / etc.
-6. Add the category to `COMPONENT_MAKE_FNS` in
-   `src/lisp/microgrid_file.rs` — the closed set "load as N" uses to
-   spot a component form. Miss it and a copy keeps the original's
-   ids for that type (`every_component_make_fn_is_a_real_constructor`
-   guards the entries, but cannot see a type that was never added).
-7. Register through `register_with_modes(...)` so the component gets
-   the shared config + runtime kwargs: `:operational-mode` (config,
-   persisted; derives the runtime knobs) plus `:health` /
-   `:telemetry-mode` / `:command-mode` (runtime fault knobs, checked
-   against the operational mode).
-
-## Sample-config DSL convention
-
-Two-layer split:
-- `%make-*` — Rust primitives in `src/lisp/make.rs`. Pure plist
-  parsing; every field arrives as a plist key, no defaults.
-- `make-*` — Lisp wrappers in `sim/defaults.lisp` that append a
-  `<cat>-defaults` plist and dispatch to `%make-*`.
-
-Topology code uses `make-*` (defaults applied). To opt out of
-defaults entirely for one call, invoke `%make-*` directly.
-Per-component plist args win without any special handling — AsList!
-takes the first occurrence of each key, as `plist-get` does, and the
-wrapper's defaults appear last in the merged plist.
-
-The REPL completes a wrapper's arguments with its `%` primitive's keys
-(`/api/symbols`). A wrapper that fills a key from one of its own parameters, as
-`plug-ev` fills `:component-id` and `:preset`, names that parameter after the
-key, so the REPL does not offer that key.
-
-Keyword names follow [`docs/names-and-units.md`](docs/names-and-units.md):
-the unit is the suffix (`:power-w`, `:soc-lower-pct`,
-`:command-delay-s`, `:ramp-rate-w-per-s`). An old keyword still loads
-through the table in `src/lisp/renames.rs`, which every defun taking
-keywords reads through `Renamed<…>`; it warns once, and the next
-structural save writes the new name into the generated block. The
-hand-written script section is never rewritten. A new
-keyword with a unit gets its suffix from the start; a renamed one gets
-a table row.
-
-The prelude (common / defaults / scenarios) is compiled into the
-binary via `include_str!`, so editing `sim/defaults.lisp` needs a
-rebuild; a script that wants live defaults-editing can still
-`(load "sim/defaults.lisp")` and `(watch-file …)` it explicitly.
-
-## Lisp value adapters
-
-- Runtime mode enums (`Health`, `TelemetryMode`, `CommandMode`), the
-  config-level `OperationalMode` and `EvIdle` are declared with
-  tulisp's `AsSymbol!` next to their sim code, which gives them the
-  lisp conversion, `symbol_name()`, `Display` and `FromStr`.
-  **Symbols only** — `:health 'error` works, `:health "error"` errors
-  with a type mismatch. Note the
-  split: `OperationalMode` is microgrid CONFIG (persists via the
-  structural-eval rewrite of the microgrid's managed file, drives the
-  formula engine); the other three are runtime fault knobs that
-  depend on it.
-- A raw `TulispObject` is an `AsList!` field like any other.
-  `:power-w` and `:sunlight-pct` use one so the make-* dispatcher can
-  inspect the raw shape to pick between a constant and a
-  `DynamicScalar`.
-
-## Lisp gotchas (current tulisp-vm)
-
-- **Timer bodies run on the calling ctx.** Same-ctx tulisp-async
-  funcalls bodies on the parent `TulispContext`, so a lambda's
-  lexical captures (`let*`-bound state, the surrounding closure
-  environment) are preserved across firings. defuns/defvars/global
-  setq results are visible as you'd expect.
-- **`(every …)` callbacks fire on `Config`'s dedicated refresh
-  loop, not on the physics tick.** `Config::spawn_lisp_refresh_loop`
-  ticks on its own 100 ms grid, takes the interpreter lock once
-  per pass, refreshes every microgrid's dynamic-scalar inputs,
-  then drains the tulisp-async pending-firings mailbox. So a
-  `(run-with-timer 0.05 …)` waits up to 100 ms before firing,
-  and a zero-delay one fires on the next refresh pass. Tests
-  that need a fire without spinning the loop call
-  `cfg.refresh_once()` (synchronous wrapper for the same work).
-  Physics ticks themselves are pure Rust now — they read the
-  atomic scalars the refresh loop has cached and never touch the
-  interpreter, so a long `/api/eval` no longer freezes the
-  microgrid's beat.
+3. Add its spec: a `component_spec!` struct and a `ComponentSpec`
+   variant in `src/spec.rs`, its arm in `src/spec/build.rs` (the checks
+   and the construction), and its row in `src/spec/defaults.rs`.
+4. (Optional) Override `subtype()` if proto needs `InverterType::Foo` / etc.
+5. Map its export category in `src/sim/site_import.rs` when the
+   Microgrid API has one.
+6. Add it to the Python client: its spec dataclass and `make_*`
+   constructor in `python/src/macrocosim/_spec.py`, its handle in
+   `_components.py`; the exporter reads the dataclasses, so it needs no
+   table of its own.
 
 ## Adding a runtime knob
 
-1. Field on the component config struct + plist arg in `src/lisp/make.rs`.
-2. (If runtime-mutable) a method on the matching capability trait,
-   and a Lisp defun in the matching `src/lisp/defuns/` file that
-   reaches it through the accessor and broadcasts `note_knob_changed`.
-   Every defun passes a docstring, as `(name, [params], doc)`, or
-   `(name, doc)` for one with no parameters:
-   `every_function_has_a_docstring` fails on one without a docstring.
-   A knob a scenario can displace also first calls
-   `scenario_snapshot_knob` with the `KnobKind` of the slot it writes;
-   a new slot needs a new variant, with arms in `snapshot_knob` /
-   `restore_knob`. A new capability also needs its own trait, an
-   accessor on `SimulatedComponent`, and a row in the capability table
-   test. Use `(every …)` or `(run-with-timer …)` from the config to
-   script behaviour over time.
-3. Demonstrate via a new line in `examples/starter-site.lisp` and
-   verify via macroctl.
+1. A field on the component config struct and its spec field, built in
+   `src/spec/build.rs`.
+2. (If runtime-mutable) a method on the matching capability trait, and
+   a field on the typed route that writes it (`DriveRequest` in
+   `src/ui/handlers/control.rs`, or a route of its own) that reaches it
+   through the accessor and broadcasts `note_knob_changed`; its unit
+   in `knob_unit` (`src/sim/events.rs`); its read-back in
+   `knobs_for` (`src/ui/handlers/component.rs`) and the inspector's
+   `KNOBS_BY_CATEGORY` (`ui-assets/inspect.js`). A new capability also
+   needs its own trait, an accessor on `SimulatedComponent`, and a row
+   in the capability table test.
+3. The Python client's knob (`python/src/macrocosim/_signals.py`,
+   `_components.py`), and a line in `examples/starter_site.py` if the
+   demo should show it.
 
 ## EV chargers
 
 The charger and the car it charges are two different things
 (`src/sim/ev_charger.rs`, `src/sim/ev_presets.rs`). The charger is
-config: `(make-ev-charger …)` takes `:phases` (1 or 3 — its own
-wiring, which both divides the offered limit into a per-phase current
-and caps how many of the car's phases can be used) and `:idle`
-(`'paused`, the default, offers nothing with no command standing;
-`'full` offers the full rating). It has no pack of its own: the
-pack kwargs (`:capacity-wh`, `:initial-soc-pct`, `:soc-lower-pct`,
-`:soc-upper-pct`, `:soc-protect-margin-pct`) are accepted with a warning
-and ignored, so older files still load, and the site import drops
-them from an export's charger.
+config: its spec takes `phases` (1 or 3 — its own wiring, which both
+divides the offered limit into a per-phase current and caps how many of
+the car's phases can be used) and `idle` (`paused`, the default, offers
+nothing with no command standing; `full` offers the full rating). It
+has no pack of its own, and the site import drops the battery bounds
+from an export's charger.
 
-The car is runtime state, driven by `(plug-ev COMPONENT-ID PRESET &rest
-overrides)` (`:soc-pct`, `:target-soc-pct`, `:phases`, `:max-current-a`,
-`:capacity-wh`, `:taper-start-pct`, `:taper-floor-pct`), `(unplug-ev ID)`,
-`(ev-info ID)` — a plist, or `nil` for an empty charger or any
-component that takes no EV — and `(ev-presets)`, the catalog.
-`(set-battery-soc ID PCT)` on a charger moves the plugged car's SoC
-and errors when nothing is plugged, as does
-`POST /api/mg/{mg}/component/{id}/drive` with `soc_pct`. Plug state
-is a scenario knob (`KnobKind::Ev`): every write that changes the
-plug or the car snapshots it first, so a scenario's teardown puts
-the charger back the way it found it.
-
-Being runtime state, the plugged car is never written to the managed
-file — `EvCharger::constructor_kwargs` renders `:phases`, `:idle` and
-`:resume-on-recovery`, and nothing about the car — so a config that
-should start with a car plugged in says so with a `(plug-ev …)` in
-the file's hand-written script section, which is preserved verbatim
-and re-runs on every load.
+The car is runtime state: `POST /api/mg/{mg}/component/{id}/ev` plugs a
+catalog car in (`preset`, with `soc_pct`, `target_soc_pct`, `phases`,
+`max_current_a`, `capacity_wh`, `taper_start_pct`, `taper_floor_pct`
+overrides), `DELETE` unplugs it, `GET` reads it and the catalog. A
+`soc_pct` drive on a charger moves the plugged car's SoC and is refused
+when nothing is plugged in. Being runtime state, the plugged car is
+never part of the charger's spec; a script that should start with a car
+plugged in plugs it from `run`. A rebuild that keeps the charger keeps
+its car (`PhysicsState`).
 
 ## Testing an external bounds-driving app
 
@@ -832,28 +646,26 @@ GCP active-power limiter is the motivating case).
   ∩ augmentations); a physical band such as the boiler's heat need is
   left out, so a command above it is accepted and held to the need. An
   EMS wanting "max within the cap" reads the bounds and commands
-  within them, or uses Lisp `CLAMP`, which clamps into the reported
-  bounds, physical band included.
-- An inverter set to `:health 'error` (or `'standby`) **trips offline
+  within them.
+- An inverter set to health `error` (or `standby`) **trips offline
   to zero output** *and* is dropped from the healthy `power_bounds`
   aggregate. A battery inverter clears its setpoint and awaits
   re-dispatch on recovery; a PV inverter resumes from sunlight; an EV
   charger trips like the battery inverter by default, and
-  `:resume-on-recovery t` makes it keep its armed command through the
+  `resume_on_recovery` makes it keep its armed command through the
   fault and ramp back to it on recovery instead; a steam boiler trips
   like the battery inverter too, while its gas burner keeps holding
   pressure at target. A request lifetime expiring on any of them
-  (granularity: the physics tick, on the site clock — sim time when
-  headless) retargets the ramp instead of snapping it: with a
-  `:ramp-rate-w-per-s` the P output moves back to idle at that rate (a PV
-  inverter's idle is its sunlight floor), without one it still gets
-  there in one tick. The inverters' Q axes ramp at
-  `:reactive-ramp-rate-var-per-s`, 2000 VAr/s unless set. A charger's car
-  survives a trip; by default charging resumes with the next command,
-  and with `:resume-on-recovery t` it ramps back on its own. Every
-  command reaches the output after the gateway delay plus a device
-  delay (`:device-delay-s`, 0.1 s unless set), each of which lets a
-  command out up to the smaller of 5 ms and half the delay early to
+  (granularity: the physics tick, on the site clock) retargets the
+  ramp instead of snapping it: with a `ramp_rate_w_per_s` the P output
+  moves back to idle at that rate (a PV inverter's idle is its sunlight
+  floor), without one it still gets there in one tick. The inverters' Q
+  axes ramp at `reactive_ramp_rate_var_per_s`, 2000 VAr/s unless set. A
+  charger's car survives a trip; by default charging resumes with the
+  next command, and with `resume_on_recovery` it ramps back on its own.
+  Every command reaches the output after the gateway delay plus a
+  device delay (`device_delay_s`, 0.1 s unless set), each of which lets
+  a command out up to the smaller of 5 ms and half the delay early to
   allow for a tick landing early; a command still in the device's
   delay line is dropped by a trip, never replayed.
 - Only a component with a gateway axis on the requested side stores an
@@ -862,15 +674,15 @@ GCP active-power limiter is the motivating case).
   battery; the charger's and boiler's Q) answers `UNIMPLEMENTED`, as
   the setpoint path already does for a component that takes no
   setpoint.
-- Drive sim state ad-hoc by POSTing lisp to
-  `http://127.0.0.1:8801/api/eval`, e.g.
-  `--data "(set-component-health 201 'error)"` → `{"value":…}`; a
-  failed eval answers 400 `{"error":"…"}`. Use
-  `/api/mg/{mg}/eval` to evaluate inside one microgrid's scope.
+- Drive sim state ad hoc over the typed routes, e.g. `curl -X POST
+  http://127.0.0.1:8801/api/mg/2200/component/201/status -H
+  'content-type: application/json' -d '{"health": "error"}'` (204; a
+  refused write answers 400 `{"error":"…"}`), or from Python with
+  `macrocosim.connect`.
 - Macrocosim's physics supports closed-loop bound tests today; the
-  remaining gaps are ergonomic, not physical — scenario assertions,
-  an in-sim controller/actor that reacts to live bounds, declarative
-  signal profiles, and deterministic sim-time. See `todo.org` §I.
+  remaining gaps are ergonomic, not physical — an in-sim
+  controller/actor that reacts to live bounds and deterministic
+  sim-time. See `todo.org` §I.
 
 ## Roadmap and deferred work
 

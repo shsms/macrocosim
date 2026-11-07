@@ -18,12 +18,11 @@
 //! ~20-second correlation window. Same order of magnitude real
 //! grid operators see at the dispatch dashboard.
 //!
-//! Scenarios that need a specific frequency event (UFLS dip,
-//! generator-trip overshoot + recovery, etc.) call
-//! `(override-frequency-model …)` to swap in different OU parameters
-//! (e.g. pull toward a lower nominal); the driver keeps integrating
-//! with those until `(clear-frequency-override)` restores the base
-//! model.
+//! Scripts that need a specific frequency event (UFLS dip,
+//! generator-trip overshoot + recovery, etc.) post an `override` to
+//! `POST /api/frequency` to swap in different OU parameters (e.g.
+//! pull toward a lower nominal); the driver keeps integrating with
+//! those until `clear_override` restores the base model.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,12 +40,11 @@ pub const DEFAULT_SIGMA: f32 = 0.015;
 /// doesn't dominate the runtime cost.
 const STEP_MS: u64 = 200;
 
-/// The three knobs the OU step reads on each tick. Wrapped in its
-/// own struct so the base + override slots share a shape: a
-/// scenario can `(override-frequency-model :nominal-hz 49.5)` to pull
-/// frequency toward 49.5 with the same dynamics as the base, then
-/// later layer on `(override-frequency-model :sigma 0.05)` without
-/// touching the override nominal.
+/// The three knobs the OU step reads on each tick. Wrapped in its own
+/// struct so the base + override slots share a shape: a script can
+/// override `nominal_hz` to 49.5 to pull frequency toward 49.5 with
+/// the same dynamics as the base. A later override replaces it: its
+/// keys come from the request, the rest from the base model.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrequencyModel {
     pub nominal_hz: f32,
@@ -64,13 +62,13 @@ impl FrequencyModel {
 
 #[derive(Clone, Debug)]
 pub struct FrequencyState {
-    /// The shape the OU driver follows by default. Configurable from
-    /// lisp via `(set-frequency-model …)`; sticks across scenarios.
+    /// The shape the OU driver follows by default. Set through
+    /// `POST /api/frequency`'s `model`.
     pub base: FrequencyModel,
-    /// Scenario-driven override. When `Some`, the driver uses these
+    /// The override a script set. When `Some`, the driver uses these
     /// params in place of the base for each step (drift toward the
     /// override's nominal, noise at the override's sigma, reversion
-    /// at the override's rate). `(clear-frequency-override)` drops it.
+    /// at the override's rate). `clear_override` drops it.
     pub override_model: Option<FrequencyModel>,
     pub current_hz: f32,
 }
@@ -96,8 +94,8 @@ impl FrequencyState {
         let m = self.active_model();
         // Self-heal a non-finite state: `+=` would keep it NaN/Inf
         // forever, and the slot is shared by every microgrid. The
-        // lisp setter rejects non-finite inputs, so this is a
-        // second line of defense against any other corruption.
+        // HTTP route rejects non-finite inputs, so this is a second
+        // line of defense against any other corruption.
         if !self.current_hz.is_finite() {
             self.current_hz = m.nominal_hz;
         }
@@ -134,12 +132,13 @@ pub fn new_shared() -> SharedFrequency {
     Arc::new(RwLock::new(FrequencyState::new()))
 }
 
-/// Start the driver loop. Spawns one tokio task that ticks at
-/// `STEP_MS` and updates the shared state. Idempotent at the caller's
-/// discretion — calling twice would spawn two drivers, which is a bug
-/// (`Engine::new` is the sole call site). The task holds the state
-/// weakly and ends once every other holder has dropped it, so an
-/// engine whose boot failed leaves no loop behind.
+/// Start the frequency driver: one tokio task that steps the shared
+/// frequency (its OU model, or a set value) every `STEP_MS`.
+/// Idempotent at the caller's discretion — calling twice would spawn
+/// two drivers, which is a bug (`Engine::new` is the sole call site).
+/// The task holds the state weakly and ends once every other holder
+/// has dropped it, so an engine whose boot failed leaves no loop
+/// behind.
 pub fn spawn_driver(state: SharedFrequency) {
     let dt_s = (STEP_MS as f32) / 1000.0;
     let state = Arc::downgrade(&state);

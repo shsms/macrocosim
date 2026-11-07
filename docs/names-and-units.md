@@ -37,8 +37,7 @@ of the HTTP routes.
    They are UTC.
 6. **Ids.** The id of a thing is `id`. A reference to another thing is
    spelled out: `microgrid_id`, `component_id`. A name that says what
-   the id is for keeps its name: `collision_id`, `suggested_id`,
-   `dispatch_id`, `--from`, `--to`. URL placeholders (`{mg}`, `{id}`)
+   the id is for keeps its name: `dispatch_id`, `--from`, `--to`. URL placeholders (`{mg}`, `{id}`)
    stay as they are.
 7. **Values without a unit keep their names.** This covers ratios,
    power factor, counts, ports, enums and seeds: `reactive_pf_limit`,
@@ -146,7 +145,6 @@ names.
 | Dispatch duration | | `duration_s` | `dispatch create --duration-s` | | s |
 | History window | | `window_s` (query) | | | s |
 | Polling | | | `dashboard --interval-s` | `timeout`, `hold_for` (`timedelta`) | s |
-| Stepped run | | | `scenario run --step-s` (above 0, default 0.1), `--until-s` | | s |
 
 ## Points in time
 
@@ -203,15 +201,13 @@ and `battery_energy`.
 
 | Quantity | JSON | HTTP / JSON | macroctl | Python | Unit |
 |---|---|---|---|---|---|
-| Own id | `id` | `id` | `snapshot load --id` | `Component.id` | |
+| Own id | `id` | `id` | | `Component.id` | |
 | Microgrid | `id` of a microgrid | `microgrid_id` on every WebSocket event about one microgrid | `--microgrid-id` | `Microgrid.id` | |
 | Component | `connections` pairs (parent, child) | `component_id` in history, setpoints and WebSocket events; `component_ids` (comma-separated) in the formula query | `list --component-id` | | |
 | Dispatch | | `dispatch_id` | `dispatch get ID` | | |
-| Load collision | | `collision_id`, `suggested_id` | | | |
 | Graph edges | | | `connections --from`, `--to` | | |
 | gRPC address | | `grpc_addr` | | `Microgrid.grpc_url` (`grpc://` plus the address) | |
 
 A microgrid in the endpoints file is `{"id", "name", "grpc_addr"}`.
-The import and snapshot-load request bodies name the new microgrid
-`id`.
+The import request body names the new microgrid `id`.
 

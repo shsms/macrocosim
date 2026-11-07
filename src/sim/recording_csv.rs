@@ -1,7 +1,7 @@
-//! Per-component CSV sinks for scenario recording.
+//! Per-component CSV sinks for a recording.
 //!
-//! `(scenario-record-csv DIR)` walks every registered component and
-//! opens CSV files per id under `DIR`:
+//! A recording started with `csv: true` walks every registered
+//! component and opens CSV files per id under its directory:
 //!
 //! - `<id>-<category>.csv` — telemetry, every component. The header
 //!   is identical across categories — a uniform set of telemetry
@@ -18,7 +18,7 @@
 //!   envelope — those are the ones a control app commands.
 //! - `<id>-bounds.csv` — the effective active-power envelope over
 //!   time, sampled at the same 1 Hz pass as telemetry. Together with
-//!   the setpoints file this lets a scenario replay-assert "the app
+//!   the setpoints file this lets a test replay-assert "the app
 //!   held a stable cap" vs "it oscillated" without an external log
 //!   scrape. Same envelope-bearing component set as setpoints.
 //! - `<id>-reactive-bounds.csv` — the Q twin of `<id>-bounds.csv`:
@@ -27,9 +27,9 @@
 //!   — a different component set than the active-bounds files, since
 //!   an inverter has a Q axis but the battery behind it doesn't.
 //!
-//! Each sink is a `BufWriter<File>`; `(scenario-stop-csv)` and
-//! `(scenario-stop)` drop the writers, which flushes and closes
-//! the underlying files.
+//! Each sink is a `BufWriter<File>`; the recording's stop (or a
+//! rebuild or unload that ends it) drops the writers, which flushes
+//! and closes the underlying files.
 
 use std::{
     collections::HashMap,
@@ -171,7 +171,7 @@ fn csv_quote(s: &str) -> String {
 }
 
 /// Bundle of active CSV sinks keyed by component id. Mutated under
-/// `MicrogridSite::scenario_csv` lock (and its setpoints / bounds
+/// `MicrogridSite::recording_csv` lock (and its setpoints / bounds
 /// siblings); the lock pattern is "open for the lifetime of the
-/// scenario, drop on stop".
+/// recording, drop on stop".
 pub(crate) type CsvSinks = HashMap<u64, CsvSink>;

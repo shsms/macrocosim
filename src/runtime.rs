@@ -1,12 +1,12 @@
 //! One startup path per microgrid: physics tick, history sampler,
 //! Microgrid gRPC server and UI loopback client. The UI client reads
 //! a private copy of the service through memory, so it works whether
-//! or not the public server binds. A microgrid that cannot bind,
-//! whose site was replaced, or whose public server ends is marked
-//! failed; the end of its in-memory copy is only logged. The process
-//! stays up. A microgrid's gRPC address is fixed after its first
-//! successful bind, until [`MicrogridRuntimes::restart_grpc`] moves
-//! it; [`MicrogridRuntimes::stop`] ends every task a runtime started.
+//! or not the public server binds. A microgrid that cannot bind, or
+//! whose public server ends, is marked failed; the end of its
+//! in-memory copy is only logged. The process stays up. A microgrid's
+//! gRPC address is fixed after its first successful bind, until
+//! [`MicrogridRuntimes::restart_grpc`] moves it;
+//! [`MicrogridRuntimes::stop`] ends every task a runtime started.
 
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
@@ -76,7 +76,6 @@ impl RuntimeView {
 #[derive(Debug)]
 pub enum StartError {
     NotRegistered(u64),
-    SiteReplaced(u64),
     Bind { addr: SocketAddr, error: String },
 }
 
@@ -84,9 +83,6 @@ impl fmt::Display for StartError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotRegistered(id) => write!(f, "microgrid {id} is not registered"),
-            Self::SiteReplaced(id) => {
-                write!(f, "microgrid {id}: site replaced; restart macrocosim")
-            }
             Self::Bind { addr, error } => write!(f, "gRPC bind {addr} failed: {error}"),
         }
     }
@@ -120,15 +116,17 @@ struct Runtime {
 struct Tasks {
     /// The public gRPC server of the last successful bind.
     grpc: Option<GrpcTask>,
-    /// The in-memory copy of the service the loopback reads.
-    in_memory: Option<AbortHandle>,
+    /// The in-memory copy of the service the loopback reads. Its
+    /// shutdown closes its connections, and with them the last
+    /// handles on the site they serve.
+    in_memory: Option<GrpcTask>,
     background: Option<BackgroundTasks>,
     loopback: Option<JoinHandle<()>>,
     /// The loopback's client, kept for good once the loopback stops.
     client: Option<MicrogridClientHandle>,
 }
 
-/// A public gRPC server task.
+/// A gRPC server task: a public one, or the in-memory copy.
 struct GrpcTask {
     /// Set to `true` to shut the server down gracefully.
     shutdown: watch::Sender<bool>,
@@ -151,6 +149,12 @@ impl GrpcTask {
             self.server.abort();
             let _ = watcher.await;
         }
+    }
+
+    /// Ask the server to shut down, without waiting: its connections
+    /// close as their streams end. [`Self::stop`] waits for it.
+    fn signal(&self) {
+        let _ = self.shutdown.send(true);
     }
 }
 
@@ -177,9 +181,7 @@ pub struct MicrogridRuntimes {
 
 impl MicrogridRuntimes {
     /// Refuses a headless `Engine`: wall-clock physics must never
-    /// start on one. Installs the port-pin check `make-microgrid`
-    /// asks on a reload, and refuses an `Engine` that already has
-    /// one: one `Engine` has one set of runtimes.
+    /// start on one.
     pub fn new(engine: Engine, options: RuntimeOptions) -> Result<Self, String> {
         if engine.is_headless() {
             return Err("MicrogridRuntimes cannot run a headless Engine".into());
@@ -191,17 +193,6 @@ impl MicrogridRuntimes {
             start_lock: tokio::sync::Mutex::new(()),
             retired_clients: Mutex::new(Vec::new()),
         });
-        let weak = Arc::downgrade(&inner);
-        engine
-            .port_pins()
-            .set(Arc::new(move |id| {
-                weak.upgrade().is_some_and(|inner| {
-                    inner.runtimes.lock().get(&id).is_some_and(|rt| {
-                        rt.grpc_addr.is_some() || matches!(rt.status, Status::Starting)
-                    })
-                })
-            }))
-            .map_err(|_| "this Engine already has a MicrogridRuntimes")?;
         Ok(Self {
             inner: Some(inner),
             loopbacks: ui::new_microgrid_loopbacks(),
@@ -209,6 +200,7 @@ impl MicrogridRuntimes {
     }
 
     /// Starts nothing: `start` answers `Ok(None)`, `status` `None`.
+    #[cfg(test)]
     pub fn inert() -> Self {
         Self {
             inner: None,
@@ -244,9 +236,9 @@ impl MicrogridRuntimes {
             return Ok(None);
         };
         let _serialized = inner.start_lock.lock().await;
-        // Registry, then status: the order make-microgrid's pin check
-        // takes them in. The port is read under both, so a reload
-        // cannot move it once this runtime is Starting.
+        // Registry, then status: the lock order (AGENTS.md). The port
+        // is read under both, so it cannot move once this runtime is
+        // Starting.
         let (site, addr, generation) = {
             let reg = inner.engine.microgrids();
             let reg = reg.lock();
@@ -254,14 +246,6 @@ impl MicrogridRuntimes {
             let site = e.site.clone();
             let mut rts = inner.runtimes.lock();
             let (fixed, generation) = match rts.get_mut(&id) {
-                Some(rt) if !rt.site.ptr_eq(&site) => {
-                    let err = StartError::SiteReplaced(id);
-                    // A new generation, so the old server's watcher
-                    // cannot overwrite this error.
-                    rt.generation += 1;
-                    rt.status = Status::Failed(err.to_string());
-                    return Err(err);
-                }
                 Some(rt) if matches!(rt.status, Status::Running) => return Ok(rt.grpc_addr),
                 Some(rt) => {
                     rt.status = Status::Starting;
@@ -311,11 +295,13 @@ impl MicrogridRuntimes {
     }
 
     /// Stop `id`'s runtime and forget it: end its telemetry streams,
-    /// shut its gRPC server down (aborted after 2 s), abort its
-    /// in-memory server, physics tick, history sampler and loopback,
-    /// and drop its loopback slot. Its port is free and its address
-    /// forgotten once this returns, so a microgrid registered later
-    /// under `id` starts clean. Does nothing for a microgrid with no
+    /// abort its physics tick, history sampler and loopback, drop its
+    /// loopback slot, and shut its gRPC server and its in-memory
+    /// server down together, aborting each one not done after 2 s.
+    /// Once this returns, its port is free and its address forgotten,
+    /// so a microgrid registered later under `id` starts clean. A
+    /// gRPC client still waiting on a request keeps the site until
+    /// that request ends. Does nothing for a microgrid with no
     /// runtime.
     pub async fn stop(&self, id: u64) {
         let Some(inner) = &self.inner else {
@@ -327,11 +313,8 @@ impl MicrogridRuntimes {
         };
         let Runtime { site, tasks, .. } = rt;
         site.cancel_all_streams();
-        if let Some(grpc) = tasks.grpc {
-            grpc.stop().await;
-        }
-        if let Some(in_memory) = tasks.in_memory {
-            in_memory.abort();
+        for server in tasks.grpc.iter().chain(&tasks.in_memory) {
+            server.signal();
         }
         if let Some(background) = tasks.background {
             site.stop_background(background).await;
@@ -343,6 +326,12 @@ impl MicrogridRuntimes {
         if let Some(client) = tasks.client {
             inner.retired_clients.lock().push(client);
         }
+        let stop = |server: Option<GrpcTask>| async move {
+            if let Some(server) = server {
+                server.stop().await;
+            }
+        };
+        tokio::join!(stop(tasks.grpc), stop(tasks.in_memory));
         log::info!("Microgrid #{id}: runtime stopped");
     }
 
@@ -373,46 +362,6 @@ impl MicrogridRuntimes {
         }
         let addr = inner.bind_addr(port);
         inner.serve_grpc(id, site, addr, generation).await.map(Some)
-    }
-
-    /// Start every registered microgrid, then keep starting each one
-    /// the Lisp layer announces. Subscribes before reading the
-    /// registry, so none is missed; returns once the first pass is
-    /// done.
-    pub async fn spawn_registration_listener(&self) -> JoinHandle<()> {
-        let Some(inner) = self.inner.clone() else {
-            return tokio::spawn(async {});
-        };
-        let mut rx = inner.engine.subscribe_microgrid_registered();
-        self.start_all(&inner).await;
-        let me = self.clone();
-        tokio::spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(id) => {
-                        if let Err(e) = me.start(id).await {
-                            log::error!("Microgrid #{id}: {e}");
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        log::warn!("runtime listener lagged {n} registrations; re-snapshotting");
-                        me.start_all(&inner).await;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                }
-            }
-        })
-    }
-
-    /// `start` every id in the registry, lowest first, logging each
-    /// error.
-    async fn start_all(&self, inner: &Inner) {
-        let ids: Vec<u64> = inner.engine.microgrids().lock().keys().copied().collect();
-        for id in ids {
-            if let Err(e) = self.start(id).await {
-                log::error!("Microgrid #{id}: {e}");
-            }
-        }
     }
 }
 
@@ -502,21 +451,25 @@ const IN_MEMORY_BUFFER: usize = 64 * 1024;
 /// A client for `server` that talks to it through memory, not a
 /// socket, and the server's task. Each connect makes a new in-memory
 /// pipe and hands the server its end. The server runs until the task
-/// is aborted; if it ends any other way, that is logged.
-fn in_memory_client(server: MicrogridServer) -> (MicrogridClientHandle, AbortHandle) {
+/// is shut down; if it ends any other way, that is logged.
+fn in_memory_client(server: MicrogridServer) -> (MicrogridClientHandle, GrpcTask) {
     let (conn_tx, conn_rx) = tokio::sync::mpsc::unbounded_channel::<tokio::io::DuplexStream>();
     let id = server.microgrid_id;
     let incoming = UnboundedReceiverStream::new(conn_rx).map(Ok::<_, std::io::Error>);
+    let (shutdown, mut stopping) = watch::channel(false);
+    let stopped = stopping.clone();
     let serving = tokio::spawn(
         Server::builder()
             .add_service(MicrogridGrpcServer::new(server))
-            .serve_with_incoming(incoming),
+            .serve_with_incoming_shutdown(incoming, async move {
+                let _ = stopping.wait_for(|stop| *stop).await;
+            }),
     );
-    let abort = serving.abort_handle();
-    tokio::spawn(async move {
-        match serving.await {
-            Err(e) if e.is_cancelled() => {}
-            ended => log::error!("Microgrid #{id}: in-memory {}", end_reason(ended)),
+    let server = serving.abort_handle();
+    let watcher = tokio::spawn(async move {
+        let ended = serving.await;
+        if !*stopped.borrow() {
+            log::error!("Microgrid #{id}: in-memory {}", end_reason(ended));
         }
     });
     let channel = Endpoint::from_static("http://in-memory.invalid").connect_with_connector_lazy(
@@ -530,7 +483,14 @@ fn in_memory_client(server: MicrogridServer) -> (MicrogridClientHandle, AbortHan
         }),
     );
     let client = MicrogridClientHandle::new_from_client(MicrogridClient::new(channel));
-    (client, abort)
+    (
+        client,
+        GrpcTask {
+            shutdown,
+            server,
+            watcher,
+        },
+    )
 }
 
 fn set_status(inner: &Inner, id: u64, generation: u64, status: Status) {
@@ -582,7 +542,9 @@ fn end_reason(ended: Result<Result<(), tonic::transport::Error>, JoinError>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lisp::Config;
+    use crate::engine::{Metadata, topology};
+    use crate::sim::sim_clock::NowSource;
+    use crate::spec::MicrogridSpec;
     use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
     const V6: IpAddr = IpAddr::V6(Ipv6Addr::LOCALHOST);
@@ -614,22 +576,36 @@ mod tests {
             .port()
     }
 
-    /// A temp dir holding one file with `decl`.
-    fn mg_file_with(decl: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::TempDir::with_prefix("mc-runtime-").unwrap();
-        let path = dir.path().join("mg.lisp");
-        std::fs::write(&path, decl).unwrap();
-        (dir, path)
+    /// Microgrid `id` on `port`: a grid connection point
+    /// `id * 10 + 1` over a meter `id * 10 + 2`, so the ids of two
+    /// microgrids differ.
+    fn mg_spec(id: u64, port: u16) -> MicrogridSpec {
+        let (grid, meter) = (id * 10 + 1, id * 10 + 2);
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "grpc_port": port,
+            "components": [
+                {"type": "grid_connection_point", "id": grid},
+                {"type": "meter", "id": meter}
+            ],
+            "connections": [[grid, meter]]
+        }))
+        .unwrap()
     }
 
-    /// A temp dir holding one file that declares microgrid `id`.
-    fn mg_file(id: u64, port: u16) -> (tempfile::TempDir, std::path::PathBuf) {
-        mg_file_with(&mg_decl(id, port))
-    }
-
-    fn config_with_mg(id: u64, port: u16) -> (Config, tempfile::TempDir) {
-        let (dir, path) = mg_file(id, port);
-        (Config::new(path.to_str().unwrap()).unwrap(), dir)
+    /// A live engine holding microgrid `id` on `port`, with no
+    /// runtime started.
+    async fn engine_with_mg(id: u64, port: u16) -> Engine {
+        let engine = Engine::new(std::env::temp_dir(), Metadata::default(), NowSource::wall());
+        topology::create(
+            &engine.structural().await,
+            &MicrogridRuntimes::inert(),
+            mg_spec(id, port),
+            None,
+        )
+        .await
+        .unwrap();
+        engine
     }
 
     /// Hand `watch_server` an already-ended server task for `id`.
@@ -637,10 +613,6 @@ mod tests {
         let ended = tokio::spawn(async { Ok::<(), tonic::transport::Error>(()) });
         let (_shutdown, stopping) = watch::channel(false);
         watch_server(Arc::downgrade(inner), id, generation, ended, stopping).await;
-    }
-
-    fn mg_decl(id: u64, port: u16) -> String {
-        format!("(make-microgrid :id {id} :grpc-port {port} :topology (lambda () nil))")
     }
 
     fn opts(ephemeral: bool) -> RuntimeOptions {
@@ -652,8 +624,8 @@ mod tests {
 
     #[tokio::test]
     async fn start_twice_returns_the_same_address() {
-        let (cfg, _d) = config_with_mg(41, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
+        let engine = engine_with_mg(41, free_v6_port()).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(true)).unwrap();
         let a = rt.start(41).await.unwrap().unwrap();
         let b = rt.start(41).await.unwrap().unwrap();
         assert_eq!(a, b);
@@ -665,8 +637,8 @@ mod tests {
     async fn a_held_port_fails_and_a_freed_one_retries() {
         let port = free_v6_port();
         let holder = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
-        let (cfg, _d) = config_with_mg(42, port);
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
+        let engine = engine_with_mg(42, port).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(false)).unwrap();
         assert!(matches!(rt.start(42).await, Err(StartError::Bind { .. })));
         let v = rt.status(42).unwrap();
         assert_eq!(v.status, RuntimeStatus::Failed);
@@ -680,38 +652,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unbound_microgrid_adopts_a_new_declared_port() {
-        let port = free_v6_port();
-        let holder = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
-        let (_dir, file) = mg_file(43, port);
-        let cfg = Config::new(file.to_str().unwrap()).unwrap();
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
-        assert!(matches!(rt.start(43).await, Err(StartError::Bind { .. })));
-        let new_port = free_v6_port();
-        std::fs::write(&file, mg_decl(43, new_port)).unwrap();
-        cfg.load_file(&file).unwrap();
-        let addr = rt.start(43).await.unwrap().unwrap();
-        assert_eq!(addr.port(), new_port);
-        drop(holder);
-    }
-
-    #[tokio::test]
-    async fn a_bound_microgrid_keeps_its_port_on_reload() {
-        let port = free_v6_port();
-        let (_dir, file) = mg_file(44, port);
-        let cfg = Config::new(file.to_str().unwrap()).unwrap();
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
-        rt.start(44).await.unwrap();
-        std::fs::write(&file, mg_decl(44, free_v6_port())).unwrap();
-        cfg.load_file(&file).unwrap();
-        assert_eq!(cfg.engine().microgrids().lock()[&44].def.grpc_port, port);
-    }
-
-    #[tokio::test]
     async fn physics_starts_once_across_starts() {
-        let (cfg, _d) = config_with_mg(45, free_v6_port());
-        let site = cfg.engine().microgrids().lock()[&45].site.clone();
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
+        let engine = engine_with_mg(45, free_v6_port()).await;
+        let site = engine.microgrids().lock()[&45].site.clone();
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(true)).unwrap();
         rt.start(45).await.unwrap();
         rt.start(45).await.unwrap();
         assert!(
@@ -722,8 +666,8 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_id_errors_and_records_nothing() {
-        let (cfg, _d) = config_with_mg(46, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
+        let engine = engine_with_mg(46, free_v6_port()).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(true)).unwrap();
         assert!(matches!(
             rt.start(999).await,
             Err(StartError::NotRegistered(999))
@@ -733,47 +677,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_headless_engine_is_refused() {
-        let (_dir, path) = mg_file(54, free_v6_port());
-        let (cfg, _clock) = Config::new_headless(path.to_str().unwrap()).unwrap();
-        assert!(MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).is_err());
-    }
-
-    /// One Engine holds one port-pin check, so a second runtimes
-    /// instance on it is refused and the first keeps answering.
-    #[tokio::test]
-    async fn a_second_runtimes_on_one_engine_is_refused() {
-        let (cfg, _d) = config_with_mg(55, free_v6_port());
-        let first = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
-        let second = MicrogridRuntimes::new(cfg.engine().clone(), opts(true));
-        assert!(second.is_err_and(|e| e.contains("already")));
-        first.start(55).await.unwrap();
-        assert!(crate::sim::microgrids::port_pinned(
-            &cfg.engine().port_pins(),
-            55
-        ));
-    }
-
-    /// A runtime that is still starting holds its port, so a reload
-    /// cannot move it under the bind.
-    #[tokio::test]
-    async fn a_starting_runtime_holds_its_port() {
-        let (cfg, _d) = config_with_mg(56, free_v6_port());
-        let site = cfg.engine().microgrids().lock()[&56].site.clone();
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
-        rt.inner.as_ref().unwrap().runtimes.lock().insert(
-            56,
-            Runtime {
-                status: Status::Starting,
-                grpc_addr: None,
-                site,
-                generation: 1,
-                tasks: Tasks::default(),
-            },
+        let clock = Arc::new(crate::sim::sim_clock::ManualClock::new());
+        let engine = Engine::new(
+            std::env::temp_dir(),
+            Metadata::default(),
+            NowSource::sim(crate::sim::sim_clock::headless_base(), clock),
         );
-        assert!(crate::sim::microgrids::port_pinned(
-            &cfg.engine().port_pins(),
-            56
-        ));
+        assert!(MicrogridRuntimes::new(engine, opts(true)).is_err());
     }
 
     #[tokio::test]
@@ -783,19 +693,46 @@ mod tests {
         assert!(rt.status(1).is_none());
     }
 
+    /// A stopped runtime lets go of its site: the in-memory server
+    /// closes the loopback's connection, which held the last handle.
+    #[tokio::test]
+    async fn a_stopped_runtime_lets_go_of_its_site() {
+        let engine = engine_with_mg(62, free_v6_port()).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(true)).unwrap();
+        rt.start(62).await.unwrap();
+        let slot = rt.loopbacks().read()[&62].clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while slot.microgrid.read().is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the loopback connects"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        drop(slot);
+        let site = engine.microgrids().lock().remove(&62).unwrap().site;
+        rt.stop(62).await;
+        // The aborted tasks drop their handles as the runtime gets to
+        // them, so give that a moment, no more.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while site.handle_count() > 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{} handles on the site remain",
+                site.handle_count()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
     /// The UI's client reaches the microgrid through memory, so a
     /// microgrid whose public port is held still has live data.
     #[tokio::test]
     async fn the_ui_client_works_without_the_public_port() {
         let port = free_v6_port();
         let holder = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
-        let (_dir, path) = mg_file_with(&format!(
-            "(make-microgrid :id 57 :grpc-port {port} \
-             :topology (lambda () (%make-grid-connection-point :id 1 \
-             :successors (list (%make-meter :id 2)))))"
-        ));
-        let cfg = Config::new(path.to_str().unwrap()).unwrap();
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
+        let engine = engine_with_mg(57, port).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(false)).unwrap();
         assert!(matches!(rt.start(57).await, Err(StartError::Bind { .. })));
         let slot = rt.loopbacks().read().get(&57).cloned().unwrap();
         // The UI's graph handle builds over the in-memory channel.
@@ -818,27 +755,8 @@ mod tests {
         .unwrap();
         let mut ids: Vec<u64> = components.iter().map(|c| c.id).collect();
         ids.sort_unstable();
-        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(ids, vec![571, 572]);
         drop(holder);
-    }
-
-    /// A microgrid registered by an eval after the listener runs gets
-    /// a runtime without anyone calling start.
-    #[tokio::test]
-    async fn the_listener_starts_microgrids_registered_later() {
-        let (cfg, _d) = config_with_mg(48, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
-        let _listener = rt.spawn_registration_listener().await;
-        assert_eq!(rt.status(48).unwrap().status, RuntimeStatus::Running);
-        cfg.eval(&mg_decl(49, free_v6_port())).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while rt.status(49).map(|v| v.status) != Some(RuntimeStatus::Running) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "microgrid 49 never started"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
     }
 
     /// The address is fixed after the first bind: under ephemeral
@@ -847,8 +765,8 @@ mod tests {
     /// that same address fails.
     #[tokio::test]
     async fn a_failed_microgrid_restarts_on_its_first_address() {
-        let (cfg, _d) = config_with_mg(52, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
+        let engine = engine_with_mg(52, free_v6_port()).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(true)).unwrap();
         let a = rt.start(52).await.unwrap().unwrap();
         let inner = rt.inner.clone().unwrap();
         let generation = inner.runtimes.lock()[&52].generation;
@@ -861,41 +779,13 @@ mod tests {
         assert_eq!(rt.status(52).unwrap().grpc_addr, Some(a.to_string()));
     }
 
-    /// The old server's watcher cannot overwrite the site-replaced
-    /// error.
-    #[tokio::test]
-    async fn a_replaced_site_stays_failed_when_the_old_server_ends() {
-        let (cfg, _d) = config_with_mg(53, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
-        rt.start(53).await.unwrap();
-        let inner = rt.inner.clone().unwrap();
-        let generation = {
-            let mut rts = inner.runtimes.lock();
-            let r = rts.get_mut(&53).unwrap();
-            r.site = MicrogridSite::new();
-            r.generation
-        };
-        assert!(matches!(
-            rt.start(53).await,
-            Err(StartError::SiteReplaced(53))
-        ));
-        end_server(&inner, 53, generation).await;
-        assert!(
-            rt.status(53)
-                .unwrap()
-                .error
-                .unwrap()
-                .contains("site replaced")
-        );
-    }
-
     /// A stopped runtime frees its port and its loopback slot, and a
     /// later start of the same microgrid starts it afresh.
     #[tokio::test]
     async fn stop_frees_the_port_and_a_later_start_starts_afresh() {
         let port = free_v6_port();
-        let (cfg, _d) = config_with_mg(58, port);
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
+        let engine = engine_with_mg(58, port).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(false)).unwrap();
         rt.start(58).await.unwrap();
         let slot = rt.loopbacks().read()[&58].clone();
         let started = std::time::Instant::now();
@@ -906,16 +796,12 @@ mod tests {
         );
         assert!(rt.status(58).is_none());
         assert!(rt.loopbacks().read().get(&58).is_none());
-        assert!(!crate::sim::microgrids::port_pinned(
-            &cfg.engine().port_pins(),
-            58
-        ));
         drop(std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)).expect("the port is free"));
         rt.stop(58).await;
         assert_eq!(rt.start(58).await.unwrap(), Some(SocketAddr::new(V6, port)));
         assert!(!Arc::ptr_eq(&slot, &rt.loopbacks().read()[&58]));
         assert_eq!(rt.status(58).unwrap().status, RuntimeStatus::Running);
-        let site = cfg.engine().microgrids().lock()[&58].site.clone();
+        let site = engine.microgrids().lock()[&58].site.clone();
         assert!(
             site.spawn_background().is_none(),
             "the second start restarted physics"
@@ -927,8 +813,8 @@ mod tests {
     #[tokio::test]
     async fn restart_grpc_moves_the_server() {
         let (old, new) = (free_v6_port(), free_v6_port());
-        let (cfg, _d) = config_with_mg(59, old);
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(false)).unwrap();
+        let engine = engine_with_mg(59, old).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(false)).unwrap();
         rt.start(59).await.unwrap();
         let slot = rt.loopbacks().read()[&59].clone();
         let addr = rt.restart_grpc(59, new).await.unwrap().unwrap();
@@ -948,16 +834,16 @@ mod tests {
     /// A runtime that never started has nothing to move.
     #[tokio::test]
     async fn restart_grpc_without_a_runtime_does_nothing() {
-        let (cfg, _d) = config_with_mg(60, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
+        let engine = engine_with_mg(60, free_v6_port()).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(true)).unwrap();
         assert!(rt.restart_grpc(60, free_v6_port()).await.unwrap().is_none());
         assert!(rt.status(60).is_none());
     }
 
     #[tokio::test]
     async fn a_server_that_returns_or_panics_marks_the_microgrid_failed() {
-        let (cfg, _d) = config_with_mg(47, free_v6_port());
-        let rt = MicrogridRuntimes::new(cfg.engine().clone(), opts(true)).unwrap();
+        let engine = engine_with_mg(47, free_v6_port()).await;
+        let rt = MicrogridRuntimes::new(engine.clone(), opts(true)).unwrap();
         rt.start(47).await.unwrap();
         let inner = rt.inner.clone().unwrap();
         let generation = inner.runtimes.lock()[&47].generation;

@@ -174,7 +174,8 @@ its port is free again and its dispatches are deleted.
 
 Every reload rebuilds each of the script's microgrids in place. Its gRPC
 server, physics and UI keep running, and each component keeps its state when
-the new script has a component with the same id and an equal spec.
+the new script has a component with the same id and an equal spec. The name,
+health and modes don't count: changing only those keeps the state too.
 
 | State | Same id, same spec | Changed or new component | Microgrid |
 |---|---|---|---|

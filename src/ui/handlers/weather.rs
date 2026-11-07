@@ -1,16 +1,12 @@
-//! Site weather over HTTP: `GET`/`POST /api/mg/{mg}/weather` mirror
-//! the Lisp `(make-weather)`, `(set-weather)`, `(pass-cloud)` and
-//! `(weather-status)` doors (`src/lisp/defuns/weather.rs`) for the
-//! weather panel, which has no Lisp console of its own, and for
-//! scripts. `DELETE` removes the weather, as a reload without
-//! `(make-weather)` does.
+//! Site weather over HTTP: `GET`/`POST /api/mg/{mg}/weather` read the
+//! sky, create or retune the weather and pass a cloud, for the
+//! weather panel and for scripts. `DELETE` removes the weather.
 //!
 //! Unlike the typed drive door in `control.rs`, weather isn't
-//! component-addressed — it's a property of the site — so it gets
-//! its own route pair instead of a `DriveRequest` field. Validation
-//! reuses the same [`crate::sim::weather::validate`] rules the Lisp
-//! doors enforce, so a request that would be rejected in the console
-//! is rejected here too, and vice versa.
+//! component-addressed — it's a property of the site — so it gets its
+//! own route pair instead of a `DriveRequest` field. Validation is
+//! [`crate::sim::weather::validate`] through
+//! [`crate::sim::weather::WeatherPatch`].
 
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
@@ -104,8 +100,7 @@ pub(in crate::ui) async fn weather_get(mg: Mg) -> WeatherResult {
 }
 
 /// One scripted cloud, fired after any config change in the same
-/// request. `ramp_s` defaults to 0, matching `(pass-cloud)`'s
-/// optional third argument.
+/// request. `ramp_s` defaults to 0.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::ui) struct PassCloudRequest {
@@ -115,11 +110,9 @@ pub(in crate::ui) struct PassCloudRequest {
     ramp_s: Option<f64>,
 }
 
-/// `POST weather` body. Every field optional — a partial update
-/// over whatever the site already has, same contract as
-/// `(set-weather)`. Times are `"HH:MM"` strings; the ranges are
-/// plain `[lo, hi]` pairs (the HTTP door has no need for Lisp's
-/// number-or-list shorthand).
+/// `POST weather` body. Every field optional — a partial update over
+/// whatever the site already has. Times are `"HH:MM"` strings; the
+/// ranges are plain `[lo, hi]` pairs.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::ui) struct WeatherPostRequest {
@@ -138,9 +131,8 @@ pub(in crate::ui) struct WeatherPostRequest {
 
 impl WeatherPostRequest {
     /// Whether the body carries any *config* field — the half that
-    /// creates weather on a weatherless site, exactly as
-    /// `(set-weather …)` does. A body holding nothing but
-    /// `pass_cloud` carries none.
+    /// creates weather on a weatherless site. A body holding nothing
+    /// but `pass_cloud` carries none.
     fn has_config_field(&self) -> bool {
         self.sunrise.is_some()
             || self.sunset.is_some()
@@ -161,11 +153,8 @@ fn hhmm_field(field: &str, s: &str) -> Result<std::time::Duration, String> {
 
 /// Parse the request body's JSON shapes into a [`WeatherPatch`]. Only
 /// the wire shapes are this door's business — `"HH:MM"` strings and
-/// plain `[lo, hi]` pairs (no need for Lisp's number-or-list
-/// shorthand). The fold order, the numeric validation and the
-/// sunrise/sunset pair check all belong to the patch, shared with the
-/// `(make-weather)` / `(set-weather)` doors, so a request rejected in
-/// the console is rejected here too and vice versa.
+/// plain `[lo, hi]` pairs. The fold order, the numeric validation and
+/// the sunrise/sunset pair check all belong to the patch.
 fn patch_of(req: &WeatherPostRequest) -> Result<WeatherPatch, String> {
     Ok(WeatherPatch {
         sunrise: req
@@ -226,26 +215,23 @@ fn apply_weather_over(
 
     let had_weather = existing.is_some();
 
-    // A cloud-only request on a weatherless site is the one shape
-    // where this door would otherwise diverge from `(pass-cloud …)`,
-    // which rejects it outright: falling through would install a
-    // whole default sky as a side effect of asking for one cloud.
-    // A body that also carries a config field still creates, same as
-    // `(set-weather …)` on a fresh site.
+    // A cloud-only request on a weatherless site is refused: falling
+    // through would install a whole default sky as a side effect of
+    // asking for one cloud. A body that also carries a config field
+    // still creates.
     if !had_weather && pass_cloud.is_some() && !req.has_config_field() {
         return Err(ApiError::bad_request(
             "pass_cloud: no weather on this site — set a config field in the same request, or \
-             call (make-weather …) first"
+             post one first"
                 .to_string(),
         ));
     }
 
     // Partial update over what the site has, or a fresh default sky
-    // when it has none — the shared create-or-update rule, the same
-    // one `(set-weather …)` goes through, decided on the reading
-    // taken above.
+    // when it has none — the create-or-update rule of `WeatherPatch`,
+    // decided on the reading taken above.
     patch_of(req)
-        .and_then(|patch| patch.install_over(site, weather::WeatherDoor::Http, existing))
+        .and_then(|patch| patch.install_over(site, existing))
         .map_err(ApiError::bad_request)?;
 
     if let Some((depth_pct, duration, ramp)) = pass_cloud {
@@ -253,13 +239,13 @@ fn apply_weather_over(
     }
 
     // Race: this handler takes the site's weather lock four separate
-    // times (read the config, write it back, arm the cloud, snapshot),
-    // and a concurrent `reset()` — a hot reload, or
-    // `(reset-microgrid)` — can clear the slot between any two of
-    // them. `with_weather` no-ops silently once that happens, so the
-    // config change and the scripted cloud both went nowhere; the
-    // missing snapshot is simply where that becomes visible. Report
-    // the conflict instead of panicking on an `expect`.
+    // times (read the config, write it back, arm the cloud,
+    // snapshot), and a concurrent `DELETE .../weather` or `reset()`
+    // can clear the slot between any two of them. `with_weather`
+    // no-ops silently once that happens, so the config change and the
+    // scripted cloud both went nowhere; the missing snapshot is
+    // simply where that becomes visible. Report the conflict instead
+    // of panicking on an `expect`.
     snapshot(site)
         .map(Json)
         .ok_or_else(|| ApiError::conflict("weather was removed while applying"))
@@ -273,7 +259,7 @@ pub(in crate::ui) async fn weather_post(
 }
 
 /// `DELETE weather`: the site has no weather from now on, and a solar
-/// inverter that followed it sees none. 204 whether or not it had
+/// inverter that followed it gets full sun. 204 whether or not it had
 /// one.
 pub(in crate::ui) async fn weather_delete(mg: Mg) -> StatusCode {
     mg.site.set_weather(None);

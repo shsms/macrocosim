@@ -1,10 +1,16 @@
 // Live-topology smoke: in-browser unit tests for ui-assets/live.js
-// plus (later tasks) e2e assertions against a running macrocosim.
-// Run: MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs
+// plus e2e assertions against a running macrocosim.
+// Run: MACROCOSIM_UI=http://127.0.0.1:PORT MACROCTL=target/debug/macroctl \
+//        node tools/ui-smoke/live-topology.mjs
+import { execFile } from "node:child_process";
 import { chromium } from "playwright";
 
 const BASE = process.env.MACROCOSIM_UI;
 if (!BASE) throw new Error("set MACROCOSIM_UI to a running macrocosim UI, e.g. http://127.0.0.1:8801");
+// The macroctl binary, which gives the setpoints: those come from the app
+// under test over gRPC, never from the UI.
+const MACROCTL = process.env.MACROCTL;
+if (!MACROCTL) throw new Error("set MACROCTL to the macroctl binary, e.g. target/debug/macroctl");
 
 let failures = 0;
 const check = (name, ok, detail = "") => {
@@ -109,10 +115,9 @@ const browser = await chromium.launch({ args: ["--no-sandbox"] });
 // uPlot's load-time `new Intl.NumberFormat(navigator.language)`
 // throws, uPlot never defines itself, and the metrics panel dies on
 // open. Real browsers always carry a valid tag; give this one the
-// same. The browser's own zone is neither UTC nor the demo's
-// Europe/Berlin, so a time shown in the browser's zone instead of the
-// display zone reads differently from the one the checks expect. The OS
-// is dark, so the theme's auto setting renders the dark tokens the
+// same. The browser's own zone is not UTC, so a time shown in UTC instead
+// of the display zone reads differently from the one the checks expect. The
+// OS is dark, so the theme's auto setting renders the dark tokens the
 // colour checks pin.
 const CONTEXT = {
   viewport: { width: 1600, height: 950 },
@@ -135,7 +140,7 @@ await page.goto(BASE, { waitUntil: "networkidle" });
 // floating cards, so store a float for each panel; the docked defaults have a
 // section of their own.
 await page.evaluate(() => {
-  for (const n of ["node", "metrics-btn", "formula-btn", "weather-btn", "defaults-btn", "scenario-report-btn", "repl-btn", "logs-btn"]) {
+  for (const n of ["node", "metrics-btn", "formula-btn", "weather-btn", "defaults-btn", "report-btn", "logs-btn"]) {
     localStorage.setItem(`mc-panel-dock-${n}`, JSON.stringify({ mode: "float" }));
   }
 });
@@ -339,7 +344,7 @@ check(
   JSON.stringify({ mainSocketOpen }),
 );
 
-// ── e2e: managed-file chrome on the microgrid list ────────────────
+// ── e2e: the microgrid list's chrome ──────────────────────────────
 // The overrides file is gone from the server, so nothing in the
 // chrome may still reach for it.
 check("e2e: the overrides pill is gone", (await page.locator("#pending-pill").count()) === 0);
@@ -360,20 +365,6 @@ check(
   prefilledId,
 );
 await page.click("#create-mg-close");
-
-// The Lisp load picker opens on microgrids/ where managed files live,
-// and on the state dir itself without one, as here: the starter site
-// is a Python script.
-await page.click("#mglist-load-btn");
-const crumb = await waitFor(async () => {
-  const t = (await page.textContent("#load-script-breadcrumb")) || "";
-  return t.trim() ? t : null;
-});
-check("e2e: load dialog opens on the state dir", /state dir/.test(crumb), crumb);
-const listed = await page.$$eval("#load-script-list button", (bs) => bs.map((b) => b.textContent));
-check("e2e: load dialog lists that directory's entries", listed.length > 0, JSON.stringify(listed));
-check("e2e: the collision bar starts hidden", await page.locator("#load-script-collision").isHidden());
-await page.click("#load-script-close");
 
 // ── e2e: the import dialog asks for the microgrid id ──────────────
 // Importing a site export used to fire a bare prompt() for a name and
@@ -540,27 +531,24 @@ check(
 // Escape settles the dialog's promise as a cancel — nothing posted.
 // It also stops at the dialog: app.js's global Esc bails out while a
 // `dialog[open]` is up, so the cancel must not peel a floating panel
-// off the dock behind it. The REPL is the panel to prove that with
-// here, opened with a backtick, which works anywhere.
+// off the dock behind it. The Logs panel, which opens on the list, is
+// the panel to prove that with here.
 const idsBeforeCancel = (await mgIds()).length;
 // Back to the list BEFORE the panel opens: a real route change
 // dismisses every floating card (routing.js), and the import that just
 // landed selected its new microgrid, so openImport navigates.
 await backToMgList();
-// The submit above can leave a dialog field focused, and the backtick
-// shortcut stands down inside a text field.
-await page.evaluate(() => document.activeElement?.blur());
-await page.keyboard.press("`");
-await waitFor(async () => await page.evaluate(() => document.getElementById("repl").classList.contains("open")), 5000);
+await page.click("#logs-btn");
+await waitFor(async () => await page.evaluate(() => document.getElementById("logs-panel").classList.contains("open")), 5000);
 await openImport(99405);
 await page.keyboard.press("Escape");
 await waitFor(async () => !(await importDialogOpen()), 5000).catch(() => {});
 check("e2e: Escape closes the import dialog", !(await importDialogOpen()));
 check(
   "e2e: Escape on the import dialog leaves the panel behind it open",
-  await page.evaluate(() => document.getElementById("repl").classList.contains("open")),
+  await page.evaluate(() => document.getElementById("logs-panel").classList.contains("open")),
 );
-await page.click("#repl .float-close");
+await page.click("#logs-panel .float-close");
 check(
   "e2e: a cancelled import registers nothing",
   (await mgIds()).length === idsBeforeCancel,
@@ -614,8 +602,8 @@ check(
   JSON.stringify(createBody),
 );
 check(
-  "e2e: a created microgrid has a spec and is unsaved",
-  createdEntry?.has_spec === true && createdEntry?.unsaved === true,
+  "e2e: a created microgrid is unsaved, with no source",
+  createdEntry?.unsaved === true && createdEntry?.source === null,
   JSON.stringify(createdEntry),
 );
 check(
@@ -688,21 +676,10 @@ const loopbackText = await waitFor(async () => {
 check("e2e: the loopback pill shows no count", /^(✓ connected|⚠ connecting)$/.test(loopbackText), loopbackText);
 
 // ── e2e: the microgrid header's file state ────────────────────────
-// The starter site comes from a Python script, so it has a spec: no
-// Lisp file to adopt, and its structure is editable.
-const demoHasSpec = await page.evaluate(async () => {
-  const rows = await (await fetch("/api/microgrids")).json();
-  return rows.find((m) => m.id === 2200)?.has_spec;
-});
-const headerState = await page.evaluate(() => ({
-  adopt: !document.getElementById("mg-adopt-btn").hidden,
-  chip: Boolean(document.querySelector("#mg-file-chips .unmanaged")),
-  palette: [...document.querySelectorAll("#palette .pal-btn")].every((b) => !b.disabled),
-}));
+// Every microgrid's structure is editable: the palette is enabled.
 check(
-  "e2e: a microgrid with a spec shows no Adopt or unmanaged chip, and an enabled palette",
-  demoHasSpec === true && !headerState.adopt && !headerState.chip && headerState.palette,
-  JSON.stringify({ demoHasSpec, headerState }),
+  "e2e: the palette is enabled",
+  await page.evaluate(() => [...document.querySelectorAll("#palette .pal-btn")].every((b) => !b.disabled)),
 );
 
 // Undo is the server's: Ctrl+Z posts to /api/mg/{mg}/undo instead of
@@ -916,15 +893,16 @@ await page.evaluate(async () => { const { topology } = await import("/assets/top
 // no power through it has no power factor to show. Command it (the
 // setpoint expires on its own, so re-runs start from the same
 // state) and wait for the ramp to reach the live overlay.
-// An active-power setpoint inside the simulator. Setpoints come from
-// the app under test over gRPC; until Lisp goes, its eval is the one
-// way this smoke can give one, so this is the smoke's last eval.
+// An active-power setpoint on the starter site, as the app under test
+// gives one: over gRPC, through macroctl. True when macroctl exits 0.
 const setActivePower = (id, w) =>
-  page.evaluate(
-    async ([id, w]) =>
-      (await fetch("/api/mg/2200/eval", { method: "POST", body: `(set-active-power ${id} ${w} :lifetime-s 60)` })).ok,
-    [id, w],
-  );
+  new Promise((resolve) => {
+    const args = ["--ui-addr", BASE, "--microgrid-id", "2200", "set-power", String(id), String(w), "--lifetime-s", "60"];
+    execFile(MACROCTL, args, { timeout: 30000 }, (err, _stdout, stderr) => {
+      if (err) console.log(`macroctl ${args.join(" ")}: ${err.message} ${stderr}`);
+      resolve(err === null);
+    });
+  });
 const setpointOk = await setActivePower(1001, -8000);
 check("e2e: hover setup — inverter setpoint accepted", setpointOk === true, String(setpointOk));
 await waitFor(async () => {
@@ -1488,13 +1466,13 @@ await page.evaluate(async () => {
 // ── EV charger: plug, charge, unplug through the inspector ─────────
 // The demo's script plugs a sedan into the charger at boot, so the
 // card opens on a car; :idle is paused, so nothing flows until the
-// set-active-power command below.
+// active-power setpoint below.
 //
 // Every waitFor here polls for the very thing the check that follows
 // asserts, so a timeout would abort the whole run with a stack trace
 // instead of reporting which UI step stopped working. `.catch` turns
-// each one back into a FAIL line — the same idiom the panel-cache and
-// REPL sections use.
+// each one back into a FAIL line — the same idiom the panel-cache
+// section uses.
 const chargerId = 1004; // the starter site's charger
 await page.evaluate(async (id) => {
   const { topology } = await import("/assets/topology.js");
@@ -1694,7 +1672,7 @@ check(
 
 // Allotment flow: demand was set at construction, BEFORE this
 // setpoint — with demand 0 the dynamic band is [0, 0] and nothing
-// flows no matter what set-active-power asks for.
+// flows no matter what the setpoint asks for.
 const boilerPowerOk = await setActivePower(BOILER_ID, 50000);
 check("e2e: the boiler's active-power setpoint is accepted", boilerPowerOk === true, String(boilerPowerOk));
 const boilerDrawing = await waitFor(async () => {
@@ -2172,9 +2150,9 @@ const grown = await waitFor(async () => {
 check("e2e: a drag taller than the cap grows the panel and re-caps it", grown !== null && grown.h > cappedH + 50, JSON.stringify(grown));
 await page.click("#metrics-btn");
 
-// ── e2e: the REPL and Logs panels ────────────────────────────────
-// Static-markup floating panels off the top bar's buttons, closed by
-// default. The REPL also answers a backtick from anywhere.
+// ── e2e: the Logs panel ──────────────────────────────────────────
+// A static-markup floating panel off the top bar's button, closed by
+// default.
 // null, not false, when the card is missing: "closed" is asserted as
 // `=== false` below, so a renamed or deleted card fails here instead
 // of passing as a panel that is merely not open.
@@ -2183,7 +2161,7 @@ const panelOpen = async (id) =>
     const el = document.getElementById(i);
     return el ? el.classList.contains("open") : null;
   }, id);
-check("e2e: the REPL and Logs panels start closed", (await panelOpen("repl")) === false && (await panelOpen("logs-panel")) === false);
+check("e2e: the Logs panel starts closed", (await panelOpen("logs-panel")) === false);
 check(
   "e2e: no drawer row is left in main",
   await page.evaluate(() => {
@@ -2224,15 +2202,15 @@ const infoLineDisplay = async () =>
     return line ? getComputedStyle(line).display : "none-found";
   });
 check("e2e: the log tail shows info lines at its default level", (await infoLineDisplay()) === "flex" && (await page.evaluate(() => document.getElementById("logs").classList.contains("min-info"))));
-// A painted log line re-formats when the zone chip switches (the demo runs in
-// Europe/Berlin, never UTC+0, so the two times differ).
+// A painted log line re-formats when the zone chip switches (the browser runs
+// in New York, never UTC+0, so the two times differ).
 const logTime = () => page.evaluate(() => document.querySelector("#logs .log-ts time")?.textContent ?? "");
-const logTimeSim = await logTime();
+const logTimeLocal = await logTime();
 const logTimeUtc = await inUtc(logTime);
 check(
   "e2e: a log line's time follows the zone chip",
-  /^\d\d:\d\d:\d\d$/.test(logTimeSim) && /^\d\d:\d\d:\d\d$/.test(logTimeUtc) && logTimeSim !== logTimeUtc,
-  JSON.stringify({ logTimeSim, logTimeUtc }),
+  /^\d\d:\d\d:\d\d$/.test(logTimeLocal) && /^\d\d:\d\d:\d\d$/.test(logTimeUtc) && logTimeLocal !== logTimeUtc,
+  JSON.stringify({ logTimeLocal, logTimeUtc }),
 );
 await page.selectOption("#logs-level", "warn");
 check("e2e: raising the minimum level to warn hides info lines", (await infoLineDisplay()) === "none");
@@ -2256,342 +2234,30 @@ check(
 // A live /ws/events line can land between the click and this read, so
 // assert the tail was emptied, not that it stayed empty.
 check("e2e: clear empties the tail", await page.evaluate(() => document.getElementById("logs").children.length < 5));
-await page.keyboard.press("`");
-check("e2e: a backtick opens the REPL panel and focuses its input", (await panelOpen("repl")) && (await page.evaluate(() => document.activeElement?.id === "repl-input")));
-const replBox = await page.evaluate(() => {
-  const r = document.getElementById("repl").getBoundingClientRect();
-  const l = document.getElementById("logs-panel").getBoundingClientRect();
-  return { w: r.width, gap: r.left - l.right, bottomDiff: r.bottom - l.bottom };
-});
-check("e2e: the REPL panel spawns 560px wide, 8px to the right of the Logs panel along the bottom", Math.abs(replBox.w - 560) <= 1 && Math.abs(replBox.gap - 8) <= 1 && Math.abs(replBox.bottomDiff) <= 1, JSON.stringify(replBox));
-await page.fill("#repl-input", "");
-await page.keyboard.press("Escape");
-check("e2e: Escape in the REPL input closes the panel", (await panelOpen("repl")) === false);
 // A card capped below what it holds stops at a floor its content sets: the card
 // head, the scroll band at its own min-height and the rest of the content, at
 // whatever height the density gives them.
+// The Logs panel is open here; close it, store a tiny cap and open it again.
 await page.click("#logs-btn");
-await page.evaluate(() => {
-  for (const n of ["repl-btn", "logs-btn"]) localStorage.setItem(`mc-panel-size-${n}`, JSON.stringify({ h: 1 }));
-});
-await page.click("#repl-btn");
+await page.evaluate(() => localStorage.setItem("mc-panel-size-logs-btn", JSON.stringify({ h: 1 })));
 await page.click("#logs-btn");
-// `fn` evaluated on page `pg` two frames from now. The REPL brings its prompt
-// back into view from a resize observer, which runs before the next paint.
+// `fn` evaluated on page `pg` two frames from now, after the card's resize
+// observer has run.
 const evaluateAfterFrames = (pg, fn) =>
   pg.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))).then(() => pg.evaluate(fn));
 const floors = await inBothDensities(() =>
-  evaluateAfterFrames(page, () => {
-    const box = (sel) => document.querySelector(sel).getBoundingClientRect();
-    return {
-      promptOver: box("#repl-form").bottom - box("#repl").bottom,
-      // The prompt scrolls with the transcript: all of it shows, not only its
-      // bottom edge.
-      promptCut: box("#repl-output").top - box("#repl-form").top,
-      tailOver: box("#logs").bottom - box("#logs-panel").bottom,
-    };
-  }),
+  evaluateAfterFrames(page, () => ({
+    tailOver: document.getElementById("logs").getBoundingClientRect().bottom - document.getElementById("logs-panel").getBoundingClientRect().bottom,
+  })),
 );
 check(
-  "e2e: capped REPL and logs cards hold the prompt and the tail, in both densities",
-  floors.every((f) => f.promptOver <= 0.5 && f.promptCut <= 0.5 && f.tailOver <= 0.5),
+  "e2e: a capped logs card holds the tail, in both densities",
+  floors.every((f) => f.tailOver <= 0.5),
   JSON.stringify(floors),
 );
-await page.click("#repl-btn");
-await page.evaluate(() => {
-  for (const n of ["repl-btn", "logs-btn"]) localStorage.removeItem(`mc-panel-size-${n}`);
-});
+await page.evaluate(() => localStorage.removeItem("mc-panel-size-logs-btn"));
 await page.click("#logs-btn");
 check("e2e: the logs button closes the Logs panel", (await panelOpen("logs-panel")) === false);
-// Opening a card stores no width: its default is not the user's. A sideways
-// drag is, and it stays — on the bottom-left REPL card too, whose content
-// re-fit must not write the old width back.
-await page.click("#repl-btn");
-await new Promise((r) => setTimeout(r, 800));
-const openedSize = await page.evaluate(() => localStorage.getItem("mc-panel-size-repl-btn"));
-check("e2e: opening the REPL panel stores no size", openedSize === null, openedSize);
-const replWidth = async () =>
-  await page.evaluate(() => ({
-    w: document.getElementById("repl").getBoundingClientRect().width,
-    stored: JSON.parse(localStorage.getItem("mc-panel-size-repl-btn") ?? "null")?.w ?? null,
-  }));
-// What the native resize handle writes on a sideways drag.
-await page.evaluate(() => { document.getElementById("repl").style.width = "700px"; });
-await new Promise((r) => setTimeout(r, 1000));
-const dragged = await replWidth();
-check("e2e: a sideways drag keeps the REPL panel's width and stores it", Math.abs(dragged.w - 700) <= 1 && dragged.stored === 700, JSON.stringify(dragged));
-// The width stays through a dock and a float-out.
-await page.click("#repl .float-dock");
-await page.click('.dock-menu .dock-menu-item:has-text("right")');
-await new Promise((r) => setTimeout(r, 400));
-await page.click("#repl .float-dock");
-await new Promise((r) => setTimeout(r, 400));
-const refloated = await replWidth();
-check("e2e: the REPL panel's dragged width survives a dock and a float-out", Math.abs(refloated.w - 700) <= 1 && refloated.stored === 700, JSON.stringify(refloated));
-// Back to the default width, the card wholly on screen, for the gripper drags.
-const resetReplWidth = async () => {
-  await page.evaluate(() => { document.getElementById("repl").style.width = "560px"; });
-  await waitFor(async () => ((await replWidth()).stored === 560 ? true : null), 5000).catch(() => null);
-};
-await resetReplWidth();
-// A mouse drag on the gripper: the corner under the pointer follows it, and the
-// card's top-left corner stays put.
-const replRect = async () =>
-  await page.evaluate(() => {
-    const r = document.getElementById("repl").getBoundingClientRect();
-    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-  });
-// Drags the REPL panel's gripper by (dx, dy), holds it `pause` ms there, moves
-// it on to (endX, endY) and lets go; returns the card's box before the drag and
-// just before the release.
-const dragGripper = async (dx, dy, { pause = 0, endX = dx, endY = dy } = {}) => {
-  const from = await replRect();
-  const x = from.right - 4;
-  const y = from.bottom - 4;
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  await page.mouse.move(x + dx, y + dy, { steps: 5 });
-  await new Promise((r) => setTimeout(r, pause));
-  await page.mouse.move(x + endX, y + endY, { steps: 5 });
-  const to = await replRect();
-  await page.mouse.up();
-  // The release settles the drag; RESIZE_SETTLE is longer than this.
-  await new Promise((r) => setTimeout(r, 100));
-  return { from, to };
-};
-// Whether the REPL panel's stored offset is the one it shows.
-const offsetStored = async () =>
-  await page.evaluate(() => {
-    const stored = JSON.parse(localStorage.getItem("mc-panel-pos-repl-btn") ?? "null");
-    const transform = document.getElementById("repl").style.transform;
-    return { stored, transform, same: stored !== null && transform === `translate(${stored.dx}px, ${stored.dy}px)` };
-  });
-// A pause in the drag keeps the corner too.
-const right = await dragGripper(50, 0, { pause: 500, endX: 100 });
-check(
-  "e2e: dragging the REPL panel's gripper right moves its right edge, not its left",
-  Math.abs(right.to.right - right.from.right - 100) <= 2 && Math.abs(right.to.left - right.from.left) <= 1,
-  JSON.stringify(right),
-);
-// The shifted offset is the card's placement now, stored at the release.
-const placed = await offsetStored();
-check("e2e: a gripper drag stores the REPL panel's shifted offset", placed.same, JSON.stringify(placed));
-// A drag that pauses and comes back to where it started stores no offset of its
-// own on the way.
-await dragGripper(100, 0, { pause: 500, endX: 0 });
-const back = await offsetStored();
-check(
-  "e2e: a gripper drag that pauses and comes back leaves the stored offset as it was",
-  JSON.stringify(back.stored) === JSON.stringify(placed.stored),
-  JSON.stringify({ placed: placed.stored, back }),
-);
-// A sideways drag drifts a pixel or two along the other axis, and the browser
-// writes that axis too. The drift is not a height drag: it stores no height.
-const drift = await dragGripper(40, 2);
-const driftSize = await page.evaluate(() => JSON.parse(localStorage.getItem("mc-panel-size-repl-btn") ?? "null"));
-check(
-  "e2e: a sideways gripper drag with a pixel of vertical drift stores a width and no height",
-  driftSize !== null && driftSize.h === undefined && driftSize.w !== undefined,
-  JSON.stringify({ drift, driftSize }),
-);
-// The REPL panel hangs from the dock's bottom edge; a drag down still moves its
-// bottom edge.
-const down = await dragGripper(0, 36);
-check(
-  "e2e: dragging the REPL panel's gripper down moves its bottom edge, not its top",
-  Math.abs(down.to.top - down.from.top) <= 1 && down.to.bottom - down.from.bottom >= 30,
-  JSON.stringify(down),
-);
-// Past the dock's bottom or right edge the card stops at it, gripper and all.
-await dragGripper(0, 2000);
-const deep = await page.evaluate(() => {
-  const card = document.getElementById("repl");
-  return {
-    h: JSON.parse(localStorage.getItem("mc-panel-size-repl-btn") ?? "null")?.h ?? null,
-    room: card.parentElement.getBoundingClientRect().bottom - card.getBoundingClientRect().top,
-  };
-});
-check(
-  "e2e: a gripper drag past the dock's bottom edge caps the REPL panel at it",
-  deep.h !== null && deep.h <= deep.room + 1,
-  JSON.stringify(deep),
-);
-const past = await dragGripper(3000, 0);
-const settled = await replRect();
-const floatAreaRight = await page.evaluate(
-  () => document.getElementById("repl").parentElement.getBoundingClientRect().right,
-);
-check(
-  "e2e: a gripper drag past the dock's right edge stops the REPL panel at it",
-  settled.right <= floatAreaRight + 1 && Math.abs(settled.left - past.from.left) <= 1,
-  JSON.stringify({ past, settled, floatAreaRight }),
-);
-await resetReplWidth();
-// A press held while the window shrinks lands the card below the dock's top
-// once it is let go, whether the pointer stays put or moves after the shrink.
-// A press that resizes nothing leaves the stored placement as it was. The REPL
-// holds a stored height from the gripper drags above, so its height follows
-// the window down: the case a press that sized nothing must not save.
-const replPlace = async () =>
-  await page.evaluate(() => {
-    const card = document.getElementById("repl");
-    return {
-      top: card.getBoundingClientRect().top,
-      dockTop: card.parentElement.getBoundingClientRect().top,
-      inner: window.innerHeight,
-      stored: JSON.parse(localStorage.getItem("mc-panel-pos-repl-btn") ?? "null"),
-    };
-  });
-for (const moved of [false, true]) {
-  const before = await replPlace();
-  const held = await replRect();
-  await page.mouse.move(held.right - 4, held.bottom - 4);
-  await page.mouse.down();
-  await page.setViewportSize({ width: 1600, height: 450 });
-  await new Promise((r) => setTimeout(r, 600));
-  if (moved) await page.mouse.move(held.right - 4, 400, { steps: 5 });
-  await page.mouse.up();
-  await new Promise((r) => setTimeout(r, 100));
-  const shrunk = await replPlace();
-  await page.setViewportSize(CONTEXT.viewport);
-  await new Promise((r) => setTimeout(r, 600));
-  const regrown = await replPlace();
-  check(
-    `e2e: a gripper press held while the window shrinks${moved ? ", then moved," : ""} leaves the REPL panel's head in the window`,
-    shrunk.top >= shrunk.dockTop - 1 &&
-      shrunk.top <= shrunk.inner - 20 &&
-      regrown.top <= regrown.inner - 100 &&
-      (moved || JSON.stringify(regrown.stored) === JSON.stringify(before.stored)),
-    JSON.stringify({ before, shrunk, regrown }),
-  );
-}
-// Only the primary button of the primary pointer presses the gripper: a
-// right-button press holds no drag, so an inline size written meanwhile still
-// settles after RESIZE_SETTLE, and another pointer's release does not end a
-// drag.
-{
-  const held = await replRect();
-  await page.mouse.move(held.right - 4, held.bottom - 4);
-  await page.mouse.down({ button: "right" });
-  await page.evaluate(() => { document.getElementById("repl").style.width = "613px"; });
-  await new Promise((r) => setTimeout(r, 600));
-  const whileRight = await replWidth();
-  await page.mouse.up({ button: "right" });
-  check(
-    "e2e: a right-button press on the gripper holds no drag: a width written meanwhile settles",
-    whileRight.stored === 613,
-    JSON.stringify(whileRight),
-  );
-}
-{
-  await page.evaluate(() => {
-    document.getElementById("repl").dispatchEvent(new PointerEvent("pointerdown", { pointerId: 5, isPrimary: false, bubbles: true }));
-    document.getElementById("repl").style.width = "617px";
-  });
-  await new Promise((r) => setTimeout(r, 600));
-  const afterSecondary = await replWidth();
-  check(
-    "e2e: a press by a non-primary pointer holds no drag: a width written meanwhile settles",
-    afterSecondary.stored === 617,
-    JSON.stringify(afterSecondary),
-  );
-}
-{
-  const held = await replRect();
-  await page.mouse.move(held.right - 4, held.bottom - 4);
-  await page.mouse.down();
-  await page.mouse.move(held.right + 26, held.bottom - 4, { steps: 5 });
-  await page.evaluate(() => window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 7, isPrimary: false })));
-  const stillPinned = await page.evaluate(() => document.getElementById("repl").style.left !== "");
-  await page.mouse.up();
-  await new Promise((r) => setTimeout(r, 100));
-  check("e2e: another pointer's release does not end a gripper drag", stillPinned);
-}
-await resetReplWidth();
-// Drags the REPL panel by its head by dx and lets go; `at` is where along the
-// head to grab it, from its left end (the grip unless given: further along, the
-// head holds the REPL's controls, which take a press themselves).
-const dragReplHead = async (dx, at = null) => {
-  const h = await page.evaluate((f) => {
-    const r = document.querySelector(f == null ? "#repl .drag-grip" : "#repl .panel-drag").getBoundingClientRect();
-    return { x: r.left + r.width * (f ?? 0.5), y: r.top + r.height / 2 };
-  }, at);
-  await page.mouse.move(h.x, h.y);
-  await page.mouse.down();
-  await page.mouse.move(h.x + dx, h.y, { steps: 8 });
-  await page.mouse.up();
-  await new Promise((r) => setTimeout(r, 300));
-};
-// A card hanging off the window's left edge keeps its left edge through a press
-// and a sideways drag of its gripper.
-await dragReplHead(-(await replRect()).left - 200);
-const offLeft = await dragGripper(20, 0);
-const offLeftSettled = await replRect();
-check(
-  "e2e: a gripper drag on a card hanging off the left edge keeps its left edge",
-  offLeft.from.left < -100 && Math.abs(offLeftSettled.left - offLeft.from.left) <= 1,
-  JSON.stringify({ offLeft, offLeftSettled }),
-);
-// Narrowed at its left limit, the card is clamped like the end of a head drag:
-// at least KEEP_X (80px) of it stays on screen.
-// Grabbed in the gap between the head's controls and its close and dock
-// buttons: the part of the head a card at its left limit still shows.
-const headGap = await page.evaluate(() => {
-  const head = document.querySelector("#repl .panel-drag").getBoundingClientRect();
-  const tools = document.querySelector("#repl .repl-head-tools").getBoundingClientRect();
-  const dock = document.querySelector("#repl .float-dock").getBoundingClientRect();
-  const x = (tools.right + dock.left) / 2;
-  return { x, at: (x - head.left) / head.width, width: dock.left - tools.right };
-});
-check("e2e: the REPL head keeps a draggable gap beside its close and dock buttons", headGap.width >= 12, JSON.stringify(headGap));
-await dragReplHead(2 - headGap.x, headGap.at);
-const atLimit = await dragGripper(-40, 0);
-const atLimitSettled = await replRect();
-check(
-  "e2e: a gripper drag that narrows a card at its left limit keeps 80px of it on screen",
-  atLimit.from.right <= 81 && atLimit.to.right <= atLimit.from.right - 30 && atLimitSettled.right >= 79,
-  JSON.stringify({ atLimit, atLimitSettled }),
-);
-// A card already past the dock's right edge can shrink there, not grow: a drag
-// that narrows it narrows it by the drag, not down to the room left.
-await page.click("#logs-btn");
-await page.click("#logs-panel .float-dock");
-await page.click('.dock-menu .dock-menu-item:has-text("right")');
-await new Promise((r) => setTimeout(r, 400));
-const edgeRight = await page.evaluate(() => document.getElementById("repl").parentElement.getBoundingClientRect().right);
-await dragReplHead(edgeRight - (await replRect()).right + 100);
-const narrowed = await dragGripper(-10, 0);
-const narrowW = (await replWidth()).w;
-check(
-  "e2e: a gripper drag on a card past the dock's edge narrows it by the drag, not to the room left",
-  narrowed.from.right > edgeRight && Math.abs(narrowW - (narrowed.from.right - narrowed.from.left - 10)) <= 2,
-  JSON.stringify({ narrowed, narrowW, edgeRight }),
-);
-await page.click("#logs-panel .float-dock");
-await page.click("#logs-btn");
-await page.click("#repl-btn");
-await page.evaluate(() => {
-  localStorage.removeItem("mc-panel-size-repl-btn");
-  localStorage.removeItem("mc-panel-pos-repl-btn");
-  localStorage.removeItem("mc-strip-right");
-});
-// In Scenarios the backtick works too.
-await page.keyboard.press("2");
-await page.keyboard.press("`");
-// The card has to be on screen there, not just carrying the class:
-// the Scenarios pane replaces the topology canvas, and the panel dock
-// the cards float in shares that grid cell.
-check(
-  "e2e: the backtick opens the REPL in Scenarios mode",
-  (await panelOpen("repl")) === true &&
-    (await page.evaluate(() => document.body.dataset.mode === "scenarios" && document.getElementById("repl").getBoundingClientRect().height > 0)),
-);
-await page.keyboard.press("Escape");
-await page.keyboard.press("1");
-await page.click(DEMO_CARD).catch(() => {});
-
-// The smoke no longer drives the REPL or runs a Lisp scenario: the
-// starter site is a Python script, edited through its spec.
 // A waitForResponse predicate for a `method` request to `path`.
 const pathIs = (path, method = "GET") => (r) => new URL(r.url()).pathname === path && r.request().method() === method;
 
@@ -2685,11 +2351,9 @@ const stripState = async () =>
       stored: JSON.parse(localStorage.getItem("mc-strip-bottom") ?? "null"),
     };
   });
-// Start from a known floating state: metrics open, floating. The
-// Escape that closed the REPL above leaves its textarea focused for a
-// beat, so the mode chord before this can be swallowed — click the
-// chrome buttons instead, which lands on a selected microgrid's
-// Topology either way.
+// Start from a known floating state: metrics open, floating. Click the
+// chrome buttons, which land on a selected microgrid's Topology either
+// way.
 await page.click('.mode-btn[data-mode="microgrids"]');
 await page.click(DEMO_CARD);
 if (!(await page.evaluate(() => document.getElementById("panel-metrics-btn")?.classList.contains("open")))) await page.click("#metrics-btn");
@@ -2756,15 +2420,14 @@ let tl = await tilesOf();
 check("e2e: a second docked panel appends at the right end and a re-docked one takes its stored slot, with a splitter between", tl.order.join() === "panel-metrics-btn,logs-panel" && tl.stored?.order?.join() === "metrics-btn,logs-btn" && tl.splitters === 1, JSON.stringify(tl));
 check("e2e: two tiles split the strip evenly", Math.abs(tl.widths[0] - tl.widths[1]) <= 6 && tl.widths[0] + tl.widths[1] >= tl.sw - 12, JSON.stringify(tl));
 // A third tile takes exactly its 1/n and the sitting two scale down
-// into the rest. The backtick summons the REPL from anywhere; it does
-// not change mode.
-await page.keyboard.press("`");
-await page.click("#repl .float-dock");
+// into the rest.
+await page.click("#defaults-btn");
+await page.click("#panel-defaults-btn .float-dock");
 await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
 tl = await tilesOf();
 check("e2e: a third docked tile takes one third of the strip", tl.widths.length === 3 && Math.abs(tl.widths[2] - tl.sw / 3) <= 6, JSON.stringify(tl));
-await page.click("#repl .float-dock");
-await page.keyboard.press("Escape");
+await page.click("#panel-defaults-btn .float-dock");
+await page.click("#defaults-btn");
 // The pair re-normalises to half the strip each now the third tile is
 // gone; re-read so the layout has settled before the splitter is
 // measured.
@@ -2787,7 +2450,7 @@ await page.mouse.down();
 for (let i = 1; i <= 10; i++) { await page.mouse.move(headBox.x - 90 * i, headBox.y); await page.waitForTimeout(15); }
 await page.mouse.up();
 tl = await tilesOf();
-check("e2e: dragging a tile head past its neighbour reorders the strip and persists the order, keeping the floated-out tile's slot", tl.order.join() === "logs-panel,panel-metrics-btn" && tl.stored?.order?.join() === "logs-btn,metrics-btn,repl-btn", JSON.stringify(tl));
+check("e2e: dragging a tile head past its neighbour reorders the strip and persists the order, keeping the floated-out tile's slot", tl.order.join() === "logs-panel,panel-metrics-btn" && tl.stored?.order?.join() === "logs-btn,metrics-btn,defaults-btn", JSON.stringify(tl));
 await page.reload({ waitUntil: "networkidle" });
 await page.click(DEMO_CARD).catch(() => {});
 await page.click("#logs-btn");
@@ -2874,9 +2537,9 @@ for (let i = 1; i <= 10; i++) { await page.mouse.move(rts.x, rts.y + 12 * i); aw
 await page.mouse.up();
 rs = await rightState();
 check("e2e: dragging a right tile splitter trades height between the tiles", rs.heights[0] - rs.heights[1] >= 220 && rs.stored?.shares?.["metrics-btn"] > rs.stored?.shares?.["logs-btn"], JSON.stringify(rs));
-// Bottom and right at once: dock the REPL to the bottom while both sit on the right.
-await page.keyboard.press("`");
-await page.click("#repl .float-dock");
+// Bottom and right at once: dock the Defaults panel to the bottom while both sit on the right.
+await page.click("#defaults-btn");
+await page.click("#panel-defaults-btn .float-dock");
 await page.click('.dock-menu .dock-menu-item:has-text("bottom")');
 const both = await page.evaluate(() => ({
   bottom: document.body.classList.contains("has-bottom-dock"),
@@ -2885,11 +2548,11 @@ const both = await page.evaluate(() => ({
   bottomW: Math.round(document.getElementById("dock-bottom").getBoundingClientRect().width),
   mainW: Math.round(document.getElementById("app").getBoundingClientRect().width),
 }));
-check("e2e: the bottom strip spans the full width under the right strip", both.bottom && both.right && both.bottomTiles.join() === "repl" && Math.abs(both.bottomW - both.mainW) <= 1, JSON.stringify(both));
+check("e2e: the bottom strip spans the full width under the right strip", both.bottom && both.right && both.bottomTiles.join() === "panel-defaults-btn" && Math.abs(both.bottomW - both.mainW) <= 1, JSON.stringify(both));
 // A docked tile's button floats it straight back, no menu.
-await page.click("#repl .float-dock");
+await page.click("#panel-defaults-btn .float-dock");
 check("e2e: a tile's dock button floats it without a menu", (await page.evaluate(() => document.querySelector(".dock-menu") === null && !document.body.classList.contains("has-bottom-dock"))));
-await page.keyboard.press("Escape");
+await page.click("#defaults-btn");
 await page.click("#panel-metrics-btn .float-dock");
 await page.click("#logs-panel .float-dock");
 rs = await rightState();
@@ -3441,22 +3104,26 @@ check(
 }
 
 // ── e2e: the zone chip ─────────────────────────────────────────────
-// The demo runs in Europe/Berlin, never UTC+0, so the clock's hour moves when
-// the chip switches to UTC, and comes back.
+// The browser runs in New York (CONTEXT), never UTC+0, so the clock's hour
+// moves when the chip switches to UTC, and comes back.
 const clockHour = async () => ((await page.textContent("#pulse-clock")) || "").slice(0, 2);
-const simChip = (await page.textContent("#tz-toggle")) || "";
-const simHour = await clockHour();
+const localChip = (await page.textContent("#tz-toggle")) || "";
+const localHour = await clockHour();
 const [utcChip, utcHour] = await inUtc(async () => [(await page.textContent("#tz-toggle")) || "", await clockHour()]);
-check("e2e: the zone chip switches to UTC", utcChip === "UTC" && simChip !== "UTC", JSON.stringify({ simChip, utcChip }));
-check("e2e: the clock follows the zone chip", /^\d\d$/.test(simHour) && simHour !== utcHour, JSON.stringify({ simHour, utcHour }));
-// In sim mode the clock shows the demo's Europe/Berlin, not the browser's
-// own New York (CONTEXT). The hour was read before the UTC round trip above,
-// so near an hour boundary it may be the hour of a few seconds ago.
-const berlinHours = [0, 5000].map((ago) =>
-  new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hourCycle: "h23", timeZone: "Europe/Berlin" }).format(Date.now() - ago),
+check("e2e: the zone chip switches to UTC", utcChip === "UTC" && localChip !== "UTC", JSON.stringify({ localChip, utcChip }));
+check("e2e: the clock follows the zone chip", /^\d\d$/.test(localHour) && localHour !== utcHour, JSON.stringify({ localHour, utcHour }));
+// In local mode the chip names the browser's own zone and the clock shows it,
+// without asking the server. The hour was read before the UTC round trip
+// above, so near an hour boundary it may be the hour of a few seconds ago.
+const newYorkHours = [0, 5000].map((ago) =>
+  new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hourCycle: "h23", timeZone: "America/New_York" }).format(Date.now() - ago),
 );
-check("e2e: in sim mode the clock shows the sim zone", berlinHours.includes(simHour), JSON.stringify({ simHour, berlinHours }));
-check("e2e: the zone chip switches back", (await page.textContent("#tz-toggle")) === simChip);
+check(
+  "e2e: in local mode the chip and the clock show the browser's zone",
+  /^e[sd]t$/.test(localChip) && newYorkHours.includes(localHour),
+  JSON.stringify({ localChip, localHour, newYorkHours }),
+);
+check("e2e: the zone chip switches back", (await page.textContent("#tz-toggle")) === localChip);
 
 // ── e2e: the theme chip ────────────────────────────────────────────
 // Auto follows the (dark) OS; the chip cycles light, dark, auto, and the choice
@@ -3592,7 +3259,7 @@ check(
 check("e2e: a toast's message reaches the logs panel once", (await uiLogCount("ui: smoke toast")) === 1);
 await page.click("#toast-host .toast-close");
 check("e2e: a toast's × closes it", (await toastState()).length === 0, JSON.stringify(await toastState()));
-await page.click("#snapshots-btn");
+await page.click("#help-btn");
 await toastNotify("over the dialog");
 check("e2e: a toast shows above an open modal dialog", await firstToastOnTop());
 await page.keyboard.press("Escape");
@@ -3615,14 +3282,14 @@ await page.click("#toast-host .toast-close");
 // A toast already up when a dialog opens is lifted above it too: its × is
 // clickable and leaves the dialog open.
 await toastNotify("before the dialog");
-await page.click("#snapshots-btn");
+await page.click("#help-btn");
 await page.waitForTimeout(300);
 const earlierOnTop = await firstToastOnTop();
 const earlierClosed = await page
   .click("#toast-host .toast-close", { timeout: 3000 })
   .then(() => true)
   .catch(() => false);
-const dialogStillOpen = await page.evaluate(() => document.getElementById("snapshots-dialog").open);
+const dialogStillOpen = await page.evaluate(() => document.getElementById("help-dialog").open);
 await page.keyboard.press("Escape");
 await dismissToasts();
 check(
@@ -3758,9 +3425,9 @@ check(
 );
 
 // ── e2e: dialogs keep server errors inline ─────────────────────────
-// A failed load shows its error in place,
-// the dialog stays open and no toast is raised; trying again or reopening
-// clears the old error.
+// A refused create (a taken microgrid id) shows its error in place, the
+// dialog stays open and no toast is raised; trying again or reopening clears
+// the old error.
 const toastCount = () => page.evaluate(() => document.querySelectorAll("#toast-host .toast").length);
 const shownError = (sel) =>
   page.evaluate((s) => {
@@ -3768,49 +3435,38 @@ const shownError = (sel) =>
     return e && !e.hidden && e.textContent ? e.textContent : null;
   }, sel);
 await page.goto(`${BASE}/#microgrids`, { waitUntil: "networkidle" });
-await page.click("#mglist-load-btn");
-let toastsBefore = await toastCount();
-await page.fill("#load-script-path", "no/such/file.lisp");
-await page.click('#load-script-form button[type="submit"]');
-const loadError = await waitFor(() => shownError("#load-script-error"), 8000).catch(() => null);
-const loadState = {
-  error: loadError,
-  open: await page.evaluate(() => document.getElementById("load-script-dialog").open),
+await page.click("#mglist-new-btn");
+const toastsBefore = await toastCount();
+await page.fill("#create-mg-name", "smoke taken id");
+await page.fill("#create-mg-id", "2200");
+await page.click('#create-mg-form button[type="submit"]');
+const createError = await waitFor(() => shownError("#create-mg-error"), 8000).catch(() => null);
+const createState = {
+  error: createError,
+  open: await page.evaluate(() => document.getElementById("create-mg-dialog").open),
   toasts: (await toastCount()) - toastsBefore,
 };
 check(
-  "e2e: a failed script load shows its error in the dialog, which stays open",
-  loadState.error?.startsWith("Load failed:") && loadState.open && loadState.toasts === 0,
-  JSON.stringify(loadState),
+  "e2e: a refused create shows its error in the dialog, which stays open",
+  /2200/.test(createState.error ?? "") && createState.open && createState.toasts === 0,
+  JSON.stringify(createState),
 );
 // A second try clears the old error while it waits for the answer.
-await page.route("**/api/load", async (r) => {
-  await new Promise((resolve) => setTimeout(resolve, 800));
+const slowCreate = async (r) => {
+  if (r.request().method() === "POST") await new Promise((resolve) => setTimeout(resolve, 800));
   await r.continue();
-});
-await page.click('#load-script-form button[type="submit"]');
-const clearedOnRetry = (await shownError("#load-script-error")) === null;
-await waitFor(() => shownError("#load-script-error"), 8000).catch(() => null);
-await page.unroute("**/api/load");
+};
+await page.route("**/api/microgrids", slowCreate);
+await page.click('#create-mg-form button[type="submit"]');
+const clearedOnRetry = (await shownError("#create-mg-error")) === null;
+await waitFor(() => shownError("#create-mg-error"), 8000).catch(() => null);
+await page.unroute("**/api/microgrids", slowCreate);
 await page.keyboard.press("Escape");
-await page.click("#mglist-load-btn");
-const clearedOnReopen = (await shownError("#load-script-error")) === null;
+await page.click("#mglist-new-btn");
+const clearedOnReopen = (await shownError("#create-mg-error")) === null;
 await page.keyboard.press("Escape");
 check("e2e: a retry or a reopened dialog clears the old error", clearedOnRetry && clearedOnReopen, JSON.stringify({ clearedOnRetry, clearedOnReopen }));
 await openDemoTopology();
-// Snapshots copy a Lisp file, which a microgrid with a spec has
-// none of: the dialog says so instead of offering a save.
-await page.click("#snapshots-btn");
-const snapState = await page.evaluate(() => ({
-  hint: document.getElementById("snapshots-blocked").hidden ? null : document.getElementById("snapshots-blocked").textContent,
-  form: !document.getElementById("snapshot-save-form").hidden,
-}));
-await page.keyboard.press("Escape");
-check(
-  "e2e: the snapshots dialog explains a microgrid with a spec has no file to snapshot",
-  /no Lisp file/.test(snapState.hint ?? "") && !snapState.form,
-  JSON.stringify(snapState),
-);
 // The Defaults panel shows the engine's table read-only.
 await page.click("#defaults-btn");
 const defaultsShown = await waitFor(
@@ -3825,6 +3481,82 @@ const defaultsShown = await waitFor(
 ).catch(() => null);
 await page.click("#defaults-btn");
 check("e2e: the Defaults panel lists the defaults per type, read-only", defaultsShown !== null, JSON.stringify(defaultsShown));
+// An edit that leaves the spec as it was is not sent: a PUT would rebuild the
+// microgrid and push an undo step.
+const noopEdit = await page.evaluate(async () => {
+  const depths = async () => (await fetch("/api/mg/2200/undo")).json();
+  const before = await depths();
+  const edit = await import("/assets/spec-edit.js");
+  const landed = [await edit.disconnect(999998, 999999), await edit.removeComponents([999999])];
+  return { before, after: await depths(), landed };
+});
+check(
+  "e2e: an edit that changes nothing is not sent",
+  JSON.stringify(noopEdit.before) === JSON.stringify(noopEdit.after) && noopEdit.landed.every((l) => l === false),
+  JSON.stringify(noopEdit),
+);
+// The Report panel reads the selected microgrid's recording: its state, its
+// newest events and links to the CSV files it wrote.
+const recordingPost = (suffix, body) =>
+  page.evaluate(
+    async ([sfx, b]) =>
+      (
+        await fetch(`/api/mg/2200/recording/${sfx}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: b === undefined ? undefined : JSON.stringify(b),
+        })
+      ).status,
+    [suffix, body],
+  );
+const recStarted = await recordingPost("start", { name: "smoke-rec", csv: true });
+// More events than one page of the events route holds (200), so the
+// panel must ask for the newest ones rather than the oldest page.
+const bulkFailed = await page.evaluate(async (n) => {
+  let failed = 0;
+  for (let i = 0; i < n; i++) {
+    const res = await fetch("/api/mg/2200/recording/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: `smoke-n${String(i).padStart(3, "0")}`, payload: "" }),
+    });
+    if (!res.ok) failed++;
+  }
+  return failed;
+}, 230);
+check("e2e: every bulk recording event is accepted", bulkFailed === 0, `${bulkFailed} failed`);
+const recEvent = await recordingPost("event", { kind: "smoke-mark", payload: "hello" });
+await page.click("#report-btn");
+const reportShown = await waitFor(
+  () =>
+    page.evaluate(() => {
+      const state = document.getElementById("report-state")?.textContent ?? "";
+      const events = document.getElementById("report-events")?.textContent ?? "";
+      const links = [...document.querySelectorAll("#report-csv a")].map((a) => a.getAttribute("href"));
+      return /smoke-rec/.test(state) &&
+        /running/.test(state) &&
+        /smoke-mark/.test(events) &&
+        !/smoke-n000/.test(events) &&
+        links.length > 0
+        ? { state: state.replace(/\s+/g, " "), links }
+        : null;
+    }),
+  8000,
+).catch(() => null);
+check(
+  "e2e: the Report panel shows the running recording, its newest events and its CSV links",
+  recStarted === 204 && recEvent === 200 && reportShown?.links.every((h) => h.startsWith("/api/mg/2200/recording/csv/")),
+  JSON.stringify({ recStarted, recEvent, reportShown }),
+);
+const csvStatus = reportShown ? await page.evaluate(async (h) => (await fetch(h)).status, reportShown.links[0]) : null;
+check("e2e: a Report panel CSV link serves its file", csvStatus === 200, String(csvStatus));
+const recStopped = await recordingPost("stop");
+const reportStopped = await waitFor(
+  () => page.evaluate(() => /stopped/.test(document.getElementById("report-state")?.textContent ?? "") || null),
+  8000,
+).catch(() => null);
+await page.click("#report-btn");
+check("e2e: the Report panel shows a stopped recording", recStopped === 200 && reportStopped === true, JSON.stringify({ recStopped, reportStopped }));
 
 // ── e2e: the button kit ────────────────────────────────────────────
 // Header buttons are the secondary kind, the new-dispatch button the
@@ -3949,16 +3681,6 @@ const emptyHint = await page.evaluate(() => {
   return shown;
 });
 check("e2e: an empty microgrid shows its hint", emptyHint !== "none", emptyHint);
-await page.click('#mode-toggle .mode-btn[data-mode="scenarios"]');
-const onScenarios = await waitFor(async () => page.evaluate(() => document.body.dataset.mode === "scenarios"), 5000).catch(
-  () => false,
-);
-check(
-  "e2e: [hidden] hides everything on the scenarios page",
-  onScenarios && (await shownButHidden()).length === 0,
-  JSON.stringify({ onScenarios, shown: await shownButHidden() }),
-);
-await openDemoTopology();
 
 // ── e2e: the top bar ───────────────────────────────────────────────
 // One bar for the whole site, in this order, with the system pulse as a group
@@ -3966,12 +3688,10 @@ await openDemoTopology();
 const TOP_BAR = [
   "status",
   "mode-toggle",
-  "active-scenarios",
   "pulse",
-  "repl-btn",
   "logs-btn",
   "defaults-btn",
-  "scenario-report-btn",
+  "report-btn",
   "help-btn",
   "theme-toggle",
   "density-toggle",
@@ -3991,24 +3711,13 @@ const inOrder = (bar, ids) =>
   );
 check("e2e: the top bar holds the site's controls in order", await inOrder("body > header", TOP_BAR));
 check("e2e: there is no pulse bar of its own", await page.evaluate(() => document.querySelector("body > #pulse") === null));
-// The REPL and the logs are the site's: their buttons open them on the list and
-// in Scenarios too.
-const MODE_BTN = (m) => `#mode-toggle .mode-btn[data-mode="${m}"]`;
+// The logs are the site's: the Logs button opens them on the list too.
 await page.click("#mg-back");
-for (const [btn, card] of [
-  ["#repl-btn", "repl"],
-  ["#logs-btn", "logs-panel"],
-]) {
-  const shown = () => page.evaluate((c) => document.getElementById(c).getBoundingClientRect().height > 0, card);
-  await page.click(btn);
-  const onList = await shown();
-  await page.click(btn);
-  await page.click(MODE_BTN("scenarios"));
-  await page.click(btn);
-  const inScenarios = await shown();
-  await page.click(btn);
-  await page.click(MODE_BTN("microgrids"));
-  check(`e2e: ${btn} opens its panel on the list and in Scenarios`, onList && inScenarios, JSON.stringify({ onList, inScenarios }));
+{
+  await page.click("#logs-btn");
+  const onList = await page.evaluate(() => document.getElementById("logs-panel").getBoundingClientRect().height > 0);
+  await page.click("#logs-btn");
+  check("e2e: the Logs button opens its panel on the list", onList);
 }
 await openDemoTopology();
 // The controls of `bar` that lie outside it or the window, and a note
@@ -4045,12 +3754,12 @@ const MG_BAR = [
   "mg-breadcrumb-name",
   "mg-breadcrumb-tso",
   "mg-file-chips",
-  "mg-adopt-btn",
+  "mg-copy-py-btn",
+  "mg-save-py-btn",
   "mg-subtoggle",
   "metrics-btn",
   "formula-btn",
   "weather-btn",
-  "snapshots-btn",
 ];
 check("e2e: the microgrid bar holds the microgrid's controls in order", await inOrder("#mg-header", MG_BAR));
 // A panel's button lights while its panel is open (side-panel.js's syncButton
@@ -4107,14 +3816,7 @@ await page.click("#formula-btn");
 const mgBarHeight = () => page.evaluate(() => document.getElementById("mg-header").getBoundingClientRect().height);
 await page.click("#mg-back");
 const onListHeight = await mgBarHeight();
-await page.click(MODE_BTN("scenarios"));
-const inScenariosHeight = await mgBarHeight();
-await page.click(MODE_BTN("microgrids"));
-check(
-  "e2e: the microgrid bar is hidden on the list and in Scenarios",
-  onListHeight === 0 && inScenariosHeight === 0,
-  JSON.stringify({ onListHeight, inScenariosHeight }),
-);
+check("e2e: the microgrid bar is hidden on the list", onListHeight === 0, JSON.stringify({ onListHeight }));
 await openDemoTopology();
 await page.setViewportSize({ width: 1024, height: 768 });
 // A long name, so the bar's controls cannot all fit on one row: they go to a
@@ -4126,7 +3828,7 @@ const mgOverflow = await inBothDensities(async () => {
   });
   const wrapped = await page.evaluate(
     () =>
-      document.getElementById("snapshots-btn").getBoundingClientRect().top >=
+      document.getElementById("weather-btn").getBoundingClientRect().top >=
       document.getElementById("mg-back").getBoundingClientRect().bottom,
   );
   const issues = await barOverflow("#mg-header");
@@ -4305,8 +4007,8 @@ check(
 }
 
 // ── e2e: panels open docked the first time ─────────────────────────
-// With no choice stored, the REPL and the logs open in the bottom strip and
-// every other panel in the right one, which narrows the canvas. A float the
+// With no choice stored, the logs open in the bottom strip and every other
+// panel in the right one, which narrows the canvas. A float the
 // user chose is remembered. In a context of its own, where nothing is stored.
 {
   const ctx = await browser.newContext(CONTEXT);
@@ -4329,43 +4031,18 @@ check(
     ["#formula-btn", "#panel-formula-btn"],
     ["#weather-btn", "#panel-weather-btn"],
     ["#defaults-btn", "#panel-defaults-btn"],
-    ["#scenario-report-btn", "#panel-scenario-report-btn"],
-    ["#repl-btn", "#repl"],
+    ["#report-btn", "#panel-report-btn"],
     ["#logs-btn", "#logs-panel"],
   ]) {
     await p.click(btn);
     placed[card] = await where(card);
   }
-  const bottom = ["#repl", "#logs-panel"];
   check(
-    "e2e: panels open docked: the REPL and logs at the bottom, the rest on the right",
-    Object.entries(placed).every(([card, edge]) => edge === (bottom.includes(card) ? "bottom" : "right")),
+    "e2e: panels open docked: the logs at the bottom, the rest on the right",
+    Object.entries(placed).every(([card, edge]) => edge === (card === "#logs-panel" ? "bottom" : "right")),
     JSON.stringify(placed),
   );
   check("e2e: the canvas narrows when the right strip appears", narrow < wide - 100, JSON.stringify({ wide, narrow }));
-  // The docked REPL's completion popup fits above its input, inside the body
-  // that clips it, scrolling what does not fit.
-  await p.click("#repl-input");
-  await p.keyboard.type("(make-");
-  const dockedPopup = await waitFor(
-    () =>
-      p.evaluate(() => {
-        const box = document.getElementById("repl-popup");
-        const ul = document.getElementById("repl-completions");
-        if (box.hidden || ul.children.length === 0) return null;
-        return {
-          entries: ul.children.length,
-          over: document.getElementById("repl-body").getBoundingClientRect().top - box.getBoundingClientRect().top,
-        };
-      }),
-    5000,
-  ).catch(() => null);
-  check(
-    "e2e: the docked REPL's completion popup fits inside its tile",
-    dockedPopup !== null && dockedPopup.entries > 5 && dockedPopup.over <= 0.5,
-    JSON.stringify(dockedPopup),
-  );
-  await p.keyboard.press("Escape");
   // A jump to a node (the formula explorer's #N links) centres it in the part
   // of the canvas the inspector does not cover: all of it when the inspector
   // is docked, beside or below the canvas. How far node 1000 sits from that
@@ -4418,39 +4095,15 @@ check(
 }
 
 // ── e2e: strips give way to the canvas in a narrow window ───────────
-// At 1024px the right strip narrows so the rest of main keeps 600px, and the
-// bottom strip at its smallest still holds the REPL's prompt, in both
-// densities.
+// At 1024px the right strip narrows so the rest of main keeps 600px.
 // In a context of its own, so the panels open docked.
 {
   const ctx = await browser.newContext({ ...CONTEXT, viewport: { width: 1024, height: 768 } });
-  await ctx.addInitScript(() => localStorage.setItem("mc-strip-bottom", JSON.stringify({ size: 1 })));
   const p = await ctx.newPage();
   await openDemoTopology(p);
   await p.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
   const rightWidth = await p.evaluate(() => document.getElementById("dock-right").getBoundingClientRect().width);
   check("e2e: at 1024px the right strip narrows so the rest of main keeps 600px", rightWidth >= 320 && rightWidth <= 424, `${rightWidth}`);
-  await p.click("#repl-btn");
-  const replFits = await inBothDensities(
-    () =>
-      evaluateAfterFrames(p, () => ({
-        docked: document.querySelector("#dock-bottom #repl.open") !== null,
-        over:
-          document.getElementById("repl-form").getBoundingClientRect().bottom -
-          document.getElementById("repl").getBoundingClientRect().bottom,
-        cut:
-          document.getElementById("repl-output").getBoundingClientRect().top -
-          document.getElementById("repl-form").getBoundingClientRect().top,
-        strip: document.getElementById("dock-bottom").getBoundingClientRect().height,
-      })),
-    p,
-  );
-  // Smaller than the strip's 260px default: the stored size is its smallest.
-  check(
-    "e2e: the bottom strip at its smallest holds the REPL prompt, in both densities",
-    replFits.every((f) => f.docked && f.strip < 260 && f.over <= 0.5 && f.cut <= 0.5),
-    JSON.stringify(replFits),
-  );
   await ctx.close();
 }
 
@@ -4478,12 +4131,12 @@ check(
       8000,
     ).catch(() => null);
     await p.evaluate(async () => (await import("/assets/topology.js")).topology.select([1]));
-    await p.click("#repl-btn");
+    await p.click("#logs-btn");
     const strips = await waitFor(
-      () => p.evaluate(() => document.body.classList.contains("has-right-dock") && document.querySelector("#dock-bottom #repl.open") !== null),
+      () => p.evaluate(() => document.body.classList.contains("has-right-dock") && document.querySelector("#dock-bottom #logs-panel.open") !== null),
       3000,
     ).catch(() => false);
-    if (!strips) found[`${density} topology strips`] = ["the inspector or the REPL did not dock"];
+    if (!strips) found[`${density} topology strips`] = ["the inspector or the logs did not dock"];
     await measure(`${density} topology`, ["body > header", "#mg-header", "#topology-controls"]);
     const stripInCanvas = await p.evaluate(() => {
       const s = document.getElementById("topology-controls").getBoundingClientRect();
@@ -4494,9 +4147,6 @@ check(
     await p.click('#mg-subtoggle .mode-btn[data-subview="dispatches"]');
     await measure(`${density} dispatches`, ["body > header", "#mg-header"]);
     await p.click('#mg-subtoggle .mode-btn[data-subview="topology"]');
-    await p.click(MODE_BTN("scenarios"));
-    await measure(`${density} scenarios`, ["body > header"]);
-    await p.click(MODE_BTN("microgrids"));
     if (await p.locator("#mg-back").isVisible()) await p.click("#mg-back");
   }, p);
   check("e2e: at 1024px no control leaves the window or its bar, on any view or density", Object.keys(found).length === 0, JSON.stringify(found));

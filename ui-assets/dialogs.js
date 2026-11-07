@@ -1,11 +1,11 @@
 // Top-bar dialogs and side-panel toggles:
-// - Help, Snapshots dialogs.
-// - Side-panel toggles for Defaults and the live Scenario report.
+// - the Help dialog;
+// - side-panel toggles for Defaults and the recording Report.
 
-import { escapeHtml, mutate } from "./app.js";
+import { escapeHtml } from "./app.js";
 import { bgFetch, getJson } from "./http.js";
-import { clearFormError, notify, showFormError } from "./notices.js";
-import { currentMgEntry, mgJson, readSelectedMg, scenarioMgId } from "./routing.js";
+import { notify } from "./notices.js";
+import { reportMgId } from "./routing.js";
 import { makeSidePanelToggle } from "./side-panel.js";
 import * as zone from "./zone.js";
 
@@ -17,160 +17,95 @@ export function setupHelpButton() {
   document
     .getElementById("help-dialog-close")
     .addEventListener("click", () => dlg.close());
-  // Click-outside-to-dismiss, mirroring the snapshots dialog.
+  // Click-outside-to-dismiss.
   dlg.addEventListener("click", (e) => {
     if (e.target === dlg) dlg.close();
-  });
-}
-
-// Snapshots are copies of one microgrid's managed file. The button is in the
-// microgrid bar, so a microgrid is selected; on an unmanaged one the dialog
-// says why it can do nothing.
-export function setupSnapshotsDialog() {
-  const dlg = document.getElementById("snapshots-dialog");
-  const btn = document.getElementById("snapshots-btn");
-  const close = document.getElementById("snapshots-dialog-close");
-  const list = document.getElementById("snapshots-list");
-  const input = document.getElementById("snapshot-name-input");
-  const form = document.getElementById("snapshot-save-form");
-  const hint = document.getElementById("snapshots-blocked");
-  const error = document.getElementById("snapshots-error");
-  if (!dlg || !btn) return;
-
-  // Why the dialog can't act, or null when it can.
-  function blockedReason() {
-    const entry = currentMgEntry();
-    if (entry?.has_spec) {
-      return `Microgrid #${readSelectedMg()} has no Lisp file to snapshot — export it as Python to keep it.`;
-    }
-    if (entry && !entry.managed) {
-      return `Microgrid #${readSelectedMg()} is an unmanaged file — Adopt it to snapshot its structure.`;
-    }
-    return null;
-  }
-
-  async function refresh() {
-    const blocked = blockedReason();
-    hint.textContent = blocked || "";
-    hint.hidden = !blocked;
-    form.hidden = Boolean(blocked);
-    list.innerHTML = "";
-    if (blocked) return;
-    const id = readSelectedMg();
-    try {
-      const names = (await mgJson("snapshots")).snapshots || [];
-      if (names.length === 0) {
-        list.innerHTML = '<li class="hint">No snapshots yet.</li>';
-        return;
-      }
-      for (const name of names) {
-        const li = document.createElement("li");
-        li.className = "snapshot-row";
-        li.innerHTML = `
-          <span class="snapshot-name">${escapeHtml(name)}</span>
-          <button class="btn snapshot-load" type="button">Load</button>
-        `;
-        li.querySelector(".snapshot-load").addEventListener("click", async () => {
-          if (!confirm(`Load snapshot "${name}"? Microgrid #${id}'s current file will be replaced.`)) return;
-          clearFormError(error);
-          try {
-            await mutate("POST", `/api/mg/${id}/snapshots/load`, { name });
-          } catch (err) {
-            showFormError(error, `Load failed: ${err.message}`);
-            return;
-          }
-          dlg.close();
-        });
-        list.appendChild(li);
-      }
-    } catch (err) {
-      list.innerHTML = `<li class="hint">error: ${escapeHtml(err.message)}</li>`;
-    }
-  }
-
-  btn.addEventListener("click", () => {
-    refresh();
-    dlg.showModal();
-  });
-  close.addEventListener("click", () => dlg.close());
-  dlg.addEventListener("click", (e) => {
-    if (e.target === dlg) dlg.close();
-  });
-  form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
-    const id = readSelectedMg();
-    const name = input.value.trim();
-    if (!name) return;
-    clearFormError(error);
-    try {
-      await mutate("POST", `/api/mg/${id}/snapshots`, { name });
-    } catch (err) {
-      showFormError(error, `Save failed: ${err.message}`);
-      return;
-    }
-    input.value = "";
-    await refresh();
   });
 }
 
 // Both panel toggles use the same chrome-button + floating-panel
 // pattern. The render functions below own the actual content.
 export const setupDefaultsToggle = () => makeSidePanelToggle("defaults-btn", renderDefaults);
-export const setupScenarioReportToggle = () =>
-  makeSidePanelToggle("scenario-report-btn", renderScenarioReport, stopScenarioReportLoop);
+export const setupReportToggle = () => makeSidePanelToggle("report-btn", renderReport, stopReportLoop);
 
-// Side-panel scenario-report poll handle. Local to this module now
-// that the timer no longer needs to be cancelled from inspect.js —
-// side-panel.js runs `stopScenarioReportLoop` as this panel's
-// teardown on re-render/close, so a stale interval can't keep firing
-// into a torn-down panel.
-let scenarioReportTimer = null;
-function stopScenarioReportLoop() {
-  if (scenarioReportTimer != null) {
-    clearInterval(scenarioReportTimer);
-    scenarioReportTimer = null;
+// The Report panel's poll handle. side-panel.js runs `stopReportLoop`
+// as this panel's teardown on re-render/close, so a stale interval
+// can't keep firing into a torn-down panel.
+let reportTimer = null;
+// How many of the newest events the panel lists.
+const REPORT_EVENT_LIMIT = 20;
+// Counts the panel's renders, so a render that finishes after a newer
+// one started (the panel closed and opened again meanwhile) starts no
+// poll of its own.
+let reportRenders = 0;
+function stopReportLoop() {
+  reportRenders += 1;
+  if (reportTimer != null) {
+    clearInterval(reportTimer);
+    reportTimer = null;
   }
 }
 
-async function renderScenarioReport(contentEl) {
+// The recording of one microgrid (reportMgId): its state from
+// `/recording`, the report as it stands from `/recording/report`, the
+// recent events from `/recording/events` and the CSV files it wrote
+// from `/recording/csv`.
+async function renderReport(contentEl) {
+  const render = ++reportRenders;
   contentEl.innerHTML = `
-    <h2>Scenario report</h2>
-    <p class="hint">Live aggregate metrics for the running scenario.
-       Polls every 2 s while this panel is open.</p>
-    <div id="sc-report-card"><span class="hint">loading…</span></div>
+    <h2>Recording report</h2>
+    <p class="hint">The selected microgrid's recording, or the lowest-numbered
+       microgrid's while none is selected. A script records with
+       <code>Microgrid.record()</code>. Polls every 2 s while this panel is open.</p>
+    <p id="report-state" class="report-state"><span class="hint">loading…</span></p>
+    <div id="report-card"></div>
     <h3>Recent events</h3>
-    <ul id="sc-report-events" class="sc-events"><li class="hint">—</li></ul>
+    <ul id="report-events" class="report-events"><li class="hint">—</li></ul>
+    <h3>CSV files</h3>
+    <div id="report-csv"><span class="hint">—</span></div>
   `;
   // Initial paint, then start polling.
-  await refreshScenarioReport();
-  // If the panel moved on during the await (closed, or re-rendered),
-  // don't start a poll loop into a dead panel — our teardown can't
-  // cancel a timer that didn't exist yet when the panel went away.
-  if (!document.getElementById("sc-report-card")) return;
-  scenarioReportTimer = setInterval(refreshScenarioReport, 2000);
+  await refreshReport();
+  // If the panel moved on during the await (closed, or rendered
+  // again), don't start a poll loop into a dead panel, or a second
+  // one: our teardown can't cancel a timer that didn't exist yet.
+  if (render !== reportRenders || !document.getElementById("report-card")) return;
+  reportTimer = setInterval(refreshReport, 2000);
 }
 
-async function refreshScenarioReport() {
+// Fills the element `id` with `html`, when the panel still has it.
+function paint(id, html) {
+  const el = document.getElementById(id);
+  if (el) el.innerHTML = html;
+}
+
+async function refreshReport() {
   try {
-    const mg = await scenarioMgId();
+    const mg = await reportMgId();
     if (mg == null) {
-      const card = document.getElementById("sc-report-card");
-      if (card) card.innerHTML = `<span class="hint">no microgrid loaded</span>`;
-      const list = document.getElementById("sc-report-events");
-      if (list) list.innerHTML = `<li class="hint">—</li>`;
+      paint("report-state", `<span class="hint">no microgrid loaded</span>`);
+      paint("report-card", "");
+      paint("report-events", `<li class="hint">—</li>`);
+      paint("report-csv", `<span class="hint">—</span>`);
       return;
     }
-    const [reportRes, eventsRes] = await Promise.all([
-      bgFetch("report", `/api/mg/${mg}/scenario/report`),
-      bgFetch("report events", `/api/mg/${mg}/scenario/events?limit=50`),
+    const base = `/api/mg/${mg}/recording`;
+    const res = await Promise.all([
+      bgFetch("recording", base),
+      bgFetch("report", `${base}/report`),
+      bgFetch("recording csv", `${base}/csv`),
     ]);
-    if (!reportRes.ok || !eventsRes.ok) return;
-    const r = await reportRes.json();
-    const ev = await eventsRes.json();
-    const card = document.getElementById("sc-report-card");
-    if (card) card.innerHTML = renderScenarioCard(r);
-    const list = document.getElementById("sc-report-events");
-    if (list) list.innerHTML = renderScenarioEvents(ev.events);
+    if (res.some((r) => !r.ok)) return;
+    const [summary, report, csv] = await Promise.all(res.map((r) => r.json()));
+    // The newest events: the ring keeps them from its oldest one.
+    const since = Math.max(summary.earliest_event_id, summary.next_event_id - REPORT_EVENT_LIMIT);
+    const eventsRes = await bgFetch("report events", `${base}/events?since=${since}`);
+    if (!eventsRes.ok) return;
+    const events = await eventsRes.json();
+    paint("report-state", reportStateHtml(mg, summary, report));
+    paint("report-card", reportCardHtml(report));
+    paint("report-events", reportEventsHtml(events.events));
+    paint("report-csv", reportCsvHtml(mg, csv));
   } catch (_e) {
     // Network blip; let the next tick try again. Don't tear down
     // the panel — the user can read the previous values until the
@@ -178,7 +113,23 @@ async function refreshScenarioReport() {
   }
 }
 
-function renderScenarioCard(r) {
+// Which recording the panel shows and where it stands: running, or
+// how it ended.
+function reportStateHtml(mg, summary, report) {
+  if (summary.name == null) {
+    return `<span class="hint">Microgrid #${mg} has no recording yet.</span>`;
+  }
+  let state = ["running", "running"];
+  if (summary.ended_at != null) {
+    state = report.ended_by === "rebuild" ? ["rebuild", "ended by a rebuild"] : ["", "stopped"];
+  }
+  return `<strong>${escapeHtml(summary.name)}</strong> on microgrid #${mg}:
+    <span class="report-badge ${state[0]}">${state[1]}</span>
+    · started ${zone.timeHtml(summary.started_at, "hms")}
+    · ${summary.elapsed_s.toFixed(1)} s · ${summary.event_count} events`;
+}
+
+function reportCardHtml(r) {
   const fmt = (v, unit = "W") =>
     v == null ? "—" : `${(v / 1000).toFixed(2)} k${unit}`;
   const soc = r.soc_stats
@@ -195,8 +146,8 @@ function renderScenarioCard(r) {
         .join("")
     : `<tr><td colspan="2" class="hint">no windows yet</td></tr>`;
   return `
-    <dl class="sc-report-dl">
-      <dt>elapsed</dt><dd>${r.scenario_elapsed_s.toFixed(1)} s</dd>
+    <dl class="report-dl">
+      <dt>elapsed</dt><dd>${r.elapsed_s.toFixed(1)} s</dd>
       <dt>grid peak</dt><dd>${fmt(r.peak_grid_w)}</dd>
       <dt>grid Q peak</dt><dd>${fmt(r.peak_grid_var, "VAr")}</dd>
       <dt>site PF at Q peak</dt><dd>${r.site_pf_at_reactive_peak == null ? "—" : r.site_pf_at_reactive_peak.toFixed(2)}</dd>
@@ -206,19 +157,19 @@ function renderScenarioCard(r) {
       <dt>battery SoC</dt><dd>${soc}</dd>
     </dl>
     <h3>15-min grid averages (last 6)</h3>
-    <table class="sc-report-tbl">
+    <table class="report-tbl">
       <thead><tr><th>window</th><th>avg</th></tr></thead>
       <tbody>${avgRows}</tbody>
     </table>
   `;
 }
 
-function renderScenarioEvents(events) {
+function reportEventsHtml(events) {
   if (!events.length) {
     return '<li class="hint">no events yet</li>';
   }
   return events
-    .slice(-20)
+    .slice(-REPORT_EVENT_LIMIT)
     .reverse()
     .map((e) => {
       return `<li><code>${zone.timeHtml(e.ts, "hms")}</code> <strong>${escapeHtml(e.kind)}</strong>
@@ -227,6 +178,19 @@ function renderScenarioEvents(events) {
     .join("");
 }
 
+// Download links for the CSV files of the running or most recent
+// recording, under the directory they were written to.
+function reportCsvHtml(mg, csv) {
+  if (!csv.files.length) return `<span class="hint">none</span>`;
+  const links = csv.files
+    .map((f) => {
+      const href = `/api/mg/${mg}/recording/csv/${encodeURIComponent(f)}`;
+      return `<a class="report-csv-link" href="${href}" download>${escapeHtml(f)}</a>`;
+    })
+    .join("");
+  const dir = csv.dir ? `<p class="hint report-csv-dir">${escapeHtml(csv.dir)}</p>` : "";
+  return `${dir}${links}`;
+}
 
 // The defaults the engine fills into each component type's spec,
 // read-only: one block per type, one row per field it fills.

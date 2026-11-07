@@ -139,13 +139,13 @@ async fn build_microgrid(
     // total loses at most the sub-second span since their subscribe, and a
     // reset cursor just re-seeds on their next sample.
     //
-    // A site reset (config hot-reload) started a new run: the caches
-    // belong to the previous run and go, like the site's own
-    // per-component accumulators and histories. A topology mutation or
-    // a rebuild with carry (same energy epoch) keeps the energy totals
-    // and prunes
-    // the caches to the streams the new graph publishes, so the charts
-    // reading the survivors carry on instead of restarting from empty.
+    // A site reset started a new run: the caches belong to the
+    // previous run and go, like the site's own per-component
+    // accumulators and histories. A topology mutation or a rebuild
+    // with carry (same energy epoch) keeps the energy totals and
+    // prunes the caches to the streams the new graph publishes, so
+    // the charts reading the survivors carry on instead of restarting
+    // from empty.
     prune_for_rebuild(slot, site, &forwarders.streams);
     // Second cursor reset: any cursor present now was re-seeded during the
     // handoff (by an old forwarder up to the abort, or a new one already
@@ -203,10 +203,10 @@ async fn run_supervisor(
     }
 }
 
-/// After seeing the first TopologyChanged, swallow any further
-/// events that arrive within `DEBOUNCE` so a hot-reload that
-/// registers 12 components in rapid succession only triggers one
-/// rebuild instead of 12.
+/// After seeing the first TopologyChanged, swallow any further events
+/// that arrive within `DEBOUNCE` so a burst of changes (a script's
+/// hello rebuilding several microgrids, an undo walked quickly) only
+/// triggers one rebuild.
 async fn debounce_topology_burst(events: &mut tokio::sync::broadcast::Receiver<SiteEvent>) {
     const DEBOUNCE: Duration = Duration::from_millis(300);
     let deadline = tokio::time::Instant::now() + DEBOUNCE;
@@ -673,12 +673,12 @@ fn energy_stream_for(power_stream: &str) -> Option<&'static str> {
     })
 }
 
-/// The two site counters a rebuild is keyed on. Every successful eval
-/// bumps the plain site version so the UI refetches — a
-/// `(set-meter-power …)` from the inspector included — but the graph
-/// the loopback mirrors only moves with the structural version
-/// (components, connections, names) or a site reset (config
-/// hot-reload: new run generation).
+/// The two site counters a rebuild is keyed on. A runtime write that
+/// the topology payload shows (a status or mode change) bumps the
+/// plain site version so the UI refetches, but the graph the loopback
+/// mirrors only moves with the structural version (components,
+/// connections, names) or a new run generation (a reset or a rebuild
+/// with carry).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SiteShape {
     structural: u64,
@@ -710,20 +710,20 @@ fn retain_streams(state: &SharedMicrogrid, live: &[&'static str]) {
     state.history.write().retain(|s, _| keep.contains(s));
 }
 
-/// Bring the slot's caches in line with the rebuilt graph. On a new run
-/// (the energy epoch moved: `reset()`, a config hot-reload) every
-/// cached stream goes, the energy totals included. On any other
-/// rebuild, a rebuild with carry included, the totals stay and the
-/// caches keep the streams in `live`.
+/// Bring the slot's caches in line with the rebuilt graph. On a new
+/// run (the energy epoch moved: `reset()`) every cached stream goes,
+/// the energy totals included. On any other rebuild, a rebuild with
+/// carry included, the totals stay and the caches keep the streams in
+/// `live`.
 fn prune_for_rebuild(state: &SharedMicrogrid, site: &MicrogridSite, live: &[&'static str]) {
     let new_run = clear_energy_on_new_run(state, site);
     retain_streams(state, if new_run { &[] } else { live });
 }
 
 /// Clear the aggregate energy totals when `site`'s energy epoch moved
-/// past the one the slot's totals were gathered under: the site was reset
-/// (a config hot-reload), so the energy belongs to a previous run — just
-/// like the site's own per-component accumulators, which `reset()` clears.
+/// past the one the slot's totals were gathered under: the site was
+/// reset, so the energy belongs to a previous run — just like the
+/// site's own per-component accumulators, which `reset()` clears.
 /// Other rebuilds (topology mutations, a rebuild with carry) keep the
 /// totals. Returns whether the epoch moved.
 fn clear_energy_on_new_run(state: &SharedMicrogrid, site: &MicrogridSite) -> bool {
@@ -855,7 +855,7 @@ fn publish_scalar(
         }
         ring.push_back(HistorySample { ts_ms, value });
     }
-    // The scenario reporter's site metrics ride the same two grid
+    // The recording report's site metrics ride the same two grid
     // formula streams the panel charts — fed here so the journal
     // needs no main-meter special case. A gap sample (`None`) carries
     // nothing to peak or average, and a timestamp outside chrono's
@@ -965,8 +965,8 @@ mod tests {
         assert_eq!(state.latest.read()["grid_energy"].ts_ms, fresh_ts);
     }
 
-    /// A config reload resets the site and moves its energy epoch:
-    /// the aggregate totals belong to the previous run and clear,
+    /// A reset (`MicrogridSite::reset`) moves the energy epoch: the
+    /// aggregate totals belong to the previous run and clear,
     /// matching the per-component accumulators `reset()` cleared. A
     /// topology mutation, or a rebuild with carry, which moves the
     /// run generation but not the epoch, keeps them.
@@ -984,31 +984,31 @@ mod tests {
         // A rebuild with carry keeps them too.
         let spec = crate::spec::MicrogridSpec::default();
         let built = crate::spec::build_topology(&spec, &Default::default()).unwrap();
-        site.swap_topology(built, &crate::sim::microgrid_site::CarryPlan::default());
+        site.swap_topology(built, &std::collections::BTreeSet::new());
         clear_energy_on_new_run(&state, &site);
         assert!(!state.energy.read().is_empty());
 
-        // A reset (config reload) starts a new run: the totals clear.
+        // A reset starts a new run: the totals clear.
         site.reset();
         clear_energy_on_new_run(&state, &site);
         assert!(state.energy.read().is_empty());
     }
 
-    /// Every successful eval bumps the site version — a meter power
-    /// override included — but only a structural edit moves the graph
-    /// the loopback mirrors. A runtime poke must not trigger a rebuild,
-    /// which tears down and resubscribes every forwarder for nothing.
+    /// A runtime write bumps the site version, but only a structural
+    /// edit moves the graph the loopback mirrors. A runtime poke must
+    /// not trigger a rebuild, which tears down and resubscribes every
+    /// forwarder for nothing.
     #[test]
     fn runtime_pokes_do_not_change_the_site_shape() {
         let site = MicrogridSite::new();
         let built = SiteShape::of(&site);
-        // What `Overrides::eval` does after `(set-meter-power …)`.
+        // What the `status` route does after a health change.
         site.bump_version();
         assert_eq!(SiteShape::of(&site), built);
     }
 
-    /// A structural edit or a site reset (config hot-reload: new run
-    /// generation) still rebuilds.
+    /// A structural edit or a site reset (a new run generation) still
+    /// rebuilds.
     #[test]
     fn structural_edits_and_resets_change_the_site_shape() {
         let site = MicrogridSite::new();
@@ -1073,11 +1073,10 @@ mod tests {
         }
     }
 
-    /// A site reset (config hot-reload) starts a new run: every cached
-    /// stream goes, surviving names included, like the site's own
-    /// per-component histories. Keeping them would splice two runs
-    /// into one ring, with a cliff where the cleared energy totals
-    /// restart at zero.
+    /// A site reset starts a new run: every cached stream goes,
+    /// surviving names included, like the site's own per-component
+    /// histories. Keeping them would splice two runs into one ring,
+    /// with a cliff where the cleared energy totals restart at zero.
     #[test]
     fn a_new_run_drops_every_cached_stream() {
         let state = new_microgrid_slot();
@@ -1109,23 +1108,23 @@ mod tests {
         assert_eq!(energy_stream_for("grid_reactive_power"), None);
     }
 
-    /// Only the two grid streams feed the scenario journal. `pv_power`
-    /// carries watts of the same shape and must leave the peak alone,
-    /// and a gap sample (`None`) on `grid_power` carries nothing to
-    /// record.
+    /// Only the two grid streams feed the recording journal.
+    /// `pv_power` carries watts of the same shape and must leave the
+    /// peak alone, and a gap sample (`None`) on `grid_power` carries
+    /// nothing to record.
     #[test]
     fn publish_scalar_feeds_the_journal_from_grid_streams_only() {
         let state = new_microgrid_slot();
         let site = MicrogridSite::new();
         let now = chrono::Utc::now();
         let ts_ms = now.timestamp_millis();
-        site.scenario_start("filter".into(), now);
+        site.recording_start("filter".into(), None, now).unwrap();
 
         publish_scalar("pv_power", "Power", "W", Some(5000.0), ts_ms, &site, &state);
-        assert_eq!(site.scenario_report(now).peak_grid_w, 0.0);
+        assert_eq!(site.recording_report(now).peak_grid_w, 0.0);
 
         publish_scalar("grid_power", "Power", "W", None, ts_ms, &site, &state);
-        assert_eq!(site.scenario_report(now).peak_grid_w, 0.0);
+        assert_eq!(site.recording_report(now).peak_grid_w, 0.0);
 
         publish_scalar(
             "grid_power",
@@ -1136,7 +1135,7 @@ mod tests {
             &site,
             &state,
         );
-        let peak = site.scenario_report(now).peak_grid_w;
+        let peak = site.recording_report(now).peak_grid_w;
         assert!((peak - 1200.0).abs() < 1e-6, "{peak}");
 
         publish_scalar(
@@ -1148,7 +1147,7 @@ mod tests {
             &site,
             &state,
         );
-        let r = site.scenario_report(now);
+        let r = site.recording_report(now);
         assert!(
             (r.peak_grid_var - 1600.0).abs() < 1e-6,
             "{}",
@@ -1169,7 +1168,7 @@ mod tests {
             &site,
             &state,
         );
-        let r = site.scenario_report(now);
+        let r = site.recording_report(now);
         assert!(
             (r.peak_grid_var - 1600.0).abs() < 1e-6,
             "sibling Q stream reached the journal: {}",

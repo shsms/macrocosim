@@ -1,13 +1,11 @@
 //! Per-microgrid dashboard data: latest samples, history rings,
-//! status, formulas, plus the singleton `/api/clock` endpoint.
+//! status and formulas.
 
 use std::collections::HashMap;
 
-use axum::{Extension, extract::State, http::StatusCode};
+use axum::{extract::State, http::StatusCode};
 use frequenz_microgrid::LogicalMeterHandle;
 use serde::Serialize;
-
-use crate::engine::Engine;
 
 use super::super::state::{
     HistorySample, MicrogridLoopbacks, MicrogridSampleSnapshot, SharedMicrogrid,
@@ -43,7 +41,7 @@ fn logical_meter_of(loopbacks: &MicrogridLoopbacks, mg_id: u64) -> Option<Logica
 /// runtime has not started.
 pub(in crate::ui) async fn metrics_status(
     mg: Mg,
-    Extension(loopbacks): Extension<MicrogridLoopbacks>,
+    State(loopbacks): State<MicrogridLoopbacks>,
 ) -> Json<MicrogridStatusResp> {
     Json(match logical_meter_of(&loopbacks, mg.id) {
         Some(lm) => MicrogridStatusResp {
@@ -65,7 +63,7 @@ pub(in crate::ui) async fn metrics_status(
 /// instead of holding "loading…" until the next WS tick.
 pub(in crate::ui) async fn metrics_latest(
     mg: Mg,
-    Extension(loopbacks): Extension<MicrogridLoopbacks>,
+    State(loopbacks): State<MicrogridLoopbacks>,
 ) -> Json<HashMap<&'static str, MicrogridSampleSnapshot>> {
     Json(
         loopback_of(&loopbacks, mg.id)
@@ -78,7 +76,7 @@ pub(in crate::ui) async fn metrics_latest(
 /// microgrid whose runtime has not started.
 pub(in crate::ui) async fn metrics_history(
     mg: Mg,
-    Extension(loopbacks): Extension<MicrogridLoopbacks>,
+    State(loopbacks): State<MicrogridLoopbacks>,
 ) -> Json<HashMap<&'static str, Vec<HistorySample>>> {
     Json(
         loopback_of(&loopbacks, mg.id)
@@ -105,7 +103,7 @@ pub(in crate::ui) async fn metrics_history(
 /// lifecycle as `metrics/status`.
 pub(in crate::ui) async fn metrics_formulas(
     mg: Mg,
-    Extension(loopbacks): Extension<MicrogridLoopbacks>,
+    State(loopbacks): State<MicrogridLoopbacks>,
 ) -> Result<Json<HashMap<&'static str, String>>, ApiError> {
     let Some(lm) = logical_meter_of(&loopbacks, mg.id) else {
         return Err(ApiError::new(
@@ -131,19 +129,4 @@ pub(in crate::ui) async fn metrics_formulas(
         out.insert("producer_power", format!("{f}"));
     }
     Ok(Json(out))
-}
-
-#[derive(Serialize)]
-pub(in crate::ui) struct ClockInfo {
-    /// IANA timezone name set via `(set-timezone …)`, default
-    /// Europe/Berlin. UI passes this to `Intl.DateTimeFormat` to
-    /// format the pulse-bar clock + (future) per-component
-    /// timestamps in the configured civil zone.
-    tz: &'static str,
-}
-
-pub(in crate::ui) async fn clock_info(State(engine): State<Engine>) -> Json<ClockInfo> {
-    Json(ClockInfo {
-        tz: engine.tz_name(),
-    })
 }

@@ -4,12 +4,7 @@ version = "0.2.0-alpha.0"
 edition = "2024"
 license = "GPL-3.0-only"
 default-run = "macrocosim"
-
-[features]
-# Gates the dev-only `macrocosim-etags` binary out of default builds (and
-# the distribution wheel). The emacs tags workflow enables it explicitly
-# (see .dir-locals.el).
-etags = []
+publish = false
 
 [dependencies]
 tonic-prost = "0.14"
@@ -20,15 +15,10 @@ prost-types = "0.14.0"
 # and the export (src/runner).
 tokio = { version = "1.43.1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "process", "signal", "io-util"] }
 tokio-stream = "0.1.15"
-tulisp = { git = "https://github.com/shsms/tulisp", rev = "42cf4432b166fd5e57050193b7fce2e24f48fdaa", features = ["sync", "etags"] }
-tulisp-fmt = "0.2"
-tulisp-async = "0.4"
 notify = "6.1.1"
-futures = "0.3.30"
 # DAG validation + formula generation for the Dashboard's aggregated
 # tiles. Macrocosim implements Node + Edge on its own component /
-# connection types in src/sim/graph_adapter.rs and runs the validator
-# at the end of each config-load / reload.
+# connection types in src/sim/graph_adapter.rs.
 frequenz-microgrid-component-graph = "0.6.2"
 # High-level Microgrid client + typed metric streams. The UI runs
 # this as a client of each microgrid's Microgrid service over an
@@ -41,11 +31,6 @@ log = "0.4.22"
 simplelog = "0.12.2"
 rand = { version = "0.8.5", features = ["small_rng"] }
 chrono = { version = "0.4.42", features = ["serde"] }
-# IANA timezone resolution for (set-timezone "Europe/Berlin"). The
-# UI's TZ toggle reads the configured zone name + formats client-
-# side via Intl.DateTimeFormat — macrocosim just owns the name +
-# rejects unknown zones at config-load time.
-chrono-tz = "0.10"
 parking_lot = "0.12"
 clap = { version = "4", features = ["derive"] }
 axum = { version = "0.8", features = ["ws"] }
@@ -58,8 +43,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # schema it writes.
 schemars = "~1.2"
 rust-embed = "8"
-# macroctl talks to the UI server's HTTP surface for scenario commands —
-# the scenario lifecycle isn't on gRPC.
+# macroctl reads the UI server's HTTP surface to find a microgrid's gRPC
+# server and for its pool and dashboard readouts.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # In-memory gRPC channel for the UI's loopback client (`runtime.rs`);
 # tower's `util` also serves the axum oneshot tests.
@@ -76,19 +61,13 @@ tonic-prost-build = { version = "0.14", features = ["cleanup-markdown"] }
 [dev-dependencies]
 # Out-of-process integration tests in tests/ talk to the live
 # HTTP / gRPC surface; reqwest is already a regular dep for macroctl,
-# we just need a temp dir for per-test config files.
+# we just need a temp dir for per-test files.
 tempfile = "3"
+futures = "0.3.30"
 
 [lib]
 name = "macrocosim"
 path = "src/lib.rs"
-
-# While tulisp comes from git (see the dependency above), tulisp-async, which
-# depends on tulisp too, must use the same copy, or the ctx types split. Cargo
-# reads this section only when macrocosim is the crate being built, not when it
-# is a dependency of another crate.
-[patch.crates-io]
-tulisp = { git = "https://github.com/shsms/tulisp", rev = "42cf4432b166fd5e57050193b7fce2e24f48fdaa" }
 
 [[bin]]
 name = "macrocosim"
@@ -97,8 +76,3 @@ path = "src/bin/macrocosim.rs"
 [[bin]]
 name = "macroctl"
 path = "src/bin/macroctl.rs"
-
-[[bin]]
-name = "macrocosim-etags"
-path = "src/bin/macrocosim-etags.rs"
-required-features = ["etags"]

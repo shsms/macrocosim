@@ -24,7 +24,8 @@ use crate::proto::common::metrics::Metric;
 /// rejected with InvalidArgument; absent values fall back to
 /// `Metadata::default_request_lifetime` for SetElectricalComponentPower
 /// or `Metadata::default_augment_lifetime` for
-/// AugmentElectricalComponentBounds (both configurable from lisp).
+/// AugmentElectricalComponentBounds (`--request-lifetime` and
+/// `--augment-lifetime` set them).
 const SET_POWER_LIFETIME_MIN_S: u64 = 10;
 const AUGMENT_LIFETIME_MIN_S: u64 = 5;
 const REQUEST_LIFETIME_MAX_S: u64 = 15 * 60;
@@ -438,11 +439,11 @@ impl microgrid_server::Microgrid for MicrogridServer {
         };
         // Only log for registered components — log_setpoint mints a
         // per-id ring, so logging a not-found rejection would let a
-        // client with random ids grow the map without bound (and
-        // show phantom components in the UI). Matches the augment
-        // path's `known` guard. Checked again after the apply: a
-        // component registered while the command was in flight
-        // (site import, UI eval) must still get its audit record.
+        // client with random ids grow the map without bound (and show
+        // phantom components in the UI). Matches the augment path's
+        // `known` guard. Checked again after the apply: a component
+        // registered while the command was in flight (a rebuild, a
+        // script's hello) must still get its audit record.
         if known || site.get(id).is_some() {
             site.log_setpoint(
                 id,
@@ -525,8 +526,8 @@ impl microgrid_server::Microgrid for MicrogridServer {
                     break;
                 }
                 // Re-read the runtime each iteration so a mid-stream
-                // `(set-component-telemetry-mode)` flip takes effect
-                // on the next sample boundary.
+                // telemetry-mode flip (the `status` route) takes
+                // effect on the next sample boundary.
                 let runtime = site.runtime_of(id);
                 match runtime.telemetry {
                     TelemetryMode::Closed => {

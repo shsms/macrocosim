@@ -1,8 +1,7 @@
 // The panel shell. Each named panel — the node inspector
 // ("node"), the formula explorer ("formula-btn"), the metrics panel
-// ("metrics-btn"), the weather panel ("weather-btn"), the REPL
-// ("repl-btn"), the log tail ("logs-btn"), the Defaults editor, the live
-// Scenario report — is its own concurrently-openable card: a tile docked
+// ("metrics-btn"), the weather panel ("weather-btn"), the log tail
+// ("logs-btn"), the Defaults view, the recording Report — is its own concurrently-openable card: a tile docked
 // in the bottom or right strip (`#dock-bottom`, `#dock-right`; the
 // `docked` class, laid out by `layoutStrip`), or floating over
 // #panel-dock, draggable and resizable. It is the same element either
@@ -94,7 +93,6 @@ const REFIT_SETTLE = 180;
 // top-right cascade or the right strip.
 const PANEL_DEFAULTS = {
   "metrics-btn": { width: 430 },
-  "repl-btn": { width: 560, spawn: "bottom-left", dock: "bottom" },
   "logs-btn": { width: 720, spawn: "bottom-left", dock: "bottom" },
 };
 // Panels whose markup is static in index.html, so a module can keep
@@ -104,7 +102,6 @@ const PANEL_DEFAULTS = {
 // min-height (floorOf).
 const STATIC_PANELS = {
   node: ["inspector", "inspect"],
-  "repl-btn": ["repl", "repl-body", "repl-output"],
   "logs-btn": ["logs-panel", "logs-body", "logs"],
 };
 // A bottom-left card sits this far in from the dock's left and
@@ -346,8 +343,8 @@ function applyPos(el, pos) {
 function wireDrag(el, name, p) {
   const strip = el.querySelector(".panel-drag");
   strip.addEventListener("pointerdown", (e) => {
-    // A control in the head (the REPL's microgrid chip and Emacs checkbox)
-    // takes its own press; the rest of the strip drags.
+    // A control in the head takes its own press; the rest of the strip
+    // drags.
     if (e.target.closest("button, input, select, textarea, label, a")) return;
     e.preventDefault();
     strip.setPointerCapture(e.pointerId);
@@ -541,8 +538,7 @@ function reorderDrag(el, head, edge, name, p, pointerId) {
 // stays `auto`, so folding a card open or shut re-sizes the panel by
 // itself, and the user's drag only says how far that may go. Dragging
 // past the content therefore leaves no dead space — the card snaps
-// back to its content once the gesture ends. The floating REPL is the
-// exception: its stylesheet takes the cap as its height (applyCap).
+// back to its content once the gesture ends.
 const capOf = (el, h, floor) => Math.max(floor, Math.min(h, el.parentElement?.clientHeight ?? window.innerHeight));
 
 // The lowest a card can go and still hold its content: its chrome (the head,
@@ -571,14 +567,8 @@ function floorOf(p) {
 // the stylesheet's — including the stylesheet's own 40px shave (kept
 // in sync with CASCADE_BASE here), which a bare `100%` would silently
 // undo for every capped panel.
-//
-// The same bound goes in --card-cap, for a card whose stylesheet makes the cap
-// its height (the floating REPL: a terminal keeps its size, its transcript
-// filling it); every other card hugs its content and ignores it.
 function applyCap(el, cap) {
-  const bound = `min(${cap}px, calc(100% - ${CASCADE_BASE}px))`;
-  el.style.maxHeight = bound;
-  el.style.setProperty("--card-cap", bound);
+  el.style.maxHeight = `min(${cap}px, calc(100% - ${CASCADE_BASE}px))`;
 }
 
 // A width the dock can still hold, never below the card's own floor: the

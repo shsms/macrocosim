@@ -2,7 +2,7 @@
 //! fails with, extractor wrappers that turn axum's own rejections
 //! into it, and the JSON fallbacks for unknown paths and methods.
 
-use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection, StringRejection};
+use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::{FromRef, FromRequest, FromRequestParts, Request};
 use axum::http::{Method, StatusCode, Uri, request::Parts};
@@ -59,6 +59,28 @@ impl ApiError {
     pub(in crate::ui) fn with(mut self, key: &str, value: impl Into<Value>) -> Self {
         self.extra.insert(key.to_string(), value.into());
         self
+    }
+}
+
+impl From<crate::engine::topology::TopologyError> for ApiError {
+    fn from(e: crate::engine::topology::TopologyError) -> Self {
+        use crate::engine::topology::TopologyError;
+        match e {
+            TopologyError::Invalid(msg) => Self::new(StatusCode::UNPROCESSABLE_ENTITY, msg),
+            TopologyError::Conflict(msg) => Self::conflict(msg),
+            TopologyError::NotRegistered(id) => Self::not_registered(id),
+        }
+    }
+}
+
+impl From<crate::runner::hello::HelloError> for ApiError {
+    fn from(e: crate::runner::hello::HelloError) -> Self {
+        use crate::runner::hello::HelloError;
+        match e {
+            HelloError::Token => Self::new(StatusCode::FORBIDDEN, e.to_string()),
+            HelloError::Version { .. } => Self::bad_request(e.to_string()),
+            HelloError::Topology(e) => e.into(),
+        }
     }
 }
 
@@ -137,24 +159,6 @@ where
 #[derive(Deserialize)]
 pub(in crate::ui) struct ComponentPath {
     pub id: u64,
-}
-
-/// A UTF-8 request body, as axum's `String` extractor reads it, whose
-/// rejection is an `ApiError` that keeps axum's status.
-pub(in crate::ui) struct Text(pub String);
-
-impl<S> FromRequest<S> for Text
-where
-    S: Send + Sync,
-{
-    type Rejection = ApiError;
-
-    async fn from_request(req: Request, state: &S) -> Result<Self, ApiError> {
-        String::from_request(req, state)
-            .await
-            .map(Text)
-            .map_err(|e: StringRejection| ApiError::new(e.status(), e.body_text()))
-    }
 }
 
 /// `axum::extract::ws::WebSocketUpgrade` whose rejection is an

@@ -1,7 +1,7 @@
 //! Smooth bound-decay function shared by SoC-protective ramps and the
 //! `soc_protected_bounds` helper that uses it. Ported from microsim's
-//! `bounded-exp-decay` in `sim/common.lisp`. Both Battery and EvCharger
-//! pull from this module so the curve shape stays consistent.
+//! `bounded-exp-decay`. Both Battery and EvCharger pull from this
+//! module so the curve shape stays consistent.
 
 /// Tunable thresholds + safety margins for `soc_protected_bounds`.
 #[derive(Clone, Copy, Debug)]

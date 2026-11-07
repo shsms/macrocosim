@@ -1,6 +1,5 @@
 //! `GET` / `PUT /api/mg/{mg}/spec` and `GET /api/spec/schema`: a
-//! microgrid built from a spec, rebuilt with carry, beside the Lisp
-//! starter.
+//! microgrid built from a spec and rebuilt with carry.
 
 mod common;
 
@@ -83,13 +82,16 @@ async fn get_answers_the_stored_spec_with_its_ids() {
         .json()
         .await
         .unwrap();
-    let flags: Vec<(u64, bool)> = list
+    let ids: Vec<u64> = list
         .as_array()
         .unwrap()
         .iter()
-        .map(|m| (m["id"].as_u64().unwrap(), m["has_spec"].as_bool().unwrap()))
+        .map(|m| m["id"].as_u64().unwrap())
         .collect();
-    assert_eq!(flags, vec![(7, true), (2200, false)]);
+    assert_eq!(ids, vec![7]);
+    for gone in ["has_spec", "managed"] {
+        assert!(list[0].get(gone).is_none(), "{gone} in {list}");
+    }
 
     let schema: Value = client
         .get(format!("{}/api/spec/schema", s.ui_url))
@@ -263,38 +265,17 @@ async fn a_put_keeps_setpoints_working_and_applies_health() {
     assert!(stream.message().await.unwrap().is_some(), "acknowledged");
 }
 
-/// A microgrid loaded from Lisp has no spec; one built from a spec is
-/// Lisp's to leave alone.
+/// A `PUT` on a microgrid booted from a file marks it unsaved and
+/// writes nothing to the file.
 #[tokio::test]
-async fn lisp_and_spec_microgrids_leave_each_other_alone() {
+async fn a_put_leaves_the_source_file_alone() {
     let dir = tempfile::TempDir::with_prefix("mc-spec-").unwrap();
     let source = dir.path().join("topology.json");
     let text = json!({"schema_version": 1, "microgrids": [plant()]}).to_string();
     std::fs::write(&source, &text).unwrap();
     let s = TestServer::start_spec_from(doc(vec![plant()]), Some(source.clone())).await;
     let client = reqwest::Client::new();
-
-    let (code, body) = get_spec(&client, &s, 2200).await;
-    assert_eq!(code, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"], "microgrid 2200 was loaded from Lisp");
-    let (code, _) = put_spec(&client, &s, 2200, &plant()).await;
-    assert_eq!(code, StatusCode::CONFLICT);
-
-    let r = client
-        .post(s.mg_url("eval"))
-        .body("(%make-meter :id 900)")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), StatusCode::CONFLICT);
-
-    let config = s.config.clone();
-    tokio::task::spawn_blocking(move || config.reload())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(s.site().component_count(), 7, "the reload kept it");
-    assert_eq!(std::fs::read_to_string(&source).unwrap(), text);
+    assert!(!s.engine.microgrids().lock()[&7].unsaved);
 
     let (code, _) = put_spec(&client, &s, 7, &plant()).await;
     assert_eq!(code, StatusCode::OK);

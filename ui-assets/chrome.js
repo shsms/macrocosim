@@ -9,8 +9,8 @@ import * as zone from "./zone.js";
 
 // ─── Clock + zone chip ─────────────────────────────────────────────────────
 //
-// The chip switches every displayed time between the sim zone and UTC
-// (zone.js); the clock shows the time now in the zone in use.
+// The chip switches every displayed time between this browser's zone and
+// UTC (zone.js); the clock shows the time now in the zone in use.
 export function setupZoneChip() {
   const chip = document.getElementById("tz-toggle");
   if (!chip) return;

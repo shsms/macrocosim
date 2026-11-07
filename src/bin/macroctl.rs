@@ -1,13 +1,8 @@
 //! Convenience CLI for poking at a running macrocosim server.
 //!
 //! --microgrid-id selects the microgrid for the gRPC commands,
-//! `dispatch`, `snapshot`, `pool`, `dashboard` and the scenario
-//! readouts (`summary`, `report`, `events`, `run --wait`); the
-//! default is the lowest id `GET /api/microgrids` reports. `scenario
-//! list` and `load` are site-wide. `scenario start`, `stop` and a
-//! run's start and stop reach every microgrid's journal; `scenario
-//! event` and a scenario's checks and recordings land on the lowest
-//! microgrid, so `--assert` works only on that one.
+//! `dispatch`, `pool` and `dashboard`; the default is the lowest id
+//! `GET /api/microgrids` reports.
 //!
 //! gRPC commands connect to the microgrid's server as the UI server
 //! lists it. --addr names a gRPC server directly; with
@@ -25,15 +20,6 @@
 //!   macroctl set-reactive-power 1001 3000 --lifetime-s 30
 //!   macroctl augment-bounds 1001 --lower-w -15000 --upper-w 15000 --lifetime-s 60
 //!   macroctl augment-reactive-bounds 1001 --lower-var -3000 --upper-var 3000 --lifetime-s 60
-//!
-//! Scenario commands — HTTP (default --ui-addr http://127.0.0.1:8801):
-//!   macroctl scenario start "demo"
-//!   macroctl scenario event outage "bat-1003"
-//!   macroctl scenario load examples/scenario-driving.lisp
-//!   macroctl scenario report
-//!   macroctl scenario events --since 0 --limit 20
-//!   macroctl scenario summary
-//!   macroctl scenario stop
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -88,9 +74,9 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Microgrid for the gRPC commands, `dispatch`, `snapshot`,
-    /// `pool`, `dashboard` and the scenario readouts. Default: the
-    /// lowest id `GET /api/microgrids` reports.
+    /// Microgrid for the gRPC commands, `dispatch`, `pool` and
+    /// `dashboard`. Default: the lowest id `GET /api/microgrids`
+    /// reports.
     #[arg(long, global = true)]
     microgrid_id: Option<u64>,
 
@@ -203,19 +189,6 @@ enum Cmd {
     #[command(subcommand)]
     Dispatch(DispatchCmd),
 
-    /// Drive the running scenario: start / stop / event / load,
-    /// and read back report + events. Talks to the UI's HTTP
-    /// surface, not gRPC.
-    #[command(subcommand)]
-    Scenario(ScenarioCmd),
-
-    /// Save / load / list snapshots of one microgrid's file.
-    /// Picks the microgrid with the global --microgrid-id, or the
-    /// lowest registered one. Routes through the UI HTTP surface;
-    /// gRPC isn't touched.
-    #[command(subcommand)]
-    Snapshot(SnapshotCmd),
-
     /// Read the loopback BatteryPool / PvPool aggregates. Output
     /// matches the `Sample<Q>` shape frequenz-microgrid's pool
     /// streams yield, so the output is paste-into-a-bug-report
@@ -308,117 +281,6 @@ enum PoolCmd {
     },
 }
 
-#[derive(Subcommand, Debug)]
-enum SnapshotCmd {
-    /// Copy the microgrid's file to snapshots/MG_ID/NAME.lisp.
-    Save {
-        /// Snapshot name (file-name component only; no slashes).
-        name: String,
-    },
-    /// Restore snapshots/MG_ID/NAME.lisp over the microgrid's file
-    /// and reload it.
-    Load {
-        name: String,
-        /// Load the snapshot as a NEW microgrid under this id
-        /// instead of restoring it over the original.
-        #[arg(long)]
-        id: Option<u64>,
-    },
-    /// List the microgrid's snapshots, alphabetical.
-    List,
-}
-
-#[derive(Subcommand, Debug)]
-enum ScenarioCmd {
-    /// List every registered scenario with its schedule / clock /
-    /// length and per-section counts (`GET /api/scenarios`).
-    List,
-
-    /// Run a registered scenario. Default (live) starts it on the
-    /// running server's wall clock. `--stepped` instead boots a
-    /// headless deterministic run in-process from `--config` and
-    /// prints the report — the CI gate; pair with `--assert`.
-    Run {
-        /// Registered scenario name.
-        name: String,
-        /// Run headless + deterministic on a sim clock, in-process,
-        /// rather than against the live server.
-        #[arg(long)]
-        stepped: bool,
-        /// Config file to boot for a `--stepped` run (the one that
-        /// registered the scenario).
-        #[arg(long)]
-        config: Option<String>,
-        /// `--stepped` clock step in seconds; fractions allowed.
-        #[arg(long = "step-s", value_parser = parse_step, default_value = "0.1")]
-        step: std::time::Duration,
-        /// Seconds: the `--stepped` run length, or the `--wait` cap for
-        /// a live run; fractions allowed. Defaults to the scenario's
-        /// `:length`.
-        #[arg(long = "until-s", value_parser = parse_secs)]
-        until: Option<std::time::Duration>,
-        /// Live runs only: block until the scenario finishes (its
-        /// `:length`, or `--until-s`), then stop it — so `--assert` can
-        /// gate on the result.
-        #[arg(long)]
-        wait: bool,
-        /// Exit non-zero if any `(scenario-expect …)` check failed.
-        /// Needs `--stepped` or `--wait` (a bare live run is async).
-        #[arg(long)]
-        assert: bool,
-    },
-
-    /// Begin a fresh scenario. Resets the journal + reporters.
-    Start {
-        /// Scenario name. Lands as `(scenario-start NAME)`.
-        name: String,
-    },
-
-    /// Mark the running scenario as ended. Freezes elapsed +
-    /// metrics; flushes any active CSV sinks.
-    Stop,
-
-    /// Append a journal event. KIND becomes a Lisp symbol; PAYLOAD
-    /// is rendered as a string.
-    Event {
-        /// Event kind (e.g. `outage`, `note`).
-        kind: String,
-        /// Free-form payload string.
-        payload: String,
-    },
-
-    /// Load a hand-written scenario file via `(load PATH)`. Path
-    /// is resolved against the server's state dir, same as
-    /// `(load …)` from the REPL.
-    Load {
-        /// Path to the scenario file (e.g. `examples/scenario-driving.lisp`).
-        path: String,
-    },
-
-    /// Show lifecycle summary — name, started_at, elapsed, event
-    /// count.
-    Summary,
-
-    /// Show aggregate metrics: peak / charge / discharge / SoC
-    /// stats / 15-min averages.
-    Report {
-        /// Exit non-zero if any `(scenario-expect …)` check failed —
-        /// turns a scenario run into a CI gate.
-        #[arg(long)]
-        assert: bool,
-    },
-
-    /// Show recent events in the journal.
-    Events {
-        /// Cursor: only events with id >= SINCE. Default 0.
-        #[arg(long, default_value_t = 0)]
-        since: u64,
-        /// Cap on returned entries.
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-    },
-}
-
 #[derive(ValueEnum, Clone, Copy, Debug)]
 enum Category {
     Grid,
@@ -458,8 +320,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         // HTTP-backed commands dispatch directly: they use the HTTP
         // client (`dispatch` only to look up the microgrid id, then
         // talks to the dispatch service) and need no gRPC channel to
-        // the Microgrid service, so a scenario readout never waits
-        // on a gRPC connect.
+        // the Microgrid service, so a readout never waits on a gRPC
+        // connect.
         Cmd::Dispatch(d) => {
             let http = reqwest::Client::new();
             // Only the id lookup needs the UI server; an explicit
@@ -469,11 +331,6 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("{e}; pass --microgrid-id"))?;
             run_dispatch(d, &cli.dispatch_addr, mg, cli.json).await
         }
-        Cmd::Scenario(s) => {
-            let http = reqwest::Client::new();
-            run_scenario(&http, s, &cli.ui_addr, cli.microgrid_id, cli.json).await
-        }
-        Cmd::Snapshot(s) => run_snapshot(s, &cli.ui_addr, cli.microgrid_id, cli.json).await,
         Cmd::Dashboard { tail, interval } => {
             run_dashboard(&cli.ui_addr, cli.microgrid_id, tail, interval).await
         }
@@ -513,15 +370,6 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 fn parse_secs(s: &str) -> Result<std::time::Duration, String> {
     let secs: f64 = s.parse().map_err(|e| format!("{e}"))?;
     std::time::Duration::try_from_secs_f64(secs).map_err(|e| format!("{e}"))
-}
-
-/// A clap value parser for a clock step: positive seconds.
-fn parse_step(s: &str) -> Result<std::time::Duration, String> {
-    let step = parse_secs(s)?;
-    if step.is_zero() {
-        return Err("the step must be above zero".into());
-    }
-    Ok(step)
 }
 
 fn str_err(e: String) -> Box<dyn std::error::Error> {
@@ -731,49 +579,6 @@ async fn run_dispatch(
     }
 }
 
-fn print_scenarios(resp: &serde_json::Value) {
-    let Some(arr) = resp.as_array() else {
-        println!("(unexpected response shape)");
-        return;
-    };
-    if arr.is_empty() {
-        println!("(no scenarios registered)");
-        return;
-    }
-    for s in arr {
-        let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-        let desc = s.get("description").and_then(|v| v.as_str()).unwrap_or("");
-        let schedule = s.get("schedule").and_then(|v| v.as_str()).unwrap_or("?");
-        let clock = s.get("clock").and_then(|v| v.as_str()).unwrap_or("?");
-        let count = |k: &str| s.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
-        let len = match s.get("length_s").and_then(|v| v.as_f64()) {
-            Some(secs) => format!("{secs:.0}s"),
-            None => "open".to_owned(),
-        };
-        // schedule/clock + run length, then the populated sections.
-        let sections = [
-            (
-                "setup",
-                u64::from(s.get("has_setup").and_then(|v| v.as_bool()) == Some(true)),
-            ),
-            ("drive", count("n_drive")),
-            ("agents", count("n_agents")),
-            ("cues", count("n_cues")),
-            ("expect", count("n_expect")),
-            (
-                "record",
-                u64::from(s.get("records").and_then(|v| v.as_bool()) == Some(true)),
-            ),
-        ]
-        .iter()
-        .filter(|(_, n)| *n > 0)
-        .map(|(k, n)| format!("{k}={n}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-        println!("{name}  [{schedule}/{clock} {len}]  {sections}  {desc}");
-    }
-}
-
 async fn run_pool(
     cmd: PoolCmd,
     ui_addr: &str,
@@ -894,24 +699,6 @@ async fn resolve_microgrid_id(
     Ok(choose_mg(&list, None)?.0)
 }
 
-/// The microgrid a scenario readout (`summary`, `report`, `events`,
-/// `run --wait`) reads: [`choose_mg`] over one read of
-/// `/api/microgrids`. With `assert`, [`assert_target`] checks it
-/// against the same listing.
-async fn resolve_scenario_mg(
-    http: &reqwest::Client,
-    ui_addr: &str,
-    explicit: Option<u64>,
-    assert: bool,
-) -> Result<u64, Box<dyn std::error::Error>> {
-    let list = fetch_microgrids(http, ui_addr).await?;
-    let (mg, _) = choose_mg(&list, explicit)?;
-    if assert {
-        assert_target(&list, mg)?;
-    }
-    Ok(mg)
-}
-
 /// The UI server's `/api/microgrids` listing. A failed connect names
 /// the UI server; a failed response is an error as [`checked`]
 /// reports it.
@@ -936,27 +723,6 @@ fn listed(list: &serde_json::Value) -> impl Iterator<Item = (u64, &serde_json::V
         .into_iter()
         .flatten()
         .filter_map(|m| Some((m.get("id")?.as_u64()?, m)))
-}
-
-/// The lowest microgrid id in an `/api/microgrids` reply; `None` for
-/// an empty list or a reply that is not a list.
-fn lowest_id(list: &serde_json::Value) -> Option<u64> {
-    listed(list).map(|(id, _)| id).min()
-}
-
-/// Whether `--assert` on microgrid `mg` checks anything. A
-/// scenario's checks land on the lowest microgrid in `list` (an
-/// `/api/microgrids` reply), so any other microgrid is an error;
-/// an empty list passes and leaves the error to the report read.
-fn assert_target(list: &serde_json::Value, mg: u64) -> Result<(), String> {
-    match lowest_id(list) {
-        Some(lowest) if lowest != mg => Err(format!(
-            "scenario checks land on microgrid {lowest}, the lowest registered one; \
-             --assert on microgrid {mg} would check nothing \
-             (drop --microgrid-id or pass {lowest})"
-        )),
-        Some(_) | None => Ok(()),
-    }
 }
 
 async fn build_pool_line(
@@ -1100,320 +866,6 @@ async fn build_dashboard_line(
     ))
 }
 
-/// Fetch microgrid `mg`'s `scenario/report`, print it, and — with
-/// `assert` — return an error when any check failed. Shared by the
-/// live `--wait` gate and the standalone `scenario report` command so
-/// the two stay in lockstep.
-async fn fetch_print_assert_report(
-    http: &reqwest::Client,
-    ui_addr: &str,
-    mg: u64,
-    json: bool,
-    assert: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let r = get_json(http, format!("{ui_addr}/api/mg/{mg}/scenario/report")).await?;
-    print_report(&r, json);
-    if assert {
-        let failed = r["checks_failed"].as_u64().unwrap_or(0);
-        if failed > 0 {
-            return Err(format!("{failed} scenario check(s) failed").into());
-        }
-    }
-    Ok(())
-}
-
-async fn run_scenario(
-    http: &reqwest::Client,
-    cmd: ScenarioCmd,
-    ui_addr: &str,
-    microgrid_id: Option<u64>,
-    json: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    match cmd {
-        ScenarioCmd::List => {
-            let resp = get_json(http, format!("{ui_addr}/api/scenarios")).await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                print_scenarios(&resp);
-            }
-        }
-        ScenarioCmd::Run {
-            name,
-            stepped,
-            config,
-            step,
-            until,
-            wait,
-            assert,
-        } => {
-            if stepped {
-                // Headless, deterministic, in-process — no server. Boots
-                // the config that registered the scenario, runs on a sim
-                // clock, prints the report, and (with --assert) exits
-                // non-zero on any failed check: the CI gate.
-                let config = config.ok_or("`scenario run --stepped` needs --config <file>")?;
-                let dt = step;
-                let (cfg, _clock) = macrocosim::lisp::Config::new_headless(&config)
-                    .map_err(|e| format!("headless boot failed: {e}"))?;
-                // `--until-s` overrides the scenario's own `:length`;
-                // without it the declared length is the run length.
-                // Same runner either way, so both paths tear down —
-                // cancel timers + restore driven knobs — identically.
-                let steps = cfg.run_scenario_stepped(&name, dt, until)?;
-                let rv = cfg.scenario_report_json();
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&rv)?);
-                } else {
-                    print_report(&rv, false);
-                    eprintln!("(stepped {steps} steps)");
-                }
-                let failed = rv["checks_failed"].as_u64().unwrap_or(0);
-                if assert && failed > 0 {
-                    return Err(format!("{failed} scenario check(s) failed").into());
-                }
-            } else {
-                // Live: start on the running server's wall clock.
-                let start = format!("{ui_addr}/api/scenarios/{name}/start");
-                if !wait {
-                    if assert {
-                        return Err(
-                            "`--assert` on a live run needs `--wait` (or use `--stepped`)".into(),
-                        );
-                    }
-                    // Fire-and-forget; the run continues server-side.
-                    checked(http.post(start).send().await?).await?;
-                    println!("scenario run {name} (live)");
-                    return Ok(());
-                }
-                // The microgrid whose journal --wait polls and
-                // reports, checked against the listing before the
-                // start.
-                let mg = resolve_scenario_mg(http, ui_addr, microgrid_id, assert).await?;
-                // Resolve the wait length BEFORE starting, so a --wait on
-                // a scenario with no :length and no --until-s fails fast
-                // instead of leaving the run orphaned server-side with
-                // nothing to stop it.
-                let wait_secs = match until {
-                    Some(d) => d.as_secs_f64(),
-                    None => {
-                        // Default to the scenario's declared :length.
-                        let list = get_json(http, format!("{ui_addr}/api/scenarios")).await?;
-                        list.as_array()
-                            .and_then(|a| a.iter().find(|s| s["name"] == name.as_str()))
-                            .and_then(|s| s["length_s"].as_f64())
-                            .ok_or(
-                                "live `--wait` needs `--until-s` for a scenario with no :length",
-                            )?
-                            .ceil()
-                    }
-                };
-                checked(http.post(start).send().await?).await?;
-                // --wait: block until the scenario finishes (the journal
-                // reports ended, or elapsed reaches the run length), then
-                // stop it so the report freezes + any CSV sinks flush.
-                eprintln!("waiting up to {wait_secs}s for {name} to finish…");
-                let deadline = wait_secs.ceil() as u64 + 5; // small grace past the run length
-                let mut waited = 0u64;
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    waited += 1;
-                    // Tolerate a transient poll hiccup (a momentary
-                    // non-2xx while the loopback rebuilds): treat it as
-                    // "not done yet" rather than aborting the run — the
-                    // deadline below still bounds the wait.
-                    let done = match http
-                        .get(format!("{ui_addr}/api/mg/{mg}/scenario"))
-                        .send()
-                        .await
-                        .and_then(|r| r.error_for_status())
-                    {
-                        Ok(resp) => match resp.json::<serde_json::Value>().await {
-                            Ok(s) => {
-                                let ended = !s["ended_at"].is_null();
-                                let elapsed = s["elapsed_s"].as_f64().unwrap_or(0.0);
-                                ended || elapsed >= wait_secs
-                            }
-                            Err(_) => false,
-                        },
-                        Err(_) => false,
-                    };
-                    if done || waited >= deadline {
-                        break;
-                    }
-                }
-                // Freeze the report + flush any CSV sinks. A failed stop
-                // means the report may still be mutating, so surface it
-                // rather than asserting on a half-frozen run.
-                checked(
-                    http.post(format!("{ui_addr}/api/scenarios/stop"))
-                        .send()
-                        .await?,
-                )
-                .await
-                .map_err(|e| format!("failed to stop scenario: {e}"))?;
-                fetch_print_assert_report(http, ui_addr, mg, json, assert).await?;
-            }
-        }
-        ScenarioCmd::Start { name } => {
-            // Quote the name as a Lisp string. We don't accept
-            // arbitrary expressions here on purpose — names are
-            // labels, not code.
-            eval(
-                http,
-                ui_addr,
-                &format!("(scenario-start {})", lisp_string(&name)),
-            )
-            .await?;
-            println!("scenario-start {name}");
-        }
-        ScenarioCmd::Stop => {
-            eval(http, ui_addr, "(scenario-stop)").await?;
-            println!("scenario-stopped");
-        }
-        ScenarioCmd::Event { kind, payload } => {
-            // KIND → unquoted symbol (matches the (scenario-event
-            // 'symbol …) idiom in scenario scripts). PAYLOAD →
-            // Lisp string. Kinds are labels, not code — reject
-            // anything that would not read back as one symbol.
-            // Requiring a leading letter keeps every accepted kind
-            // out of the reader's number shapes ("42", "-5",
-            // "5_000", "1e3" all read back as numbers, not symbols).
-            if !kind.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-                || !kind
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
-                return Err(format!(
-                    "event kind must be a plain symbol (a letter, then letters, \
-                     digits, - or _): {kind:?}"
-                )
-                .into());
-            }
-            let id = eval(
-                http,
-                ui_addr,
-                &format!("(scenario-event '{kind} {})", lisp_string(&payload)),
-            )
-            .await?;
-            println!("event id={id}");
-        }
-        ScenarioCmd::Load { path } => {
-            eval(http, ui_addr, &format!("(load {})", lisp_string(&path))).await?;
-            println!("loaded {path}");
-        }
-        ScenarioCmd::Summary => {
-            let mg = resolve_scenario_mg(http, ui_addr, microgrid_id, false).await?;
-            let s = get_json(http, format!("{ui_addr}/api/mg/{mg}/scenario")).await?;
-            print_summary(&s, json);
-        }
-        ScenarioCmd::Report { assert } => {
-            let mg = resolve_scenario_mg(http, ui_addr, microgrid_id, assert).await?;
-            fetch_print_assert_report(http, ui_addr, mg, json, assert).await?;
-        }
-        ScenarioCmd::Events { since, limit } => {
-            let mg = resolve_scenario_mg(http, ui_addr, microgrid_id, false).await?;
-            let e = send_json(
-                http.get(format!("{ui_addr}/api/mg/{mg}/scenario/events"))
-                    .query(&[("since", since.to_string()), ("limit", limit.to_string())]),
-            )
-            .await?;
-            print_events(&e, json);
-        }
-    }
-    Ok(())
-}
-
-async fn run_snapshot(
-    cmd: SnapshotCmd,
-    ui_addr: &str,
-    microgrid_id: Option<u64>,
-    json: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let http = reqwest::Client::new();
-    // Snapshots belong to one microgrid: they copy that microgrid's
-    // own file. Same selection rule as the other per-mg subcommands —
-    // --microgrid-id, else the lowest registered id.
-    let mg = resolve_microgrid_id(&http, ui_addr, microgrid_id).await?;
-    match cmd {
-        SnapshotCmd::Save { name } => {
-            let resp = send_json(
-                http.post(format!("{ui_addr}/api/mg/{mg}/snapshots"))
-                    .json(&serde_json::json!({ "name": name })),
-            )
-            .await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                println!(
-                    "saved {} -> {}",
-                    name,
-                    resp.get("path").and_then(|v| v.as_str()).unwrap_or("?"),
-                );
-            }
-        }
-        SnapshotCmd::Load { name, id } => {
-            let mut body = serde_json::json!({ "name": name });
-            if let Some(id) = id {
-                body["id"] = serde_json::json!(id);
-            }
-            let resp = send_json(
-                http.post(format!("{ui_addr}/api/mg/{mg}/snapshots/load"))
-                    .json(&body),
-            )
-            .await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                let loaded = resp.get("id").and_then(|v| v.as_u64()).unwrap_or(mg);
-                println!("loaded {name} into microgrid {loaded}");
-            }
-        }
-        SnapshotCmd::List => {
-            let resp = get_json(&http, format!("{ui_addr}/api/mg/{mg}/snapshots")).await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                let names = resp
-                    .get("snapshots")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                if names.is_empty() {
-                    println!("(no snapshots for microgrid {mg})");
-                } else {
-                    for n in names {
-                        if let Some(s) = n.as_str() {
-                            println!("{s}");
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// POST a Lisp expression to the whole-site `/api/eval`. Returns
-/// the printed value, or the evaluation error.
-async fn eval(
-    http: &reqwest::Client,
-    ui_addr: &str,
-    expr: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let resp = http
-        .post(format!("{ui_addr}/api/eval"))
-        .body(expr.to_string())
-        .send()
-        .await?;
-    let body: serde_json::Value = checked(resp)
-        .await
-        .map_err(|e| format!("eval failed: {e}"))?
-        .json()
-        .await?;
-    Ok(body["value"].as_str().unwrap_or("").to_string())
-}
-
 /// The JSON body of a GET of `url`; a failed response is an error as
 /// [`checked`] reports it.
 async fn get_json(
@@ -1457,17 +909,6 @@ fn error_line(status: reqwest::StatusCode, text: &str) -> String {
     }
 }
 
-/// Backslash-escape a string for embedding inside Lisp source.
-/// Handles the two characters that break a `"…"` literal: `"`
-/// and `\`. Deliberately NOT the library's `escape_lisp_string`:
-/// that one also strips control characters (it writes files that
-/// get re-evaled), which would silently delete the newlines in a
-/// multi-line scenario-event payload sent from the CLI.
-fn lisp_string(s: &str) -> String {
-    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
-}
-
 /// `latest[stream].value` as f64 from an `/api/.../metrics/latest`
 /// map — shared by the pool and dashboard line builders.
 fn latest_value(latest: &serde_json::Value, stream: &str) -> Option<f64> {
@@ -1475,125 +916,6 @@ fn latest_value(latest: &serde_json::Value, stream: &str) -> Option<f64> {
         .get(stream)
         .and_then(|v| v.get("value"))
         .and_then(|v| v.as_f64())
-}
-
-fn print_summary(s: &serde_json::Value, json: bool) {
-    if json {
-        println!("{s:#}");
-        return;
-    }
-    let name = s["name"].as_str().unwrap_or("(none)");
-    let started = s["started_at"].as_str().unwrap_or("—");
-    let ended = s["ended_at"].as_str().unwrap_or("running");
-    let elapsed = s["elapsed_s"].as_f64().unwrap_or(0.0);
-    let n = s["event_count"].as_u64().unwrap_or(0);
-    println!("name        {name}");
-    println!("started_at  {started}");
-    println!("ended_at    {ended}");
-    println!("elapsed     {elapsed:.1} s");
-    println!("events      {n}");
-}
-
-/// One `FAIL` row of the report for a check entry of its `checks`
-/// array. The actual value carries the check's `unit` when the report
-/// gives one.
-fn failed_check_row(c: &serde_json::Value) -> String {
-    let id = c["component_id"].as_u64().unwrap_or(0);
-    let metric = c["metric"].as_str().unwrap_or("?");
-    let expectation = c["expectation"].as_str().unwrap_or("?");
-    let unit = c["unit"].as_str().unwrap_or("");
-    let actual = match c["actual"].as_f64() {
-        Some(v) if unit.is_empty() => format!("{v}"),
-        Some(v) => format!("{v} {unit}"),
-        None => "unavailable".into(),
-    };
-    format!("  FAIL  {id} {metric}: expected {expectation}, actual {actual}")
-}
-
-fn print_report(r: &serde_json::Value, json: bool) {
-    if json {
-        println!("{r:#}");
-        return;
-    }
-    fn kw(v: f64) -> String {
-        format!("{:.2} kW", v / 1000.0)
-    }
-    fn kwh(v: f64) -> String {
-        format!("{:.2} kWh", v / 1000.0)
-    }
-    let elapsed = r["scenario_elapsed_s"].as_f64().unwrap_or(0.0);
-    let peak = r["peak_grid_w"].as_f64().unwrap_or(0.0);
-    let chg = r["total_battery_charged_wh"].as_f64().unwrap_or(0.0);
-    let dchg = r["total_battery_discharged_wh"].as_f64().unwrap_or(0.0);
-    let pv = r["total_pv_produced_wh"].as_f64().unwrap_or(0.0);
-    println!("elapsed              {elapsed:.1} s");
-    let passed = r["checks_passed"].as_u64().unwrap_or(0);
-    let failed = r["checks_failed"].as_u64().unwrap_or(0);
-    if passed + failed > 0 {
-        println!("checks               {passed} passed, {failed} failed");
-        if let Some(arr) = r["checks"].as_array() {
-            for c in arr.iter().filter(|c| c["passed"] != true) {
-                println!("{}", failed_check_row(c));
-            }
-        }
-    }
-    println!("grid peak            {}", kw(peak));
-    println!("battery charged      {}", kwh(chg));
-    println!("battery discharged   {}", kwh(dchg));
-    println!("PV produced          {}", kwh(pv));
-    if let Some(soc) = r["soc_stats"].as_object() {
-        let mean = soc["mean_pct"].as_f64().unwrap_or(0.0);
-        let median = soc["median_pct"].as_f64().unwrap_or(0.0);
-        let mode = soc["mode_pct"]
-            .as_u64()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "—".into());
-        println!("SoC mean / median / mode  {mean:.1}% / {median:.1}% / {mode}%");
-    }
-    if let Some(arr) = r["grid_window_averages"].as_array()
-        && !arr.is_empty()
-    {
-        println!("\n15-min grid averages (last 6):");
-        for w in arr.iter().rev().take(6).collect::<Vec<_>>().iter().rev() {
-            let ts = w["window_start"].as_str().unwrap_or("?");
-            let avg = w["avg_w"].as_f64().unwrap_or(0.0);
-            println!("  {ts}  {}", kw(avg));
-        }
-    }
-    if let Some(arr) = r["per_battery"].as_array()
-        && !arr.is_empty()
-    {
-        println!("\nper battery:");
-        for b in arr {
-            let id = b["id"].as_u64().unwrap_or(0);
-            let c = b["charge_wh"].as_f64().unwrap_or(0.0);
-            let d = b["discharge_wh"].as_f64().unwrap_or(0.0);
-            println!("  {id}  charge {}  discharge {}", kwh(c), kwh(d));
-        }
-    }
-}
-
-fn print_events(e: &serde_json::Value, json: bool) {
-    if json {
-        println!("{e:#}");
-        return;
-    }
-    let next = e["next_event_id"].as_u64().unwrap_or(0);
-    if let Some(arr) = e["events"].as_array() {
-        if arr.is_empty() {
-            println!("(no events)");
-        } else {
-            println!("{:>5}  {:<24}  {:<14}  payload", "id", "ts", "kind");
-            for ev in arr {
-                let id = ev["id"].as_u64().unwrap_or(0);
-                let ts = ev["ts"].as_str().unwrap_or("?");
-                let kind = ev["kind"].as_str().unwrap_or("?");
-                let payload = ev["payload"].as_str().unwrap_or("");
-                println!("{id:>5}  {ts:<24}  {kind:<14}  {payload}");
-            }
-        }
-    }
-    println!("\nnext_event_id: {next}");
 }
 
 async fn cmd_info(
@@ -2162,19 +1484,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn assert_target_accepts_only_the_lowest_microgrid() {
-        let list = serde_json::json!([{"id": 7}, {"id": 3}]);
-        assert_eq!(assert_target(&list, 3), Ok(()));
-        assert_eq!(
-            assert_target(&list, 7).unwrap_err(),
-            "scenario checks land on microgrid 3, the lowest registered one; \
-             --assert on microgrid 7 would check nothing \
-             (drop --microgrid-id or pass 3)"
-        );
-        assert_eq!(assert_target(&serde_json::json!([]), 7), Ok(()));
-    }
-
     #[tokio::test]
     async fn resolve_microgrid_id_names_an_unreachable_ui_server() {
         // Nothing listens on port 1: the request fails to connect.
@@ -2265,93 +1574,8 @@ mod tests {
         assert_eq!(got, "http://[::1]:8803");
     }
 
-    #[tokio::test]
-    async fn resolve_scenario_mg_checks_the_listing() {
-        let http = test_client();
-        let (ui, _) = canned_ui_server(r#"[{"id": 3}, {"id": 7}]"#, 1);
-        let err = resolve_scenario_mg(&http, &ui, Some(7), true)
-            .await
-            .unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "scenario checks land on microgrid 3, the lowest registered one; \
-             --assert on microgrid 7 would check nothing \
-             (drop --microgrid-id or pass 3)"
-        );
-        let (ui, _) = canned_ui_server(r#"[{"id": 3}]"#, 2);
-        let err = resolve_scenario_mg(&http, &ui, Some(9), true)
-            .await
-            .unwrap_err();
-        assert_eq!(err.to_string(), "microgrid 9 not registered");
-        let got = resolve_scenario_mg(&http, &ui, None, true).await.unwrap();
-        assert_eq!(got, 3);
-    }
-
-    #[tokio::test]
-    async fn scenario_run_wait_starts_nothing_on_an_unregistered_microgrid() {
-        // Room for a second request, so a start POST would be seen.
-        let (ui, requests) = canned_ui_server(r#"[{"id": 3}]"#, 2);
-        let cmd = ScenarioCmd::Run {
-            name: "s".to_string(),
-            stepped: false,
-            config: None,
-            step: std::time::Duration::from_millis(100),
-            until: Some(std::time::Duration::from_secs(1)),
-            wait: true,
-            assert: false,
-        };
-        let err = run_scenario(&test_client(), cmd, &ui, Some(9), false)
-            .await
-            .unwrap_err();
-        assert_eq!(err.to_string(), "microgrid 9 not registered");
-        assert_eq!(*requests.lock().unwrap(), ["GET /api/microgrids"]);
-    }
-
     fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(std::iter::once("macroctl").chain(args.iter().copied()))
-    }
-
-    #[test]
-    fn scenario_run_takes_fractional_seconds() {
-        let cli = parse(&[
-            "scenario",
-            "run",
-            "demo",
-            "--step-s",
-            "0.25",
-            "--until-s",
-            "90.5",
-        ])
-        .unwrap();
-        let Cmd::Scenario(ScenarioCmd::Run { step, until, .. }) = cli.cmd else {
-            panic!("not scenario run");
-        };
-        assert_eq!(step, std::time::Duration::from_millis(250));
-        assert_eq!(until, Some(std::time::Duration::from_secs_f64(90.5)));
-    }
-
-    #[test]
-    fn scenario_run_step_defaults_to_a_tenth_of_a_second() {
-        let cli = parse(&["scenario", "run", "demo"]).unwrap();
-        let Cmd::Scenario(ScenarioCmd::Run { step, until, .. }) = cli.cmd else {
-            panic!("not scenario run");
-        };
-        assert_eq!(step, std::time::Duration::from_millis(100));
-        assert_eq!(until, None);
-    }
-
-    #[test]
-    fn scenario_run_refuses_the_unitless_flags() {
-        assert!(parse(&["scenario", "run", "demo", "--step", "100"]).is_err());
-        assert!(parse(&["scenario", "run", "demo", "--until", "9"]).is_err());
-        assert_eq!(
-            parse(&["scenario", "run", "demo", "--step-s=-1"])
-                .unwrap_err()
-                .kind(),
-            clap::error::ErrorKind::ValueValidation
-        );
-        assert!(parse(&["scenario", "run", "demo", "--step-s", "0"]).is_err());
-        assert!(parse(&["scenario", "run", "demo", "--step-s", "1e-12"]).is_err());
     }
 
     #[test]
@@ -2475,12 +1699,8 @@ mod tests {
         );
         assert!(parse(&["dispatch", "create", "t", "battery", "--duration-s", "60"]).is_ok());
         assert!(parse(&["dispatch", "create", "t", "battery", "--duration", "60"]).is_err());
-        let cli = parse(&["snapshot", "load", "x", "--id", "7"]).unwrap();
-        assert!(matches!(
-            cli.cmd,
-            Cmd::Snapshot(SnapshotCmd::Load { id: Some(7), .. })
-        ));
-        assert!(parse(&["snapshot", "load", "x", "--as-id", "7"]).is_err());
+        assert!(parse(&["snapshot", "list"]).is_err(), "snapshots are gone");
+        assert!(parse(&["scenario", "list"]).is_err(), "scenarios are gone");
         let cli = parse(&["list", "--component-id", "4", "--component-id", "5"]).unwrap();
         assert!(matches!(cli.cmd, Cmd::List { ids, .. } if ids == [4, 5]));
         assert!(parse(&["list", "--id", "4"]).is_err());
@@ -2510,50 +1730,8 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_check_row_names_the_unit_of_its_actual_value() {
-        let check = serde_json::json!({
-            "component_id": 4,
-            "metric": "active_power_w",
-            "expectation": "approx 5000 (tol 100)",
-            "passed": false,
-            "actual": 4200.0,
-            "unit": "W",
-        });
-        assert_eq!(
-            failed_check_row(&check),
-            "  FAIL  4 active_power_w: expected approx 5000 (tol 100), actual 4200 W"
-        );
-        let no_unit = serde_json::json!({
-            "component_id": 4,
-            "metric": "some_metric",
-            "expectation": "approx 50 (tol 1)",
-            "actual": 40.5,
-        });
-        assert!(failed_check_row(&no_unit).ends_with("actual 40.5"));
-        let missing = serde_json::json!({
-            "component_id": 4,
-            "metric": "active_power_w",
-            "expectation": "approx 5000 (tol 100)",
-            "actual": null,
-            "unit": "W",
-        });
-        assert!(failed_check_row(&missing).ends_with("actual unavailable"));
-    }
-
-    #[test]
     fn list_labels_its_units() {
         assert!(list_header().contains("rated_lower_w"));
         assert!(list_header().contains("rated_upper_w"));
-    }
-
-    #[tokio::test]
-    async fn scenario_summary_reads_nothing_from_an_unregistered_microgrid() {
-        // Room for a second request, so a scenario GET would be seen.
-        let (ui, requests) = canned_ui_server(r#"[{"id": 3}]"#, 2);
-        let err = run_scenario(&test_client(), ScenarioCmd::Summary, &ui, Some(9), false)
-            .await
-            .unwrap_err();
-        assert_eq!(err.to_string(), "microgrid 9 not registered");
-        assert_eq!(*requests.lock().unwrap(), ["GET /api/microgrids"]);
     }
 }

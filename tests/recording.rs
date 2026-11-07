@@ -1,10 +1,8 @@
-//! The recording routes under `/api/mg/{mg}/recording`, beside the
-//! Lisp scenarios that share the journal.
+//! The recording routes under `/api/mg/{mg}/recording`.
 
 mod common;
 
-use common::{TestServer, drive, put_spec};
-use macrocosim::sim::MicrogridSite;
+use common::{TestServer, put_spec};
 use macrocosim::spec::TopologyDoc;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -58,30 +56,10 @@ async fn get(client: &reqwest::Client, s: &TestServer, rel: &str) -> Value {
     r.json().await.unwrap()
 }
 
-async fn eval(client: &reqwest::Client, s: &TestServer, body: &str) -> (StatusCode, Value) {
-    let r = client
-        .post(format!("{}/api/eval", s.ui_url))
-        .body(body.to_string())
-        .send()
-        .await
-        .unwrap();
-    (r.status(), r.json().await.unwrap())
-}
-
 /// Whether the journal runs, read off `GET .../recording`.
 async fn running(client: &reqwest::Client, s: &TestServer) -> bool {
     let summary = get(client, s, "recording").await;
     !summary["started_at"].is_null() && summary["ended_at"].is_null()
-}
-
-fn meter_power(site: &MicrogridSite) -> f32 {
-    site.get(2)
-        .unwrap()
-        .meter_drive()
-        .unwrap()
-        .meter_power_reading()
-        .unwrap()
-        .value
 }
 
 #[tokio::test]
@@ -155,50 +133,6 @@ async fn a_second_start_answers_409() {
         "{body}"
     );
     assert_eq!(stop(&client, &s).await.1["name"], "a");
-}
-
-/// A Lisp scenario and a recording never share the journal, and a
-/// scenario stop leaves a recording running.
-#[tokio::test]
-async fn lisp_scenarios_and_recordings_refuse_each_other() {
-    let (s, client) = start().await;
-    let (code, body) = eval(&client, &s, r#"(scenario-start "lisp")"#).await;
-    assert_eq!(code, StatusCode::OK, "{body}");
-    let (code, body) = post(&client, &s, "recording/start", json!({"name": "r"})).await;
-    assert_eq!(code, StatusCode::CONFLICT, "{body}");
-    assert!(
-        body["error"].as_str().unwrap().contains("Lisp scenario"),
-        "{body}"
-    );
-    eval(&client, &s, "(scenario-stop)").await;
-
-    let (code, _) = post(&client, &s, "recording/start", json!({"name": "r"})).await;
-    assert_eq!(code, StatusCode::NO_CONTENT);
-    let (code, body) = eval(&client, &s, r#"(scenario-start "lisp")"#).await;
-    assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
-    assert!(
-        body["error"]
-            .as_str()
-            .unwrap()
-            .contains("recording is running in microgrid 7"),
-        "{body}"
-    );
-    let (code, body) = eval(&client, &s, "(scenario-stop)").await;
-    assert_eq!(code, StatusCode::OK, "{body}");
-    assert!(running(&client, &s).await, "a scenario stop left it");
-    assert_eq!(stop(&client, &s).await.1["name"], "r");
-}
-
-/// A knob write during a recording takes no snapshot: a later
-/// scenario stop has nothing to put back.
-#[tokio::test]
-async fn a_knob_write_during_a_recording_takes_no_snapshot() {
-    let (s, client) = start().await;
-    post(&client, &s, "recording/start", json!({"name": "r"})).await;
-    drive(&client, &s, 7, 2, json!({"power_w": 5000.0})).await;
-    assert_eq!(stop(&client, &s).await.0, StatusCode::OK);
-    eval(&client, &s, "(scenario-stop)").await;
-    assert_eq!(meter_power(&s.site()), 5000.0);
 }
 
 /// A `PUT` ends the recording; the next stop answers its report with

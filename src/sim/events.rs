@@ -12,9 +12,9 @@
 use serde::Serialize;
 
 /// Capacity of the broadcast ring. Sized to absorb a full second of
-/// telemetry samples (~10 metrics × ~50 components) plus headroom
-/// for eval bursts. Subscribers that fall further behind than this
-/// will see `Lagged` errors and re-sync.
+/// telemetry samples (~10 metrics × ~50 components) plus headroom for
+/// write bursts. Subscribers that fall further behind than this will
+/// see `Lagged` errors and re-sync.
 pub const EVENT_BUS_CAPACITY: usize = 4096;
 
 /// A single broadcast event the UI can react to. The discriminator
@@ -23,10 +23,10 @@ pub const EVENT_BUS_CAPACITY: usize = 4096;
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SiteEvent {
-    /// Mutation occurred (eval, reload, …). Subscribers should
-    /// refetch /api/mg/{mg}/topology if they care about structure or
-    /// metadata changes. Cheap signal — sent on every accepted eval
-    /// regardless of whether the eval actually mutated state.
+    /// Something the topology payload shows changed (a rebuild, a
+    /// status or mode write, …). Subscribers should refetch
+    /// /api/mg/{mg}/topology if they care about structure or metadata
+    /// changes. A cheap signal.
     TopologyChanged { version: u64 },
     /// Single telemetry sample, emitted by the history sampler.
     Sample {
@@ -80,19 +80,6 @@ pub enum SiteEvent {
         target: String,
         message: String,
     },
-    /// Reload (or the initial load) raised a lisp error. The site
-    /// has been reset to its post-reset (empty) state by `reload`
-    /// before this fires, so a UI subscriber knows to show a
-    /// banner "config invalid since `ts` — fix and save to
-    /// recover" rather than "everything got deleted".
-    ConfigError {
-        #[serde(
-            rename = "ts",
-            serialize_with = "crate::timefmt::serialize_millis_as_rfc3339"
-        )]
-        ts_ms: i64,
-        message: String,
-    },
     /// One sample from an aggregated metric stream that the loopback
     /// Microgrid client exposes — grid_power, battery_pool_power,
     /// pv_power, consumer_power, producer_power, etc. (see
@@ -133,16 +120,16 @@ pub enum SiteEvent {
     },
     /// The microgrid named by the `WireEvent` wrapper's
     /// `microgrid_id` was unloaded. Emitted by the WS event pump from
-    /// the engine's `microgrid_unloaded` broadcast; the SPA drops
-    /// its card and leaves a view of it.
+    /// the engine's `microgrid_unloaded` broadcast; the SPA drops its
+    /// card and leaves a view of it.
     MicrogridUnloaded,
     /// The script runner's status changed; the body is that of
     /// `GET /api/runner`. Sent with no `microgrid_id`.
-    ScriptStatus(crate::runner::ScriptStatus),
-    /// A runtime knob changed — REPL, scenario, typed control API, or the
-    /// web UI; all writes funnel through the defuns or the control
-    /// handlers, and both emit this. The inspector refreshes its
-    /// edit-in-place inputs from it.
+    ScriptStatus(Box<crate::runner::ScriptStatus>),
+    /// A runtime knob changed through the typed control API, from a
+    /// script, a terminal or the web UI; the control handlers emit
+    /// this. The inspector refreshes its edit-in-place inputs from
+    /// it.
     KnobChanged {
         /// `None` for a knob of the whole microgrid (`grid-voltage`,
         /// `sample-lag`).
@@ -162,11 +149,10 @@ pub enum SiteEvent {
         /// Unit of `value`, from the knob; `None` for a unitless
         /// ratio or a token.
         unit: Option<&'static str>,
-        /// New value; None when the knob was cleared (pf-limit /
-        /// apparent-va accept clearing).
+        /// New value; None when the knob was cleared: a meter's
+        /// power, reactive power or power factor, an unplugged EV, or
+        /// a removed pf-limit / apparent-va.
         value: Option<KnobValue>,
-        /// Printed Lisp source when the write installed an expression.
-        expr: Option<String>,
         /// meter-power-factor only.
         leading: Option<bool>,
     },
@@ -243,7 +229,6 @@ mod tests {
             knob: "reactive-apparent-va",
             unit: knob_unit("reactive-apparent-va"),
             value: Some(KnobValue::Number(1.5)),
-            expr: None,
             leading: None,
         });
         assert_eq!(knob["component_id"], 7);
@@ -264,9 +249,7 @@ mod tests {
             serde_json::json!({"kind": "microgrid_unloaded"})
         );
         assert_eq!(
-            json(&SiteEvent::ScriptStatus(
-                crate::runner::ScriptStatus::default()
-            )),
+            json(&SiteEvent::ScriptStatus(Box::default())),
             serde_json::json!({"kind": "script_status", "script": null, "child": null,
                                "last_reload": null, "output": [], "microgrids": []})
         );

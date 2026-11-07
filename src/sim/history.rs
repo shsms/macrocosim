@@ -43,7 +43,7 @@ pub enum Metric {
     /// total is the *net* energy across the bus. Integrated on the
     /// physics tick via the shared trapezoidal accumulator (`EnergyAccum`,
     /// see `MicrogridSite::tick_once`), so it accrues in both the live
-    /// server and the headless stepped runner; a component in
+    /// server and in tests that step the clock; a component in
     /// `Health::Error` stops accruing until it recovers. The history
     /// sampler snapshots the running total into this ring for the UI
     /// charts. A P·dt integral related to the battery SoC one (see

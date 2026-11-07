@@ -65,8 +65,9 @@ pub struct BatteryInverter {
     active: DeviceAxis,
     /// Reactive output, clamped to the capability at the live P.
     reactive: DeviceAxis,
-    /// The live PF / kVA capability; `set-reactive-pf-limit` and
-    /// `set-reactive-apparent-va` change it at runtime.
+    /// The live PF / kVA capability; the drive route's
+    /// `reactive_pf_limit` and `reactive_apparent_va` change it at
+    /// runtime.
     caps: Mutex<ReactiveCapability>,
     /// The AC-side value telemetry publishes: the push each healthy
     /// child accepted, by its accept ratio; 0 when the inverter is
@@ -215,25 +216,6 @@ impl SimulatedComponent for BatteryInverter {
 
     fn stream_jitter_pct(&self) -> f32 {
         self.cfg.stream_jitter_pct
-    }
-
-    fn make_fn(&self) -> &'static str {
-        "%make-battery-inverter"
-    }
-
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        super::common_inverter_kwargs(super::CommonInverterCfg {
-            rated_lower_w: self.cfg.rated_lower_w,
-            rated_upper_w: self.cfg.rated_upper_w,
-            command_delay: self.cfg.command_delay,
-            ramp_rate_w_per_s: self.cfg.ramp_rate_w_per_s,
-            interval: self.interval,
-            stream_jitter_pct: self.cfg.stream_jitter_pct,
-            reactive: self.cfg.reactive,
-            reactive_command_delay: self.cfg.reactive_command_delay,
-            reactive_ramp_rate_var_per_s: self.cfg.reactive_ramp_rate_var_per_s,
-            device_delay: self.cfg.device_delay,
-        })
     }
 }
 
@@ -659,47 +641,6 @@ mod tests {
         assert!(inv.aggregate_power_w(&w).abs() < 1.0, "too early");
         w.tick_n(1, DT);
         assert!((inv.aggregate_power_w(&w) - 3_000.0).abs() < 1.0, "on time");
-    }
-
-    /// A disabled PF cap pins as literal `0`; infinite ramps are
-    /// omitted.
-    #[test]
-    fn constructor_kwargs_pin_reactive_disabled_as_zero() {
-        let mut cfg = BatteryInverterConfig::default();
-        cfg.reactive.pf_limit = None;
-        let inv = BatteryInverter::new(3, Duration::from_secs(1), cfg);
-        assert_eq!(inv.make_fn(), "%make-battery-inverter");
-        let s = inv
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, v)| format!("{k} {v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(
-            s.contains(":reactive-pf-limit 0"),
-            "None must pin as 0, got {s}"
-        );
-        assert!(
-            !s.contains(":ramp-rate-w-per-s"),
-            "infinite ramp is omitted"
-        );
-        assert!(s.contains(":command-delay-s 0.0"));
-    }
-
-    /// f32 config renders without widened-f64 noise.
-    #[test]
-    fn constructor_kwargs_render_f32_without_widening_noise() {
-        let mut cfg = BatteryInverterConfig::default();
-        cfg.reactive.pf_limit = Some(0.35);
-        let inv = BatteryInverter::new(3, Duration::from_secs(1), cfg);
-        let s = inv
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, v)| format!("{k} {v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(s.contains(":reactive-pf-limit 0.35"), "{s}");
-        assert!(!s.contains("0.3499"), "no widened-f64 tail: {s}");
     }
 
     /// P at the apparent-power rim alone gives a present (0, 0) band.

@@ -1,5 +1,5 @@
-"""The starter site: one microgrid (id 2200) with a battery, PV, an EV charger, a
-CHP and a hidden consumer load, the environment that animates it, and seven
+"""The starter site: one microgrid (id 2200) with a battery, PV, an EV charger,
+a CHP and a hidden consumer load, the environment that animates it, and seven
 scenarios that drive it.
 
 Run it from the repository root, with the venv that ``uv sync`` makes in
@@ -177,8 +177,7 @@ async def run(microgrids: dict[int, mc.Microgrid]) -> None:
 # -----------------------------------------------------------------------------
 # Each records itself and puts back in a `finally` every knob it changed, or
 # hands it back to the animation. Setpoints come from the app under test over
-# gRPC, so where the Lisp scenarios commanded the battery inverter, these leave
-# it to the app.
+# gRPC, so these leave the battery inverter to the app.
 
 
 async def peak_evening_load(microgrid: mc.Microgrid) -> mc.RecordingReport:
@@ -215,8 +214,8 @@ async def pv_dropout(microgrid: mc.Microgrid) -> mc.RecordingReport:
 
 
 async def battery_degraded_fleet(microgrid: mc.Microgrid) -> mc.RecordingReport:
-    """The battery flips between ok and error; the pool's bounds should shrink
-    while it is out and recover when it is back."""
+    """The site's one battery flips between ok and error; the pool's bounds
+    should shrink while it is out and recover when it is back."""
     battery = microgrid[BATTERY]
     try:
         async with microgrid.record("battery-degraded-fleet") as recording:
@@ -259,8 +258,8 @@ async def flaky_network(microgrid: mc.Microgrid) -> mc.RecordingReport:
 
 async def frequency_deviation(microgrid: mc.Microgrid) -> mc.RecordingReport:
     """The grid frequency leans to 49.9 Hz, back to 50 and on to 50.1 Hz, a
-    minute each, by moving the frequency model's nominal, so the noise stays
-    on. The frequency is one value for the whole simulator."""
+    minute each, by moving the frequency model's nominal, so the noise stays on.
+    The frequency is one value for the whole simulator."""
     hz = Frequency.from_hertz
     try:
         async with microgrid.record("frequency-deviation") as recording:
@@ -298,8 +297,8 @@ async def cold_start(microgrid: mc.Microgrid) -> mc.RecordingReport:
 
 
 async def off_grid_island(microgrid: mc.Microgrid) -> mc.RecordingReport:
-    """The grid connection point fails for a minute, a forced island: the PV
-    and the battery carry the load alone until it reconnects."""
+    """The grid connection point fails for a minute, a forced island: the PV and
+    the battery carry the load alone until it reconnects."""
     grid = microgrid[GRID]
     try:
         async with microgrid.record("off-grid-island") as recording:

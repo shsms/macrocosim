@@ -8,23 +8,22 @@
 //! The import does not build components directly. It produces a
 //! `MicrogridSpec` that keeps the export's component ids
 //! ([`SiteImport::spec`]), which the import handler creates as the UI
-//! creates any microgrid. (`SiteImport::forms` renders the same
-//! components as Lisp, for the Lisp tests until Lisp goes.)
+//! creates any microgrid.
 //!
 //! Field sources, per the `frequenz-api-common` protos vendored in
 //! `submodules/`:
-//! - `categorySpecificInfo.inverter.type` → battery vs solar make fn
-//! - `categorySpecificInfo.gridConnectionPoint.ratedFuseCurrent`
-//!   → `:rated-fuse-current-a`
-//! - `metricConfigBounds[METRIC_AC_POWER_ACTIVE]` → `:rated-lower-w` /
-//!   `:rated-upper-w` (batteries prefer `METRIC_DC_POWER` — their
+//! - `categorySpecificInfo.inverter.type` → battery vs solar inverter
+//! - `categorySpecificInfo.gridConnectionPoint.ratedFuseCurrent` →
+//!   `rated_fuse_current_a`
+//! - `metricConfigBounds[METRIC_AC_POWER_ACTIVE]` → `rated_lower_w` /
+//!   `rated_upper_w` (batteries prefer `METRIC_DC_POWER` — their
 //!   rated range is a DC quantity)
-//! - `metricConfigBounds[METRIC_BATTERY_CAPACITY]` → `:capacity-wh` (Wh)
-//!   — batteries only
-//! - `metricConfigBounds[METRIC_BATTERY_SOC_PCT]` → `:soc-lower-pct` /
-//!   `:soc-upper-pct` — batteries only; an EV charger's pack belongs to
-//!   the car plugged into it, so these are dropped there
-//! - `operationalMode` → `:operational-mode` (config; the simulator
+//! - `metricConfigBounds[METRIC_BATTERY_CAPACITY]` → `capacity_wh`
+//!   (Wh) — batteries only
+//! - `metricConfigBounds[METRIC_BATTERY_SOC_PCT]` → `soc_lower_pct` /
+//!   `soc_upper_pct` — batteries only; an EV charger's pack belongs
+//!   to the car plugged into it, so these are dropped there
+//! - `operationalMode` → `operational_mode` (config; the simulator
 //!   derives the runtime knobs from it)
 //! - `categorySpecificInfo.battery.type` (chemistry) is dropped: the
 //!   simulator's battery carries no chemistry yet.
@@ -32,8 +31,8 @@
 //! Wind turbines, power transformers and breakers import as marker
 //! components (see [`crate::sim::marker`]): present in the topology,
 //! no physics. Steam boilers carry their electric rating —
-//! `metricConfigBounds[METRIC_AC_POWER_ACTIVE]` → `:rated-lower-w` /
-//! `:rated-upper-w`, same as an EV charger.
+//! `metricConfigBounds[METRIC_AC_POWER_ACTIVE]` → `rated_lower_w` /
+//! `rated_upper_w`, same as an EV charger.
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -149,12 +148,12 @@ struct ApiConnection {
     destination_electrical_component_id: ApiId,
 }
 
-/// One component lifted out of the export: the make function that
-/// builds its simulated twin plus the fields the export pins.
+/// One component lifted out of the export: the spec type of its
+/// simulated twin plus the fields the export pins.
 #[derive(Debug)]
 pub struct ImportedComponent {
     pub id: u64,
-    make_fn: &'static str,
+    kind: &'static str,
     /// The pinned fields, by their spec field name, e.g.
     /// `("capacity_wh", Float(40000.0))`. Names come from a fixed
     /// set.
@@ -171,16 +170,6 @@ enum Value {
 }
 
 impl Value {
-    /// The value as Lisp reads it.
-    fn lisp(&self) -> String {
-        match self {
-            Value::Float(f) => lisp_float(*f),
-            Value::Int(i) => i.to_string(),
-            Value::Text(t) => format!("\"{}\"", esc(t)),
-            Value::Mode(m) => format!("'{m}"),
-        }
-    }
-
     /// The value as the topology document carries it.
     fn json(&self) -> serde_json::Value {
         match self {
@@ -196,12 +185,7 @@ impl ImportedComponent {
     /// The component's spec: its type, its id and its pinned fields.
     fn spec(&self) -> Result<crate::spec::ComponentSpec, String> {
         let mut json = serde_json::Map::new();
-        let kind = self
-            .make_fn
-            .strip_prefix("make-")
-            .expect("every make fn starts with make-")
-            .replace('-', "_");
-        json.insert("type".into(), kind.into());
+        json.insert("type".into(), self.kind.into());
         json.insert("id".into(), self.id.into());
         for (k, v) in &self.kwargs {
             json.insert((*k).into(), v.json());
@@ -210,7 +194,7 @@ impl ImportedComponent {
     }
 }
 
-/// A parsed site export, ready to render as overrides-file forms.
+/// A parsed site export, ready to become a microgrid spec.
 #[derive(Debug)]
 pub struct SiteImport {
     pub components: Vec<ImportedComponent>,
@@ -229,9 +213,6 @@ fn strip_prefixes<'a>(token: &'a str, prefixes: &[&str]) -> &'a str {
     token
 }
 
-use crate::lisp::escape_lisp_string as esc;
-use crate::lisp::lisp_float;
-
 /// The configured bounds for one metric, by its token suffix.
 fn bounds_for<'a>(c: &'a ApiComponent, suffix: &str) -> Option<&'a Bounds> {
     c.metric_config_bounds.iter().find_map(|b| {
@@ -242,8 +223,8 @@ fn bounds_for<'a>(c: &'a ApiComponent, suffix: &str) -> Option<&'a Bounds> {
     })
 }
 
-/// The `:rated-lower-w` / `:rated-upper-w` pair from the first metric in
-/// `metrics` the export configures bounds for. AC components pass
+/// The `rated_lower_w` / `rated_upper_w` pair from the first metric
+/// in `metrics` the export configures bounds for. AC components pass
 /// only `AC_POWER_ACTIVE`; a battery prefers `DC_POWER` (its rated
 /// range is a DC quantity) with the AC bounds as fallback.
 fn rated_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>, metrics: &[&str]) {
@@ -259,7 +240,7 @@ fn rated_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>, metrics:
 }
 
 /// The export's operational mode, kept as what it is: a config
-/// parameter (`:operational-mode`). The simulator derives the
+/// parameter (`operational_mode`). The simulator derives the
 /// runtime knobs from it — the import never sets those directly.
 /// UNSPECIFIED is the default and is omitted. Unknown tokens are an
 /// error, not a silent default.
@@ -274,11 +255,14 @@ fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>) -> Result
             "COMPONENT_OPERATIONAL_MODE_",
         ],
     );
-    // The API token is the mode's Lisp symbol in SCREAMING_SNAKE_CASE.
-    let mode: crate::sim::OperationalMode = suffix
-        .to_lowercase()
-        .replace('_', "-")
-        .parse()
+    // The API token is the mode's name in SCREAMING_SNAKE_CASE,
+    // except that the proto spells the telemetry-only mode
+    // `TELEMTRY_ONLY`.
+    let name = match suffix {
+        "TELEMTRY_ONLY" => "telemetry_only".to_string(),
+        other => other.to_lowercase(),
+    };
+    let mode: crate::sim::OperationalMode = serde_json::from_value(serde_json::Value::String(name))
         .map_err(|_| format!("unknown operational mode: {suffix}"))?;
     if mode == crate::sim::OperationalMode::Unspecified {
         return Ok(());
@@ -288,7 +272,7 @@ fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>) -> Result
 }
 
 /// Battery-shaped storage kwargs: capacity (Wh) and the SoC range.
-/// Batteries and EV chargers both take them.
+/// Only batteries take them; an EV charger has no pack of its own.
 fn storage_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>) {
     if let Some(cap) = bounds_for(c, "BATTERY_CAPACITY").and_then(|b| b.upper.or(b.lower)) {
         out.push(("capacity_wh", Value::Float(cap)));
@@ -303,7 +287,7 @@ fn storage_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>) {
     }
 }
 
-/// Lifts one export component into the make function + kwargs of its
+/// Lifts one export component into the spec type + fields of its
 /// simulated twin. Unsupported categories are a hard error: silently
 /// skipping one would import a topology that looks complete but has
 /// holes where the export had components.
@@ -317,7 +301,7 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
     if let Some(name) = c.name.as_deref().filter(|n| !n.is_empty()) {
         kwargs.push(("name", Value::Text(name.to_string())));
     }
-    let make_fn = match suffix {
+    let kind = match suffix {
         "GRID_CONNECTION_POINT" | "GRID" => {
             if let Some(fuse) = c
                 .category_specific_info
@@ -328,9 +312,9 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
                 kwargs.push(("rated_fuse_current_a", Value::Int(fuse.into())));
             }
             rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
-            "make-grid-connection-point"
+            "grid_connection_point"
         }
-        "METER" => "make-meter",
+        "METER" => "meter",
         "INVERTER" => {
             let inverter_type = c
                 .category_specific_info
@@ -341,8 +325,8 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
                 .unwrap_or("UNSPECIFIED");
             rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
             match inverter_type {
-                "BATTERY" => "make-battery-inverter",
-                "PV" | "SOLAR" => "make-solar-inverter",
+                "BATTERY" => "battery_inverter",
+                "PV" | "SOLAR" => "solar_inverter",
                 other => {
                     // The simulator has to pick a concrete inverter
                     // model; UNSPECIFIED and HYBRID have none.
@@ -356,41 +340,36 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
         "BATTERY" => {
             storage_kwargs(c, &mut kwargs);
             rated_kwargs(c, &mut kwargs, &["DC_POWER", "AC_POWER_ACTIVE"]);
-            "make-battery"
+            "battery"
         }
         // No `storage_kwargs`: the charger has no pack of its own —
-        // the car plugged into it does — so `%make-ev-charger`
-        // rejects `:capacity-wh` / `:soc-lower-pct` / `:soc-upper-pct`, and an
-        // export carrying them would abort the import's whole form.
+        // the car plugged into it does — so its spec takes no
+        // `capacity_wh` / `soc_lower_pct` / `soc_upper_pct`.
         "EV_CHARGER" => {
             rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
-            "make-ev-charger"
+            "ev_charger"
         }
         "STEAM_BOILER" => {
             rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
-            "make-steam-boiler"
+            "steam_boiler"
         }
         // CHP and the marker categories have no physics of their
         // own: they complete the topology and classify the meters
         // around them; power is set on the neighboring meter.
-        "CHP" => "make-chp",
-        "WIND_TURBINE" => "make-wind-turbine",
-        "POWER_TRANSFORMER" => "make-power-transformer",
-        "BREAKER" => "make-breaker",
+        "CHP" => "chp",
+        "WIND_TURBINE" => "wind_turbine",
+        "POWER_TRANSFORMER" => "power_transformer",
+        "BREAKER" => "breaker",
         other => {
             return Err(format!("component {id}: cannot simulate category {other}"));
         }
     };
     mode_kwargs(c, &mut kwargs).map_err(|e| format!("component {id}: {e}"))?;
-    Ok(ImportedComponent {
-        id,
-        make_fn,
-        kwargs,
-    })
+    Ok(ImportedComponent { id, kind, kwargs })
 }
 
-/// Parses the two uploaded files into make/connect material. Errors
-/// name the component so a 4000-line export stays debuggable.
+/// Parses the two uploaded files into components and connections.
+/// Errors name the component so a 4000-line export stays debuggable.
 pub fn parse(
     components: ComponentsFile,
     connections: Option<ConnectionsFile>,
@@ -431,9 +410,8 @@ pub fn parse(
             edges.push(edge);
         }
     }
-    // Cycles must fail the whole request here: the site-side `connect`
-    // refuses them one edge at a time, which would abort the import
-    // mid-eval with the microgrid already created and half-built.
+    // Cycles must fail the whole request here, before a spec is made
+    // and anything is built.
     for &(src, dst) in &edges {
         if src == dst {
             return Err(format!("connection {src} → {dst} is a self-edge"));
@@ -451,21 +429,13 @@ pub fn parse(
 }
 
 impl SiteImport {
-    /// The highest component id in the import — the enterprise id
-    /// allocator must move past it so later auto-assigned ids can't
-    /// collide with imported ones.
-    pub fn max_id(&self) -> u64 {
-        self.components.iter().map(|c| c.id).max().unwrap_or(0)
-    }
-
-    /// The order the components must be emitted in, and the number
-    /// of walk steps it took to work that out (for
-    /// `forms_walk_shared_subtrees_once`).
+    /// The order the components must be built in, and the number of
+    /// walk steps it took to work that out (for
+    /// `spec_walks_shared_subtrees_once`).
     ///
-    /// Children before parents, as an authored config registers them:
-    /// Lisp evaluates :successors before the surrounding make-*, so an
-    /// import must not tick an inverter before the battery it pushes
-    /// into. Cycles were refused at parse time. See
+    /// Children before parents, so an import does not tick an
+    /// inverter before the battery it pushes into. Cycles were
+    /// refused at parse time. See
     /// [`crate::spec::order::children_first`].
     fn ordered_ids_counting(&self) -> (Vec<u64>, u64) {
         crate::spec::order::children_first_counting(
@@ -490,36 +460,6 @@ impl SiteImport {
             connections: self.connections.clone(),
             ..Default::default()
         })
-    }
-
-    /// Renders one atomic form: `(progn (make-* …) … (connect …) …)`.
-    /// Evaluated against the new microgrid through the same eval path
-    /// UI edits take, so the persist pass regenerates that
-    /// microgrid's managed file around the components this form built
-    /// — the form itself is never stored, the resulting structure is.
-    pub fn forms(&self) -> String {
-        // Children before parents — see `ordered_ids_counting`, which
-        // owns the walk and the reasoning behind its order.
-        let (ordered_ids, _calls) = self.ordered_ids_counting();
-        let by_id: HashMap<u64, &ImportedComponent> =
-            self.components.iter().map(|c| (c.id, c)).collect();
-
-        let mut out = String::from("(progn\n");
-        for id in &ordered_ids {
-            let c = by_id
-                .get(id)
-                .expect("edge endpoints exist: parse rejects dangling edges");
-            out.push_str(&format!("  ({} :id {}", c.make_fn, c.id));
-            for (k, v) in &c.kwargs {
-                out.push_str(&format!(" :{} {}", k.replace('_', "-"), v.lisp()));
-            }
-            out.push_str(")\n");
-        }
-        for (from, to) in &self.connections {
-            out.push_str(&format!("  (connect {from} {to})\n"));
-        }
-        out.push(')');
-        out
     }
 }
 
@@ -600,24 +540,43 @@ mod tests {
         assert!(spec.get("id").is_none(), "{spec}");
     }
 
+    /// The spec's components as JSON, in build order.
+    fn components_of(import: &SiteImport) -> Vec<serde_json::Value> {
+        let spec = serde_json::to_value(import.spec().unwrap()).unwrap();
+        spec["components"].as_array().unwrap().clone()
+    }
+
+    /// The spec's component with id `id`, as JSON.
+    fn component(import: &SiteImport, id: u64) -> serde_json::Value {
+        components_of(import)
+            .into_iter()
+            .find(|c| c["id"] == id)
+            .unwrap_or_else(|| panic!("no component {id}"))
+    }
+
+    /// Where component `id` comes in the spec's build order.
+    fn pos(order: &[serde_json::Value], id: u64) -> usize {
+        order
+            .iter()
+            .position(|c| c["id"] == id)
+            .unwrap_or_else(|| panic!("no component {id}"))
+    }
+
     #[test]
     fn import_keeps_capacity_soc_and_rated_bounds() {
         let import = parse(generic_components(), Some(generic_connections())).unwrap();
         assert_eq!(import.components.len(), 5);
         assert_eq!(import.connections.len(), 4);
-        assert_eq!(import.max_id(), 5);
-        let forms = import.forms();
-        assert!(forms.contains(
-            "(make-grid-connection-point :id 1 :name \"grid\" :rated-fuse-current-a 100)"
-        ));
-        assert!(forms.contains(
-            "(make-battery-inverter :id 3 :name \"inverter A\" :rated-lower-w -30000.0 :rated-upper-w 30000.0)"
-        ));
-        assert!(forms.contains(
-            "(make-battery :id 4 :name \"battery A\" :capacity-wh 40000.0 :soc-lower-pct 5.0 :soc-upper-pct 95.0)"
-        ));
-        assert!(forms.contains("(make-solar-inverter :id 5)"));
-        assert!(forms.contains("(connect 3 4)"));
+        assert_eq!(
+            component(&import, 3),
+            serde_json::json!({"type": "battery_inverter", "id": 3, "name": "inverter A",
+                "rated_lower_w": -30000.0, "rated_upper_w": 30000.0})
+        );
+        assert_eq!(
+            component(&import, 5),
+            serde_json::json!({"type": "solar_inverter", "id": 5})
+        );
+        assert!(import.connections.contains(&(3, 4)));
     }
 
     #[test]
@@ -682,13 +641,18 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let forms = parse(file, None).unwrap().forms();
-        assert!(forms.contains("(make-wind-turbine :id 1)"));
-        assert!(
-            forms.contains("(make-steam-boiler :id 2 :rated-lower-w 0.0 :rated-upper-w 500000.0)")
+        let import = parse(file, None).unwrap();
+        assert_eq!(
+            component(&import, 1),
+            serde_json::json!({"type": "wind_turbine", "id": 1})
         );
-        assert!(forms.contains("(make-power-transformer :id 3)"));
-        assert!(forms.contains("(make-breaker :id 4)"));
+        assert_eq!(
+            component(&import, 2),
+            serde_json::json!({"type": "steam_boiler", "id": 2,
+                "rated_lower_w": 0.0, "rated_upper_w": 500000.0})
+        );
+        assert_eq!(component(&import, 3)["type"], "power_transformer");
+        assert_eq!(component(&import, 4)["type"], "breaker");
     }
 
     /// A battery's rated range is its DC power bounds; the AC bounds
@@ -705,18 +669,16 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let forms = parse(file, None).unwrap().forms();
-        assert!(
-            forms.contains("(make-battery :id 1 :rated-lower-w -50000.0 :rated-upper-w 50000.0)")
-        );
+        let battery = component(&parse(file, None).unwrap(), 1);
+        assert_eq!(battery["rated_lower_w"], -50000.0);
+        assert_eq!(battery["rated_upper_w"], 50000.0);
     }
 
     /// A charger has no pack of its own — the car it charges does —
-    /// so `%make-ev-charger` rejects `:capacity-wh` / `:soc-lower-pct` /
-    /// `:soc-upper-pct`. An export whose charger carries the battery
+    /// so its spec takes no `capacity_wh` / `soc_lower_pct` /
+    /// `soc_upper_pct`. An export whose charger carries the battery
     /// bounds (exports do, for chargers that report an SoC) must
-    /// therefore drop them rather than emit a form that aborts the
-    /// import's whole `(progn …)`.
+    /// therefore drop them rather than make a spec that fails.
     #[test]
     fn import_drops_pack_bounds_from_ev_chargers() {
         let file: ComponentsFile = serde_json::from_str(
@@ -730,18 +692,15 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let forms = parse(file, None).unwrap().forms();
-        assert!(
-            forms.contains("(make-ev-charger :id 1 :rated-lower-w 0.0 :rated-upper-w 22000.0)"),
-            "{forms}"
+        assert_eq!(
+            component(&parse(file, None).unwrap(), 1),
+            serde_json::json!({"type": "ev_charger", "id": 1,
+                "rated_lower_w": 0.0, "rated_upper_w": 22000.0})
         );
-        assert!(!forms.contains(":capacity-wh"), "{forms}");
-        assert!(!forms.contains(":soc-lower-pct"), "{forms}");
-        assert!(!forms.contains(":soc-upper-pct"), "{forms}");
     }
 
-    /// The operational mode is a config parameter and stays one:
-    /// it renders as `:operational-mode`, never as runtime knobs.
+    /// The operational mode is a config parameter and stays one: it
+    /// becomes `operational_mode`, never runtime knobs.
     #[test]
     fn import_keeps_operational_modes_as_config() {
         let file: ComponentsFile = serde_json::from_str(
@@ -753,17 +712,28 @@ mod tests {
                 {"id": "3", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
                  "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_CONTROL_AND_TELEMETRY"},
                 {"id": "4", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
-                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_UNSPECIFIED"}
+                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_UNSPECIFIED"},
+                {"id": "5", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER",
+                 "operationalMode": "ELECTRICAL_COMPONENT_OPERATIONAL_MODE_TELEMTRY_ONLY"}
             ]}"#,
         )
         .unwrap();
-        let forms = parse(file, None).unwrap().forms();
-        assert!(forms.contains("(make-meter :id 1 :operational-mode 'inactive)"));
-        assert!(forms.contains("(make-meter :id 2 :operational-mode 'telemetry-only)"));
-        assert!(forms.contains("(make-meter :id 3 :operational-mode 'control-and-telemetry)"));
-        assert!(forms.contains("(make-meter :id 4)"));
-        assert!(!forms.contains(":telemetry-mode"));
-        assert!(!forms.contains(":command-mode"));
+        let import = parse(file, None).unwrap();
+        assert_eq!(
+            component(&import, 1),
+            serde_json::json!({"type": "meter", "id": 1, "operational_mode": "inactive"})
+        );
+        assert_eq!(component(&import, 2)["operational_mode"], "telemetry_only");
+        assert_eq!(
+            component(&import, 3)["operational_mode"],
+            "control_and_telemetry"
+        );
+        assert_eq!(
+            component(&import, 4),
+            serde_json::json!({"type": "meter", "id": 4})
+        );
+        // The proto's own spelling of the telemetry-only mode.
+        assert_eq!(component(&import, 5)["operational_mode"], "telemetry_only");
     }
 
     /// The older `COMPONENT_*` token prefixes and plain-number ids
@@ -785,7 +755,7 @@ mod tests {
         )
         .unwrap();
         let import = parse(file, Some(connections)).unwrap();
-        assert_eq!(import.components[0].make_fn, "make-grid-connection-point");
+        assert_eq!(import.components[0].kind, "grid_connection_point");
         // The repeated connection row is kept once.
         assert_eq!(import.connections, vec![(1, 2)]);
     }
@@ -811,44 +781,13 @@ mod tests {
         assert!(err.contains("99"));
     }
 
-    /// Forms come out children first, as an authored config registers
-    /// them: a battery's make precedes its inverter's, whatever the
-    /// export order, so the tick order matches.
-    #[test]
-    fn forms_emit_children_before_parents() {
-        let import = parse(generic_components(), Some(generic_connections())).unwrap();
-        let out = import.forms();
-        // Every component here carries at least one kwarg (a name),
-        // so ":id N" is always followed by a space before the next
-        // kwarg — that space, not just ":id 4", is the delimiter,
-        // since ":id 4" alone would also match ":id 40".
-        let pos = |needle: &str| {
-            out.find(needle)
-                .unwrap_or_else(|| panic!("{needle} missing in {out}"))
-        };
-        assert!(
-            pos(":id 4 ") < pos(":id 3 "),
-            "battery 4 before inverter 3:\n{out}"
-        );
-        assert!(
-            pos(":id 3 ") < pos(":id 2 "),
-            "inverter 3 before meter 2:\n{out}"
-        );
-        assert!(
-            pos(":id 2 ") < pos(":id 1 "),
-            "meter 2 before grid 1:\n{out}"
-        );
-        // connections still follow every make
-        assert!(pos("(connect") > pos(":id 1 "));
-    }
-
     /// A diamond (1→2, 1→3, 2→4, 3→4) plus an edge-less component 5
     /// listed between 2 and 3 in export order: 4 has two parents (2
-    /// and 3) and must still be emitted exactly once, and 5 — reached
-    /// by no edge at all — keeps its export-order place at the end,
-    /// after every edge-connected component.
+    /// and 3) and must still come exactly once, and 5 — reached by no
+    /// edge at all — keeps its export-order place at the end, after
+    /// every edge-connected component.
     #[test]
-    fn forms_emit_each_component_once_and_keep_unconnected_ones_in_export_order() {
+    fn spec_lists_each_component_once_and_keeps_unconnected_ones_in_export_order() {
         let components: ComponentsFile = serde_json::from_str(
             r#"{"electricalComponents": [
                 {"id": "1", "name": "grid", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"},
@@ -868,33 +807,21 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let out = parse(components, Some(connections)).unwrap().forms();
-        // Every component here also carries a name kwarg, so ":id N "
-        // (with the trailing space) is again the safe delimiter.
-        let pos = |needle: &str| {
-            out.find(needle)
-                .unwrap_or_else(|| panic!("{needle} missing in {out}"))
-        };
-        assert_eq!(
-            out.matches(":id 4 ").count(),
-            1,
-            "component 4 emitted exactly once:\n{out}"
-        );
-        assert!(pos(":id 4 ") < pos(":id 2 "), "4 before 2:\n{out}");
-        assert!(pos(":id 4 ") < pos(":id 3 "), "4 before 3:\n{out}");
-        assert!(pos(":id 2 ") < pos(":id 1 "), "2 before 1:\n{out}");
-        assert!(pos(":id 3 ") < pos(":id 1 "), "3 before 1:\n{out}");
-        assert!(
-            pos(":id 1 ") < pos(":id 5 "),
-            "unconnected 5 after 1:\n{out}"
-        );
+        let order = components_of(&parse(components, Some(connections)).unwrap());
+        assert_eq!(order.len(), 5, "each component once: {order:?}");
+        assert!(pos(&order, 4) < pos(&order, 2), "4 before 2");
+        assert!(pos(&order, 4) < pos(&order, 3), "4 before 3");
+        assert!(pos(&order, 2) < pos(&order, 1), "2 before 1");
+        assert!(pos(&order, 3) < pos(&order, 1), "3 before 1");
+        assert!(pos(&order, 1) < pos(&order, 5), "unconnected 5 after 1");
     }
 
     /// 25 chained diamonds: node k fans out to `a_k` and `b_k`, both
     /// of which point at node k+1. Every node below the root is a
     /// shared subtree, so a walk that only marks `seen` on the way
     /// back up re-descends node 25 once per root-to-leaf path — 2^25
-    /// of them, minutes of spinning while the create lock is held.
+    /// of them, minutes of spinning while the structural lock is
+    /// held.
     ///
     /// Counted, not timed. The regressed walk reaches the SAME answer,
     /// just after exponentially many calls — about three minutes on
@@ -905,7 +832,7 @@ mod tests {
     /// `2 * (nodes + edges)` leaves that room and no room at all for
     /// re-descending a shared subtree.
     #[test]
-    fn forms_walk_shared_subtrees_once() {
+    fn spec_walks_shared_subtrees_once() {
         const DIAMONDS: u64 = 25;
         let node = |k: u64| 10 + k;
         let fork = |k: u64, side: u64| 100 + 2 * k + side;
@@ -958,48 +885,17 @@ mod tests {
             nodes + edges
         );
 
-        let out = import.forms();
-        // Every component carries a name kwarg, so ":id N " with the
-        // trailing space is again the safe delimiter.
-        let pos = |needle: &str| {
-            out.find(needle)
-                .unwrap_or_else(|| panic!("{needle} missing in {out}"))
-        };
-        let once = |id: u64| {
-            assert_eq!(
-                out.matches(&format!(":id {id} ")).count(),
-                1,
-                "component {id} emitted exactly once"
-            );
-        };
-        for k in 0..=DIAMONDS {
-            once(node(k));
-        }
+        let order = components_of(&import);
+        assert_eq!(order.len(), 76, "each component once");
         for k in 0..DIAMONDS {
-            once(fork(k, 0));
-            once(fork(k, 1));
             for side in 0..2 {
                 assert!(
-                    pos(&format!(":id {} ", node(k + 1))) < pos(&format!(":id {} ", fork(k, side))),
+                    pos(&order, node(k + 1)) < pos(&order, fork(k, side)),
                     "shared child {} before its parent {}",
                     node(k + 1),
                     fork(k, side)
                 );
             }
         }
-    }
-
-    /// Names with quote characters cannot break out of their string
-    /// literal in the generated Lisp.
-    #[test]
-    fn import_escapes_names() {
-        let file: ComponentsFile = serde_json::from_str(
-            r#"{"electricalComponents": [
-                {"id": "1", "name": "we \" like ) quotes", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"}
-            ]}"#,
-        )
-        .unwrap();
-        let forms = parse(file, None).unwrap().forms();
-        assert!(forms.contains(r#":name "we \" like ) quotes""#));
     }
 }

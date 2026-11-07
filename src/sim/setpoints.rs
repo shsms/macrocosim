@@ -33,7 +33,7 @@ pub enum SetpointKind {
 
 impl SetpointKind {
     /// Stable snake_case label, matching the Serialize rename — used
-    /// by the event bus and the scenario setpoints CSV.
+    /// by the event bus and the recording's setpoints CSV.
     pub fn as_str(self) -> &'static str {
         match self {
             SetpointKind::ActivePower => "active_power",

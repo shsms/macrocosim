@@ -1,11 +1,9 @@
 // The weather panel: the site's sky as one card — a day curve, the
 // live sunlight readout, the config knobs, and a "pass a cloud"
 // trigger. It is the UI's face on `GET/POST /api/mg/{mg}/weather`
-// (src/ui/handlers/weather.rs), which mirrors the Lisp
-// `(make-weather)` / `(set-weather)` / `(pass-cloud)` doors for
-// people who aren't driving the site from the console.
+// (src/ui/handlers/weather.rs).
 //
-// Sunrise and sunset are UTC `"HH:MM"` times, as `(make-weather)` takes them:
+// Sunrise and sunset are UTC `"HH:MM"` times, as the weather route takes them:
 // the fields read and write exactly those, so a sunrise the user typed comes
 // back as the sunrise they typed. The day chart and the cloud times are drawn
 // in the display zone (zone.js); the sky itself is computed from UTC seconds of
@@ -27,8 +25,8 @@ import * as theme from "./theme.js";
 import * as zone from "./zone.js";
 
 const PANEL = "weather-btn";
-// The scenarios panel's cadence (panels.js:945): weather has no WS
-// push of its own, and the readout has to track a passing cloud.
+// Weather has no WS push of its own, and the readout has to track a
+// passing cloud.
 const POLL_MS = 3000;
 // The curve's sampling grid: the whole day, every 10 minutes.
 // Fine enough that the sine reads as a smooth arch and a multi-minute
@@ -682,9 +680,8 @@ function liveHtml() {
 const EMPTY_HTML = `
   <div class="weather-panel">
     <div class="weather-head"><h2>Weather</h2></div>
-    <p class="hint">No weather on this site. Creating it installs the default sky —
-      the same one <code>(make-weather)</code> gives, which you can retune here
-      afterwards.</p>
+    <p class="hint">No weather on this site. Creating it installs the default sky,
+      which you can retune here afterwards.</p>
     <button type="button" class="pill" id="weather-create">Create weather</button>
     <p class="form-error" id="weather-error" hidden></p>
   </div>`;

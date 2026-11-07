@@ -7,11 +7,11 @@
 //!
 //! Cloud cover comes from two producers that both just push
 //! [`CloudEvent`]s onto the same list: an ambient Poisson-arrival
-//! generator (driven by [`Weather::advance`], when
-//! `cloud_mean_gap_s` is configured) and a scripted door
-//! ([`Weather::pass_cloud`]) for scenarios and the weather panel.
-//! [`Weather::pct_at`] multiplies every event's transmission
-//! together, so overlapping clouds compound.
+//! generator (driven by [`Weather::advance`], when `cloud_mean_gap_s`
+//! is configured) and a scripted door ([`Weather::pass_cloud`]) for
+//! scripts and the weather panel, both through
+//! `POST /api/mg/{mg}/weather`. [`Weather::pct_at`] multiplies every
+//! event's transmission together, so overlapping clouds compound.
 //!
 //! Evaluation is a pure function of `(config, event list)` — times
 //! are UTC throughout, and everything below is stated in UTC.
@@ -26,11 +26,11 @@ use crate::sim::{MicrogridSite, sim_clock::parse_time_of_day};
 use crate::timeout_tracker::deadline_after;
 
 /// How long an expired [`CloudEvent`] is kept in the list after it
-/// ends, so a lagged reader (an inverter reading `pct_at(now -
-/// lag)`) still finds it. Also the bound `advance` measures a forward
-/// clock jump against: `advance` is called once per tick (100 ms
-/// live; dt-sized steps in a stepped scenario run), so any single
-/// call spanning more than an hour is a clock anomaly (suspended VM,
+/// ends, so a lagged reader (an inverter reading `pct_at(now - lag)`)
+/// still finds it. Also the bound `advance` measures a forward clock
+/// jump against: `advance` is called once per tick (100 ms live;
+/// dt-sized steps on a hand-advanced clock), so any single call
+/// spanning more than an hour is a clock anomaly (suspended VM,
 /// wall-clock correction), not real elapsed simulation time — instead
 /// of grinding through a potentially huge ambient backlog one arrival
 /// at a time, `advance` just re-anchors to `now`.
@@ -303,10 +303,10 @@ impl Weather {
         self.events.retain(|e| e.end() + margin >= now);
     }
 
-    /// Insert one deterministic, scripted cloud event starting at
-    /// the current anchor (or `Utc::now()` if `advance` has never
-    /// been called). Used by scenarios and the weather panel — a
-    /// scripted cloud is an ordinary event that expires on its own.
+    /// Insert one deterministic, scripted cloud event starting at the
+    /// current anchor (or `Utc::now()` if `advance` has never been
+    /// called). Used by `POST .../weather` — a scripted cloud is an
+    /// ordinary event that expires on its own.
     pub fn pass_cloud(&mut self, depth_pct: f32, duration: Duration, ramp: Duration) {
         let start = self.anchor.unwrap_or_else(Utc::now);
         let plateau = duration.saturating_sub(ramp.saturating_mul(2));
@@ -320,13 +320,10 @@ impl Weather {
     }
 }
 
-/// Pure numeric validators shared by the Lisp weather doors
-/// (`src/lisp/defuns/weather.rs`) and the HTTP weather routes
-/// (`src/ui/handlers/weather.rs`), so both surfaces enforce
-/// identical rules even though each phrases its error text around
-/// its own field vocabulary (`:cloud-mean-gap-s` vs `cloud_mean_gap_s`).
-/// Every fn here is a pure check — no `WeatherConfig`, no site, no
-/// error type tied to either caller's framework.
+/// Pure numeric validators for the weather routes
+/// (`src/ui/handlers/weather.rs`) and [`WeatherPatch`]. Every fn here
+/// is a pure check — no `WeatherConfig`, no site, no error type tied
+/// to a caller's framework.
 pub mod validate {
     use std::time::Duration;
 
@@ -483,52 +480,15 @@ pub mod validate {
     }
 }
 
-/// Which door a [`WeatherPatch`] arrived through. It changes nothing
-/// about what is checked — only how a rejection is worded, since each
-/// surface names the same field in its own vocabulary (`:peak-pct` in a
-/// Lisp form, `peak_pct` in a JSON body) and a Lisp error also names
-/// the defun the author actually typed.
-#[derive(Clone, Copy)]
-pub enum WeatherDoor<'a> {
-    /// A Lisp form, carrying its own name — `"make-weather"` or
-    /// `"set-weather"`.
-    Lisp(&'a str),
-    /// The HTTP weather route.
-    Http,
-}
-
-impl WeatherDoor<'_> {
-    /// How this door introduces an error about one field: the Lisp
-    /// kwarg or the JSON field name, followed by the message.
-    ///
-    /// `with_form` is why there are two spellings rather than one:
-    /// the Lisp doors put the form name in front of the checks that
-    /// read as being about the form as a whole (the window, `:peak-pct`,
-    /// `:cloud-mean-gap-s`) but not in front of the range kwargs. That
-    /// split is historical, and is kept so no existing message moves.
-    fn label(&self, kw: &str, json: &str, with_form: bool) -> String {
-        match self {
-            Self::Lisp(form) if with_form => format!("{form}: {kw}"),
-            Self::Lisp(_) => kw.to_string(),
-            Self::Http => format!("{json}:"),
-        }
-    }
-}
-
 /// One update to a [`WeatherConfig`]: every field optional, already
 /// parsed out of whatever wire shape it arrived in.
 ///
-/// Both weather doors — the Lisp `(make-weather)` / `(set-weather)`
-/// forms in `src/lisp/defuns/weather.rs` and `POST
-/// /api/mg/{mg}/weather` in `src/ui/handlers/weather.rs` — carry the
-/// same fields, fold them in the same order, run the same checks, and
-/// share the same "a rejected request changes nothing" contract. So
-/// each door only parses its own spelling (an `"HH:MM"` string or
-/// bare seconds and a number-or-`(lo hi)` range from Lisp; JSON
-/// strings and `[lo, hi]` pairs over HTTP) into this struct.
-/// Everything past that point — the fold order, the validation, the
-/// sunrise/sunset pair check and the create-or-update install
-/// decision — lives here, written once.
+/// `POST /api/mg/{mg}/weather` (`src/ui/handlers/weather.rs`) parses
+/// its JSON strings and `[lo, hi]` pairs into this struct. Everything
+/// past that point — the fold order, the validation, the
+/// sunrise/sunset pair check, the create-or-update install decision
+/// and the "a rejected request changes nothing" contract — lives
+/// here.
 #[derive(Default)]
 pub struct WeatherPatch {
     /// Time of day (UTC) the clear-sky curve turns on.
@@ -554,9 +514,8 @@ pub struct WeatherPatch {
 impl WeatherPatch {
     /// Fold this patch into `cfg`, validating as it goes. `cfg` is
     /// the caller's working copy, so a rejected patch leaves the
-    /// site's live weather untouched. Errors are worded in `door`'s
-    /// own field vocabulary.
-    pub fn apply_to(&self, cfg: &mut WeatherConfig, door: WeatherDoor<'_>) -> Result<(), String> {
+    /// site's live weather untouched. Errors name the JSON field.
+    pub fn apply_to(&self, cfg: &mut WeatherConfig) -> Result<(), String> {
         if let Some(v) = self.sunrise {
             cfg.sunrise = v;
         }
@@ -567,7 +526,7 @@ impl WeatherPatch {
         // ("06:00"→"21:00" over a 05:00–20:00 config) is judged on the
         // pair it produces rather than on the half it happens to set
         // first.
-        let at = door.label(":sunrise/:sunset —", "sunrise/sunset", true);
+        let at = "sunrise/sunset:";
         validate::sunrise_before_sunset(cfg.sunrise, cfg.sunset)
             .map_err(|e| format!("{at} {e}"))?;
         if let Some(v) = self.peak_pct {
@@ -575,27 +534,27 @@ impl WeatherPatch {
             // `min_avail` positive — the band collapses and every
             // following array parks at 0 instead of generating, with
             // nothing in the telemetry to say why.
-            let at = door.label(":peak-pct", "peak_pct", true);
+            let at = "peak_pct:";
             validate::peak_pct(v).map_err(|e| format!("{at} {e}"))?;
             cfg.peak_pct = v;
         }
         if let Some(gap_s) = self.cloud_mean_gap_s {
-            let at = door.label(":cloud-mean-gap-s", "cloud_mean_gap_s", true);
+            let at = "cloud_mean_gap_s:";
             cfg.cloud_mean_gap_s =
                 validate::cloud_mean_gap_s(gap_s).map_err(|e| format!("{at} {e}"))?;
         }
         if let Some(range) = self.cloud_depth {
-            let at = door.label(":cloud-depth-pct", "cloud_depth_pct", false);
+            let at = "cloud_depth_pct:";
             validate::depth_range(range).map_err(|e| format!("{at} {e}"))?;
             cfg.cloud_depth = range;
         }
         if let Some(range) = self.cloud_duration {
-            let at = door.label(":cloud-duration-s", "cloud_duration_s", false);
+            let at = "cloud_duration_s:";
             validate::secs_range(range).map_err(|e| format!("{at} {e}"))?;
             cfg.cloud_duration = range;
         }
         if let Some(range) = self.cloud_ramp {
-            let at = door.label(":cloud-ramp-s", "cloud_ramp_s", false);
+            let at = "cloud_ramp_s:";
             validate::secs_range(range).map_err(|e| format!("{at} {e}"))?;
             cfg.cloud_ramp = range;
         }
@@ -610,26 +569,24 @@ impl WeatherPatch {
     /// fields the patch carries move, and the event list and anchor
     /// survive — or a fresh [`Weather`] over
     /// [`WeatherConfig::default`] when the site has no weather yet,
-    /// which is what makes `(set-weather :cloud-mean-gap-s 600)` (and its
-    /// HTTP twin) a valid way in on a fresh site.
+    /// which is what makes a `POST` of only `cloud_mean_gap_s` a
+    /// valid way in on a fresh site.
     ///
     /// A seed is the exception: an RNG cannot be re-seeded in place
     /// without disturbing the stream, so passing one rebuilds the
     /// `Weather` outright — a deliberate reset of the ambient event
-    /// stream, which is exactly what "re-seed" means to a scenario
-    /// that wants reproducibility from here on.
+    /// stream, which is exactly what "re-seed" means to a script that
+    /// wants reproducibility from here on.
     ///
     /// Nothing is written until validation passes, so a rejected
     /// patch leaves the live weather exactly as it was.
     ///
-    /// This form reads the site itself, which is what the Lisp doors
-    /// want — nothing has looked yet when `(set-weather …)` runs. A
-    /// caller that has ALREADY looked must hand that reading to
-    /// [`Self::install_over`] instead of letting this take a second,
-    /// possibly different one.
-    pub fn install(&self, site: &MicrogridSite, door: WeatherDoor<'_>) -> Result<(), String> {
+    /// This form reads the site itself. A caller that has ALREADY
+    /// looked must hand that reading to [`Self::install_over`]
+    /// instead of letting this take a second, possibly different one.
+    pub fn install(&self, site: &MicrogridSite) -> Result<(), String> {
         let existing = site.with_weather(|w| w.config().clone());
-        self.install_over(site, door, existing)
+        self.install_over(site, existing)
     }
 
     /// [`Self::install`] against a reading the caller already took:
@@ -640,9 +597,9 @@ impl WeatherPatch {
     ///
     /// Passing the reading in rather than taking a fresh one is the
     /// whole point. The HTTP door has to look before it installs, to
-    /// turn away a cloud-only body; if a concurrent `reset()` — a hot
-    /// reload, or `(reset-microgrid)` — clears the slot in between,
-    /// installing against what the caller SAW takes the update arm,
+    /// turn away a cloud-only body; if a concurrent `reset()` or
+    /// `DELETE .../weather` clears the slot in between, installing
+    /// against what the caller SAW takes the update arm,
     /// `with_weather` no-ops on the now-empty slot, and the request
     /// lands nowhere. That is correct: a reset's clear is scoped to
     /// the run, and the request it interrupted reports the conflict
@@ -659,12 +616,11 @@ impl WeatherPatch {
     pub fn install_over(
         &self,
         site: &MicrogridSite,
-        door: WeatherDoor<'_>,
         existing: Option<WeatherConfig>,
     ) -> Result<(), String> {
         let existed = existing.is_some();
         let mut cfg = existing.unwrap_or_default();
-        self.apply_to(&mut cfg, door)?;
+        self.apply_to(&mut cfg)?;
         if !existed {
             site.set_weather(Some(Weather::new(cfg)));
         } else if self.seed.is_some() {
@@ -869,7 +825,7 @@ mod tests {
         // What the caller saw before the reset cleared the slot.
         let seen_before_the_reset = Some(WeatherConfig::default());
         patch
-            .install_over(&site, WeatherDoor::Http, seen_before_the_reset.clone())
+            .install_over(&site, seen_before_the_reset.clone())
             .expect("a valid patch");
         assert!(
             site.with_weather(|_| ()).is_none(),
@@ -887,7 +843,7 @@ mod tests {
             ..Default::default()
         };
         reseed
-            .install_over(&site, WeatherDoor::Http, seen_before_the_reset)
+            .install_over(&site, seen_before_the_reset)
             .expect("a valid patch");
         assert!(
             site.with_weather(|_| ()).is_none(),
@@ -896,9 +852,7 @@ mod tests {
 
         // The other half of the contract: asked to look for itself,
         // the self-probing form finds nothing and does create.
-        patch
-            .install(&site, WeatherDoor::Http)
-            .expect("a valid patch");
+        patch.install(&site).expect("a valid patch");
         assert_eq!(
             site.with_weather(|w| w.config().peak_pct),
             Some(80.0),

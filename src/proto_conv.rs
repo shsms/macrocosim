@@ -80,11 +80,10 @@ fn operational_mode_to_proto(m: OperationalMode) -> ElectricalComponentOperation
 /// Build the static, type-defining `ElectricalComponent` for a
 /// component (used by `ListElectricalComponents` and the assets
 /// listing). `microgrid_id` comes from the caller — the per-port
-/// Microgrid server knows its own id, the assets server takes it
-/// from the request — so multi-microgrid clients can route by it.
-/// `site` resolves the display-name override (`:name` /
-/// `rename-component` land in the site's `name_overrides`, not on the
-/// component) and the operational mode.
+/// Microgrid server knows its own id, the assets server takes it from
+/// the request — so multi-microgrid clients can route by it. `site`
+/// resolves the display name (the spec's `name` lands in the site's
+/// `name_overrides`, not on the component) and the operational mode.
 pub fn make_component_proto(
     c: &dyn SimulatedComponent,
     site: &MicrogridSite,
@@ -137,15 +136,15 @@ pub fn make_component_proto(
             config_bounds: Some(rated),
         });
         // Reactive config bounds: the capability hull — the widest Q
-        // reachable at any P in the rated range — not a live sample at
-        // the current P. "Static" here means computed fresh from the
-        // caps at read time, not fixed at construction: the caps
-        // themselves are runtime-mutable (`set-reactive-pf-limit` /
-        // `set-reactive-apparent-va`), so this hull tracks whatever PF
-        // / kVA band is live right now, not a frozen nameplate value.
-        // A component with no reactive caps (`reactive_limits() ==
-        // None`) honestly advertises `(0.0, 0.0)` instead of a fake
-        // ±p_max edge.
+        // reachable at any P in the rated range — not a live sample
+        // at the current P. "Static" here means computed fresh from
+        // the caps at read time, not fixed at construction: the caps
+        // themselves are runtime-mutable (the drive route's
+        // `reactive_pf_limit` / `reactive_apparent_va`), so this hull
+        // tracks whatever PF / kVA band is live right now, not a
+        // frozen nameplate value. A component with no reactive caps
+        // (`reactive_limits() == None`) honestly advertises `(0.0,
+        // 0.0)` instead of a fake ±p_max edge.
         if cat != ElectricalComponentCategory::Battery {
             // An open side reaches any P.
             let p_max = [rated.lower, rated.upper]

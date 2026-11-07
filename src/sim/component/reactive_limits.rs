@@ -10,8 +10,8 @@ pub trait ReactiveLimits: Send + Sync {
     /// (`site.bounds_of`, via `ReactiveCapability::q_band_at`).
     /// "Static" relative to that envelope means P-independent, not
     /// fixed forever: the caps this returns are the CURRENT
-    /// runtime-set PF/kVA limits (mutable via
-    /// `set-reactive-pf-limit` / `set-reactive-apparent-va`), not a
+    /// runtime-set PF/kVA limits (mutable via the drive route's
+    /// `reactive_pf_limit` / `reactive_apparent_va`), not a
     /// construction-time nameplate. `make_component_proto` uses this
     /// (via `ReactiveCapability::hull`) to advertise the reactive
     /// config bound instead of a live-P sample.

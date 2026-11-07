@@ -161,10 +161,10 @@ pub fn snapshot(site: &MicrogridSite) -> (Vec<GraphNode>, Vec<GraphEdge>) {
     (nodes, edges)
 }
 
-/// Build a validated [`ComponentGraph`] from the live `MicrogridSite`.
-/// Returns the graph crate's `Error` if any category-rule, root, or
-/// connectivity check fails. The caller decides how to surface the
-/// failure (log + keep running for a hot-reload; abort for boot).
+/// Build a validated [`ComponentGraph`] from the live
+/// `MicrogridSite`. Returns the graph crate's `Error` if any
+/// category-rule, root, or connectivity check fails. The caller
+/// decides how to surface the failure.
 pub fn build(
     site: &MicrogridSite,
 ) -> Result<ComponentGraph<GraphNode, GraphEdge>, frequenz_microgrid_component_graph::Error> {

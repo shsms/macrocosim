@@ -1,15 +1,14 @@
-//! Scenario lifecycle + event journal.
+//! Recording lifecycle + event journal.
 //!
-//! A scenario is a Lisp script that drives the simulator through a
-//! sequence of events (sudden load spikes, component outages, …)
-//! while a Rust observer records what happened. `ScenarioJournal`
-//! is that observer. The script calls `(scenario-start NAME)` to
-//! begin, `(scenario-event KIND PAYLOAD)` to record interesting
-//! moments, and `(scenario-stop)` to freeze the report so it can
-//! be fetched.
+//! A script drives the simulator through a sequence of events
+//! (sudden load spikes, component outages, …) while a recording
+//! notes what happened. `RecordingJournal` is that observer. The
+//! script starts one (`POST .../recording/start`), adds the moments
+//! it cares about (`.../recording/event`), and stops it
+//! (`.../recording/stop`) to freeze the report.
 //!
-//! Events are append-only with a capped ring so a long-running
-//! scenario doesn't grow without bound. Each event carries a stable
+//! Events are append-only with a capped ring so a long recording
+//! doesn't grow without bound. Each event carries a stable
 //! monotonic id so HTTP clients can poll the events endpoint with a
 //! `since=` cursor and only see new entries.
 
@@ -17,36 +16,30 @@ use std::collections::{BTreeMap, VecDeque};
 
 use chrono::{DateTime, Utc};
 
-/// Cap on the in-memory event ring. A typical scenario fires
+/// Cap on the in-memory event ring. A typical recording gets
 /// dozens of events per minute (component outages, setpoint
 /// responses, milestone markers); 4096 entries covers ~30 minutes
 /// of dense traffic before the oldest start aging out. The
 /// overflow is silent; clients reading the events endpoint with a
 /// `since=` cursor will see a gap.
-const SCENARIO_EVENT_CAPACITY: usize = 4096;
+const EVENT_CAPACITY: usize = 4096;
 
 /// Window length for the grid-power average ring (15 minutes in
 /// seconds, UTC-aligned).
 pub(crate) const WINDOW_AVG_LENGTH_S: i64 = 15 * 60;
 
-/// Cap on retained check results. The pass/fail *counters* keep
-/// counting past this; only the per-check detail ages out — so a
-/// scenario asserting in a tight `(every …)` loop still reports
-/// accurate totals while the report payload stays bounded.
-const SCENARIO_CHECK_CAPACITY: usize = 1024;
-
 /// Cap on retained 15-minute windows. 96 covers a full UTC day —
-/// most scenarios don't run that long, and the BTreeMap drops
+/// most recordings don't run that long, and the BTreeMap drops
 /// the oldest by key so a multi-day run keeps only the most
 /// recent day.
 const WINDOW_AVG_CAPACITY: usize = 96;
 
-/// Single entry in the scenario journal. `id` is monotonic and
-/// stable across the journal's lifetime — it does not reset on
-/// `scenario_start`. Clients use it as the `since=` cursor for
-/// `/api/mg/{mg}/scenario/events`.
+/// Single entry in the recording journal. `id` is monotonic and
+/// stable across the journal's lifetime — it does not reset on a
+/// start. Clients use it as the `since=` cursor for
+/// `/api/mg/{mg}/recording/events`.
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct ScenarioEvent {
+pub struct RecordingEvent {
     pub id: u64,
     #[serde(serialize_with = "crate::timefmt::serialize_rfc3339")]
     pub ts: DateTime<Utc>,
@@ -54,28 +47,7 @@ pub struct ScenarioEvent {
     pub payload: String,
 }
 
-/// One `(scenario-expect …)` result. Recorded when the assertion
-/// runs — checks are instantaneous reads of current state, not
-/// watched conditions.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ScenarioCheck {
-    #[serde(serialize_with = "crate::timefmt::serialize_rfc3339")]
-    pub ts: DateTime<Utc>,
-    pub component_id: u64,
-    /// Canonical metric name (`Metric::as_str`).
-    pub metric: String,
-    /// Human-readable expectation, e.g. `"approx -15000 (tol 500)"`
-    /// or `"in [20, 80]"`.
-    pub expectation: String,
-    /// Observed value. `None` when the component wasn't registered
-    /// or doesn't publish the metric — recorded as a failure.
-    pub actual: Option<f32>,
-    /// Unit of `actual` (`Metric::unit`).
-    pub unit: &'static str,
-    pub passed: bool,
-}
-
-/// Battery-side energy integrals accumulated since `scenario_start`.
+/// Battery-side energy integrals accumulated since the start.
 /// Sign convention follows macrocosim's internals: positive DC power
 /// = charging; negative = discharging. Both quantities are recorded
 /// as positive Wh (absolute energy that crossed the bus in each
@@ -93,15 +65,6 @@ pub struct PvIntegrals {
     pub produced_wh: f64,
 }
 
-/// Who owns the journal: a Lisp scenario, which snapshots the knobs
-/// it drives and keeps checks, or a recording, which does neither.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum JournalKind {
-    #[default]
-    Scenario,
-    Recording,
-}
-
 /// What ended a recording: its own stop, or a rebuild of the
 /// microgrid, which ends it and keeps its report for the stop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -111,35 +74,30 @@ pub enum EndedBy {
     Rebuild,
 }
 
-/// Scenario journal: name + lifecycle + capped event ring + the
-/// metric accumulators the reporter exposes via
-/// `/api/mg/{mg}/scenario/report` and `/api/mg/{mg}/recording/report`.
+/// Recording journal: name + lifecycle + capped event ring + the
+/// metric accumulators the report exposes via
+/// `/api/mg/{mg}/recording/report`.
 #[derive(Debug, Default)]
-pub struct ScenarioJournal {
+pub struct RecordingJournal {
     pub name: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
-    /// Who started the journal last. Only a running `Scenario`
-    /// snapshots knobs, and a Lisp scenario stop leaves a running
-    /// `Recording` alone.
-    pub kind: JournalKind,
-    /// What ended the last recording; `None` while it runs and for a
-    /// scenario.
+    /// What ended the last recording; `None` while it runs.
     pub ended_by: Option<EndedBy>,
     /// The final report of a recording a rebuild ended, kept until a
     /// recording stop collects it once. Only a new recording drops it.
     pub(crate) rebuild_report: Option<crate::sim::microgrid_site::RecordingReport>,
-    events: VecDeque<ScenarioEvent>,
+    events: VecDeque<RecordingEvent>,
     next_id: u64,
     /// Maximum positive active power seen on the loopback's
     /// `grid_power` formula stream (the LM's site import/export)
-    /// since the scenario started. Resets on `start`, freezes — like
+    /// since the recording started. Resets on `start`, freezes — like
     /// elapsed — once `stop` lands, but keeps absorbing samples
     /// until then. Stored as f64 to match the units the integrals
     /// below use.
     peak_grid_active_w: f64,
     /// The grid streams' (P, Q) pair at the instant of maximum |Q|
-    /// seen since the scenario started, so the report can derive
+    /// seen since the recording started, so the report can derive
     /// power-factor-at-peak-Q. P and Q ride two independent formula
     /// streams, so the pair is the peak Q against the last-seen P
     /// (see `last_grid_p`); both streams are driven by the LM's
@@ -156,8 +114,8 @@ pub struct ScenarioJournal {
     /// instant" is the closest P before this Q. `None` until the
     /// first P of the run.
     last_grid_p: Option<f64>,
-    /// Per-battery charge / discharge energy integrals since
-    /// `scenario_start`. BTreeMap so report ordering is stable.
+    /// Per-battery charge / discharge energy integrals since the
+    /// start. BTreeMap so report ordering is stable.
     per_battery: BTreeMap<u64, BatteryIntegrals>,
     /// Per-solar-inverter produced-energy integrals.
     per_pv: BTreeMap<u64, PvIntegrals>,
@@ -166,7 +124,7 @@ pub struct ScenarioJournal {
     /// value is `(sum_w, sample_count)` so the report derives the
     /// mean cheaply and additional samples accumulate without
     /// floating-point drift. Bounded at WINDOW_AVG_CAPACITY
-    /// most-recent windows so a multi-day scenario doesn't grow
+    /// most-recent windows so a multi-day recording doesn't grow
     /// without bound.
     window_avgs: BTreeMap<i64, (f64, u64)>,
     /// Wall-clock timestamp of the previous integration sample —
@@ -174,31 +132,20 @@ pub struct ScenarioJournal {
     /// `start` runs; updated at the end of each
     /// `MicrogridSite::record_history_snapshot` pass.
     prev_sample_ts: Option<DateTime<Utc>>,
-    /// Recent `(scenario-expect …)` results, oldest evicted past
-    /// SCENARIO_CHECK_CAPACITY. The counters below cover the full
-    /// run regardless of eviction.
-    checks: VecDeque<ScenarioCheck>,
-    checks_passed: u64,
-    checks_failed: u64,
-    /// Per-component cumulative-energy totals (Wh) snapshotted when the
-    /// scenario started (`MicrogridSite::scenario_start` fills it in).
-    /// Energy checks subtract this baseline, so a check reads energy
-    /// accrued during the scenario, not since boot — a live server that
-    /// ran for hours beforehand behaves like a fresh stepped run.
-    pub energy_baseline_wh: BTreeMap<u64, f64>,
 }
 
-impl ScenarioJournal {
-    /// Begin a fresh scenario. Replaces any prior name, clears the
-    /// stop marker, and empties the event ring. Event ids continue
-    /// monotonically — a client polling the scenario events route
-    /// across a restart sees a gap rather than an id rewind.
+impl RecordingJournal {
+    /// Begin a fresh recording. Replaces any prior name, clears the
+    /// stop marker, empties the event ring and drops a report a
+    /// rebuild kept for an earlier recording. Event ids continue
+    /// monotonically — a client polling the events route across a
+    /// restart sees a gap rather than an id rewind.
     pub fn start(&mut self, name: String, now: DateTime<Utc>) {
         self.name = Some(name);
         self.started_at = Some(now);
         self.ended_at = None;
-        self.kind = JournalKind::Scenario;
         self.ended_by = None;
+        self.rebuild_report = None;
         self.events.clear();
         self.peak_grid_active_w = 0.0;
         self.peak_grid_pq = None;
@@ -206,10 +153,6 @@ impl ScenarioJournal {
         self.per_battery.clear();
         self.per_pv.clear();
         self.window_avgs.clear();
-        self.checks.clear();
-        self.checks_passed = 0;
-        self.checks_failed = 0;
-        self.energy_baseline_wh.clear();
         // Seed the integration cursor at start so the first
         // snapshot's dt covers `now → snapshot_ts`.
         self.prev_sample_ts = Some(now);
@@ -217,13 +160,13 @@ impl ScenarioJournal {
 
     /// Hand one loopback `grid_power` sample (the LM grid formula's
     /// site import/export) to the reporter: peak-so-far, the
-    /// 15-minute window averages, and the P side of the PF-at-peak
-    /// pair. Skipped before `start` and after `stop`, so the metrics
-    /// reflect only the active scenario window. `now` buckets the
-    /// value into a 15-minute UTC-aligned window for the per-window
-    /// average accumulator. ~1 Hz resampled — coarser than the raw
-    /// telemetry the retired main-meter path read, accepted in the
-    /// spec addendum.
+    /// 15-minute window averages, and the P that pairs with the peak
+    /// reactive power, for the power factor at that peak. Skipped
+    /// before `start` and after `stop`, so the metrics reflect only
+    /// the running recording. `now` buckets the value into a
+    /// 15-minute UTC-aligned window for the per-window average
+    /// accumulator. The samples come at about 1 Hz, coarser than the
+    /// raw telemetry.
     pub fn record_grid_power(&mut self, value: f32, now: DateTime<Utc>) {
         if !self.is_running() {
             return;
@@ -270,7 +213,7 @@ impl ScenarioJournal {
     }
 
     /// The (P, Q) pair at the instant of maximum |Q| since the
-    /// scenario started. `None` before any pairable sample.
+    /// recording started. `None` before any pairable sample.
     pub fn peak_grid_pq(&self) -> Option<(f64, f64)> {
         self.peak_grid_pq
     }
@@ -278,7 +221,7 @@ impl ScenarioJournal {
     /// Compute the integration window for this snapshot relative
     /// to the previous one. Used by `record_battery_sample` and
     /// `record_pv_sample`. Returns 0 if there is no prior cursor
-    /// (scenario not running) or if time went backwards.
+    /// (not running) or if time went backwards.
     fn integration_dt_s(&self, now: DateTime<Utc>) -> f64 {
         if !self.is_running() {
             return 0.0;
@@ -292,22 +235,9 @@ impl ScenarioJournal {
         }
     }
 
-    /// Started and not yet stopped, whoever owns it.
+    /// Started and not yet stopped.
     pub fn is_running(&self) -> bool {
         self.started_at.is_some() && self.ended_at.is_none()
-    }
-
-    /// [`Self::start`] for a recording. A report a rebuild kept for
-    /// an earlier recording is dropped.
-    pub fn start_recording(&mut self, name: String, now: DateTime<Utc>) {
-        self.start(name, now);
-        self.kind = JournalKind::Recording;
-        self.rebuild_report = None;
-    }
-
-    /// A recording runs.
-    pub fn recording_is_running(&self) -> bool {
-        self.kind == JournalKind::Recording && self.is_running()
     }
 
     /// Accumulate one battery DC-power sample. Positive = charging,
@@ -364,34 +294,7 @@ impl ScenarioJournal {
         &self.window_avgs
     }
 
-    /// Record one assertion result. Mirrors `record` (events): no
-    /// running-window gate — a check fired after `stop` is a script
-    /// bug better surfaced in the report than silently dropped.
-    pub fn record_check(&mut self, check: ScenarioCheck) {
-        if check.passed {
-            self.checks_passed += 1;
-        } else {
-            self.checks_failed += 1;
-        }
-        if self.checks.len() >= SCENARIO_CHECK_CAPACITY {
-            self.checks.pop_front();
-        }
-        self.checks.push_back(check);
-    }
-
-    pub fn checks(&self) -> impl Iterator<Item = &ScenarioCheck> {
-        self.checks.iter()
-    }
-
-    pub fn checks_passed(&self) -> u64 {
-        self.checks_passed
-    }
-
-    pub fn checks_failed(&self) -> u64 {
-        self.checks_failed
-    }
-
-    /// Mark the scenario as ended. Idempotent; subsequent calls
+    /// Mark the recording as ended. Idempotent; subsequent calls
     /// keep the first stop time.
     pub fn stop(&mut self, now: DateTime<Utc>) {
         if self.ended_at.is_none() {
@@ -401,13 +304,13 @@ impl ScenarioJournal {
 
     /// Append an event. Drops the oldest entry when the ring is
     /// full. Returns the new event's id.
-    pub fn record(&mut self, kind: String, payload: String, ts: DateTime<Utc>) -> u64 {
+    pub fn push_event(&mut self, kind: String, payload: String, ts: DateTime<Utc>) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
-        if self.events.len() >= SCENARIO_EVENT_CAPACITY {
+        if self.events.len() >= EVENT_CAPACITY {
             self.events.pop_front();
         }
-        self.events.push_back(ScenarioEvent {
+        self.events.push_back(RecordingEvent {
             id,
             ts,
             kind,
@@ -416,7 +319,7 @@ impl ScenarioJournal {
         id
     }
 
-    /// Seconds since `started_at`, or 0 if the scenario hasn't
+    /// Seconds since `started_at`, or 0 if the recording hasn't
     /// started. Freezes at `ended_at` once stopped.
     pub fn elapsed_s(&self, now: DateTime<Utc>) -> f64 {
         let Some(start) = self.started_at else {
@@ -431,11 +334,11 @@ impl ScenarioJournal {
 
     /// Returns events with id >= `from_id`, capped at `limit`.
     /// Oldest first. The `from_id` cursor is inclusive — clients
-    /// poll `scenario/events?since=N` and pass back
+    /// poll `recording/events?since=N` and pass back
     /// `next_event_id` from the previous response unchanged: that's
     /// "the id of the next event that hasn't been written yet", so
     /// id >= cursor naturally returns only new entries.
-    pub fn events_since(&self, from_id: u64, limit: usize) -> Vec<ScenarioEvent> {
+    pub fn events_since(&self, from_id: u64, limit: usize) -> Vec<RecordingEvent> {
         self.events
             .iter()
             .filter(|e| e.id >= from_id)
@@ -473,7 +376,7 @@ mod tests {
 
     #[test]
     fn lifecycle_sets_and_freezes_elapsed() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         // Pre-start: elapsed is 0.
         assert_eq!(j.elapsed_s(ts(100)), 0.0);
         j.start("warmup".into(), ts(100));
@@ -488,12 +391,12 @@ mod tests {
     }
 
     #[test]
-    fn record_assigns_monotonic_ids_and_filters_since() {
-        let mut j = ScenarioJournal::default();
+    fn push_event_assigns_monotonic_ids_and_filters_since() {
+        let mut j = RecordingJournal::default();
         j.start("s".into(), ts(0));
-        let id0 = j.record("note".into(), "hi".into(), ts(1));
-        let id1 = j.record("outage".into(), "bat-1003".into(), ts(2));
-        let id2 = j.record("note".into(), "bye".into(), ts(3));
+        let id0 = j.push_event("note".into(), "hi".into(), ts(1));
+        let id1 = j.push_event("outage".into(), "bat-1003".into(), ts(2));
+        let id2 = j.push_event("note".into(), "bye".into(), ts(3));
         assert_eq!((id0, id1, id2), (0, 1, 2));
 
         // from_id=0 (inclusive) returns everything.
@@ -514,23 +417,23 @@ mod tests {
 
     #[test]
     fn start_clears_events_but_ids_continue() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("first".into(), ts(0));
-        j.record("a".into(), String::new(), ts(1));
-        j.record("b".into(), String::new(), ts(2));
+        j.push_event("a".into(), String::new(), ts(1));
+        j.push_event("b".into(), String::new(), ts(2));
         assert_eq!(j.event_count(), 2);
 
         j.start("second".into(), ts(100));
         assert_eq!(j.event_count(), 0);
         assert_eq!(j.next_event_id(), 2);
 
-        let id = j.record("c".into(), String::new(), ts(101));
+        let id = j.push_event("c".into(), String::new(), ts(101));
         assert_eq!(id, 2);
     }
 
     #[test]
     fn battery_integrals_split_by_sign() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("integ".into(), ts(0));
         // 10 seconds of charging at 1800 W: charge_wh += 1800 *
         // 10 / 3600 = 5.0 Wh.
@@ -546,7 +449,7 @@ mod tests {
 
     #[test]
     fn pv_integrals_treat_negative_power_as_production() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("pv".into(), ts(0));
         // PV publishes negative power while sourcing — 3600 s at
         // -7200 W is 7200 Wh produced.
@@ -561,7 +464,7 @@ mod tests {
 
     #[test]
     fn integrals_skip_outside_running_window() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         // Pre-start: no integration.
         j.record_battery_sample(1, 1000.0, ts(10));
         assert!(j.per_battery().get(&1).is_none());
@@ -581,7 +484,7 @@ mod tests {
 
     #[test]
     fn restart_clears_integrals() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("first".into(), ts(0));
         j.record_battery_sample(1, 3600.0, ts(60)); // 60 Wh
         j.advance_sample_cursor(ts(60));
@@ -600,7 +503,7 @@ mod tests {
     /// window: (6000+9000)/2 = 7500.
     #[test]
     fn grid_peak_and_windows_track_grid_power_samples() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("avg".into(), ts(0));
         j.record_grid_power(3000.0, ts(100));
         j.record_grid_power(5000.0, ts(300));
@@ -624,7 +527,7 @@ mod tests {
     /// the oldest key is evicted, so a multi-day run stays capped.
     #[test]
     fn window_averages_evict_the_oldest_past_capacity() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("cap".into(), ts(0));
         for w in 0..(WINDOW_AVG_CAPACITY as i64 + 5) {
             j.record_grid_power(1000.0, ts(w * WINDOW_AVG_LENGTH_S));
@@ -640,7 +543,7 @@ mod tests {
     /// |Q| — a smaller-magnitude Q afterwards doesn't displace it.
     #[test]
     fn grid_pq_pairs_last_p_with_peak_q() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("pf".into(), ts(0));
         j.record_grid_power(8000.0, ts(100));
         j.record_grid_reactive(6000.0, ts(101));
@@ -653,17 +556,17 @@ mod tests {
     /// it is skipped rather than pairing against a fabricated zero.
     #[test]
     fn grid_reactive_without_a_prior_p_forms_no_pair() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("pf".into(), ts(0));
         j.record_grid_reactive(6000.0, ts(100));
         assert_eq!(j.peak_grid_pq(), None);
     }
 
     /// Samples outside the running window are dropped, matching the
-    /// integrals — the report covers only the active scenario.
+    /// integrals — the report covers only the running recording.
     #[test]
     fn grid_samples_ignored_outside_the_running_window() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         // Pre-start.
         j.record_grid_power(9000.0, ts(100));
         j.record_grid_reactive(9000.0, ts(101));
@@ -679,57 +582,14 @@ mod tests {
         assert_eq!(j.peak_grid_active_w(), 1000.0);
     }
 
-    fn check(passed: bool, at: DateTime<Utc>) -> ScenarioCheck {
-        ScenarioCheck {
-            ts: at,
-            component_id: 200,
-            metric: "active_power_w".into(),
-            expectation: "approx 5000 (tol 100)".into(),
-            actual: Some(if passed { 5000.0 } else { 9999.0 }),
-            unit: "W",
-            passed,
-        }
-    }
-
-    /// Counters track every recorded check; the detail ring evicts
-    /// past capacity without disturbing them.
-    #[test]
-    fn check_counters_survive_ring_eviction() {
-        let mut j = ScenarioJournal::default();
-        j.start("checks".into(), ts(0));
-        for i in 0..(SCENARIO_CHECK_CAPACITY + 10) {
-            j.record_check(check(i % 2 == 0, ts(i as i64)));
-        }
-        assert_eq!(j.checks().count(), SCENARIO_CHECK_CAPACITY);
-        assert_eq!(
-            j.checks_passed() + j.checks_failed(),
-            (SCENARIO_CHECK_CAPACITY + 10) as u64,
-        );
-    }
-
-    /// `start` resets both the check ring and the counters.
-    #[test]
-    fn restart_clears_checks() {
-        let mut j = ScenarioJournal::default();
-        j.start("first".into(), ts(0));
-        j.record_check(check(true, ts(1)));
-        j.record_check(check(false, ts(2)));
-        assert_eq!(j.checks_failed(), 1);
-
-        j.start("second".into(), ts(100));
-        assert_eq!(j.checks().count(), 0);
-        assert_eq!(j.checks_passed(), 0);
-        assert_eq!(j.checks_failed(), 0);
-    }
-
     #[test]
     fn ring_caps_at_capacity_and_drops_oldest() {
-        let mut j = ScenarioJournal::default();
+        let mut j = RecordingJournal::default();
         j.start("flood".into(), ts(0));
-        for i in 0..(SCENARIO_EVENT_CAPACITY + 50) {
-            j.record("tick".into(), i.to_string(), ts(i as i64));
+        for i in 0..(EVENT_CAPACITY + 50) {
+            j.push_event("tick".into(), i.to_string(), ts(i as i64));
         }
-        assert_eq!(j.event_count(), SCENARIO_EVENT_CAPACITY);
+        assert_eq!(j.event_count(), EVENT_CAPACITY);
         // Oldest 50 ids dropped.
         let earliest = j.events_since(0, 1).into_iter().next().unwrap();
         assert_eq!(earliest.id, 50);

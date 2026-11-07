@@ -7,19 +7,9 @@ import { escapeHtml, mutate } from "./app.js";
 import { OPERATIONAL_MODES, setStateKnob, showComponent } from "./inspect.js";
 import { notify } from "./notices.js";
 import { pasteIntoSpec, specTypeFor } from "./paste-forms.js";
-import { READ_ONLY_TITLE, readSelectedMg, structureEditable } from "./routing.js";
+import { readSelectedMg } from "./routing.js";
 import { addComponent, editSpec, removeComponents } from "./spec-edit.js";
 import { ALIGN_MODES, topology } from "./topology.js";
-
-// Structural edits change the microgrid's spec, so they are only
-// offered on one that has a spec. Every entry point — palette,
-// context menu, keyboard shortcut — goes through this, so a shortcut
-// can't slip past a greyed-out button.
-function editable() {
-  if (structureEditable()) return true;
-  notify(READ_ONLY_TITLE);
-  return false;
-}
 
 // Editor-style clipboard for copy / paste of node subgraphs. Holds a
 // snapshot of the *structure* (categories, subtypes, edges between
@@ -54,9 +44,8 @@ export const undoMgr = (() => {
     try {
       await mutate("POST", `/api/mg/${mgId}/${direction}`);
     } catch (e) {
-      // A 409 is "nothing left on that stack" (or, for a microgrid
-      // loaded from Lisp, an unmanaged file) — the server's own
-      // wording says which, so pass it through.
+      // A 409 is "nothing left on that stack" — the server's own
+      // wording says so, so pass it through.
       notify(`${cap(direction)} failed: ${e.message}`);
     }
   }
@@ -108,7 +97,6 @@ export function copySelection() {
 // Paste the clipboard subgraph as one spec edit (one undo step), its
 // components under fresh ids; the splice comes from paste-forms.js.
 export async function pasteClipboard() {
-  if (!editable()) return;
   if (clipboard.isEmpty()) {
     notify("Clipboard is empty — copy something first.");
     return;
@@ -120,7 +108,6 @@ export async function pasteClipboard() {
 }
 
 export async function deleteSelection() {
-  if (!editable()) return;
   const ids = topology.selectedIds();
   if (!ids.length) {
     notify("Nothing selected to delete.");
@@ -130,7 +117,6 @@ export async function deleteSelection() {
 }
 
 export async function cutSelection() {
-  if (!editable()) return;
   if (copySelection()) await deleteSelection();
 }
 
@@ -233,18 +219,12 @@ export function showContextMenu(x, y) {
   const menu = document.getElementById("ctx-menu");
   const sel = topology.selectedIds();
   const items = [];
-  // Copy is a clipboard read, and the mode rows are runtime state —
-  // both stay on a microgrid loaded from Lisp. Cut / Delete / Paste
-  // change the structure, so they only appear on one with a spec.
-  const structural = structureEditable();
   if (sel.length) {
     items.push({ label: "Copy", shortcut: "Ctrl/Cmd+C", action: copySelection });
-    if (structural) {
-      items.push({ label: "Cut", shortcut: "Ctrl/Cmd+X", action: cutSelection });
-      items.push({ label: "Delete", shortcut: "Del", action: deleteSelection });
-    }
+    items.push({ label: "Cut", shortcut: "Ctrl/Cmd+X", action: cutSelection });
+    items.push({ label: "Delete", shortcut: "Del", action: deleteSelection });
     items.push(...modeMenuItems(sel));
-  } else if (!clipboard.isEmpty() && structural) {
+  } else if (!clipboard.isEmpty()) {
     items.push({ label: "Paste", shortcut: "Ctrl/Cmd+V", action: pasteClipboard });
   }
   if (sel.length >= 2) items.push(...alignMenuItems(topology));
@@ -276,7 +256,6 @@ export function setupAddForm() {
   document.getElementById("palette").addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".pal-btn");
     if (!btn) return;
-    if (!editable()) return;
     btn.disabled = true;
     try {
       await addComponent(btn.dataset.type, "hidden" in btn.dataset ? { hidden: true } : {});
@@ -284,22 +263,4 @@ export function setupAddForm() {
       btn.disabled = false;
     }
   });
-}
-
-// Grey the whole Add-component palette out on a microgrid loaded from
-// Lisp. Called on every microgrid-list refresh, so it tracks the
-// selection without the user having to reopen the panel.
-export function refreshPaletteLock() {
-  const palette = document.getElementById("palette");
-  if (!palette) return;
-  const locked = !structureEditable();
-  // The reason goes on the container too: a disabled button swallows
-  // pointer events, so its own title never surfaces as a tooltip.
-  if (locked) palette.title = READ_ONLY_TITLE;
-  else palette.removeAttribute("title");
-  for (const btn of palette.querySelectorAll(".pal-btn")) {
-    btn.disabled = locked;
-    if (locked) btn.title = READ_ONLY_TITLE;
-    else btn.removeAttribute("title");
-  }
 }

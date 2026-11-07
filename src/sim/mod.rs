@@ -1,11 +1,25 @@
+/// `Display` for mode enums, spelt as serde spells them (`over_bound`):
+/// the one name the topology document, the HTTP routes and the knob
+/// events share.
+macro_rules! display_as_serde {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match serde_json::to_value(self) {
+                    Ok(serde_json::Value::String(name)) => f.write_str(&name),
+                    _ => unreachable!("a mode enum serializes as a string"),
+                }
+            }
+        }
+    )+};
+}
+
 pub mod battery;
 pub mod bounds;
-pub mod clock;
 pub mod component;
 pub mod decay;
 pub mod device_axis;
 pub mod dispatch;
-pub(crate) mod dynamic_scalar;
 pub mod energy;
 pub mod ev_charger;
 pub mod ev_presets;
@@ -24,10 +38,10 @@ pub mod microgrids;
 pub mod physics_state;
 pub mod ramp;
 pub mod reactive;
+pub(crate) mod recording;
+pub(crate) mod recording_csv;
 pub mod runtime;
-pub(crate) mod scenario;
-pub(crate) mod scenario_csv;
-pub mod scenarios;
+pub(crate) mod scalar;
 pub mod setpoints;
 pub mod sim_clock;
 pub mod site_import;

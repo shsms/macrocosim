@@ -10,7 +10,8 @@ use crate::sim::{
     decay::{SocProtect, integrate_soc_pct, sanitize_soc_pct},
 };
 
-/// Tunables exposed via `(make-battery :soc-protect-margin-pct 10.0 …)`.
+/// A battery's tunables, set from its spec (`soc_protect_margin_pct`
+/// and the rest).
 #[derive(Clone, Debug)]
 pub struct BatteryConfig {
     pub capacity_wh: f32,
@@ -218,37 +219,6 @@ impl SimulatedComponent for Battery {
     fn rated_active_bounds(&self) -> Option<Bounds> {
         Some(closed(self.cfg.rated_lower_w, self.cfg.rated_upper_w))
     }
-
-    fn make_fn(&self) -> &'static str {
-        "%make-battery"
-    }
-
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        let lf = crate::lisp::lisp_float32;
-        let mut kw = vec![
-            (":capacity-wh", lf(self.cfg.capacity_wh)),
-            (":initial-soc-pct", lf(self.cfg.initial_soc_pct)),
-            (":soc-lower-pct", lf(self.cfg.soc_lower_pct)),
-            (":soc-upper-pct", lf(self.cfg.soc_upper_pct)),
-            (":voltage-v", lf(self.cfg.voltage_v)),
-            (":rated-lower-w", lf(self.cfg.rated_lower_w)),
-            (":rated-upper-w", lf(self.cfg.rated_upper_w)),
-            (
-                ":soc-protect-margin-pct",
-                lf(self.cfg.soc_protect_margin_pct),
-            ),
-        ];
-        if self.interval != Duration::from_millis(1000) {
-            kw.push((
-                ":interval-s",
-                crate::lisp::lisp_float(self.interval.as_secs_f64()),
-            ));
-        }
-        if self.cfg.stream_jitter_pct != 0.0 {
-            kw.push((":stream-jitter-pct", lf(self.cfg.stream_jitter_pct)));
-        }
-        kw
-    }
 }
 
 impl DcStorage for Battery {
@@ -363,30 +333,6 @@ mod tests {
             (dc_current_a - dc_power_w / 800.0).abs() < 0.01,
             "dc_current_a must be dc_power_w / voltage, got {dc_current_a}"
         );
-    }
-
-    /// Every construction kwarg round-trips into the rendered form,
-    /// and `:interval-s` renders only when it departs from the 1000 ms
-    /// default.
-    #[test]
-    fn constructor_kwargs_round_trip_battery() {
-        let cfg = BatteryConfig {
-            capacity_wh: 50_000.0,
-            initial_soc_pct: 20.0,
-            ..Default::default()
-        };
-        let b = Battery::new(7, Duration::from_millis(500), cfg);
-        assert_eq!(b.make_fn(), "%make-battery");
-        let kw = b.constructor_kwargs();
-        let s = kw
-            .iter()
-            .map(|(k, v)| format!("{k} {v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(s.contains(":capacity-wh 50000.0"));
-        assert!(s.contains(":initial-soc-pct 20.0"));
-        assert!(s.contains(":interval-s 0.5"));
-        assert!(s.contains(":rated-lower-w -30000.0"));
     }
 
     /// The pack takes up to its rating anywhere between empty and

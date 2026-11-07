@@ -7,37 +7,40 @@ mod common;
 use std::time::Duration;
 
 use common::TestServer;
+use macrocosim::proto::microgrid::microgrid_client::MicrogridClient;
+use macrocosim::proto::microgrid::{PowerType, SetElectricalComponentPowerRequest};
 
-const INVERTER_AND_BATTERY: &str = r#"
-(setq b (%make-battery :id 100
-                       :capacity-wh 100000.0
-                       :rated-lower-w -10000.0
-                       :rated-upper-w  10000.0))
-(%make-battery-inverter :id 200
-                        :rated-lower-w -10000.0
-                        :rated-upper-w  10000.0
-                        :successors (list b))
-"#;
+/// The setpoint's request lifetime, in seconds.
+const LIFETIME_S: u64 = 10;
+
+const INVERTER_AND_BATTERY: &str = r#"{
+  "components": [
+    {"type": "battery", "id": 100, "capacity_wh": 100000.0,
+     "rated_lower_w": -10000.0, "rated_upper_w": 10000.0},
+    {"type": "battery_inverter", "id": 200,
+     "rated_lower_w": -10000.0, "rated_upper_w": 10000.0}
+  ],
+  "connections": [[200, 100]]
+}"#;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn short_lifetime_setpoint_resets_after_expiry() {
-    let s = TestServer::start(INVERTER_AND_BATTERY).await;
-    let client = reqwest::Client::new();
+    let s = TestServer::start_mg(INVERTER_AND_BATTERY).await;
 
-    // Apply a non-zero setpoint with a 2 s lifetime.
-    // (set-active-power id watts lifetime-ms) — the Lisp defun
-    // doesn't enforce the gRPC handler's 10 s minimum, so this
-    // path lets us drive a fast expiry deterministically. The
-    // lifetime must comfortably outlast the eval-to-first-assert
-    // gap, or a loaded runner expires the setpoint before step 1
-    // reads it back.
-    let r = client
-        .post(format!("{}/api/eval", s.ui_url))
-        .body("(set-active-power 200 3000.0 2000)")
-        .send()
+    // Apply a non-zero setpoint with the shortest lifetime the
+    // Microgrid API allows for SetElectricalComponentPower, 10 s.
+    let mut c = MicrogridClient::connect(s.grpc_url.clone())
         .await
-        .unwrap();
-    assert!(r.status().is_success(), "set-active-power eval failed");
+        .expect("grpc connect");
+    let sent = tokio::time::Instant::now();
+    c.set_electrical_component_power(SetElectricalComponentPowerRequest {
+        electrical_component_id: 200,
+        power: 3000.0,
+        power_type: PowerType::Active as i32,
+        request_lifetime: Some(LIFETIME_S),
+    })
+    .await
+    .expect("set-power accepted");
 
     // Step 1: confirm the setpoint took effect. The command crosses
     // the gateway and device delays, so poll against a deadline.
@@ -63,9 +66,9 @@ async fn short_lifetime_setpoint_resets_after_expiry() {
     // Step 2+3: wait for the gateway's physics step to expire the
     // entry and reset the setpoint, then tick so the ramp lands at 0.
     // Polling with a deadline instead of one fixed sleep keeps a
-    // stalled CI machine from failing the test spuriously. With
-    // infinite default ramp-rate, one tick after the reset is enough.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    // stalled CI machine from failing the test spuriously. With an
+    // instant ramp, one tick after the reset is enough.
+    let deadline = sent + Duration::from_secs(LIFETIME_S + 10);
     let p_after = loop {
         tokio::time::sleep(Duration::from_millis(50)).await;
         s.site()

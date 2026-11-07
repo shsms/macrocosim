@@ -1,5 +1,5 @@
-// The display zone's formatters and wall-time conversions, in the sim zone and
-// in UTC, across a DST change.
+// The display zone's formatters and wall-time conversions, in the local zone
+// and in UTC, across a DST change.
 // Run: node tools/zone-test.mjs   (exits non-zero on failure)
 import assert from "node:assert/strict";
 import * as zone from "../ui-assets/zone.js";
@@ -7,9 +7,14 @@ import * as zone from "../ui-assets/zone.js";
 // The text of a `<time>` element, or the dash timeHtml gives for no time.
 const text = (t, kind) => zone.timeHtml(t, kind).replace(/<[^>]*>/g, "");
 
-// Before init: the Berlin fallback, sim mode.
-assert.equal(zone.tz(), "Europe/Berlin");
+// Before init: the zone this process runs in, local mode.
+const own = new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+assert.equal(zone.tz(), own);
 assert.equal(zone.isUtc(), false);
+
+// The checks below read a fixed zone in place of the browser's.
+zone.setLocalZone("Europe/Berlin");
+assert.equal(zone.tz(), "Europe/Berlin");
 
 const summer = Date.UTC(2026, 6, 1, 12, 34, 56); // 14:34:56 CEST
 assert.equal(zone.fmtTime(summer), "14:34:56");
@@ -31,7 +36,7 @@ assert.equal(zone.timeHtml("soon", "hms"), "—");
 const axis = zone.tzDate(summer / 1000);
 assert.deepEqual([axis.getHours(), axis.getMinutes(), axis.getSeconds()], [14, 34, 56]);
 
-// Wall time -> UTC in the sim zone.
+// Wall time -> UTC in the local zone.
 assert.equal(zone.wallToUtcMs("2026-07-01T14:34"), Date.UTC(2026, 6, 1, 12, 34));
 assert.equal(zone.wallToUtcMs("2026-01-01T13:00"), Date.UTC(2026, 0, 1, 12, 0));
 // Spring forward (29 Mar 2026, 02:00 -> 03:00): 02:30 does not exist and maps
@@ -62,18 +67,26 @@ off();
 zone.setUtc(false);
 assert.equal(heard, 1, "an unsubscribed listener is not called");
 
-// init tells the listeners, so a label painted before it ran is repainted with
-// the zone it read (here: none — no server, no storage — so the zone stays put
-// and nothing throws).
+// init applies the chip's remembered choice and tells the listeners, so a label
+// painted before it ran is repainted (here: no storage, so the local zone stays
+// and nothing throws). It asks the server nothing.
 let afterInit = 0;
+let fetched = 0;
+globalThis.fetch = async () => {
+  fetched++;
+  return new Response("{}");
+};
 const offInit = zone.onChange(() => afterInit++);
-await zone.init();
+zone.init();
 offInit();
+delete globalThis.fetch;
 assert.equal(afterInit, 1);
+assert.equal(fetched, 0);
+assert.equal(zone.isUtc(), false);
 assert.equal(zone.tz(), "Europe/Berlin");
 
-// Another sim zone; its short name follows DST.
-zone.setSimZone("America/New_York");
+// Another local zone; its short name follows DST.
+zone.setLocalZone("America/New_York");
 assert.equal(text(summer, "hm"), "08:34");
 assert.equal(zone.label(summer), "EDT");
 assert.equal(zone.label(winter), "EST");
@@ -88,19 +101,14 @@ assert.equal(zone.wallToUtcMs("2026-03-08T04:30"), Date.UTC(2026, 2, 8, 8, 30));
 assert.equal(zone.wallToUtcMs("2026-11-01T01:30"), Date.UTC(2026, 10, 1, 5, 30));
 // Santiago skips its own midnight (6 Sep 2026, 00:00 -> 01:00 -03), so that
 // day starts at 01:00 local, 04:00 UTC.
-zone.setSimZone("America/Santiago");
+zone.setLocalZone("America/Santiago");
 assert.equal(zone.zonedDayStartMs(Date.UTC(2026, 8, 6, 12)), Date.UTC(2026, 8, 6, 4));
 
-// A zone the server knows but this Intl does not falls back to UTC instead of
-// throwing out of every formatter, whether set directly or read by init.
-zone.setSimZone("Not/A_Zone");
+// A zone this Intl does not know falls back to UTC instead of throwing out of
+// every formatter.
+zone.setLocalZone("Not/A_Zone");
 assert.equal(zone.tz(), "UTC");
 assert.equal(zone.fmtTime(summer), "12:34:56");
-globalThis.fetch = async () => new Response(JSON.stringify({ tz: "Not/A_Zone" }));
-zone.setSimZone("Europe/Berlin");
-await zone.init();
-assert.equal(zone.tz(), "UTC");
-delete globalThis.fetch;
-zone.setSimZone("Europe/Berlin");
+zone.setLocalZone("Europe/Berlin");
 
 console.log("zone-test: all assertions passed");

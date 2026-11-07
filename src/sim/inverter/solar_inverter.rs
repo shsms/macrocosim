@@ -14,17 +14,16 @@ use std::{
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, RwLock};
 use rand::Rng;
-use tulisp::TulispContext;
 
 use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Category, Controllable, MicrogridSite, ReactiveLimits, SimulatedComponent, Telemetry,
     bounds::{VecBounds, closed},
-    component::{GatewaySettings, KnobKind, KnobSnapshot, ScalarReading, SunlightDrive},
+    component::{GatewaySettings, SunlightDrive},
     device_axis::DeviceAxis,
-    dynamic_scalar::DynamicScalar,
     reactive::ReactiveCapability,
     runtime::Health,
+    scalar::Scalar,
 };
 use crate::timeout_tracker::SetpointAxis;
 
@@ -34,7 +33,7 @@ use crate::timeout_tracker::SetpointAxis;
 /// than dark.
 const SUNLIGHT_SEED_PCT: f32 = 100.0;
 
-/// Where a PV inverter's cloud-cover percentage comes from.
+/// Where a PV inverter's sunlight percentage comes from.
 ///
 /// Two shapes, and the split is about *who* produces the number:
 ///
@@ -48,17 +47,14 @@ const SUNLIGHT_SEED_PCT: f32 = 100.0;
 ///   cloud sweep across a multi-PV site instead of hitting every
 ///   array in the same tick. Nobody has driven this inverter's knob;
 ///   it just tracks the sky.
-/// - [`Self::Manual`] — something drove it: a `:sunlight-pct` kwarg, a
-///   `(set-solar-sunlight …)` poke, a scenario, the UI. The
-///   [`DynamicScalar`] underneath covers both a plain constant and a
-///   Lisp expression re-resolved by `refresh_inputs`.
+/// - [`Self::Manual`] — something drove it: a `sunlight_pct` in the
+///   spec, or a `drive` write.
 ///
 /// This is a plain tag: it says which of the two shapes a slot is in
 /// and nothing else. The lag and jitter that shape a `Follow` sample
 /// live on [`SolarInverterConfig`] (their only writer), and the value
 /// `tick` resolves lives in [`SolarInverter`]'s own `sunlight_cache`
-/// — so `Clone` is just a derive, and a snapshot of this enum carries
-/// the *shape* of the slot, never a copy of the sky.
+/// — so `Clone` is just a derive.
 ///
 /// `Follow` resolves in [`SimulatedComponent::tick`] because that is
 /// the only door handed both the site (which owns the weather) and
@@ -74,15 +70,14 @@ pub enum SunlightSource {
     /// config carries. Read back through
     /// [`SolarInverter::sunlight_pct`], which serves the cache.
     Follow,
-    /// A driven value: a constant, or a Lisp expression re-resolved
-    /// each `refresh_inputs`.
-    Manual(DynamicScalar),
+    /// A driven percentage.
+    Manual(Scalar),
 }
 
 impl SunlightSource {
-    /// A driven source wrapping `scalar`.
-    pub fn manual(scalar: DynamicScalar) -> Self {
-        Self::Manual(scalar)
+    /// A source driven at `pct`.
+    pub fn manual(pct: f32) -> Self {
+        Self::Manual(Scalar::new(pct))
     }
 }
 
@@ -101,8 +96,7 @@ pub struct SolarInverterConfig {
     /// Defaults to `Some(100.0)`: an inverter built without saying
     /// anything about weather keeps the historical full-sun constant,
     /// so nothing that never heard of weather changes behaviour. The
-    /// Lisp door maps an absent `:sunlight-pct` to `None` — the absent
-    /// kwarg *is* how a weather-following inverter renders.
+    /// spec build maps an absent `sunlight_pct` to `None`.
     pub sunlight_pct: Option<f32>,
     pub command_delay: Duration,
     pub ramp_rate_w_per_s: f32,
@@ -115,12 +109,6 @@ pub struct SolarInverterConfig {
     /// Reactive slew rate (VAR/s). 2000 default ≈ 5 s OLRT for a
     /// 10 kVAR window — IEEE 1547-2018 Cat B baseline.
     pub reactive_ramp_rate_var_per_s: f32,
-    /// True when `:sunlight-pct` was constructed as a lambda or symbol
-    /// rather than a plain number. Not a plist kwarg itself — it
-    /// only tells the microgrid-file renderer to omit `:sunlight-pct`
-    /// (a dynamic source can't round-trip as a static number) rather
-    /// than write out `sunlight_pct`'s stale fallback value.
-    pub sunlight_dynamic: bool,
     /// How far behind the sky a `Follow` source samples — the array
     /// sees `weather_pct_at(now - lag)`. `None` (the default) uses a
     /// small stable offset derived from the inverter's id (0–60 s),
@@ -155,7 +143,6 @@ impl Default for SolarInverterConfig {
             reactive: ReactiveCapability::microsim_default(),
             reactive_command_delay: Duration::from_millis(100),
             reactive_ramp_rate_var_per_s: 2000.0,
-            sunlight_dynamic: false,
             weather_lag: None,
             weather_jitter_pct: 0.0,
             array_peak_w: 30_000.0,
@@ -171,15 +158,11 @@ pub struct SolarInverter {
     cfg: SolarInverterConfig,
     /// Cloud-cover percentage — see [`SunlightSource`]. Either
     /// `Follow` (tracking the site's weather, resolved in `tick`) or
-    /// `Manual`: a constant (the cfg default or a numeric
-    /// `:sunlight-pct`) or a Lisp expression (`:sunlight-pct (lambda () …)`
-    /// / `:sunlight-pct 'symbol`) re-resolved each tick by
-    /// `refresh_inputs`. Lisp timers can also push values via
-    /// `(set-solar-sunlight ID PCT)`, which collapses any prior
-    /// source — dynamic or weather-following — to a constant;
-    /// [`Self::clear_sunlight`] is the way back to `Follow`.
+    /// `Manual`: the spec's `sunlight_pct` or a `drive` write, which
+    /// displaces a `Follow` source; [`Self::clear_sunlight`] is the
+    /// way back to `Follow`.
     sunlight_source: RwLock<SunlightSource>,
-    /// The last cloud-cover percentage `tick` resolved for a
+    /// The last sunlight percentage `tick` resolved for a
     /// [`SunlightSource::Follow`] slot, as `f32` bits, seeded at
     /// [`SUNLIGHT_SEED_PCT`]. Unread while the slot is `Manual` — a
     /// driven source answers from its own scalar — and left alone by
@@ -214,7 +197,7 @@ impl SolarInverter {
     pub fn new(id: u64, interval: Duration, cfg: SolarInverterConfig) -> Self {
         let source = match cfg.sunlight_pct {
             None => SunlightSource::Follow,
-            Some(pct) => SunlightSource::manual(DynamicScalar::constant(pct)),
+            Some(pct) => SunlightSource::manual(pct),
         };
         // Whatever the slot starts at: a `Follow` slot starts at the
         // cache's full-sun seed, a driven one at its constant.
@@ -238,14 +221,14 @@ impl SolarInverter {
         }
     }
 
-    /// Drop whatever drove the sunlight knob and go back to
-    /// following the site's weather — the way back from
-    /// `set_sunlight_pct` / `set_sunlight_source`, mirroring the
-    /// meter's `clear_active_power_source`. The `Follow` it installs
-    /// reads the configured lag and jitter at resolve time, so a
-    /// cleared inverter tracks the sky exactly like a
-    /// freshly-constructed weather-following one. Until the next tick
-    /// resolves it, the knob reads whatever the cache last held.
+    /// Drop whatever drove the sunlight knob and go back to following
+    /// the site's weather — the way back from `set_sunlight_pct`,
+    /// mirroring the meter's `clear_active_power_source`. The
+    /// `Follow` it installs reads the configured lag and jitter at
+    /// resolve time, so a cleared inverter tracks the sky exactly
+    /// like a freshly-constructed weather-following one. Until the
+    /// next tick resolves it, the knob reads whatever the cache last
+    /// held.
     pub fn clear_sunlight(&self) {
         *self.sunlight_source.write() = SunlightSource::Follow;
     }
@@ -314,7 +297,7 @@ impl SolarInverter {
         self.caps.lock().q_band_at(p)
     }
 
-    /// The Follow lag used when no `:weather-lag-s` was given: a
+    /// The Follow lag used when no `weather_lag_s` was given: a
     /// stable 0–60 s offset hashed from the component id, so a cloud
     /// sweeps across a multi-PV site by default. Hash, not RNG — the
     /// offset survives restarts and reloads with no stored state.
@@ -348,15 +331,6 @@ impl SimulatedComponent for SolarInverter {
     }
     fn stream_interval(&self) -> Duration {
         self.interval
-    }
-    fn refresh_inputs(&self, ctx: &mut TulispContext) {
-        // Manual only — a `Follow` source has no Lisp to re-resolve,
-        // it resolves against the site in `tick`. No-op for the
-        // constant case too: DynamicScalar::refresh returns
-        // immediately when there's no source expression.
-        if let SunlightSource::Manual(scalar) = &*self.sunlight_source.read() {
-            scalar.refresh(ctx);
-        }
     }
 
     fn tick(&self, world: &MicrogridSite, now: DateTime<Utc>, _dt: Duration) {
@@ -425,122 +399,6 @@ impl SimulatedComponent for SolarInverter {
     fn stream_jitter_pct(&self) -> f32 {
         self.cfg.stream_jitter_pct
     }
-
-    fn snapshot_knob(&self, kind: KnobKind) -> Option<KnobSnapshot> {
-        match kind {
-            KnobKind::Sunlight => Some(KnobSnapshot::Sunlight(self.sunlight_source.read().clone())),
-            _ => None,
-        }
-    }
-
-    fn restore_knob(&self, snap: KnobSnapshot) -> bool {
-        match snap {
-            KnobSnapshot::Sunlight(source) => {
-                *self.sunlight_source.write() = source;
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn make_fn(&self) -> &'static str {
-        "%make-solar-inverter"
-    }
-
-    fn has_unrenderable_source(&self) -> bool {
-        match &*self.sunlight_source.read() {
-            // A `Follow` source is NEVER unrenderable: omitting
-            // `:sunlight-pct` *is* its rendering, and a reloaded config
-            // with no kwarg reconstructs a weather-following inverter
-            // exactly. This arm deliberately ignores
-            // `cfg.sunlight_dynamic`, which is sticky-true for the
-            // life of an inverter built with a lambda — one that was
-            // later cleared back to `Follow` no longer has any
-            // expression to lose, so reporting it unrenderable would
-            // block a save over a slot that renders perfectly.
-            SunlightSource::Follow => false,
-            // Three ways a driven slot outruns what can be written
-            // back. The first two are dynamic sources, which have no
-            // static number at all: constructed dynamic (which
-            // `constructor_kwargs` already omits `:sunlight-pct` for)
-            // and a runtime `(set-solar-sunlight ID (lambda …))`
-            // poke, whose expression the generated block cannot carry
-            // either — the same case Meter reports for
-            // `set-meter-power`.
-            //
-            // The third is a plain CONSTANT poked over an inverter
-            // built with no `:sunlight-pct` at all (`sunlight_pct` is
-            // `None`). There is a number to write, but nowhere to
-            // write it from: the renderer emits the constructed
-            // kwarg, and this inverter never had one, so the poke
-            // would be dropped silently and the saved file would come
-            // back following the weather. Meter says the same thing
-            // the same way, with `constructed_power.is_none() &&
-            // power_source.is_some()`.
-            SunlightSource::Manual(s) => {
-                self.cfg.sunlight_dynamic || s.is_dynamic() || self.cfg.sunlight_pct.is_none()
-            }
-        }
-    }
-
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        let mut kw = super::common_inverter_kwargs(super::CommonInverterCfg {
-            rated_lower_w: self.cfg.rated_lower_w,
-            rated_upper_w: self.cfg.rated_upper_w,
-            command_delay: self.cfg.command_delay,
-            ramp_rate_w_per_s: self.cfg.ramp_rate_w_per_s,
-            interval: self.interval,
-            stream_jitter_pct: self.cfg.stream_jitter_pct,
-            reactive: self.cfg.reactive,
-            reactive_command_delay: self.cfg.reactive_command_delay,
-            reactive_ramp_rate_var_per_s: self.cfg.reactive_ramp_rate_var_per_s,
-            device_delay: self.cfg.device_delay,
-        });
-        // A dynamic sunlight source can't round-trip as a static
-        // number — the renderer omits :sunlight-pct entirely rather
-        // than writing the (possibly stale) fallback value. An
-        // inverter built to follow the weather (`sunlight_pct: None`)
-        // omits it too, but for the opposite reason: the absent kwarg
-        // is precisely what a reload reads back as "this inverter
-        // follows the weather". A slot driven to a constant at
-        // runtime also omits it, since there is no constructed number
-        // to write.
-        let manual = matches!(&*self.sunlight_source.read(), SunlightSource::Manual(_));
-        if let Some(pct) = self.cfg.sunlight_pct
-            && !self.cfg.sunlight_dynamic
-            && manual
-        {
-            kw.push((":sunlight-pct", crate::lisp::lisp_float32(pct)));
-        }
-        // Only write :array-peak-w when it diverges from the matched-array
-        // default (|rated-lower|) — a matched config round-trips with
-        // no extra noise.
-        if (self.cfg.array_peak_w - self.cfg.rated_lower_w.abs()).abs() > f32::EPSILON {
-            kw.push((
-                ":array-peak-w",
-                crate::lisp::lisp_float32(self.cfg.array_peak_w),
-            ));
-        }
-        // The two `Follow` shaping kwargs. Lag is written whenever it
-        // is explicit — zero included, since `:weather-lag-s 0` is
-        // the opt-out from the id-derived default sweep and must
-        // round-trip; an unset lag renders nothing, so a reloaded
-        // inverter re-derives the same offset from its id. Jitter is
-        // written only when it diverges from its zero default.
-        if let Some(lag) = self.cfg.weather_lag {
-            kw.push((
-                ":weather-lag-s",
-                crate::lisp::lisp_float32(lag.as_secs_f32()),
-            ));
-        }
-        if self.cfg.weather_jitter_pct != 0.0 {
-            kw.push((
-                ":weather-jitter-pct",
-                crate::lisp::lisp_float32(self.cfg.weather_jitter_pct),
-            ));
-        }
-        kw
-    }
 }
 
 impl SunlightDrive for SolarInverter {
@@ -549,33 +407,15 @@ impl SunlightDrive for SolarInverter {
     /// to incoming setpoints. Values are applied as-is; the per-tick
     /// clamp happens in `SolarInverter::min_avail_w`.
     fn set_sunlight_pct(&self, pct: f32) {
-        *self.sunlight_source.write() = SunlightSource::manual(DynamicScalar::constant(pct));
-    }
-
-    /// Like every other driven value this installs a `Manual` source,
-    /// displacing a `Follow` one if that is what was there.
-    fn set_sunlight_source(&self, scalar: DynamicScalar) {
-        *self.sunlight_source.write() = SunlightSource::manual(scalar);
+        *self.sunlight_source.write() = SunlightSource::manual(pct);
     }
 
     fn clear_sunlight_source(&self) {
         self.clear_sunlight();
     }
 
-    fn sunlight_reading(&self) -> ScalarReading {
-        let s = self.sunlight_source.read();
-        ScalarReading {
-            value: self.pct_of(&s),
-            // `Follow` has no Lisp source text, but it is not a plain
-            // constant either — the inspector shows the "weather"
-            // marker in the same slot a lambda's printed form goes,
-            // so a reader can tell a tracked sky from a driven
-            // number.
-            expr: match &*s {
-                SunlightSource::Follow => Some("weather".into()),
-                SunlightSource::Manual(scalar) => scalar.source_text(),
-            },
-        }
+    fn sunlight_reading(&self) -> f32 {
+        self.sunlight_pct()
     }
 }
 
@@ -672,16 +512,15 @@ mod tests {
         inv.set_sunlight_pct(20.0);
         assert!((inv.min_avail_w() - (-2_000.0)).abs() < 1e-3);
 
-        // Overdrive now clamps at the AC rating rather than
-        // overdriving past it — the microsim's out-of-range
-        // pass-through is retired. Expressing overdrive intent is
-        // now `:array-peak-w`'s job (see `oversized_array_clips_at_the_ac_rating`).
+        // Overdrive clamps at the AC rating; an array larger than the
+        // rating is `array_peak_w`'s job (see
+        // `oversized_array_clips_at_the_ac_rating`).
         inv.set_sunlight_pct(150.0);
         assert!((inv.min_avail_w() - (-10_000.0)).abs() < 1e-3);
     }
 
-    /// An oversized DC array flat-tops at the inverter's AC rating;
-    /// a matched array is unchanged from the pre-:array-peak-w behavior.
+    /// An oversized DC array flat-tops at the inverter's AC rating; a
+    /// matched array follows the sunlight up to the rating.
     #[test]
     fn oversized_array_clips_at_the_ac_rating() {
         let matched = SolarInverter::new(1, Duration::from_secs(1), SolarInverterConfig::default());
@@ -753,43 +592,6 @@ mod tests {
             (p - (-30_000.0)).abs() < 1e-3,
             "expected AC-clamped -30000 W before any tick, got {p}"
         );
-    }
-
-    /// A dynamic sunlight source resolves on each `refresh_inputs`,
-    /// driving the min_avail floor without going through the
-    /// imperative `(set-solar-sunlight)` setter.
-    #[test]
-    fn dynamic_sunlight_source_refreshes() {
-        let mut ctx = tulisp::TulispContext::new();
-        let inv = SolarInverter::new(1, Duration::from_secs(1), cfg_with_sun(100.0));
-        let lambda = ctx.eval_string("(lambda () 40.0)").unwrap();
-        let scalar = DynamicScalar::from_funcall(lambda, 100.0);
-        inv.set_sunlight_source(scalar);
-
-        // Pre-refresh: the cached fallback (100.0) is still in effect.
-        assert!((inv.min_avail_w() - (-10_000.0)).abs() < 1e-3);
-
-        // Refresh resolves the lambda → 40% of -10 kW rated = -4 kW.
-        inv.refresh_inputs(&mut ctx);
-        assert!((inv.min_avail_w() - (-4_000.0)).abs() < 1e-3);
-    }
-
-    /// `set_sunlight_pct` collapses any prior dynamic source, so a
-    /// timer- or scenario-driven imperative override wins over a
-    /// configured lambda.
-    #[test]
-    fn set_sunlight_pct_collapses_dynamic_source() {
-        let mut ctx = tulisp::TulispContext::new();
-        let inv = SolarInverter::new(1, Duration::from_secs(1), cfg_with_sun(100.0));
-        let lambda = ctx.eval_string("(lambda () 70.0)").unwrap();
-        inv.set_sunlight_source(DynamicScalar::from_funcall(lambda, 100.0));
-        inv.refresh_inputs(&mut ctx);
-        assert!((inv.min_avail_w() - (-7_000.0)).abs() < 1e-3);
-
-        inv.set_sunlight_pct(30.0);
-        // Subsequent refresh is a no-op on the constant.
-        inv.refresh_inputs(&mut ctx);
-        assert!((inv.min_avail_w() - (-3_000.0)).abs() < 1e-3);
     }
 
     /// A faulted PV inverter trips offline: it produces nothing rather
@@ -985,155 +787,6 @@ mod tests {
         assert!((w.get(1).unwrap().aggregate_power_w(&w) - (-6_000.0)).abs() < 1.0);
     }
 
-    /// A static `:sunlight-pct` renders as its own kwarg, sharing the
-    /// same rated / command-delay / reactive kwargs as the battery
-    /// inverter.
-    #[test]
-    fn constructor_kwargs_round_trip_solar() {
-        let mut cfg = cfg_with_sun(42.0);
-        cfg.rated_lower_w = -12_000.0;
-        let inv = SolarInverter::new(5, Duration::from_secs(1), cfg);
-        assert_eq!(inv.make_fn(), "%make-solar-inverter");
-        let s = inv
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, v)| format!("{k} {v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(s.contains(":sunlight-pct 42.0"));
-        assert!(s.contains(":rated-lower-w -12000.0"));
-    }
-
-    /// A lambda- or symbol-driven sunlight source can't round-trip
-    /// as a static number, so `:sunlight-pct` is omitted entirely.
-    #[test]
-    fn constructor_kwargs_omits_sunlight_pct_when_dynamic() {
-        let mut cfg = cfg_with_sun(100.0);
-        cfg.sunlight_dynamic = true;
-        let inv = SolarInverter::new(6, Duration::from_secs(1), cfg);
-        let s = inv
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, v)| format!("{k} {v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(!s.contains(":sunlight-pct"));
-        assert!(inv.has_unrenderable_source());
-    }
-
-    /// A sunlight source installed at RUNTIME — a scenario or an
-    /// `every` block calling `(set-solar-sunlight ID (lambda …))` —
-    /// is just as unwritable as a constructed one, so the component
-    /// has to report it. The construction-time flag alone missed it,
-    /// which is the same gap Meter closes by consulting its live
-    /// power source.
-    #[test]
-    fn a_runtime_lambda_sunlight_poke_reports_unrenderable() {
-        let inv = SolarInverter::new(6, Duration::from_secs(1), cfg_with_sun(80.0));
-        assert!(!inv.has_unrenderable_source(), "a static one is fine");
-        let mut ctx = tulisp::TulispContext::new();
-        let lambda = ctx.eval_string("(lambda () 40.0)").unwrap();
-        inv.set_sunlight_source(DynamicScalar::from_funcall(lambda, 80.0));
-        assert!(inv.has_unrenderable_source());
-    }
-
-    /// The other unwritable poke, and the one a lambda check alone
-    /// misses: a plain CONSTANT driven over an inverter built with no
-    /// `:sunlight-pct` at all. The number is perfectly renderable in the
-    /// abstract, but this inverter has no constructed `:sunlight-pct`
-    /// for the renderer to write it into — `constructor_kwargs` omits
-    /// the kwarg, so a save would drop the poke and reload as a
-    /// weather-following inverter. Reporting it unrenderable is what
-    /// makes that loss visible instead of silent, exactly as Meter
-    /// does for a `set-meter-power` over a meter built without
-    /// `:power-w`.
-    #[test]
-    fn a_constant_poked_over_a_follow_built_inverter_reports_unrenderable() {
-        let inv = SolarInverter::new(
-            7,
-            Duration::from_secs(1),
-            SolarInverterConfig {
-                sunlight_pct: None,
-                ..Default::default()
-            },
-        );
-        assert!(
-            !inv.has_unrenderable_source(),
-            "following the weather renders by omission",
-        );
-
-        inv.set_sunlight_pct(30.0);
-        assert!(
-            inv.has_unrenderable_source(),
-            "a constant with no constructed kwarg to carry it",
-        );
-        let s = inv
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(
-            !s.contains(":sunlight-pct"),
-            "…and the renderer really has nowhere to put it, got {s}",
-        );
-    }
-
-    /// `cfg.sunlight_dynamic` is sticky — it records how the inverter
-    /// was BUILT and never clears. Clearing the slot back to `Follow`
-    /// leaves no expression to lose, so the inverter is renderable
-    /// again: the omitted `:sunlight-pct` is exactly how a Follow slot
-    /// is written. Consulting the stale flag on a Follow source would
-    /// wrongly mark a perfectly renderable microgrid unsaveable.
-    #[test]
-    fn a_cleared_follow_slot_is_renderable_despite_the_sticky_dynamic_flag() {
-        let mut cfg = cfg_with_sun(100.0);
-        cfg.sunlight_dynamic = true;
-        let inv = SolarInverter::new(6, Duration::from_secs(1), cfg);
-        assert!(inv.has_unrenderable_source(), "built with a lambda");
-
-        inv.clear_sunlight();
-        assert!(
-            !inv.has_unrenderable_source(),
-            "a Follow slot renders by omission",
-        );
-        let s = inv
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(!s.contains(":sunlight-pct"), "and the kwarg stays omitted");
-    }
-
-    /// Snapshot/restore round-trip for the sunlight knob: a dynamic
-    /// (lambda) source survives being swapped out for a constant and
-    /// back — `is_dynamic()` and the printed source text both come
-    /// back exactly as they were, because `restore_knob` writes the
-    /// captured `SunlightSource` (and the `DynamicScalar` inside it)
-    /// itself, not a re-parse of its text.
-    #[test]
-    fn snapshot_restore_round_trip_sunlight_dynamic_source() {
-        let mut ctx = tulisp::TulispContext::new();
-        let inv = SolarInverter::new(1, Duration::from_secs(1), cfg_with_sun(50.0));
-        let lambda = ctx.eval_string("(lambda () 33.0)").unwrap();
-        let scalar = DynamicScalar::from_funcall(lambda, 50.0);
-        inv.set_sunlight_source(scalar);
-        let text_before = inv.sunlight_reading().expr;
-        assert!(text_before.is_some());
-
-        let snap = inv.snapshot_knob(KnobKind::Sunlight).unwrap();
-
-        // A scenario collapses it to a constant.
-        inv.set_sunlight_pct(10.0);
-        assert!(inv.sunlight_reading().expr.is_none());
-        assert!(!inv.has_unrenderable_source());
-
-        assert!(inv.restore_knob(snap));
-        assert_eq!(inv.sunlight_reading().expr, text_before);
-        assert!(inv.has_unrenderable_source(), "dynamic source restored");
-    }
-
     /// A Follow-source inverter tracks site weather at now − lag and
     /// falls back to 100% when the site has no weather.
     ///
@@ -1170,22 +823,13 @@ mod tests {
         w.set_weather(Some(Weather::new(WeatherConfig::default())));
         w.tick_once(noon, dt);
         let r = inv.sunlight_drive().unwrap().sunlight_reading();
-        assert!(
-            (r.value - 100.0).abs() < 0.01,
-            "solar noon → 100, got {}",
-            r.value,
-        );
-        assert_eq!(
-            r.expr.as_deref(),
-            Some("weather"),
-            "Follow read-back marker"
-        );
+        assert!((r - 100.0).abs() < 0.01, "solar noon → 100, got {r}");
 
         // At 09:30 — 3.5 h into a 14 h day: sin(π/4)·100. This tick is
         // also what drives the cache OFF 100, giving the fallback
         // check below something to move back from.
         w.tick_once(morning, dt);
-        let pct = inv.sunlight_drive().unwrap().sunlight_reading().value;
+        let pct = inv.sunlight_drive().unwrap().sunlight_reading();
         let expect = 100.0 * (std::f32::consts::PI * 0.25).sin();
         assert!((pct - expect).abs() < 0.1, "expected {expect}, got {pct}");
 
@@ -1195,7 +839,7 @@ mod tests {
         // Skip the fallback and the cache would still read ≈70.7.
         w.set_weather(None);
         w.tick_once(morning, dt);
-        let pct = inv.sunlight_drive().unwrap().sunlight_reading().value;
+        let pct = inv.sunlight_drive().unwrap().sunlight_reading();
         assert!((pct - 100.0).abs() < 0.01, "no weather → 100, got {pct}");
     }
 
@@ -1232,23 +876,23 @@ mod tests {
         // nothing about what the cache last held.
         w.tick_once(night, Duration::from_millis(100));
         assert_eq!(
-            inv.sunlight_drive().unwrap().sunlight_reading().value,
+            inv.sunlight_drive().unwrap().sunlight_reading(),
             0.0,
             "the Follow tick resolves the night sky into the cache"
         );
 
         inv.sunlight_drive().unwrap().set_sunlight_pct(42.0);
         w.tick_once(night, Duration::from_millis(100));
-        assert!((inv.sunlight_drive().unwrap().sunlight_reading().value - 42.0).abs() < 0.01);
+        assert!((inv.sunlight_drive().unwrap().sunlight_reading() - 42.0).abs() < 0.01);
         inv.sunlight_drive().unwrap().clear_sunlight_source();
         assert_eq!(
-            inv.sunlight_drive().unwrap().sunlight_reading().value,
+            inv.sunlight_drive().unwrap().sunlight_reading(),
             0.0,
             "the clear reads the last resolved sky at once, before any tick"
         );
         w.tick_once(night, Duration::from_millis(100));
         assert_eq!(
-            inv.sunlight_drive().unwrap().sunlight_reading().value,
+            inv.sunlight_drive().unwrap().sunlight_reading(),
             0.0,
             "night sky via Follow"
         );
@@ -1280,7 +924,7 @@ mod tests {
         let noon = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 13, 0, 0).unwrap();
 
         w.tick_once(noon, Duration::from_millis(100));
-        let pct = inv.sunlight_drive().unwrap().sunlight_reading().value;
+        let pct = inv.sunlight_drive().unwrap().sunlight_reading();
         let an_hour_ago = 100.0 * (std::f32::consts::PI * 6.0 / 14.0).sin();
         assert!(
             (pct - an_hour_ago).abs() < 0.05,
@@ -1292,7 +936,7 @@ mod tests {
         );
     }
 
-    /// An unset `:weather-lag-s` gives each inverter a stable
+    /// An unset `weather_lag_s` gives each inverter a stable
     /// id-derived offset (0–60 s) so a cloud sweeps across a multi-PV
     /// site by default; an explicit zero opts out. Pinned with a
     /// hard-edged cloud: the lagged inverter still reads the
@@ -1353,15 +997,13 @@ mod tests {
             .unwrap()
             .sunlight_drive()
             .unwrap()
-            .sunlight_reading()
-            .value;
+            .sunlight_reading();
         let instant = w
             .get(lagged_id + 200)
             .unwrap()
             .sunlight_drive()
             .unwrap()
-            .sunlight_reading()
-            .value;
+            .sunlight_reading();
         assert!(
             instant < 1.0,
             "explicit zero lag sees the cloud, got {instant}"
@@ -1398,7 +1040,7 @@ mod tests {
         let mut seen = Vec::new();
         for _ in 0..12 {
             w.tick_once(noon, Duration::from_millis(100));
-            seen.push(inv.sunlight_drive().unwrap().sunlight_reading().value);
+            seen.push(inv.sunlight_drive().unwrap().sunlight_reading());
         }
         assert!(
             seen.windows(2).any(|p| (p[0] - p[1]).abs() > f32::EPSILON),
@@ -1410,65 +1052,5 @@ mod tests {
                 "±50% of the 100% base is [50, 150], got {v} in {seen:?}"
             );
         }
-    }
-
-    /// The knob snapshot round-trips a Follow source: a scenario that
-    /// drives sunlight restores back to Follow, not a stale constant.
-    #[test]
-    fn knob_snapshot_restores_follow() {
-        let inv = SolarInverter::new(
-            1,
-            Duration::from_secs(1),
-            SolarInverterConfig {
-                sunlight_pct: None,
-                ..Default::default()
-            },
-        );
-        let snap = inv.snapshot_knob(KnobKind::Sunlight).unwrap();
-        inv.set_sunlight_pct(5.0);
-        assert!(inv.restore_knob(snap));
-        assert!(matches!(
-            &*inv.sunlight_source.read(),
-            SunlightSource::Follow
-        ));
-    }
-
-    /// The other direction, which the Follow test alone can't cover:
-    /// a scenario opening on a MANUALLY driven inverter must restore
-    /// the driven constant, not leave it following the weather. The
-    /// two together pin the payload as carrying the whole source —
-    /// a restore that hard-coded either variant would fail one of
-    /// them.
-    #[test]
-    fn knob_snapshot_restores_manual_over_follow() {
-        let inv = SolarInverter::new(
-            1,
-            Duration::from_secs(1),
-            SolarInverterConfig {
-                sunlight_pct: None,
-                ..Default::default()
-            },
-        );
-        // Something drove the knob to 42 before the scenario started.
-        inv.set_sunlight_pct(42.0);
-        let snap = inv.snapshot_knob(KnobKind::Sunlight).unwrap();
-
-        // The scenario clears it back to weather-following...
-        inv.clear_sunlight();
-        assert_eq!(inv.sunlight_reading().expr.as_deref(), Some("weather"));
-
-        // ... and teardown puts the driven constant back.
-        assert!(inv.restore_knob(snap));
-        let r = inv.sunlight_reading();
-        assert!(
-            (r.value - 42.0).abs() < 0.01,
-            "restored 42, got {}",
-            r.value
-        );
-        assert_eq!(r.expr, None, "a restored constant carries no marker");
-        assert!(matches!(
-            &*inv.sunlight_source.read(),
-            SunlightSource::Manual(_)
-        ));
     }
 }

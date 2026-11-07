@@ -8,21 +8,28 @@ mod common;
 use std::time::Duration;
 
 use chrono::DateTime;
-use common::{TestServer, WsClient, eval_or_panic};
+use common::{TestServer, WsClient};
 use serde_json::Value;
 
-const TINY_TOPOLOGY: &str = r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-meter :id 2
-                               :successors
-                               (list (%make-battery :id 3)))))
-"#;
+const TINY_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "battery", "id": 3},
+    {"type": "meter", "id": 2},
+    {"type": "grid_connection_point", "id": 1}
+  ],
+  "connections": [[2, 3], [1, 2]]
+}"#;
 
 /// A grid → meter → EV charger the two EV tests both drive: id 6 is
 /// the charger, id 2 the meter that takes no car.
-const EV_TOPOLOGY: &str = "(%make-grid-connection-point :id 1) (%make-meter :id 2) \
-                           (%make-ev-charger :id 6) (connect 1 2) (connect 2 6)";
+const EV_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "grid_connection_point", "id": 1},
+    {"type": "meter", "id": 2},
+    {"type": "ev_charger", "id": 6}
+  ],
+  "connections": [[1, 2], [2, 6]]
+}"#;
 
 async fn json(client: &reqwest::Client, url: String) -> Value {
     client
@@ -50,7 +57,7 @@ fn assert_rfc3339_millis(v: &Value) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn topology_endpoint_serves_components_and_connections() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let topo = json(&reqwest::Client::new(), s.mg_url("topology")).await;
     let components = topo["components"].as_array().expect("components array");
     let ids: Vec<i64> = components
@@ -64,20 +71,29 @@ async fn topology_endpoint_serves_components_and_connections() {
     assert_eq!(connections.len(), 2, "expected grid→meter, meter→battery");
 }
 
+/// A component renamed in a `PUT` of the spec shows its new name in
+/// the topology.
 #[tokio::test(flavor = "multi_thread")]
-async fn eval_endpoint_round_trips_world_state() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+async fn a_spec_put_renames_a_component() {
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(format!("{}/api/eval", s.ui_url))
-        .body("(rename-component 2 \"main\")")
+    let mut spec = json(&client, s.mg_url("spec")).await;
+    let meter = spec["components"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|c| c["id"] == 2)
+        .unwrap();
+    meter["name"] = "main".into();
+    client
+        .put(s.mg_url("spec"))
+        .json(&spec)
         .send()
         .await
+        .unwrap()
+        .error_for_status()
         .unwrap();
-    assert!(resp.status().is_success());
-    let body: Value = resp.json().await.unwrap();
-    assert!(body["value"].is_string(), "{body}");
 
     // Read back via the topology route to confirm the world updated.
     let topo = json(&client, s.mg_url("topology")).await;
@@ -91,43 +107,42 @@ async fn eval_endpoint_round_trips_world_state() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn scenario_endpoints_round_trip_via_eval() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+async fn recording_endpoints_round_trip() {
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
-    // Pre-start: lifecycle is empty.
-    let pre = json(&client, s.mg_url("scenario")).await;
+    // Before a start: the lifecycle is empty.
+    let pre = json(&client, s.mg_url("recording")).await;
     assert!(pre["name"].is_null());
 
-    // Start + record an event via /api/eval.
-    for body in [
-        "(scenario-start \"smoke\")",
-        "(scenario-event 'note \"hi\")",
+    // Start and add an event.
+    for (route, body) in [
+        ("recording/start", serde_json::json!({"name": "smoke"})),
+        (
+            "recording/event",
+            serde_json::json!({"kind": "note", "payload": "hi"}),
+        ),
     ] {
         let r = client
-            .post(format!("{}/api/eval", s.ui_url))
-            .body(body)
+            .post(s.mg_url(route))
+            .json(&body)
             .send()
             .await
             .unwrap();
-        assert!(
-            r.status().is_success(),
-            "eval {body} failed: {:?}",
-            r.status()
-        );
+        assert!(r.status().is_success(), "{route}: {:?}", r.status());
     }
 
-    let summary = json(&client, s.mg_url("scenario")).await;
+    let summary = json(&client, s.mg_url("recording")).await;
     assert_eq!(summary["name"], "smoke");
     assert_eq!(summary["event_count"], 1);
 
-    let events = json(&client, s.mg_url("scenario/events")).await;
+    let events = json(&client, s.mg_url("recording/events")).await;
     let arr = events["events"].as_array().unwrap();
     assert_eq!(arr[0]["kind"], "note");
 
-    // The report is keyed on the grid formula streams now, so it
-    // carries no meter id at all — the retired main-meter concept.
-    let report = json(&client, s.mg_url("scenario/report")).await;
+    // The report is keyed on the grid formula streams, so it carries
+    // no meter id at all.
+    let report = json(&client, s.mg_url("recording/report")).await;
     assert!(
         report.get("main_meter_id").is_none(),
         "main_meter_id should be retired from the report: {report}"
@@ -149,11 +164,11 @@ async fn scenario_endpoints_round_trip_via_eval() {
 }
 
 /// A microgrid created over HTTP from a topology document lives in
-/// memory with a stored spec: nothing is written, a structural eval on
-/// it is refused, and a `PUT` of its spec is how its structure changes.
+/// memory with a stored spec: nothing is written, and a `PUT` of its
+/// spec is how its structure changes.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_created_microgrid_is_edited_through_its_spec() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
     let resp = client
@@ -174,14 +189,6 @@ async fn a_created_microgrid_is_edited_through_its_spec() {
         "{created}"
     );
     assert!(!s.engine.state_dir().join("microgrids").exists());
-
-    let refused = client
-        .post(format!("{}/api/mg/{id}/eval", s.ui_url))
-        .body("(%make-meter :id 5001)")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(refused.status(), reqwest::StatusCode::CONFLICT);
 
     let mut spec = json(&client, format!("{}/api/mg/{id}/spec", s.ui_url)).await;
     spec["components"]
@@ -207,7 +214,7 @@ async fn a_created_microgrid_is_edited_through_its_spec() {
 /// topology immediately.
 #[tokio::test(flavor = "multi_thread")]
 async fn site_import_creates_microgrid_with_working_formulas() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
     let body = serde_json::json!({
@@ -296,7 +303,7 @@ fn tiny_export(name: &str, mid: Option<u64>, component_id: u64) -> Value {
 /// exactly that one, not the next free one.
 #[tokio::test(flavor = "multi_thread")]
 async fn site_import_claims_the_requested_microgrid_id() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
     // Well clear of the lowest free id (2201), so landing on it can
@@ -329,7 +336,7 @@ async fn site_import_claims_the_requested_microgrid_id() {
 /// names the id so the UI can put it in a toast. Nothing is created.
 #[tokio::test(flavor = "multi_thread")]
 async fn site_import_refuses_a_taken_microgrid_id() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
     let wanted = 2318;
@@ -402,19 +409,18 @@ async fn site_import_refuses_a_taken_microgrid_id() {
 /// end to end over that topology.
 #[tokio::test(flavor = "multi_thread")]
 async fn grid_reactive_formula_converges_over_a_site_with_an_ev_charger() {
-    let topology = r#"
-(%make-grid-connection-point :id 1
-    :successors
-    (list (%make-meter :id 2
-                        :successors
-                        (list (%make-battery-inverter :id 3
-                                                        :successors
-                                                        (list (%make-battery :id 4)))))
-          (%make-meter :id 5
-                       :successors
-                       (list (%make-ev-charger :id 6)))))
-"#;
-    let s = TestServer::start(topology).await;
+    let topology = r#"{
+      "components": [
+        {"type": "battery", "id": 4},
+        {"type": "battery_inverter", "id": 3},
+        {"type": "meter", "id": 2},
+        {"type": "ev_charger", "id": 6},
+        {"type": "meter", "id": 5},
+        {"type": "grid_connection_point", "id": 1}
+      ],
+      "connections": [[3, 4], [2, 3], [5, 6], [1, 2], [1, 5]]
+    }"#;
+    let s = TestServer::start_mg(topology).await;
     let client = reqwest::Client::new();
 
     let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
@@ -476,19 +482,18 @@ async fn grid_reactive_formula_converges_over_a_site_with_an_ev_charger() {
 /// as with grid Q).
 #[tokio::test(flavor = "multi_thread")]
 async fn per_source_reactive_streams_converge() {
-    let topology = r#"
-(%make-grid-connection-point :id 1
-    :successors
-    (list (%make-meter :id 2
-                        :successors
-                        (list (%make-battery-inverter :id 3
-                                                        :successors
-                                                        (list (%make-battery :id 4)))))
-          (%make-meter :id 5
-                       :successors
-                       (list (%make-solar-inverter :id 6)))))
-"#;
-    let s = TestServer::start(topology).await;
+    let topology = r#"{
+      "components": [
+        {"type": "battery", "id": 4},
+        {"type": "battery_inverter", "id": 3},
+        {"type": "meter", "id": 2},
+        {"type": "solar_inverter", "id": 6},
+        {"type": "meter", "id": 5},
+        {"type": "grid_connection_point", "id": 1}
+      ],
+      "connections": [[3, 4], [2, 3], [5, 6], [1, 2], [1, 5]]
+    }"#;
+    let s = TestServer::start_mg(topology).await;
     let client = reqwest::Client::new();
 
     let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
@@ -537,19 +542,18 @@ async fn per_source_reactive_streams_converge() {
 /// carries the retired main_meter_id flag.
 #[tokio::test(flavor = "multi_thread")]
 async fn grid_frequency_streams_on_a_multi_feeder_site() {
-    let topology = r#"
-(%make-grid-connection-point :id 1
-    :successors
-    (list (%make-meter :id 2
-                        :successors
-                        (list (%make-solar-inverter :id 3)))
-          (%make-meter :id 4
-                       :successors
-                       (list (%make-battery-inverter :id 5
-                                                       :successors
-                                                       (list (%make-battery :id 6)))))))
-"#;
-    let s = TestServer::start(topology).await;
+    let topology = r#"{
+      "components": [
+        {"type": "solar_inverter", "id": 3},
+        {"type": "meter", "id": 2},
+        {"type": "battery", "id": 6},
+        {"type": "battery_inverter", "id": 5},
+        {"type": "meter", "id": 4},
+        {"type": "grid_connection_point", "id": 1}
+      ],
+      "connections": [[2, 3], [5, 6], [4, 5], [1, 2], [1, 4]]
+    }"#;
+    let s = TestServer::start_mg(topology).await;
     let client = reqwest::Client::new();
 
     let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
@@ -605,7 +609,7 @@ async fn grid_frequency_streams_on_a_multi_feeder_site() {
 /// nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn weather_http_round_trip() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
     let resp = client.get(s.mg_url("weather")).send().await.unwrap();
@@ -721,22 +725,23 @@ async fn weather_http_round_trip() {
     }
 }
 
-const SOLAR_TOPOLOGY: &str = r#"
-(%make-grid-connection-point :id 1
-    :successors
-    (list (%make-solar-inverter :id 2 :rated-lower-w -10000.0 :rated-upper-w 0.0)
-          (%make-meter :id 3)))
-"#;
+const SOLAR_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "solar_inverter", "id": 2, "rated_lower_w": -10000.0, "rated_upper_w": 0.0},
+    {"type": "meter", "id": 3},
+    {"type": "grid_connection_point", "id": 1}
+  ],
+  "connections": [[1, 2], [1, 3]]
+}"#;
 
 /// `POST /api/mg/{mg}/component/{id}/drive` with `clear_sunlight:
 /// true` drops a prior `sunlight_pct` poke and returns the inverter
-/// to following the site's weather — the read-back knob shows the
-/// "weather" marker `sunlight_reading` gives a `Follow` source. On a
-/// non-solar component (a meter) the same field is a 400, not a
-/// silent no-op.
+/// to following the site's weather — with no weather on the site, the
+/// read-back knob goes back to full sun. On a non-solar component (a
+/// meter) the same field is a 400, not a silent no-op.
 #[tokio::test(flavor = "multi_thread")]
 async fn drive_clear_sunlight_returns_to_weather_and_rejects_non_solar() {
-    let s = TestServer::start(SOLAR_TOPOLOGY).await;
+    let s = TestServer::start_mg(SOLAR_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
     client
@@ -755,7 +760,7 @@ async fn drive_clear_sunlight_returns_to_weather_and_rejects_non_solar() {
         .find(|k| k["knob"] == "solar-sunlight")
         .unwrap_or_else(|| panic!("no solar-sunlight knob: {comp}"));
     assert_eq!(poked["value"], 42.0, "{comp}");
-    assert!(poked["expr"].is_null(), "a poke has no source text: {comp}");
+    assert!(poked.get("expr").is_none(), "{comp}");
 
     client
         .post(s.mg_url("component/2/drive"))
@@ -766,14 +771,26 @@ async fn drive_clear_sunlight_returns_to_weather_and_rejects_non_solar() {
         .error_for_status()
         .unwrap();
 
-    let comp = json(&client, s.mg_url("component/2")).await;
-    let cleared = comp["knobs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|k| k["knob"] == "solar-sunlight")
-        .unwrap_or_else(|| panic!("no solar-sunlight knob: {comp}"));
-    assert_eq!(cleared["expr"], "weather", "{comp}");
+    // The next physics tick reads the sky: no weather is full sun.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let comp = json(&client, s.mg_url("component/2")).await;
+        let cleared = comp["knobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|k| k["knob"] == "solar-sunlight")
+            .unwrap_or_else(|| panic!("no solar-sunlight knob: {comp}"))
+            .clone();
+        if cleared["value"] == 100.0 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never back to the weather: {comp}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     // clear_sunlight on a meter (not a solar inverter) is a 4xx
     // rejection, not a silent no-op.
@@ -798,7 +815,7 @@ async fn drive_clear_sunlight_returns_to_weather_and_rejects_non_solar() {
 /// `drive_soc_on_an_empty_charger_names_the_missing_ev`.
 #[tokio::test(flavor = "multi_thread")]
 async fn drive_rejects_each_field_on_the_wrong_component_kind() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
     let cases = [
         (
@@ -867,16 +884,16 @@ async fn drive_rejects_each_field_on_the_wrong_component_kind() {
 /// boiler's own reading is only the fallback.
 #[tokio::test(flavor = "multi_thread")]
 async fn steam_boiler_pool_streams_reach_the_loopback_snapshot() {
-    let topology = r#"
-(%make-grid-connection-point :id 1
-    :successors
-    (list (%make-meter :id 2
-                        :successors
-                        (list (%make-meter :id 5
-                                           :successors
-                                           (list (%make-steam-boiler :id 6)))))))
-"#;
-    let s = TestServer::start(topology).await;
+    let topology = r#"{
+      "components": [
+        {"type": "steam_boiler", "id": 6},
+        {"type": "meter", "id": 5},
+        {"type": "meter", "id": 2},
+        {"type": "grid_connection_point", "id": 1}
+      ],
+      "connections": [[5, 6], [2, 5], [1, 2]]
+    }"#;
+    let s = TestServer::start_mg(topology).await;
     let client = reqwest::Client::new();
 
     let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
@@ -922,9 +939,9 @@ async fn steam_boiler_pool_streams_reach_the_loopback_snapshot() {
     );
 }
 
-/// A runtime poke such as `(set-meter-power …)` fires TopologyChanged
-/// like every eval; the aggregate history behind the metrics charts
-/// must survive it end to end. (Before the loopback checked the site
+/// A runtime poke such as a meter's `power_w` drive changes no
+/// structure; the aggregate history behind the metrics charts must
+/// survive it end to end. (Before the loopback checked the site
 /// shape, the rebuild this triggered wiped the ring.) Whether the
 /// poke rebuilds at all is pinned by the loopback's own unit test
 /// `runtime_pokes_do_not_change_the_site_shape`.
@@ -932,16 +949,16 @@ async fn steam_boiler_pool_streams_reach_the_loopback_snapshot() {
 async fn a_meter_power_override_keeps_the_aggregate_history() {
     // The component graph wants the battery behind an inverter, or the
     // loopback's graph build never succeeds.
-    let topology = r#"
-(%make-grid-connection-point :id 1
-    :successors
-    (list (%make-meter :id 2
-                       :successors
-                       (list (%make-battery-inverter :id 3
-                                                     :successors
-                                                     (list (%make-battery :id 4)))))))
-"#;
-    let s = TestServer::start(topology).await;
+    let topology = r#"{
+      "components": [
+        {"type": "battery", "id": 4},
+        {"type": "battery_inverter", "id": 3},
+        {"type": "meter", "id": 2},
+        {"type": "grid_connection_point", "id": 1}
+      ],
+      "connections": [[3, 4], [2, 3], [1, 2]]
+    }"#;
+    let s = TestServer::start_mg(topology).await;
     let client = reqwest::Client::new();
     let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
     let id = mgs.as_array().expect("microgrids array")[0]["id"]
@@ -964,15 +981,14 @@ async fn a_meter_power_override_keeps_the_aggregate_history() {
         "grid_power history never filled: {before} samples"
     );
 
-    let resp = client
-        .post(format!("{}/api/eval", s.ui_url))
-        .body("(set-meter-power 2 1000.0)")
+    client
+        .post(format!("{}/api/mg/{id}/component/2/drive", s.ui_url))
+        .json(&serde_json::json!({"power_w": 1000.0}))
         .send()
         .await
+        .unwrap()
+        .error_for_status()
         .unwrap();
-    assert!(resp.status().is_success());
-    let body: Value = resp.json().await.unwrap();
-    assert!(body["value"].is_string(), "{body}");
 
     // Past the supervisor's 300 ms debounce and long enough for a
     // rebuild to have wiped the ring and refilled only a sample or two.
@@ -986,7 +1002,7 @@ async fn a_meter_power_override_keeps_the_aggregate_history() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ev_route_reports_plug_state() {
-    let s = TestServer::start(EV_TOPOLOGY).await;
+    let s = TestServer::start_mg(EV_TOPOLOGY).await;
     let client = reqwest::Client::new();
     let base = format!("{}/api/mg/2200", s.ui_url);
 
@@ -1002,7 +1018,14 @@ async fn ev_route_reports_plug_state() {
         "{empty}"
     );
 
-    eval_or_panic(&client, &s, "(plug-ev 6 'city :soc-pct 25)").await;
+    client
+        .post(s.mg_url("component/6/ev"))
+        .json(&serde_json::json!({"preset": "city", "soc_pct": 25}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
 
     let plugged = json(&client, format!("{base}/component/6/ev")).await;
     assert_eq!(plugged["plugged"], true, "{plugged}");
@@ -1036,7 +1059,7 @@ async fn ev_route_reports_plug_state() {
 /// charger, plugged or not.
 #[tokio::test(flavor = "multi_thread")]
 async fn drive_soc_on_an_empty_charger_names_the_missing_ev() {
-    let s = TestServer::start(EV_TOPOLOGY).await;
+    let s = TestServer::start_mg(EV_TOPOLOGY).await;
     let client = reqwest::Client::new();
     let base = format!("{}/api/mg/2200", s.ui_url);
 
@@ -1065,7 +1088,14 @@ async fn drive_soc_on_an_empty_charger_names_the_missing_ev() {
     );
 
     // With a car plugged in the same request lands on the car.
-    eval_or_panic(&client, &s, "(plug-ev 6 'city :soc-pct 25)").await;
+    client
+        .post(s.mg_url("component/6/ev"))
+        .json(&serde_json::json!({"preset": "city", "soc_pct": 25}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     client
         .post(s.mg_url("component/6/drive"))
         .json(&serde_json::json!({"soc_pct": 50.0}))
@@ -1081,57 +1111,23 @@ async fn drive_soc_on_an_empty_charger_names_the_missing_ev() {
     );
 }
 
-/// …and because that request writes the CAR, it takes the plug knob's
-/// snapshot first, exactly as `set-battery-soc` does in Lisp: a
-/// scenario that teleports a charger's SoC has that undone by its own
-/// teardown, along with the plug itself. (A battery's SoC still has no
-/// snapshot on any door — see scenarios/README.md.)
+/// A microgrid created after start gets a runtime, and the list shows
+/// it running.
 #[tokio::test(flavor = "multi_thread")]
-async fn drive_soc_on_a_charger_is_undone_by_scenario_teardown() {
-    let s = TestServer::start(EV_TOPOLOGY).await;
+async fn a_microgrid_created_later_is_running() {
+    let server = TestServer::start_mg("{}").await;
     let client = reqwest::Client::new();
-    let base = format!("{}/api/mg/2200", s.ui_url);
-
-    eval_or_panic(&client, &s, "(plug-ev 6 'city :soc-pct 25)").await;
-    eval_or_panic(&client, &s, "(scenario-start \"ev\")").await;
     client
-        .post(s.mg_url("component/6/drive"))
-        .json(&serde_json::json!({"soc_pct": 60.0}))
+        .post(format!("{}/api/microgrids", server.ui_url))
+        .json(&serde_json::json!({
+            "schema_version": 1,
+            "microgrids": [{"id": 71, "grpc_port": 8971, "components": []}]
+        }))
         .send()
         .await
         .unwrap()
         .error_for_status()
         .unwrap();
-    let mid = json(&client, format!("{base}/component/6/ev")).await;
-    assert!(
-        (mid["soc_pct"].as_f64().unwrap() - 60.0).abs() < 0.5,
-        "{mid}"
-    );
-
-    eval_or_panic(&client, &s, "(scenario-stop)").await;
-    let after = json(&client, format!("{base}/component/6/ev")).await;
-    assert_eq!(
-        after["plugged"], true,
-        "the car the run found is back: {after}"
-    );
-    assert!(
-        (after["soc_pct"].as_f64().unwrap() - 25.0).abs() < 0.5,
-        "teardown must put the car back at the SoC it found: {after}"
-    );
-}
-
-/// A microgrid registered by a REPL eval after start gets a runtime
-/// through the listener, and the list shows it running.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_repl_registered_microgrid_is_running() {
-    let server = TestServer::start("nil").await;
-    let client = reqwest::Client::new();
-    eval_or_panic(
-        &client,
-        &server,
-        "(make-microgrid :id 71 :grpc-port 8971 :topology (lambda () nil))",
-    )
-    .await;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         let list = json(&client, format!("{}/api/microgrids", server.ui_url)).await;
@@ -1151,7 +1147,7 @@ async fn a_repl_registered_microgrid_is_running() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ws_events_name_ids_and_times_like_the_http_bodies() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut ws = WsClient::connect(&s.ui_url).await;
     // The pump subscribes after the upgrade completes; a first frame
     // proves it is listening before the one-shot knob event fires.
@@ -1160,8 +1156,8 @@ async fn ws_events_name_ids_and_times_like_the_http_bodies() {
         .expect("a first WebSocket frame");
     let client = reqwest::Client::new();
     let resp = client
-        .post(format!("{}/api/eval", s.ui_url))
-        .body("(set-meter-power 2 1500)")
+        .post(s.mg_url("component/2/drive"))
+        .json(&serde_json::json!({"power_w": 1500}))
         .send()
         .await
         .unwrap();
@@ -1206,16 +1202,22 @@ async fn ws_events_name_ids_and_times_like_the_http_bodies() {
     assert_eq!(knob["unit"], "W");
 }
 
-/// The typed routes for the component knobs Lisp used to own, over a
-/// real socket: reactive limits on `/drive`, the operational mode on
-/// `/runtime`, a car plugged and unplugged on `/ev`, the sample lag
-/// and a stream cancel. Each refuses an unknown field.
+/// The typed routes for the component knobs, over a real socket:
+/// reactive limits on `/drive`, the operational mode on `/runtime`, a
+/// car plugged and unplugged on `/ev`, the sample lag and a stream
+/// cancel. Each refuses an unknown field.
 #[tokio::test(flavor = "multi_thread")]
 async fn typed_knob_routes_reach_the_site() {
-    let s = TestServer::start(
-        "(%make-grid-connection-point :id 1) (%make-meter :id 2) \
-         (%make-ev-charger :id 6) (%make-solar-inverter :id 8) \
-         (connect 1 2) (connect 2 6) (connect 2 8)",
+    let s = TestServer::start_mg(
+        r#"{
+          "components": [
+            {"type": "grid_connection_point", "id": 1},
+            {"type": "meter", "id": 2},
+            {"type": "ev_charger", "id": 6},
+            {"type": "solar_inverter", "id": 8}
+          ],
+          "connections": [[1, 2], [2, 6], [2, 8]]
+        }"#,
     )
     .await;
     let client = reqwest::Client::new();
@@ -1297,7 +1299,7 @@ async fn typed_knob_routes_reach_the_site() {
 /// the base model.
 #[tokio::test(flavor = "multi_thread")]
 async fn grid_and_frequency_routes_reach_the_site() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
     let post = |url: String, body: Value| {
         let req = client.post(url).json(&body);

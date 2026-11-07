@@ -39,8 +39,8 @@ fn endpoints_of(
     (child, v)
 }
 
-/// `--topology` boots the document's microgrids with no Lisp, and the
-/// enterprise flags reach the servers they configure.
+/// `--topology` boots the document's microgrids, and the assets and
+/// dispatch address flags move those servers.
 #[test]
 fn a_topology_file_boots_its_microgrids() {
     let dir = tempfile::TempDir::with_prefix("mc-endpoints-").unwrap();
@@ -60,6 +60,8 @@ fn a_topology_file_boots_its_microgrids() {
             topology.as_os_str(),
             "--assets-addr".as_ref(),
             "127.0.0.1:9900".as_ref(),
+            "--dispatch-addr".as_ref(),
+            "127.0.0.1:8900".as_ref(),
         ],
     );
     let mg0 = &v["microgrids"][0];
@@ -69,6 +71,10 @@ fn a_topology_file_boots_its_microgrids() {
     assert!(
         v["assets"].as_str().unwrap().starts_with("127.0.0.1:"),
         "the flag moved the assets server: {v}"
+    );
+    assert!(
+        v["dispatch"].as_str().unwrap().starts_with("127.0.0.1:"),
+        "the flag moved the dispatch server: {v}"
     );
     assert_eq!(
         v["version"],
@@ -80,13 +86,13 @@ fn a_topology_file_boots_its_microgrids() {
 #[test]
 fn each_microgrid_lists_its_grpc_addr() {
     let dir = tempfile::TempDir::with_prefix("mc-endpoints-").unwrap();
-    let mg = dir.path().join("mg.lisp");
+    let topology = dir.path().join("topology.json");
     std::fs::write(
-        &mg,
-        "(make-microgrid :id 51 :name \"north\" :topology (lambda () nil))",
+        &topology,
+        r#"{"schema_version": 1, "microgrids": [{"id": 51, "name": "north", "components": []}]}"#,
     )
     .unwrap();
-    let (_child, v) = endpoints_of(dir.path(), &[mg.as_os_str()]);
+    let (_child, v) = endpoints_of(dir.path(), &["--topology".as_ref(), topology.as_os_str()]);
     let mg0 = &v["microgrids"][0];
     assert_eq!(mg0["id"], 51, "{v}");
     assert_eq!(mg0["name"], "north", "{v}");

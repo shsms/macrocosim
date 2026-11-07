@@ -36,12 +36,10 @@ const ALLOWED = [
   "dd-seg-btn",
   "ctx-item",
   "dock-menu-item",
-  "script-row",
   "mglist-card",
   "mchip",
   "pal-btn",
   "dd-chip",
-  "repl-mg-chip",
   "seg-chip",
 ];
 

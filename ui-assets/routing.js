@@ -10,7 +10,7 @@ import { pulseBar } from "./chrome.js";
 import { bgFetch, errorText, getJson, jsonInit } from "./http.js";
 import { refitCharts, showComponent } from "./inspect.js";
 import { notify } from "./notices.js";
-import { microgridsPanel, scenariosPanel } from "./panels.js";
+import { microgridsPanel } from "./panels.js";
 import { closeAllPanels } from "./side-panel.js";
 import { readStorage, removeStorage, writeStorage } from "./storage.js";
 import { topology } from "./topology.js";
@@ -63,48 +63,26 @@ export async function mgSend(method, suffix, body) {
   return res;
 }
 
-// The microgrid the scenario readouts show: the selected one, else
-// the lowest id in the last microgrid listing (fetched from
+// The microgrid the Report panel shows: the selected one, else the
+// lowest id in the last microgrid listing (fetched from
 // `/api/microgrids` when no listing has arrived yet), else null.
 // Display only: the selection and the route stay as they are.
-export async function scenarioMgId() {
+export async function reportMgId() {
   const id = readSelectedMg();
   if (id != null) return id;
-  if (!mgFlags.size) publishMgFlags(await getJson("/api/microgrids"));
-  const ids = [...mgFlags.keys()];
+  if (!listedMgs.size) publishMgList(await getJson("/api/microgrids"));
+  const ids = [...listedMgs.keys()];
   return ids.length ? Math.min(...ids) : null;
 }
 
-// ─── Per-microgrid file flags ──────────────────────────────────────────────
-// The `managed` / `unsaved` / `source` fields off the last
-// /api/microgrids listing, keyed by id. microgridsPanel publishes on
-// every refresh; the inspector, the editor and the canvas read it to
-// decide whether a structural affordance is offered at all — only a
-// managed file can have its structure rewritten, so on an unmanaged
-// one the edit would run live and then be lost on the next reload.
-let mgFlags = new Map();
+// ─── The last microgrid listing ────────────────────────────────────────────
+// The /api/microgrids rows off the last listing, keyed by id.
+// microgridsPanel publishes on every refresh; reportMgId reads the ids.
+let listedMgs = new Map();
 
-export function publishMgFlags(rows) {
-  mgFlags = new Map(rows.map((m) => [m.id, m]));
+export function publishMgList(rows) {
+  listedMgs = new Map(rows.map((m) => [m.id, m]));
 }
-
-export function currentMgEntry() {
-  const id = readSelectedMg();
-  return id == null ? null : mgFlags.get(id) || null;
-}
-
-// Whether the selected microgrid's structure can be edited: it has a
-// stored spec, which the editor changes and PUTs. One loaded from Lisp
-// has none and is read-only. Permissive before the first listing
-// lands (or for an id the listing doesn't carry): greying the whole
-// editor out on a not-yet-known microgrid would claim something we
-// have not heard; the server is the real gate.
-export function structureEditable() {
-  const entry = currentMgEntry();
-  return entry == null || entry.has_spec === true;
-}
-
-export const READ_ONLY_TITLE = "loaded from Lisp — the structure is read-only";
 
 // ─── Density toggle ────────────────────────────────────────────────────────
 // Compact (the default) or comfortable, set as data-density on <html>; the type
@@ -136,7 +114,7 @@ export function setupDensityToggle() {
 const MODE_KEY = "macrocosim-mode";
 const MG_SELECTED_KEY = "macrocosim-selected-mg";
 const MG_SUBVIEW_KEY = "macrocosim-mg-subview";
-const VALID_MODES = new Set(["microgrids", "scenarios"]);
+const VALID_MODES = new Set(["microgrids"]);
 const VALID_SUBVIEWS = new Set(["topology", "dispatches"]);
 
 export function readSelectedMg() {
@@ -154,9 +132,9 @@ export function readSubview() {
 // The subview name, but only when the mode and mgView flags say the
 // subview pane is actually on screen — null otherwise. Keyboard
 // shortcuts and WS refreshes must gate on this, never on
-// data-subview alone: the subview persists across mode switches and
-// would leave canvas shortcuts armed on Scenarios or the microgrid
-// list, firing against a hidden canvas's selection.
+// data-subview alone: the subview persists on the microgrid list and
+// would leave canvas shortcuts armed there, firing against a hidden
+// canvas's selection.
 export function visibleSubview() {
   const { mode, mgView, subview } = document.body.dataset;
   return mode === "microgrids" && mgView === "selected" ? subview : null;
@@ -171,8 +149,7 @@ function currentRoute() {
   };
 }
 
-function routeToHash({ mode, selectedMg, subview }) {
-  if (mode === "scenarios") return "#scenarios";
+function routeToHash({ selectedMg, subview }) {
   if (selectedMg == null) return "#microgrids";
   return `#microgrids/${selectedMg}/${subview}`;
 }
@@ -186,9 +163,6 @@ function parseHash(hash) {
   if (!hash || hash === "#") return null;
   if (hash === "#microgrids") {
     return { mode: "microgrids", selectedMg: null, subview: "topology" };
-  }
-  if (hash === "#scenarios") {
-    return { mode: "scenarios", selectedMg: null, subview: "topology" };
   }
   const m = /^#microgrids\/(\d+)(?:\/(dashboard|topology|formulas|dispatches))?$/.exec(hash);
   // `formulas` was its own subview before the formula explorer became
@@ -263,7 +237,6 @@ let lastAppliedRoute = null;
 function applyMode(mode, keepPanels = false) {
   mode = applyRoute(mode, keepPanels);
   if (mode === "microgrids") microgridsPanel.refresh();
-  if (mode === "scenarios") scenariosPanel.refresh();
 }
 
 // Puts the stored (mode, mg, subview) on the DOM — body flags, toggle
@@ -361,8 +334,8 @@ export function jumpToTopology(id) {
 
 // The selection must name a microgrid the server has. The list panel
 // calls this with every list fresh from the server; a remembered id
-// the server no longer knows — a fresh state dir, a file unloaded
-// from the REPL — is dropped for the list view, saying why. A
+// the server no longer knows — a fresh state dir, a microgrid the
+// script dropped — is dropped for the list view, saying why. A
 // correction rather than a navigation (replaceState, not push), so
 // Back does not walk into the dead route. Applies the route only:
 // the caller holds the fresh list and renders it itself.
@@ -384,12 +357,10 @@ function dropSelection(id) {
   setStatus("", "");
   notify(`Microgrid #${id} is no longer loaded`);
   applyRoute(next.mode);
-  renderReplMgChip();
 }
 
 export function selectMicrogrid(id) {
   navigateTo({ mode: "microgrids", selectedMg: id });
-  renderReplMgChip();
   // Refetch the per-mg topology so the canvas + the empty-hint
   // overlay (D5) reflect the newly-selected microgrid. Without
   // this the canvas keeps showing the previous microgrid's
@@ -398,47 +369,11 @@ export function selectMicrogrid(id) {
   if (id != null) refreshTopology();
 }
 
-// REPL chip — surfaces which microgrid the REPL form's POSTs
-// route to: "→ {name}" when a microgrid is selected, "→ enterprise"
-// (the whole-site /api/eval) otherwise. Clicking jumps to the
-// Microgrids list so the operator can pick a different one.
-export function renderReplMgChip() {
-  const chip = document.getElementById("repl-mg-chip");
-  if (!chip) return;
-  const id = readSelectedMg();
-  if (id == null) {
-    chip.textContent = "→ enterprise";
-    chip.classList.add("muted");
-    return;
-  }
-  chip.classList.remove("muted");
-  // Pull the name from the microgridsPanel's cache if available;
-  // fall back to "#id" so the chip never sits empty.
-  const cached = (window.__mgPanelCache || []).find((m) => m.id === id);
-  chip.textContent = `→ ${cached ? cached.name || `#${id}` : `#${id}`}`;
-}
-
-export function setupReplMgChip() {
-  const chip = document.getElementById("repl-mg-chip");
-  if (!chip) return;
-  chip.addEventListener("click", () => {
-    navigateTo({ mode: "microgrids", selectedMg: null });
-    renderReplMgChip();
-  });
-  renderReplMgChip();
-}
-
 export function setupModeToggle() {
   for (const btn of document.querySelectorAll("#mode-toggle .mode-btn")) {
-    btn.addEventListener("click", () => {
-      const mode = btn.dataset.mode;
-      // Microgrids button returns the user to the list. Picking a
-      // microgrid (D2 cards) re-enters the selected view.
-      navigateTo({
-        mode,
-        selectedMg: mode === "microgrids" ? null : currentRoute().selectedMg,
-      });
-    });
+    // The Microgrids button returns the user to the list. Picking a
+    // microgrid (D2 cards) re-enters the selected view.
+    btn.addEventListener("click", () => navigateTo({ mode: btn.dataset.mode, selectedMg: null }));
   }
   for (const btn of document.querySelectorAll("#mg-subtoggle .mode-btn")) {
     btn.addEventListener("click", () => {
@@ -451,24 +386,17 @@ export function setupModeToggle() {
   if (backBtn) backBtn.addEventListener("click", () => selectMicrogrid(null));
   applyInitialRoute();
   setupRouterPopstate();
-  // Keyboard chord — 1 → Microgrids list, 2 → Scenarios. Skip
-  // when a text input has focus so digits typed into the REPL /
-  // search boxes don't trigger a mode flip.
+  // Keyboard chord — 1 → Microgrids list. Skip when a text input has
+  // focus so digits typed into a field don't trigger a mode flip.
   document.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     const t = ev.target;
     const tag = t?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable)
       return;
-    let mode = null;
-    if (ev.key === "1") mode = "microgrids";
-    else if (ev.key === "2") mode = "scenarios";
-    if (!mode) return;
+    if (ev.key !== "1") return;
     ev.preventDefault();
-    navigateTo({
-      mode,
-      selectedMg: mode === "microgrids" ? null : currentRoute().selectedMg,
-    });
+    navigateTo({ mode: "microgrids", selectedMg: null });
   });
 }
 
@@ -490,7 +418,7 @@ export async function refreshTopology() {
     topology.apply(data);
     // The system pulse's health counters + graph pill read from the
     // same topology fetch — one round-trip carries both
-    // signals + a hot-reload's WS topology_changed nudge
+    // signals + a script reload's WS topology_changed nudge
     // already drives a refresh.
     pulseBar.applyTopology(data.components || [], data.graph_status);
   } catch (err) {

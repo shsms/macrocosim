@@ -1,7 +1,7 @@
-//! The per-type defaults the engine fills into a spec before it builds
-//! it: the values of `sim/defaults.lisp`. They sit on top of each
-//! component's own `*Config::default()`, so a field with no entry here
-//! keeps the component's default.
+//! The per-type defaults the engine fills into a spec before it
+//! builds it, served on `GET /api/defaults`. They sit on top of each
+//! component's own `*Config::default()`, so a field with no entry
+//! here keeps the component's default.
 //!
 //! Some fields have no entry on purpose, because leaving them unset
 //! selects a behaviour of their own: a meter's `power_w` (it reads
@@ -35,10 +35,9 @@ pub struct Defaults {
 }
 
 impl Default for Defaults {
-    /// The table of `sim/defaults.lisp`.
+    /// The defaults table.
     fn default() -> Self {
-        // The types without physics share one entry, as the Lisp
-        // `marker-defaults` plist does.
+        // The types without physics share one entry.
         let marker = MarkerSpec {
             stream_jitter_pct: Some(0.0),
             ..Default::default()
@@ -134,105 +133,7 @@ pub fn fill(spec: &MicrogridSpec, defaults: &Defaults) -> MicrogridSpec {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
-
-    /// A flat plist as Lisp prints it, `(:a 1 :b ok)`, as key → value.
-    fn parse_plist(printed: &str) -> BTreeMap<String, String> {
-        let inner = printed
-            .trim()
-            .strip_prefix('(')
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or_else(|| panic!("not a list: {printed}"));
-        let tokens: Vec<&str> = inner.split_whitespace().collect();
-        assert!(tokens.len().is_multiple_of(2), "not a plist: {printed}");
-        tokens
-            .chunks(2)
-            .map(|kv| (kv[0].to_string(), kv[1].to_string()))
-            .collect()
-    }
-
-    /// One entry of the Rust table as Lisp keys and values: `_` becomes
-    /// `-` in keys and in enum values, numbers stay numbers.
-    fn as_plist(entry: &impl Serialize) -> BTreeMap<String, serde_json::Value> {
-        let serde_json::Value::Object(map) = serde_json::to_value(entry).unwrap() else {
-            unreachable!()
-        };
-        map.into_iter()
-            .map(|(k, v)| {
-                let v = match v {
-                    serde_json::Value::String(s) => serde_json::Value::String(s.replace('_', "-")),
-                    v => v,
-                };
-                (format!(":{}", k.replace('_', "-")), v)
-            })
-            .collect()
-    }
-
-    fn same(lisp: &BTreeMap<String, String>, rust: &BTreeMap<String, serde_json::Value>) -> bool {
-        lisp.len() == rust.len()
-            && lisp.iter().all(|(k, v)| match rust.get(k) {
-                Some(serde_json::Value::Number(n)) => v.parse::<f64>().ok() == n.as_f64(),
-                Some(serde_json::Value::String(s)) => v == s,
-                _ => false,
-            })
-    }
-
-    /// The table equals `sim/defaults.lisp` as a running interpreter
-    /// reads it.
-    #[tokio::test]
-    async fn the_table_equals_the_lisp_defaults() {
-        let dir = crate::test_dir::TestDir::new("spec-defaults");
-        let file = dir.join("mg.lisp");
-        std::fs::write(&file, "(make-microgrid :id 1 :topology (lambda ()))").unwrap();
-        let (config, _clock) = crate::lisp::Config::new_headless(file.to_str().unwrap()).unwrap();
-        let d = Defaults::default();
-        let table: [(&str, BTreeMap<String, serde_json::Value>); 11] = [
-            ("grid", as_plist(&d.grid_connection_point)),
-            ("meter", as_plist(&d.meter)),
-            ("battery", as_plist(&d.battery)),
-            ("battery-inverter", as_plist(&d.battery_inverter)),
-            ("solar-inverter", as_plist(&d.solar_inverter)),
-            ("marker", as_plist(&d.chp)),
-            ("ev-charger", as_plist(&d.ev_charger)),
-            ("steam-boiler", as_plist(&d.steam_boiler)),
-            ("marker", as_plist(&d.wind_turbine)),
-            ("marker", as_plist(&d.power_transformer)),
-            ("marker", as_plist(&d.breaker)),
-        ];
-        for (category, rust) in table {
-            let printed = config
-                .defaults_silent(&format!("{category}-defaults"))
-                .unwrap();
-            let lisp = parse_plist(&printed);
-            assert!(
-                same(&lisp, &rust),
-                "{category}: Lisp {lisp:?} against Rust {rust:?}"
-            );
-        }
-    }
-
-    /// Every Lisp `*-defaults` plist has a row in the table above.
-    #[test]
-    fn every_lisp_defaults_category_is_compared() {
-        for category in crate::lisp::DEFAULT_CATEGORIES {
-            assert!(
-                [
-                    "grid",
-                    "meter",
-                    "battery",
-                    "battery-inverter",
-                    "solar-inverter",
-                    "ev-charger",
-                    "steam-boiler",
-                    "marker"
-                ]
-                .contains(category),
-                "{category}-defaults has no entry in the_table_equals_the_lisp_defaults"
-            );
-        }
-    }
 
     #[test]
     fn fill_takes_unset_fields_and_keeps_set_ones() {

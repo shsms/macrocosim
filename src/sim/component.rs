@@ -1,17 +1,9 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
-use tulisp::TulispContext;
 
 use crate::proto::common::metrics::Bounds;
-use crate::sim::{
-    bounds::VecBounds,
-    dynamic_scalar::DynamicScalar,
-    inverter::solar_inverter::SunlightSource,
-    meter::{ConstructedReactive, ReactiveSource},
-    microgrid_site::MicrogridSite,
-    physics_state::PhysicsState,
-};
+use crate::sim::{bounds::VecBounds, microgrid_site::MicrogridSite, physics_state::PhysicsState};
 
 mod controllable;
 mod dc_storage;
@@ -41,7 +33,7 @@ pub enum Category {
 
 impl Category {
     /// Canonical lowercase slug — the one vocabulary shared by the
-    /// topology API and the scenario CSV filenames.
+    /// topology API and the recording CSV filenames.
     pub fn as_str(self) -> &'static str {
         match self {
             Category::Grid => "grid",
@@ -72,37 +64,44 @@ pub(crate) fn power_state(p: f32) -> &'static str {
     }
 }
 
-tulisp::AsSymbol! {
-    /// A component's declared capability — a microgrid CONFIG parameter,
-    /// not a runtime state. The runtime fault knobs (telemetry mode,
-    /// command mode, health) depend on it: an `Inactive` component can
-    /// never stream telemetry, whatever the knobs say. The formula
-    /// engine reads this mode to decide whether a component can be a
-    /// measurement source.
-    ///
-    /// A deliberate twin of the graph crate's `OperationalMode`
-    /// (lifted 1:1 in `graph_adapter::lift_mode`): the local type
-    /// carries the Lisp symbol conversion the foreign type can't.
-    /// Keep `provides_telemetry` in sync with the graph crate's.
-    #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, Default,
-        serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-    )]
-    #[serde(rename_all = "snake_case")]
-    pub enum OperationalMode {
-        /// Not explicitly set; treated as full capability.
-        #[default]
-        Unspecified<"unspecified">,
-        /// Not operational: no telemetry, no control.
-        Inactive<"inactive">,
-        /// Streams telemetry, rejects control commands.
-        TelemetryOnly<"telemetry-only">,
-        /// Accepts control commands, streams no telemetry.
-        ControlOnly<"control-only">,
-        /// Full capability, explicitly declared.
-        ControlAndTelemetry<"control-and-telemetry">,
-    }
+/// A component's declared capability — a microgrid CONFIG parameter,
+/// not a runtime state. The runtime fault knobs (telemetry mode,
+/// command mode, health) depend on it: an `Inactive` component can
+/// never stream telemetry, whatever the knobs say. The formula engine
+/// reads this mode to decide whether a component can be a measurement
+/// source.
+///
+/// A deliberate twin of the graph crate's `OperationalMode` (lifted
+/// 1:1 in `graph_adapter::lift_mode`): the local type carries the
+/// serde and JSON Schema derives the foreign type can't. Keep
+/// `provides_telemetry` in sync with the graph crate's.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationalMode {
+    /// Not explicitly set; treated as full capability.
+    #[default]
+    Unspecified,
+    /// Not operational: no telemetry, no control.
+    Inactive,
+    /// Streams telemetry, rejects control commands.
+    TelemetryOnly,
+    /// Accepts control commands, streams no telemetry.
+    ControlOnly,
+    /// Full capability, explicitly declared.
+    ControlAndTelemetry,
 }
+
+display_as_serde!(OperationalMode);
 
 impl OperationalMode {
     /// Whether a component in this mode streams telemetry.
@@ -250,124 +249,38 @@ impl Telemetry {
     }
 }
 
-/// A single-axis knob read-back: the live resolved value plus, for a
-/// dynamic (lambda / symbol) source, the printed Lisp expression
-/// driving it. `expr` is `None` for a plain constant — see
-/// `DynamicScalar::source_text`, which this wraps. Cheap and
-/// lock-safe by construction: the source string is captured once at
-/// construction time, so reading it here never touches the
-/// interpreter.
-#[derive(Clone, Debug)]
-pub struct ScalarReading {
-    pub value: f32,
-    pub expr: Option<String>,
-}
-
-/// A meter's reactive-power knob read-back — the Q twin of
-/// `ScalarReading`, widened to also cover the power-factor
-/// derivation shape (`ReactiveSource::PowerFactor` has no scalar
-/// source of its own to read back, just the pf/leading pair it was
-/// configured with).
+/// A meter's reactive-power knob read-back: a direct VAr value, or
+/// the power factor its Q is derived from.
 #[derive(Clone, Debug)]
 pub enum ReactiveReading {
-    Var(ScalarReading),
+    Var(f32),
     PowerFactor { pf: f32, leading: bool },
-}
-
-/// Which driven knob a scenario snapshot call targets — the
-/// vocabulary [`SimulatedComponent::snapshot_knob`] keys on, the key
-/// type `MicrogridSite`'s per-scenario baseline map indexes by
-/// alongside the component id, and what teardown dispatches its
-/// `KnobChanged` broadcast on. Restore needs no `KnobKind`: a
-/// [`KnobSnapshot`] already names its own knob by variant.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum KnobKind {
-    MeterPower,
-    MeterReactive,
-    Sunlight,
-    BoilerDemand,
-    /// EV charger plug state (the connected car, or none).
-    Ev,
-}
-
-/// A captured knob value, ready to be written straight back into a
-/// component's slot(s) by [`SimulatedComponent::restore_knob`].
-/// Holds the live Rust objects (`DynamicScalar` / `ReactiveSource`),
-/// not their printed text: a lambda's closed-over state and a
-/// symbol's live binding can't be reconstructed by re-parsing a
-/// string, and restoring one has to hand back the exact object that
-/// was installed before the scenario touched it.
-///
-/// The meter variants carry BOTH the live source and the
-/// construction-time kwarg, captured as one paired snapshot: restore
-/// must write both, or a scenario-era `clear_active_power_source` /
-/// `clear_reactive_power_source` (which also drops the construction
-/// kwarg — "clear means cleared") would permanently lose the
-/// `:power-w` / `:reactive-power-var` a component was originally built
-/// with.
-pub enum KnobSnapshot {
-    /// Solar inverter sunlight %: the source slot is never optional
-    /// on this component (it's always at least a constant), so no
-    /// `Option` here — but the payload carries the whole
-    /// [`SunlightSource`], `Follow` included, not just the driven
-    /// scalar. That is what lets restore land the exact pre-scenario
-    /// state: an inverter that was tracking the weather goes back to
-    /// tracking the weather, rather than being frozen at whatever
-    /// constant the sky happened to be at snapshot time. Distinct
-    /// from [`Self::BoilerDemand`] so the type — not a `kind`
-    /// argument travelling alongside it — is what keeps a boiler's
-    /// snapshot from being written into an inverter's slot.
-    Sunlight(SunlightSource),
-    /// Steam boiler steam demand (kg/s): same shape as
-    /// [`Self::Sunlight`], different knob.
-    BoilerDemand(DynamicScalar),
-    /// Meter active-power axis: the live override (`None` when the
-    /// meter was measuring its children) plus the `:power-w` kwarg it
-    /// was constructed with, if any.
-    MeterActive {
-        source: Option<DynamicScalar>,
-        constructed: Option<f32>,
-    },
-    /// Meter reactive-power axis: the live override — `Var` or
-    /// `PowerFactor`, or `None` when the meter was measuring — plus
-    /// the `:reactive-power-var` / `:power-factor` kwarg it was
-    /// constructed with, if any.
-    MeterReactive {
-        source: Option<ReactiveSource>,
-        constructed: Option<ConstructedReactive>,
-    },
-    /// EV charger plug state: the car that was connected (a copy) or
-    /// `None` for an empty charger, so restore puts the exact car back
-    /// or unplugs whatever a scenario plugged.
-    Ev(Option<crate::sim::ev_presets::ConnectedEv>),
 }
 
 /// The single trait every simulated component implements.
 ///
 /// Reading order:
 ///   - **Identity**: id, category, name, subtype, is_hidden.
-///   - **Lifecycle**: stream_interval, stream_jitter_pct,
-///     refresh_inputs, tick, telemetry, active_power_w.
+///   - **Lifecycle**: stream_interval, stream_jitter_pct, tick,
+///     telemetry, active_power_w.
 ///   - **Capabilities**, each its own trait reached through an
 ///     accessor that returns `None` unless the component has it:
 ///     `controllable` ([`Controllable`], what the gateway drives),
 ///     `dc_storage` ([`DcStorage`], the battery side of the DC bus),
-///     `reactive_limits` ([`ReactiveLimits`]), and the scenario and
-///     UI knobs `meter_drive` ([`MeterDrive`]), `sunlight_drive`
+///     `reactive_limits` ([`ReactiveLimits`]), and the HTTP knobs
+///     `meter_drive` ([`MeterDrive`]), `sunlight_drive`
 ///     ([`SunlightDrive`]), `steam_drive` ([`SteamDrive`]) and
 ///     `ev_port` ([`EvPort`]). The Microgrid API rules live in
 ///     `sim::gateway`, never in a component.
 ///   - **Bounds**: rated_active_bounds, rated_fuse_current.
 ///   - **Aggregation** (parent reads from child): aggregate_power_w,
 ///     aggregate_reactive_var.
-///   - **Scenario teardown**: snapshot_knob, restore_knob.
-///   - **Managed-file rendering**: make_fn, has_unrenderable_source,
-///     constructor_kwargs.
+///   - **Carry across a rebuild**: physics_state,
+///     restore_physics_state.
 ///
 /// The required methods are `id`, `category`, `name`,
-/// `stream_interval`, `tick`, `telemetry`, `make_fn` and
-/// `constructor_kwargs`; a component overrides the accessors for the
-/// capabilities it has.
+/// `stream_interval`, `tick` and `telemetry`; a component overrides
+/// the accessors for the capabilities it has.
 pub trait SimulatedComponent: Send + Sync + fmt::Display {
     // ── identity ─────────────────────────────────────────────────────
 
@@ -409,26 +322,10 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
         0.0
     }
 
-    /// Refresh externally-driven inputs from Lisp. The MicrogridSite
-    /// scheduler holds the interpreter lock and calls this on every
-    /// component, in registration order, *before* the tick pass.
-    /// Components carrying a [`DynamicScalar`] (lambda- or symbol-
-    /// bound `:power-w`, `:sunlight-pct`, …) re-evaluate it here and
-    /// stash the resolved scalar in an atomic that `tick` then reads.
-    /// Default no-op.
-    ///
-    /// Must not register defuns or otherwise mutate global state —
-    /// the lock is held for every component in turn and the loop's
-    /// total cost is bounded by the slowest implementor.
-    ///
-    /// [`DynamicScalar`]: crate::sim::dynamic_scalar::DynamicScalar
-    fn refresh_inputs(&self, _ctx: &mut TulispContext) {}
-
     /// Advance internal state by `dt`. Called once per physics tick
-    /// from `MicrogridSite::tick_once` in registration order (children before
-    /// parents). Components that aggregate from successors read them
-    /// here via `site.get(child_id)`. Must not call back into the
-    /// Lisp interpreter — see [`Self::refresh_inputs`] for that.
+    /// from `MicrogridSite::tick_once` in registration order
+    /// (children before parents). Components that aggregate from
+    /// successors read them here via `site.get(child_id)`.
     fn tick(&self, site: &MicrogridSite, now: DateTime<Utc>, dt: Duration);
 
     /// Snapshot the component's observable state for streaming. Pure
@@ -486,39 +383,6 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
         None
     }
 
-    // ── scenario teardown (snapshot / restore) ───────────────────────
-
-    /// Capture this component's `kind` knob so a later
-    /// [`Self::restore_knob`] can put it back exactly as it was.
-    /// Called by `MicrogridSite`'s scenario baseline map the first
-    /// time a scenario is about to displace a knob it hasn't already
-    /// snapshotted — so the very first capture, taken before the
-    /// scenario's own drive, is what teardown restores to, no matter
-    /// how many times the scenario re-drives the same knob
-    /// afterward. `None` when this component has no such knob (the
-    /// default) — the caller treats that as "nothing to snapshot",
-    /// not an error.
-    fn snapshot_knob(&self, _kind: KnobKind) -> Option<KnobSnapshot> {
-        None
-    }
-
-    /// Write a previously captured [`KnobSnapshot`] straight back
-    /// into the component's slot(s). Mechanical, unlike
-    /// [`MeterDrive::clear_active_power_source`] /
-    /// [`MeterDrive::clear_reactive_power_source`] — those are
-    /// user-intent verbs that also drop the construction-time kwarg,
-    /// which would permanently erase a `:power-w` a scenario merely
-    /// overrode for its own duration.
-    ///
-    /// `snap`'s variant names the knob on its own — there is one per
-    /// [`KnobKind`], so a boiler-demand snapshot handed to a solar
-    /// inverter simply doesn't match its arm. Returns `false` when
-    /// `snap` names nothing this component owns (including "this
-    /// component has no such knob at all", the default).
-    fn restore_knob(&self, _snap: KnobSnapshot) -> bool {
-        false
-    }
-
     // ── carry across a rebuild ───────────────────────────────────────
 
     /// The physics state a rebuilt copy of this component should keep
@@ -560,35 +424,9 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     fn aggregate_reactive_var(&self, _world: &MicrogridSite) -> f32 {
         0.0
     }
-
-    // ── microgrid-file rendering ──────────────────────────────────────
-
-    /// The `%make-*` primitive that rebuilds this component on load.
-    fn make_fn(&self) -> &'static str;
-
-    /// Does this component carry an input value the generated block
-    /// cannot write down? Two shapes qualify: a `:power-w` /
-    /// `:sunlight-pct` bound to a lambda or symbol, which only means
-    /// something while the interpreter is running, and a value poked
-    /// in at runtime over a component that was built without that
-    /// kwarg — the renderer writes construction arguments, not
-    /// pokes, so either way the value is dropped. Adopt warns about
-    /// these; they have to be set again from the script section.
-    fn has_unrenderable_source(&self) -> bool {
-        false
-    }
-
-    /// Construction kwargs as lisp-syntax (key, value) pairs, excluding
-    /// `:id`, `:name`, `:successors` and runtime-mode kwargs — the
-    /// microgrid-file renderer supplies those. Values follow the file
-    /// format rules: floats via `lisp_float`, non-finite values omitted,
-    /// disabled reactive caps pinned as `0`.
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)>;
 }
 
-/// Cloneable handle that we hand to Lisp as an opaque host value.
-/// Wrapping in a newtype lets us hang `Display`, `Clone`, the
-/// `TulispAny` opt-in, and a stable `TypeId` off it.
+/// Cloneable handle on a registered component.
 #[derive(Clone)]
 pub struct ComponentHandle(pub Arc<dyn SimulatedComponent>);
 
@@ -615,11 +453,6 @@ impl fmt::Display for ComponentHandle {
         write!(f, "<{} #{}>", self.0.name(), self.0.id())
     }
 }
-
-/// First auto-allocated component ID. Microsim picks 1000 so explicit
-/// IDs (1, 2, …) on roots/main-meters don't collide; macrocosim
-/// matches the convention so test fixtures stay portable.
-pub const FIRST_AUTO_ID: u64 = 1000;
 
 #[cfg(test)]
 mod tests {

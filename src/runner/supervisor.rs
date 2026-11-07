@@ -12,8 +12,8 @@
 //!    [`HELLO_DEADLINE`] (it is then killed), fails to load; the old
 //!    child and the world are untouched.
 //! 3. The hello is checked and its microgrids built aside under the
-//!    create lock ([`topology::apply_hello`]). A refusal fails the
-//!    load and changes nothing.
+//!    structural lock ([`topology::apply_hello`]). A refusal fails
+//!    the load and changes nothing.
 //! 4. If the new child is still alive, the old one is stopped (stdin
 //!    closed, up to [`STOP_GRACE`](super::child::STOP_GRACE) to exit,
 //!    then killed), then the microgrids are unloaded, rebuilt and
@@ -31,12 +31,13 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 use super::child::{Child, Exit};
 use super::hello::{HelloAnswer, HelloError, HelloMicrogrid, HelloRequest};
 use super::script_watch::{script_tree, state_dirs};
-use crate::engine::{Engine, topology};
+use crate::engine::Engine;
+use crate::engine::topology::{self, TopologyError};
 use crate::runtime::MicrogridRuntimes;
 use crate::spec::TopologyDoc;
 use std::time::Instant;
@@ -155,6 +156,9 @@ pub struct ScriptSupervisor {
     /// Set once the first child's hello was answered, or it failed to
     /// load.
     first_load: watch::Sender<bool>,
+    /// The status on every change; the WS event pump forwards it as a
+    /// `script_status` event.
+    status_tx: broadcast::Sender<ScriptStatus>,
 }
 
 impl ScriptSupervisor {
@@ -187,6 +191,7 @@ impl ScriptSupervisor {
             state: Mutex::new(State::default()),
             ops: tokio::sync::Mutex::new(()),
             first_load: watch::channel(false).0,
+            status_tx: broadcast::channel(64).0,
         })
     }
 
@@ -423,9 +428,8 @@ impl ScriptSupervisor {
 
     async fn apply(&self, child: &Child, req: HelloRequest) -> Result<Vec<u64>, HelloError> {
         let doc = TopologyDoc::from_value(req.topology)
-            .map_err(|e| HelloError::Invalid(e.message().to_string()))?;
-        let create_lock = self.engine.create_lock();
-        let _structural = create_lock.lock().await;
+            .map_err(|e| TopologyError::Invalid(e.message().to_string()))?;
+        let structural = self.engine.structural().await;
         let stop_old = || async {
             if !child.alive() {
                 return Err("the script exited before its microgrids were put in place".to_string());
@@ -436,12 +440,14 @@ impl ScriptSupervisor {
             }
             Ok(())
         };
-        topology::apply_hello(&self.engine, &self.runtimes, &self.script, doc, stop_old)
+        topology::apply_hello(&structural, &self.runtimes, &self.script, doc, stop_old)
             .await
             .map_err(HelloError::from)
     }
 
-    /// Stop the children the way a reload stops the old one.
+    /// Stop the pending and the running child, each by
+    /// [`Child::stop`]: close its stdin, then kill it after the
+    /// grace.
     pub async fn shutdown(&self) {
         let (pending, running) = {
             let mut state = self.state.lock();
@@ -472,8 +478,13 @@ impl ScriptSupervisor {
         }
     }
 
+    /// Subscribe to the status, sent on every change.
+    pub fn subscribe(&self) -> broadcast::Receiver<ScriptStatus> {
+        self.status_tx.subscribe()
+    }
+
     fn broadcast(&self) {
-        let _ = self.engine.script_status.send(self.status());
+        let _ = self.status_tx.send(self.status());
     }
 }
 

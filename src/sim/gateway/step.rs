@@ -659,7 +659,7 @@ mod tests {
     /// The discharge side of
     /// `a_zero_command_holds_the_window_while_the_output_ramps_down`:
     /// a 0 command on a discharging inverter holds the window at
-    /// `:soc-lower-pct` while the output ramps up to 0.
+    /// `soc_lower_pct` while the output ramps up to 0.
     #[test]
     fn a_zero_command_holds_the_lower_window_while_the_output_ramps_up() {
         let site = settled_at_the_edge(-5_000.0, 10.1);

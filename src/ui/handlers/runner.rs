@@ -25,13 +25,11 @@ pub(in crate::ui) async fn runner_hello(
             "this engine runs no script",
         ));
     };
-    // The hello runs in a task of its own, so a child that hangs up
-    // mid-hello cannot leave it half applied.
-    tokio::spawn(async move { runner.hello(body).await })
+    // The supervisor takes its own lock before the structural one, so
+    // the hello is detached as it is.
+    super::detached(async move { runner.hello(body).await.map_err(ApiError::from) })
         .await
-        .map_err(|e| ApiError::internal(format!("the hello panicked: {e}")))?
         .map(Json)
-        .map_err(|e| ApiError::new(e.status(), e.to_string()))
 }
 
 /// GET /api/runner — the script, its child's state, the last reload's

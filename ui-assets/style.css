@@ -42,20 +42,6 @@
   --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.4);
   --backdrop: rgba(0, 0, 0, 0.55);
-  /* REPL syntax: the rainbow parens by depth, then the token kinds. */
-  --syn-paren-1: #dd3333;
-  --syn-paren-2: #dd8800;
-  --syn-paren-3: #cccc00;
-  --syn-paren-4: #22cc22;
-  --syn-paren-5: #2299cc;
-  --syn-paren-6: #4466cc;
-  --syn-paren-7: #cc44cc;
-  --syn-mismatch: #ff5555;
-  --syn-string: #e8a366;
-  --syn-comment: #888888;
-  --syn-special: #c08cf0;
-  --syn-fn: #7ab8ff;
-  --syn-plist-key: #4ec9b0;
   /* Graph pills and the hover card (pill.js reads these at load and again on a
      theme change). */
   --pill-surface: #242a33;
@@ -170,19 +156,6 @@
   --shadow-2: 0 4px 12px rgba(31, 35, 40, 0.15);
   --shadow-3: 0 8px 24px rgba(31, 35, 40, 0.18);
   --backdrop: rgba(31, 35, 40, 0.3);
-  --syn-paren-1: #b42318;
-  --syn-paren-2: #b25e00;
-  --syn-paren-3: #7f7000;
-  --syn-paren-4: #1a7f37;
-  --syn-paren-5: #0b6f9c;
-  --syn-paren-6: #3b55b5;
-  --syn-paren-7: #9b2f9b;
-  --syn-mismatch: #cf222e;
-  --syn-string: #a3540f;
-  --syn-comment: #6e7781;
-  --syn-special: #7b3fc4;
-  --syn-fn: #0a66c2;
-  --syn-plist-key: #0e7a6b;
   --pill-surface: #ffffff;
   --pill-border: #d3d8df;
   --pill-fg: #1f2328;
@@ -380,27 +353,10 @@ header strong {
 
 .spacer { flex: 1; }
 
-/* Live indicator alongside the Scenarios mode toggle: lists every
-   currently-running scenario by name. Hidden when nothing's
-   running, so the chip only shows up when there's something
-   meaningful to say. */
-.active-scenarios {
-  font-family: var(--font-mono);
-  font-size: var(--text-md);
-  color: var(--good);
-  background: color-mix(in srgb, var(--good) 12%, transparent);
-  padding: var(--space-0) var(--space-2);
-  border-radius: var(--radius-lg);
-  border: 1px solid color-mix(in srgb, var(--good) 35%, transparent);
-  cursor: pointer;
-}
-.active-scenarios:hover { border-color: var(--good); }
-
 /* Every <dialog> in the app is a themed modal with the same
    header shape (h3 title + × close), so the base theme applies by
    element — a new dialog joins by existing instead of by editing
-   four id lists (the gap that left snapshots-dialog on the
-   browser's default white chrome). Per-dialog overrides (e.g. the
+   an id list. Per-dialog overrides (e.g. the
    dispatch dialog's width) stay id-scoped and win on specificity. */
 dialog {
   background: var(--bg-elev);
@@ -430,9 +386,7 @@ dialog header h3 {
   color: var(--accent);
 }
 #help-dialog-content,
-#snapshots-dialog-content,
-#create-mg-content,
-#load-script-content {
+#create-mg-content {
   overflow-y: auto;
   padding: var(--space-4);
   max-height: calc(80vh - 60px);
@@ -657,8 +611,7 @@ main {
 }
 
 #topology,
-#dispatches,
-#scenarios {
+#dispatches {
   grid-area: topology;
   background: var(--bg);
   position: relative;
@@ -667,19 +620,11 @@ main {
   min-height: 0;
 }
 
-/* Mode → which main pane is visible. Top-level modes are
-   `microgrids` and `scenarios`; the Microgrids mode has a
-   secondary state (`data-mg-view = "list" | "selected"`) for
+/* Mode → which main pane is visible. The one top-level mode is
+   `microgrids`; it has a secondary state (`data-mg-view = "list" | "selected"`) for
    whether the user is browsing the card grid or has drilled
    into a specific microgrid, plus a `data-subview` flag
    (topology / dispatches) for the per-mg sub-tab. */
-body[data-mode="scenarios"] #microgrid-list,
-body[data-mode="scenarios"] #mg-header,
-body[data-mode="scenarios"] #dispatches,
-body[data-mode="scenarios"] #topology { display: none; }
-
-body[data-mode="microgrids"] #scenarios { display: none; }
-
 body[data-mode="microgrids"][data-mg-view="list"] #mg-header,
 body[data-mode="microgrids"][data-mg-view="list"] #dispatches,
 body[data-mode="microgrids"][data-mg-view="list"] #topology { display: none; }
@@ -688,11 +633,6 @@ body[data-mode="microgrids"][data-mg-view="selected"] #microgrid-list { display:
 
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"]  #dispatches { display: none; }
 body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"] #topology { display: none; }
-
-#scenarios {
-  padding: var(--space-4) var(--space-5);
-  overflow: auto;
-}
 
 #microgrid-list {
   grid-area: topology;
@@ -803,56 +743,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="dispatches"]
   color: var(--fg);
 }
 
-/* The REPL's head holds its controls, so the transcript below is all
-   transcript. They are set in the mono face at the docked head's size, without
-   its uppercase title style, and push right, clear of the close and dock
-   buttons. In a narrow head the microgrid chip shrinks first, so the checkbox
-   and the eval button stay. The clip leaves room for their focus rings. The
-   right margin keeps a bit of the head draggable beside the close and dock
-   buttons, which, with them, is most of what shows of a card pushed off the
-   left edge. */
-#repl .panel-drag {
-  justify-content: flex-start;
-  gap: var(--space-3);
-  padding: 0 calc(2 * var(--icon-btn-size) + var(--space-0) + var(--space-2)) 0 var(--space-3);
-}
-.repl-head-tools {
-  margin-left: auto;
-  margin-right: var(--space-4);
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  overflow: clip;
-  overflow-clip-margin: var(--space-1);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: 0;
-  text-transform: none;
-  white-space: nowrap;
-  user-select: none;
-}
-.repl-mg-chip {
-  font: inherit;
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-2);
-  color: var(--accent);
-  cursor: pointer;
-  white-space: nowrap;
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.repl-mg-chip:hover { border-color: var(--accent); }
-.repl-mg-chip.muted { color: var(--muted); }
-.repl-keys-toggle { flex: none; display: flex; align-items: center; gap: var(--space-1); color: var(--muted); cursor: pointer; }
-.repl-keys-toggle input { margin: 0; accent-color: var(--accent); }
-.repl-keys-toggle:has(input:checked) { color: var(--accent); }
-.repl-eval-btn { flex: none; font: inherit; }
-
 #topology-empty-hint {
   display: none;
   grid-area: topology;
@@ -941,24 +831,7 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 .formula-op  { color: var(--warn); }
 .formula-call { color: var(--good); }
 
-#snapshots-dialog #snapshot-save-form {
-  display: flex;
-  gap: var(--space-2);
-  align-items: end;
-  margin-bottom: var(--space-3);
-}
-#snapshots-dialog #snapshot-save-form label {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  font-size: var(--text-md);
-  color: var(--muted);
-}
-#snapshots-list { list-style: none; padding: 0; margin: 0; }
-
-/* The create-microgrid form: one field per row, matching the
-   snapshot dialog's field styling so the two dialogs read alike. */
+/* The create-microgrid form: one field per row. */
 #create-mg-form {
   display: flex;
   flex-direction: column;
@@ -975,22 +848,6 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 }
 #create-mg-form button { align-self: flex-start; }
 
-/* The load dialog's collision offer: the file names an id something
-   else already loaded, so the row carries the reason and (for a
-   managed file) the load-as-N button that resolves it. */
-.collision-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  padding: var(--space-2) var(--space-3);
-  margin-bottom: var(--space-2);
-  font-size: var(--text-md);
-  border: 1px solid var(--warn);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-}
-
 /* File-state chips on a microgrid card and in its header. */
 .mg-chip {
   font-size: var(--text-sm);
@@ -1000,10 +857,6 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
   border-radius: var(--radius-sm);
   margin-left: var(--space-1);
 }
-.mg-chip.unmanaged {
-  background: color-mix(in srgb, var(--warn) 18%, transparent);
-  color: var(--warn);
-}
 .mg-chip.unsaved,
 .mg-chip.edited,
 .mg-chip.failed {
@@ -1012,165 +865,6 @@ body[data-mg-empty="1"][data-mg-view="selected"][data-subview="topology"] #topol
 }
 .mg-chip.failed {
   border: 1px solid var(--bad);
-}
-
-#load-script-breadcrumb {
-  font-family: var(--font-mono);
-  margin-bottom: var(--space-2);
-}
-#load-script-list {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 var(--space-3);
-  max-height: 40vh;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-.script-row {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  border: none;
-  border-bottom: 1px solid var(--border);
-  background: none;
-  color: var(--fg);
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: var(--text-md);
-}
-#load-script-list li:last-child .script-row { border-bottom: none; }
-.script-row:hover {
-  background: var(--bg);
-  color: var(--accent);
-}
-#load-script-list .hint { padding: var(--space-2) var(--space-3); }
-#load-script-dialog #load-script-form {
-  display: flex;
-  gap: var(--space-2);
-  align-items: end;
-  margin-bottom: var(--space-3);
-}
-#load-script-dialog #load-script-form label {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  font-size: var(--text-md);
-  color: var(--muted);
-}
-#load-script-dialog #load-script-path { font-family: var(--font-mono); }
-.snapshot-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-.snapshot-row:last-child { border-bottom: none; }
-.snapshot-name {
-  font-family: var(--font-mono);
-  font-size: var(--text-md);
-}
-
-.scenarios-header {
-  display: flex;
-  gap: var(--space-3);
-  align-items: baseline;
-  margin-bottom: var(--space-3);
-}
-.scenarios-title { font-size: var(--text-xl); margin: 0; }
-.sc-badge {
-  font-size: var(--text-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  background: color-mix(in srgb, var(--warn) 18%, transparent);
-  color: var(--warn);
-  padding: var(--space-0) var(--space-2);
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-}
-.sc-badge.running { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
-.sc-badge.pass { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
-.sc-badge.fail { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); }
-
-/* Registered-scenario list */
-.scenarios-list { display: grid; gap: var(--space-2); margin-bottom: var(--space-4); }
-.sc-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto auto;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-.sc-row.selected { border-color: var(--accent); }
-.sc-row-main { display: flex; flex-direction: column; gap: var(--space-0); min-width: 0; }
-.sc-row-name { font-weight: 500; }
-.sc-row-meta { font-size: var(--text-md); color: var(--muted); font-variant-numeric: tabular-nums; }
-.sc-row-desc { font-size: var(--text-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sc-row-sections { font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
-
-/* Run view */
-.sc-run-view {
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-4);
-  display: grid;
-  gap: var(--space-3);
-}
-.sc-run-header { display: flex; gap: var(--space-3); align-items: center; }
-.sc-run-name { font-weight: 600; font-size: var(--text-lg); }
-.sc-run-header .muted { font-variant-numeric: tabular-nums; }
-.sc-run-header .btn { margin-left: auto; }
-.sc-run-timeline {
-  position: relative;
-  height: 34px;
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-.sc-tl-mark {
-  position: absolute;
-  top: 50%;
-  width: 12px;
-  height: 12px;
-  transform: translate(-50%, -50%);
-  border: 1px solid var(--border);
-  background: var(--panel);
-}
-.sc-tl-cue { border-radius: 50%; }
-.sc-tl-check { transform: translate(-50%, -50%) rotate(45deg); } /* diamond */
-.sc-tl-fired { background: var(--accent); border-color: var(--accent); }
-.sc-tl-pass { background: var(--good); border-color: var(--good); }
-.sc-tl-fail { background: var(--bad); border-color: var(--bad); }
-.sc-run-cols { display: grid; grid-template-columns: 240px 1fr; gap: var(--space-4); }
-.sc-run-metrics h3, .sc-run-checks h3, .sc-run-events h3 {
-  font-size: var(--text-md); text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--muted); margin: 0 0 var(--space-2);
-}
-.sc-metric { display: flex; justify-content: space-between; font-size: var(--text-md); padding: var(--space-0) 0; }
-.sc-metric b { font-variant-numeric: tabular-nums; }
-.sc-check {
-  display: grid;
-  grid-template-columns: 16px auto 1fr;
-  gap: var(--space-2);
-  font-size: var(--text-md);
-  padding: var(--space-0) 0;
-  font-variant-numeric: tabular-nums;
-}
-.sc-check.pass > span:first-child { color: var(--good); }
-.sc-check.fail > span:first-child { color: var(--bad); }
-.sc-event { font-size: var(--text-md); padding: var(--space-0) 0; }
-.sc-event code { color: var(--accent); }
-.sc-csv-link {
-  display: inline-block;
-  font-size: var(--text-md);
-  margin: var(--space-0) var(--space-2) var(--space-0) 0;
-  color: var(--accent);
-  font-family: var(--font-mono);
 }
 
 /* ── Floating panels ─────────────────────────────────────────────────
@@ -1328,9 +1022,9 @@ body.has-right-dock #dock-right { display: flex; flex-direction: column; }
   box-shadow: none;
 }
 .float-panel.docked:last-child { border-right: none; }
-/* The scroll bands of the REPL and logs give up their floors as tiles, or they
-   clip the tile's own floor. */
-#repl.docked #repl-output, #logs-panel.docked #logs { min-height: 0; }
+/* The logs' scroll band gives up its floor as a tile, or it clips the tile's
+   own floor. */
+#logs-panel.docked #logs { min-height: 0; }
 /* The tile head: the grab strip grows a title (the card's landmark
    label) and room for its buttons; the grip stays as the handle. The
    right padding covers .float-close and .float-dock, two --icon-btn-size
@@ -1475,20 +1169,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   display: block;
 }
 
-/* REPL panel: one transcript band holding the output and, as its last line,
-   the prompt. The band's floor (240px) holds the prompt and keeps room for the
-   completion popup above or below it; repl.js caps the popup to that room. The
-   card's own floor, measured by side-panel.js (floorOf), holds the card head
-   and that floor. */
-#repl-body {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-  font-family: var(--font-mono);
-  font-size: var(--text-lg);
-}
-
 /* Logs panel: the tail scrolls inside the card, above its own 160px floor; the
    card's measured floor holds the head row as well. */
 #logs-body {
@@ -1551,202 +1231,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .log-line.debug .log-lvl,
 .log-line.trace .log-lvl { color: var(--muted); }
 .log-line .log-msg { flex: 1; }
-
-/* Once the gripper has given it a height (side-panel.js applyCap), a floating
-   REPL keeps that height instead of hugging a short transcript; until then it
-   hugs, like any card. A gripper drag in progress writes an inline height,
-   which wins until it settles. */
-#repl:not(.docked) {
-  --card-cap: auto;
-  height: var(--card-cap);
-}
-
-/* The transcript: past entries, then the prompt and its hint, scrolling as one,
-   like a terminal. */
-#repl-output {
-  flex: 1 1 auto;
-  min-height: 240px;
-  overflow-y: auto;
-  padding: var(--space-2) var(--space-4);
-  background: var(--bg-elev);
-  cursor: text;
-}
-
-/* The line under the prompt's text, kept when empty so the transcript does not
-   jump as it fills. A long signature or docstring line ends in an ellipsis. */
-#repl-hint {
-  grid-column: 2;
-  min-width: 0;
-  min-height: 1lh;
-  font-size: var(--text-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--fg);
-}
-.repl-hint-arg { color: var(--accent); font-weight: 600; }
-.repl-hint-doc { margin-left: var(--space-3); color: var(--muted); }
-
-.repl-entry { margin-bottom: var(--space-2); }
-.repl-entry pre { margin: 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); border: none; background: transparent; }
-.repl-command  { color: var(--fg); cursor: pointer; }
-.repl-prompt-mark { color: var(--accent); }
-.repl-command:hover { background: var(--bg); }
-.repl-value    { color: var(--good); white-space: pre-wrap; }
-.repl-error    { color: var(--bad); white-space: pre-wrap; }
-
-/* The prompt: a ▸ and the input, set like a past command's line, with the hint
-   under the input. */
-#repl-form {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: baseline;
-  column-gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  line-height: 1.4;
-}
-
-#repl-input-wrap {
-  min-width: 0;
-  position: relative; /* anchor for the rainbow-paren overlay and the completion popup */
-}
-
-/* The overlay and textarea share every layout-affecting property so
-   their glyphs sit on the same pixel grid. The textarea is on top
-   with transparent text + visible caret; the overlay underneath
-   renders the same content with rainbow-coloured parens. */
-#repl-input,
-#repl-input-overlay {
-  width: 100%;
-  box-sizing: border-box;
-  border: none;
-  border-radius: 0;
-  padding: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-lg);
-  line-height: 1.4;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
-}
-#repl-input {
-  position: relative;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--fg);
-  resize: none;
-  /* repl.js sizes it to its text, so it never scrolls on its own. A block, so
-     the wrap is exactly as tall: no baseline gap under an inline textarea. */
-  overflow: hidden;
-  display: block;
-  z-index: var(--z-canvas);
-}
-#repl-input:focus { outline: none; }
-#repl-input::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: transparent; }
-#repl-input-overlay {
-  position: absolute;
-  inset: 0;
-  background: var(--bg-elev);
-  color: var(--fg);
-  pointer-events: none;
-  overflow: hidden;
-  z-index: 0;
-}
-.paren-0 { color: var(--syn-paren-1); }
-.paren-1 { color: var(--syn-paren-2); }
-.paren-2 { color: var(--syn-paren-3); }
-.paren-3 { color: var(--syn-paren-4); }
-.paren-4 { color: var(--syn-paren-5); }
-.paren-5 { color: var(--syn-paren-6); }
-.paren-6 { color: var(--syn-paren-7); }
-.paren-mismatch { color: var(--syn-mismatch); background: color-mix(in srgb, var(--syn-mismatch) 18%, transparent); }
-.repl-string { color: var(--syn-string); }
-.repl-comment { color: var(--syn-comment); font-style: italic; }
-/* A plist key: `:name` at a word boundary (repl-syntax.js). */
-.repl-plist-key { color: var(--syn-plist-key); }
-/* Special-form heads (defun / let / when / …): syntax keywords. */
-.repl-special-form { color: var(--syn-special); font-weight: 600; }
-/* Any other symbol immediately after `(` — a function call. */
-.repl-function-head { color: var(--syn-fn); }
-
-/* The completion popup: the names on the left, the selected name's signature
-   and docstring beside them. Each half scrolls on its own, within the height
-   repl.js caps it to. It opens at the word being completed: repl.js puts its
-   left edge at the word's start, sliding it left to stay within the input. The
-   doc pane is as wide as its widest line, so a docstring shows as written; it
-   folds only when the input is too narrow for it. */
-#repl-popup {
-  position: absolute;
-  bottom: 100%;       /* above the prompt; .below drops it under */
-  left: 0;            /* set by repl.js, at the word being completed */
-  max-width: 100%;
-  margin: 0 0 var(--space-1);
-  display: flex;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--text-md);
-  /* border-box, so the height repl.js caps it to is the whole popup's. */
-  box-sizing: border-box;
-  max-height: 220px;
-  overflow: hidden;
-  z-index: var(--z-popover);
-  box-shadow: var(--shadow-2);
-}
-#repl-popup[hidden] { display: none; }
-/* With more room under the prompt than over it, the popup drops down. */
-#repl-popup.below { top: 100%; bottom: auto; margin: var(--space-1) 0 0; }
-#repl-completions {
-  flex: 0 0 auto;
-  min-width: 240px;
-  margin: 0;
-  padding: var(--space-1) 0;
-  list-style: none;
-  overflow-y: auto;
-}
-#repl-doc {
-  flex: 0 1 auto;
-  width: max-content;
-  min-width: 0;
-  overflow-y: auto;
-  padding: var(--space-1) var(--space-3);
-  border-left: 1px solid var(--border);
-  font-size: var(--text-sm);
-}
-#repl-doc:empty { display: none; }
-.repl-doc-head {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-bottom: var(--space-1);
-  white-space: nowrap;
-}
-.repl-doc-sig {
-  color: var(--syn-fn);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.repl-doc-kind { color: var(--muted); }
-.repl-doc-text {
-  margin: 0;
-  padding: 0;
-  border: none;
-  background: transparent;
-  white-space: pre-wrap;
-  font: inherit;
-  color: var(--fg);
-}
-#repl-completions li {
-  padding: var(--space-0) var(--space-3);
-  cursor: pointer;
-  white-space: nowrap;
-}
-#repl-completions li.selected,
-#repl-completions li:hover {
-  background: var(--accent);
-  color: var(--bg);
-}
 
 /* Panel typography: shared by the inspector (#inspect is itself a
    .panel-content) and every other floating panel's content. */
@@ -2107,33 +1591,6 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 }
 #inspect .knob-flag-input { margin: 0; }
 
-/* A dynamic knob's "this is a Lisp expression, not a plain number"
-   marker (toggleExprChip in inspect.js). Same tinted-pill
-   look as .insp-augmented below (rgba of the existing --accent
-   token), just scoped to the knob's own dd. */
-#inspect .knob-expr-chip {
-  display: inline-block;
-  margin-top: var(--space-0);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  padding: 1px var(--space-2);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
-  border: 1px solid var(--accent);
-}
-
-/* An expression-driven knob's resolved per-tick value, shown beneath
-   the printed source (paintResolved in inspect.js) — the source alone
-   doesn't say what it currently evaluates to. */
-#inspect .knob-resolved {
-  display: block;
-  margin-top: var(--space-0);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  color: var(--muted);
-}
-
 /* Header meta row: id text plus the category / health / augmented
    chips (see inspect.js renderInspect's header markup). Same
    tinted-pill idea as the .seg-chip on-* states below,
@@ -2414,27 +1871,50 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
 .sp-ok  { color: var(--good); }
 .sp-bad { color: var(--bad); }
 
-.sc-report-dl {
+/* The Report panel: the recording's state line, its report, events and
+   CSV links. */
+.report-state { font-size: var(--text-md); }
+.report-badge {
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
+  padding: var(--space-0) var(--space-2);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.report-badge.running { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.report-badge.rebuild { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.report-csv-dir { font-family: var(--font-mono); word-break: break-all; }
+.report-csv-link {
+  display: inline-block;
+  font-size: var(--text-md);
+  margin: var(--space-0) var(--space-2) var(--space-0) 0;
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+.report-dl {
   font-family: var(--font-mono);
   font-size: var(--text-md);
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: var(--space-0) var(--space-2);
 }
-.sc-report-dl dt { color: var(--muted); }
-.sc-report-dl dd { margin: 0; }
-.sc-report-tbl {
+.report-dl dt { color: var(--muted); }
+.report-dl dd { margin: 0; }
+.report-tbl {
   width: 100%;
   font-family: var(--font-mono);
   font-size: var(--text-md);
   border-collapse: collapse;
 }
-.sc-report-tbl th, .sc-report-tbl td {
+.report-tbl th, .report-tbl td {
   text-align: left;
   padding: var(--space-0) var(--space-2);
   border-bottom: 1px solid var(--border);
 }
-.sc-events {
+.report-events {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -2443,11 +1923,11 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-family: var(--font-mono);
   font-size: var(--text-md);
 }
-.sc-events li {
+.report-events li {
   padding: var(--space-0) var(--space-1);
   border-bottom: 1px solid var(--border);
 }
-.sc-events code {
+.report-events code {
   color: var(--muted);
   margin-right: var(--space-2);
 }
@@ -2456,8 +1936,8 @@ body[data-mode="microgrids"][data-mg-view="selected"][data-subview="topology"] #
   font-family: var(--font-mono);
   font-size: var(--text-lg);
   display: grid;
-  /* Cap the label column so a long dt ("reactive power (VAr or
-     expr)") wraps instead of starving the input column — inside a
+  /* Cap the label column so a long dt ("reactive power (VAr)")
+     wraps instead of starving the input column — inside a
      card the panel's 420px loses two rounds of padding, so the
      inputs cannot spare what a max-content label column takes. */
   grid-template-columns: fit-content(45%) 1fr;

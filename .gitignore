@@ -2,14 +2,16 @@
 /.claude/
 /TAGS
 
-# Managed-microgrid-file state: written by macrocosim itself, at
-# --state-dir (default: cwd) or wherever a boot script's directory
-# ends up doubling as one (e.g. examples/enterprise.lisp when a demo
-# script boots from the checkout). enterprise.lisp is unanchored on
-# purpose — any directory a script boots from gets its own.
+# State 0.1 wrote into its state dir: managed Lisp microgrid files,
+# snapshots and enterprise.lisp. 0.2 refuses to start on a state dir
+# that holds them, so these guard against committing leftovers.
+# enterprise.lisp is unanchored, as any directory could have been one.
 /microgrids/
 /snapshots/
 enterprise.lisp
+
+# Recordings' CSV files, under the state dir (default: cwd).
+/recordings/
 
 # NFS silly-rename strays (an editor holding an fd to a replaced file)
 .nfs*

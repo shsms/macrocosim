@@ -1,4 +1,4 @@
-//! Power-bound containers, ported from microsim's lisp/bounds module.
+//! Power-bound containers, ported from microsim's bounds module.
 //!
 //! Two layers:
 //! - [`VecBounds`] is a sorted, normalized list of disjoint

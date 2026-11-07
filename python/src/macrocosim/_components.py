@@ -181,7 +181,7 @@ class Meter(Component):
     def reactive_power(self) -> ClearableSignal[ReactivePower]:
         """Reactive power. `clear()` makes the meter measure its children again,
         and drops any power factor, whether given in the spec or set at runtime
-        through the UI or Lisp."""
+        through the UI."""
         return self._reactive_power
 
 

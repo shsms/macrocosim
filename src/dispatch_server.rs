@@ -564,9 +564,8 @@ mod tests {
                     },
                     site: crate::sim::MicrogridSite::new(),
                     source: None,
-                    managed: false,
                     unsaved: false,
-                    spec: None,
+                    spec: Default::default(),
                 },
             );
         }

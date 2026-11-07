@@ -193,9 +193,9 @@ async def test_one_recording_at_a_time() -> None:
 
 async def test_a_refused_start_raises_and_frees_the_microgrid() -> None:
     fake = _Fake()
-    fake.start = httpx.Response(409, json={"error": "a Lisp scenario is running"})
+    fake.start = httpx.Response(409, json={"error": "a recording is already running"})
     mg = _mg(fake)
-    with pytest.raises(Rejected, match="a Lisp scenario is running"):
+    with pytest.raises(Rejected, match="a recording is already running"):
         async with mg.record("peak"):
             pass
     fake.start = httpx.Response(204)

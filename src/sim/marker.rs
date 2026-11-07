@@ -2,9 +2,9 @@
 //! They carry no physics of their own — they exist so the topology is
 //! complete and so the formula engine can classify the meters around
 //! them (a meter feeding a wind turbine is a wind meter). Power is
-//! set directly on the neighboring meter via `(set-meter-power …)`.
-//! Whatever flows through a marker is its children's, so a meter
-//! above a transformer or breaker still sums the branch below it.
+//! set directly on the neighboring meter (its `power_w`). Whatever
+//! flows through a marker is its children's, so a meter above a
+//! transformer or breaker still sums the branch below it.
 
 use std::{fmt, time::Duration};
 
@@ -26,8 +26,8 @@ impl Marker {
             Category::WindTurbine => "wind",
             Category::PowerTransformer => "transformer",
             Category::Breaker => "breaker",
-            // The constructor is only reached from the %make-*
-            // marker forms; anything else is a programming error.
+            // The constructor is only reached from the spec build's
+            // marker arm; anything else is a programming error.
             other => unreachable!("Marker::new with non-marker category {other:?}"),
         };
         Self {
@@ -76,64 +76,5 @@ impl SimulatedComponent for Marker {
 
     fn aggregate_reactive_var(&self, site: &MicrogridSite) -> f32 {
         site.sum_children(self.id, |c| c.aggregate_reactive_var(site))
-    }
-
-    fn make_fn(&self) -> &'static str {
-        match self.category {
-            Category::Chp => "%make-chp",
-            Category::WindTurbine => "%make-wind-turbine",
-            Category::PowerTransformer => "%make-power-transformer",
-            Category::Breaker => "%make-breaker",
-            other => unreachable!("Marker::make_fn with non-marker category {other:?}"),
-        }
-    }
-
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        let mut kw = Vec::new();
-        if self.stream_jitter_pct != 0.0 {
-            kw.push((
-                ":stream-jitter-pct",
-                crate::lisp::lisp_float32(self.stream_jitter_pct),
-            ));
-        }
-        kw
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// `make_fn` maps every marker category to its `%make-*`
-    /// primitive; `:stream-jitter-pct` renders only when non-zero.
-    #[test]
-    fn constructor_kwargs_and_make_fn_by_category() {
-        let m = Marker::new(1, Category::Chp, 3.0);
-        assert_eq!(m.make_fn(), "%make-chp");
-        let s = m
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, v)| format!("{k} {v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(s.contains(":stream-jitter-pct 3.0"));
-
-        assert_eq!(
-            Marker::new(2, Category::WindTurbine, 0.0).make_fn(),
-            "%make-wind-turbine"
-        );
-        assert_eq!(
-            Marker::new(4, Category::PowerTransformer, 0.0).make_fn(),
-            "%make-power-transformer"
-        );
-        assert_eq!(
-            Marker::new(5, Category::Breaker, 0.0).make_fn(),
-            "%make-breaker"
-        );
-        assert!(
-            Marker::new(2, Category::WindTurbine, 0.0)
-                .constructor_kwargs()
-                .is_empty()
-        );
     }
 }

@@ -96,9 +96,9 @@ impl TimeoutTracker {
         expired
     }
 
-    /// Drop every armed deadline. Called when a site resets: a
-    /// deadline armed before a hot reload must not fire against
-    /// whatever component the rebuilt config registers under the same
+    /// Drop every armed deadline. Called when a site resets or is
+    /// rebuilt: a deadline armed before must not fire against
+    /// whatever component the new topology registers under the same
     /// id. Nothing is actuated.
     pub fn clear(&mut self) {
         self.deadlines.clear();

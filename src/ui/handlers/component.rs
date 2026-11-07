@@ -11,7 +11,7 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use serde::Serialize;
 
-use crate::sim::component::{ReactiveReading, ScalarReading};
+use crate::sim::component::ReactiveReading;
 use crate::sim::setpoints::{SetpointKind, SetpointOutcome};
 use crate::timeout_tracker::SetpointAxis;
 
@@ -41,15 +41,6 @@ struct KnobState {
     value: Option<f32>,
     /// Unit of `value`; `None` for a unitless ratio.
     unit: Option<&'static str>,
-    /// Printed Lisp source for a dynamic (lambda / symbol) reading.
-    /// `None` for a plain constant. Shipped unfiltered, including
-    /// tulisp's opaque `CompiledDefun` closure Display (an unquoted
-    /// lambda literal evaluates to one before it ever reaches the
-    /// component) — the client detects that marker and renders a
-    /// placeholder instead of the meaningless literal string
-    /// "CompiledDefun" (see `knobDisplay` in `ui-assets/inspect.js`),
-    /// the same way it already had to for the WS `knob_changed` path.
-    expr: Option<String>,
     /// Set only on `meter-power-factor`: whether the derived reactive
     /// power leads (capacitive) rather than lags (inductive).
     leading: Option<bool>,
@@ -86,23 +77,17 @@ pub(in crate::ui) async fn component(
     component_state(&mg.site, id).map(Json)
 }
 
-fn knob(
-    knob: &'static str,
-    value: Option<f32>,
-    expr: Option<String>,
-    leading: Option<bool>,
-) -> KnobState {
+fn knob(knob: &'static str, value: Option<f32>, leading: Option<bool>) -> KnobState {
     KnobState {
         knob,
         value,
         unit: crate::sim::events::knob_unit(knob),
-        expr,
         leading,
     }
 }
 
-fn scalar_knob(name: &'static str, r: ScalarReading) -> KnobState {
-    knob(name, Some(r.value), r.expr, None)
+fn scalar_knob(name: &'static str, value: f32) -> KnobState {
+    knob(name, Some(value), None)
 }
 
 /// The runtime knobs the component has, one set per capability it
@@ -117,7 +102,7 @@ fn knobs_for(c: &dyn crate::sim::SimulatedComponent) -> Vec<KnobState> {
         match meter.meter_reactive_reading() {
             Some(ReactiveReading::Var(r)) => knobs.push(scalar_knob("meter-reactive-power", r)),
             Some(ReactiveReading::PowerFactor { pf, leading }) => {
-                knobs.push(knob("meter-power-factor", Some(pf), None, Some(leading)));
+                knobs.push(knob("meter-power-factor", Some(pf), Some(leading)));
             }
             None => {}
         }
@@ -127,8 +112,8 @@ fn knobs_for(c: &dyn crate::sim::SimulatedComponent) -> Vec<KnobState> {
     }
     if let Some(r) = c.reactive_limits() {
         let cap = r.reactive_capability();
-        knobs.push(knob("reactive-pf-limit", cap.pf_limit, None, None));
-        knobs.push(knob("reactive-apparent-va", cap.apparent_va, None, None));
+        knobs.push(knob("reactive-pf-limit", cap.pf_limit, None));
+        knobs.push(knob("reactive-apparent-va", cap.apparent_va, None));
     }
     if let Some(boiler) = c.steam_drive() {
         knobs.push(scalar_knob("boiler-demand", boiler.demand_reading()));

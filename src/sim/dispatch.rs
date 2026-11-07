@@ -12,9 +12,10 @@
 //! State is enterprise-wide but keyed by `microgrid_id` (the dispatch
 //! API carries the id in every request, so a single service fronts
 //! all microgrids — unlike the Microgrid API's per-port servers). It
-//! lives on [`crate::lisp::Config`] so the single gRPC service and the
-//! UI handlers share one source of truth; it survives a config reload
-//! (the store is not torn down with a microgrid's `MicrogridSite`) but
+//! lives on the [`crate::engine::Engine`] so the single gRPC service
+//! and the UI handlers share one source of truth; it survives a
+//! rebuild (the store is not torn down with a microgrid's
+//! `MicrogridSite`; an unload deletes the microgrid's dispatches) but
 //! is not persisted across a process restart.
 
 use std::collections::BTreeMap;

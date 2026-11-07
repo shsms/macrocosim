@@ -10,13 +10,13 @@
 //!   pump, and the HTTP handlers.
 //! - `loopback` — gRPC loopback supervisor.
 //! - `events_ws` — WebSocket push channel.
-//! - `handlers` — one submodule per HTTP topic (topology, eval,
-//!   history, scenarios, microgrids, …).
+//! - `handlers` — one submodule per HTTP topic (topology, spec,
+//!   history, recording, microgrids, …).
 //! - `api` — the error type every handler fails with, and the
 //!   extractors and fallbacks that answer axum's own failures with
 //!   it.
-//! - `app_state` — the router's state: the `Engine`, and the Lisp
-//!   `Config` for the handlers that evaluate Lisp.
+//! - `app_state` — the router's state: the `Engine`, the runtimes,
+//!   the export's interpreter and the script's supervisor.
 
 mod api;
 mod app_state;
@@ -31,12 +31,14 @@ pub use state::{
     new_microgrid_loopbacks, new_microgrid_slot,
 };
 
+use std::sync::Arc;
+
 use axum::{
-    Extension, Router,
+    Router,
     routing::{delete, get, post},
 };
 
-use crate::lisp::Config;
+use crate::engine::Engine;
 use app_state::AppState;
 use events_ws::events_ws;
 
@@ -46,23 +48,26 @@ use events_ws::events_ws;
 /// the per-microgrid loopback slots the `/api/mg/{mg}/metrics/*`
 /// routes read.
 ///
-/// `runner` is the supervisor of the engine's script, which the
-/// `/api/runner` routes answer for; `None` without a script.
+/// `python` is the interpreter the `.py` export runs on, and `runner`
+/// the supervisor of the engine's script, which the `/api/runner`
+/// routes answer for; `None` without a script.
 pub async fn serve_with_listener(
     listener: tokio::net::TcpListener,
-    config: Config,
+    engine: Engine,
     runtimes: crate::runtime::MicrogridRuntimes,
-    runner: Option<std::sync::Arc<crate::runner::ScriptSupervisor>>,
+    python: Arc<crate::runner::python::Interpreter>,
+    runner: Option<Arc<crate::runner::ScriptSupervisor>>,
 ) -> std::io::Result<()> {
-    axum::serve(listener, router(config, runtimes, runner))
+    axum::serve(listener, router(engine, runtimes, python, runner))
         .await
         .map_err(std::io::Error::other)
 }
 
 fn router(
-    config: Config,
+    engine: Engine,
     runtimes: crate::runtime::MicrogridRuntimes,
-    runner: Option<std::sync::Arc<crate::runner::ScriptSupervisor>>,
+    python: Arc<crate::runner::python::Interpreter>,
+    runner: Option<Arc<crate::runner::ScriptSupervisor>>,
 ) -> Router {
     use handlers::{
         assets::{asset, index, logs_backfill},
@@ -73,25 +78,17 @@ fn router(
         defaults::defaults,
         dispatches::{dispatch_create, dispatch_delete, dispatch_set_active, dispatches},
         ev::{ev, ev_plug, ev_unplug},
-        eval::{eval, eval_for_mg, format, symbols},
         formula::formula,
         frequency::{frequency_get, frequency_post},
         grid::grid_post,
         history::{history, setpoints},
-        microgrid_data::{
-            clock_info, metrics_formulas, metrics_history, metrics_latest, metrics_status,
+        microgrid_data::{metrics_formulas, metrics_history, metrics_latest, metrics_status},
+        microgrids::{microgrids_create, microgrids_import, microgrids_list},
+        recording::{
+            recording_csv_file, recording_csv_list, recording_event, recording_events,
+            recording_report, recording_start, recording_status, recording_stop,
         },
-        microgrids::{
-            adopt, load_file, load_file_as, microgrids_create, microgrids_import, microgrids_list,
-        },
-        recording::{recording_event, recording_report, recording_start, recording_stop},
         runner::{runner_hello, runner_status},
-        scenarios::{
-            scenario_csv_file, scenario_csv_list, scenario_events, scenario_report,
-            scenario_summary, scenarios_list, scenarios_start, scenarios_stop,
-        },
-        scripts::scripts_list,
-        snapshots::{snapshots_list, snapshots_load, snapshots_save},
         spec::{microgrid_delete, spec_get, spec_put, spec_py, spec_schema},
         topology::topology,
         undo::{redo, undo, undo_depths},
@@ -102,7 +99,6 @@ fn router(
         .route("/topology", get(topology))
         .route("/spec", get(spec_get).put(spec_put))
         .route("/spec.py", get(spec_py))
-        .route("/eval", post(eval_for_mg))
         .route("/formula", get(formula))
         .route("/component/{id}", get(component))
         .route("/component/{id}/status", post(component_status))
@@ -125,24 +121,16 @@ fn router(
         .route("/metrics/latest", get(metrics_latest))
         .route("/metrics/history", get(metrics_history))
         .route("/metrics/formulas", get(metrics_formulas))
-        .route("/adopt", post(adopt))
         .route("/undo", get(undo_depths).post(undo))
         .route("/redo", post(redo))
-        .route("/snapshots", get(snapshots_list).post(snapshots_save))
-        .route("/snapshots/load", post(snapshots_load))
-        .route("/scenario", get(scenario_summary))
-        .route("/scenario/events", get(scenario_events))
-        .route("/scenario/report", get(scenario_report))
-        .route("/scenario/csv", get(scenario_csv_list))
-        .route("/scenario/csv/{file}", get(scenario_csv_file))
-        .route("/recording", get(scenario_summary))
+        .route("/recording", get(recording_status))
         .route("/recording/start", post(recording_start))
         .route("/recording/stop", post(recording_stop))
         .route("/recording/event", post(recording_event))
-        .route("/recording/events", get(scenario_events))
+        .route("/recording/events", get(recording_events))
         .route("/recording/report", get(recording_report))
-        .route("/recording/csv", get(scenario_csv_list))
-        .route("/recording/csv/{file}", get(scenario_csv_file))
+        .route("/recording/csv", get(recording_csv_list))
+        .route("/recording/csv/{file}", get(recording_csv_file))
         .route("/dispatches", get(dispatches).post(dispatch_create))
         .route("/dispatches/{dispatch_id}", delete(dispatch_delete))
         .route(
@@ -152,22 +140,12 @@ fn router(
     Router::new()
         .route("/", get(index))
         .route("/assets/{*path}", get(asset))
-        .route("/api/eval", post(eval))
-        .route("/api/format", post(format))
-        .route("/api/symbols", get(symbols))
         .route("/api/defaults", get(defaults))
         .route("/api/spec/schema", get(spec_schema))
         .route("/api/frequency", get(frequency_get).post(frequency_post))
         .route("/api/logs", get(logs_backfill))
-        .route("/api/clock", get(clock_info))
-        .route("/api/scenarios", get(scenarios_list))
-        .route("/api/scenarios/stop", post(scenarios_stop))
-        .route("/api/scenarios/{name}/start", post(scenarios_start))
-        .route("/api/scripts", get(scripts_list))
         .route("/api/runner", get(runner_status))
         .route("/api/runner/hello", post(runner_hello))
-        .route("/api/load", post(load_file))
-        .route("/api/load-as", post(load_file_as))
         .route(
             "/api/microgrids",
             get(microgrids_list).post(microgrids_create),
@@ -182,20 +160,20 @@ fn router(
         .route("/ws/events", get(events_ws))
         .fallback(api::no_route)
         .method_not_allowed_fallback(api::method_not_allowed)
-        .layer(Extension(runtimes.loopbacks()))
-        .layer(Extension(runtimes))
         .layer(axum::middleware::from_fn(origin_guard))
-        .with_state(AppState::new(config, runner))
+        .with_state(AppState::new(engine, runtimes, python, runner))
 }
 
 /// Same-origin guard for the browser-facing surface.
 ///
-/// `/api/eval` runs arbitrary Lisp — file writes included — and a
-/// cross-origin page can fire a `text/plain` POST at it without any
-/// CORS preflight: CORS response headers only gate *reading* the
-/// response, never executing the request, so a `CorsLayer` alone
-/// would not defend it. The server refuses requests that provably
-/// come from a foreign browser context instead:
+/// The routes change the simulation, and a cross-origin page can fire
+/// some of them without any CORS preflight: a body-less POST
+/// (`/undo`, `/redo`, `/recording/stop`, `/streams/cancel`) or a GET
+/// that does work (`/spec.py` runs Python). CORS response headers
+/// only gate *reading* the response, never executing the request, so
+/// a `CorsLayer` alone would not defend them. The server refuses
+/// requests that provably come from a foreign browser context
+/// instead:
 ///
 /// - a non-loopback `Host` rejects DNS rebinding (evil.example
 ///   resolving to 127.0.0.1 keeps its own name in `Host`);

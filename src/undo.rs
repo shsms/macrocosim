@@ -1,6 +1,5 @@
 //! A per-microgrid undo / redo stack, generic over what one step
-//! stores: a Lisp microgrid keeps generated blocks, a microgrid with a
-//! stored spec keeps specs.
+//! stores; the engine keeps the specs a microgrid's `PUT`s replaced.
 
 use std::collections::VecDeque;
 

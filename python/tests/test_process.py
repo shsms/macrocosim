@@ -125,7 +125,7 @@ def test_an_empty_state_dir_is_used(popen: PopenSpy, tmp_path: Path) -> None:
 def test_a_non_empty_state_dir_raises_before_popen(
     popen: PopenSpy, tmp_path: Path
 ) -> None:
-    (tmp_path / "enterprise.lisp").write_text("old")
+    (tmp_path / "notes.txt").write_text("old")
     with pytest.raises(ValueError, match="absent or an empty directory"):
         p.spawn("/bin/mc", "x", env=None, state_dir=tmp_path)
     assert popen.calls == []

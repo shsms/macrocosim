@@ -29,10 +29,13 @@ for (const scheme of ["dark", "light"]) {
     await page.waitForTimeout(2000);
     await page.screenshot({ path: `${out}/inspector-${scheme}-${density}.png` });
     await page.keyboard.press("Escape");
-    await page.keyboard.press("`");
+    await page.click("#logs-btn");
     await page.waitForTimeout(500);
-    await page.fill("#repl-input", '(let ((x 1)) (message "hi %d" (+ x 2))) ; note');
-    await page.screenshot({ path: `${out}/repl-${scheme}-${density}.png` });
+    await page.screenshot({ path: `${out}/logs-${scheme}-${density}.png` });
+    await page.click("#logs-btn");
+    await page.click("#report-btn");
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: `${out}/report-${scheme}-${density}.png` });
     await ctx.close();
   }
 }

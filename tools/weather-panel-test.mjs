@@ -145,11 +145,11 @@ const PAYLOAD = {
   // Berlin in January is UTC+1: the day starts at 23:00 UTC the night before,
   // so a 06:00 UTC sunrise sits at 07:00 on the chart.
   zone.setUtc(false);
-  zone.setSimZone("Europe/Berlin");
+  zone.setLocalZone("Europe/Berlin");
   const dawn = { ...PAYLOAD, sunrise: "06:00", sunset: "18:00", events: [] };
   const [xs, clear] = daySeries(dawn, Date.parse(NOW));
   const firstLit = xs[clear.findIndex((c) => c > 0)];
-  check("zone: a UTC sunrise lands at its sim-zone hour", near(firstLit, 7 + 1 / 6), String(firstLit));
+  check("zone: a UTC sunrise lands at its local-zone hour", near(firstLit, 7 + 1 / 6), String(firstLit));
   check("zone: a winter day spans 24 hours", xs[xs.length - 1] === 24, String(xs[xs.length - 1]));
   // A DST change: the day starts at the zone's midnight and runs 23 or 25
   // hours, so every hour after the change is drawn where its wall time is.

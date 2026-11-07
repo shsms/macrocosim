@@ -2,9 +2,9 @@
 //! `MicrogridSite`.
 //!
 //! `spawn_history_sampler` ticks at 1 Hz and drops a snapshot into
-//! every component's per-metric ring. Each snapshot also fans out
-//! as a `SiteEvent::Sample` and (when a scenario is running) feeds
-//! the scenario journal's integrators. The actual ring lives on
+//! every component's per-metric ring. Each snapshot also fans out as
+//! a `SiteEvent::Sample` and (while a recording runs) feeds the
+//! recording journal's integrators. The actual ring lives on
 //! `MicrogridSiteInner::histories`.
 
 use std::time::Duration;
@@ -15,7 +15,7 @@ use crate::sim::Category;
 use crate::sim::events::SiteEvent;
 use crate::sim::history::{ComponentHistory, History, Metric, Sample};
 
-use super::{HISTORY_CAPACITY, MicrogridSite};
+use super::{Components, HISTORY_CAPACITY, MicrogridSite};
 
 impl MicrogridSite {
     /// Spawn the history sampler — a single task that walks every
@@ -50,9 +50,16 @@ impl MicrogridSite {
     /// each other or against component history readers.
     pub fn record_history_snapshot(&self, now: DateTime<Utc>) {
         let components = self.inner.components.read().clone();
+        self.record_history_snapshot_if_current(&components, now);
+    }
+
+    /// [`Self::record_history_snapshot`] of `components` if that list
+    /// is still installed when the samples are written, and nothing
+    /// if a rebuild has replaced it since it was read.
+    fn record_history_snapshot_if_current(&self, components: &Components, now: DateTime<Utc>) {
         let mut emitted: Vec<(u64, Metric, f32)> = Vec::new();
-        // Integrals fed to the scenario reporter. We capture them
-        // off the telemetry snapshot rather than refilling from the
+        // Integrals fed to the recording report. We capture them off
+        // the telemetry snapshot rather than refilling from the
         // metric stream so batteries (which expose only dc_power_w,
         // not active_power_w) get integrated too.
         let mut battery_samples: Vec<(u64, f32)> = Vec::new();
@@ -76,9 +83,14 @@ impl MicrogridSite {
         let energy_totals = self.inner.component_energy.read().clone();
         {
             let mut histories = self.inner.histories.write();
-            let mut csv_sinks = self.inner.scenario_csv.write();
-            let mut bounds_sinks = self.inner.scenario_bounds_csv.write();
-            let mut reactive_bounds_sinks = self.inner.scenario_reactive_bounds_csv.write();
+            // A rebuild replaced the components meanwhile: what was
+            // read belongs to none of them now.
+            if !self.is_current(components) {
+                return;
+            }
+            let mut csv_sinks = self.inner.recording_csv.write();
+            let mut bounds_sinks = self.inner.recording_bounds_csv.write();
+            let mut reactive_bounds_sinks = self.inner.recording_reactive_bounds_csv.write();
             for (c, snap, bounds, reactive_bounds) in &snapshots {
                 match c.category() {
                     Category::Battery => {
@@ -123,16 +135,16 @@ impl MicrogridSite {
                 }
             }
         }
-        // Hand the battery / PV integration samples to the scenario
+        // Hand the battery / PV integration samples to the recording
         // reporter so the metrics endpoint stays current. Only
-        // meaningful while a scenario is running; the journal
+        // meaningful while a recording runs; the journal
         // short-circuits outside it. The site-level P/Q metrics do
         // NOT come through here — they ride the UI loopback's grid
         // formula streams and are fed from its publish path.
         // Integrals advance the cursor at the end so the next
         // snapshot's dt is measured from now.
         {
-            let mut journal = self.inner.scenario.write();
+            let mut journal = self.inner.recording.write();
             for (id, dc_power_w) in &battery_samples {
                 journal.record_battery_sample(*id, *dc_power_w, now);
             }
@@ -222,12 +234,6 @@ mod tests {
                 ..Default::default()
             }
         }
-        fn make_fn(&self) -> &'static str {
-            "%make-test-stub"
-        }
-        fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-            Vec::new()
-        }
     }
 
     /// Driving `record_history_snapshot` directly populates the
@@ -265,12 +271,6 @@ mod tests {
                     ..Default::default()
                 }
             }
-            fn make_fn(&self) -> &'static str {
-                "%make-test-stub"
-            }
-            fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-                Vec::new()
-            }
         }
 
         let w = MicrogridSite::new();
@@ -293,6 +293,30 @@ mod tests {
         // Windowed read drops samples before `since`.
         let recent = w.history_window(7, Metric::ActivePowerW, t1).unwrap();
         assert_eq!(recent.len(), 1);
+    }
+
+    /// A sample taken off a list a rebuild replaced records nothing;
+    /// one off the current list is recorded.
+    #[test]
+    fn a_sample_off_a_replaced_list_is_dropped() {
+        let meter =
+            || crate::sim::Meter::new(5, std::time::Duration::from_secs(1), None, None, 0.0, false);
+        let now = Utc::now();
+        let live = MicrogridSite::new();
+        live.register(meter());
+        let current = live.inner.components.read().clone();
+        live.record_history_snapshot_if_current(&current, now);
+        assert!(
+            live.inner.histories.read().contains_key(&5),
+            "the current list counts"
+        );
+
+        let w = MicrogridSite::new();
+        w.register(meter());
+        let stale = w.inner.components.read().clone();
+        *w.inner.components.write() = std::sync::Arc::new(Vec::new());
+        w.record_history_snapshot_if_current(&stale, now);
+        assert!(!w.inner.histories.read().contains_key(&5));
     }
 
     /// `record_history_snapshot` fans out a Sample event per pushed
@@ -327,12 +351,6 @@ mod tests {
                     soc_pct: Some(60.0),
                     ..Default::default()
                 }
-            }
-            fn make_fn(&self) -> &'static str {
-                "%make-test-stub"
-            }
-            fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-                Vec::new()
             }
         }
         let w = MicrogridSite::new();
@@ -419,12 +437,6 @@ mod tests {
                     ..Default::default()
                 }
             }
-            fn make_fn(&self) -> &'static str {
-                "%make-test-stub"
-            }
-            fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-                Vec::new()
-            }
         }
         let w = MicrogridSite::new();
         w.register(DcOnly);
@@ -458,58 +470,5 @@ mod tests {
         w.tick_once(t(14400), Duration::from_secs(3600)); // +3600 Wh
         let wh = w.component_energy_wh(4).unwrap();
         assert!((wh - 7200.0).abs() < 1e-6, "{wh}");
-    }
-
-    /// Energy scenario checks read the accrual since `scenario_start`:
-    /// the baseline snapshotted at start is subtracted from the running
-    /// total, so a long-running live server behaves like a fresh
-    /// stepped run.
-    #[test]
-    fn scenario_energy_counts_from_scenario_start() {
-        let w = MicrogridSite::new();
-        w.register(ConstPower {
-            id: 4,
-            watts: 3600.0,
-        });
-        let t = |s| Utc.timestamp_opt(s, 0).unwrap();
-        w.tick_once(t(0), Duration::from_secs(0));
-        w.tick_once(t(3600), Duration::from_secs(3600)); // 3600 Wh pre-scenario
-
-        w.scenario_start("s".into(), t(3600));
-        assert_eq!(w.component_energy_since_scenario_wh(4), Some(0.0));
-
-        w.tick_once(t(7200), Duration::from_secs(3600)); // +3600 Wh during
-        let wh = w.component_energy_since_scenario_wh(4).unwrap();
-        assert!((wh - 3600.0).abs() < 1e-6, "{wh}");
-        // The boot total still carries the full history.
-        let total = w.component_energy_wh(4).unwrap();
-        assert!((total - 7200.0).abs() < 1e-6, "{total}");
-    }
-
-    /// Removing a component mid-scenario drops its energy baseline too:
-    /// a component re-registered under the same id restarts at zero, and
-    /// subtracting the stale baseline would read negative energy.
-    #[test]
-    fn removed_component_drops_its_scenario_energy_baseline() {
-        let w = MicrogridSite::new();
-        w.register(ConstPower {
-            id: 4,
-            watts: 3600.0,
-        });
-        let t = |s| Utc.timestamp_opt(s, 0).unwrap();
-        w.tick_once(t(0), Duration::from_secs(0));
-        w.tick_once(t(3600), Duration::from_secs(3600)); // 3600 Wh
-        w.scenario_start("s".into(), t(3600)); // baseline: 3600 Wh
-
-        w.remove_component(4);
-        w.register(ConstPower {
-            id: 4,
-            watts: 3600.0,
-        });
-        w.tick_once(t(7200), Duration::from_secs(3600)); // seed only
-        w.tick_once(t(10800), Duration::from_secs(3600)); // +3600 Wh
-        let wh = w.component_energy_since_scenario_wh(4).unwrap();
-        assert!(wh >= 0.0, "stale baseline read negative energy: {wh}");
-        assert!((wh - 3600.0).abs() < 1e-6, "{wh}");
     }
 }

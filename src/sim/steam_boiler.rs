@@ -2,22 +2,22 @@
 //! (unmodelled) gas: the electric draw is the gateway's command, held
 //! by the heater inside a per-tick band [0, need_w]; the implied gas
 //! burner holds pressure at the thermostat target, so pressure lives
-//! in [target, max]: above only via set-pressure / :initial-bar,
+//! in [target, max]: above only via a pressure write or `initial`,
 //! decaying back at the steam-demand rate.
 
 use std::{fmt, time::Duration};
 
 use chrono::{DateTime, Utc};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Category, Controllable, MicrogridSite, PhysicsState, SimulatedComponent, Telemetry,
     bounds::{VecBounds, closed},
-    component::{GatewaySettings, KnobKind, KnobSnapshot, ScalarReading, SteamDrive},
+    component::{GatewaySettings, SteamDrive},
     device_axis::DeviceAxis,
-    dynamic_scalar::DynamicScalar,
     runtime::Health,
+    scalar::Scalar,
 };
 use crate::timeout_tracker::SetpointAxis;
 
@@ -31,11 +31,8 @@ pub struct SteamBoilerConfig {
     pub initial_bar: Option<f32>,
     pub capacity_wh_per_bar: f32,
     pub wh_per_kg: f32,
-    /// Seed for the demand source (kg/s) when it is a plain number.
+    /// The steam demand (kg/s) the boiler starts at.
     pub demand_kg_per_s: f32,
-    /// True when :demand-kg-per-s was a lambda/symbol at construction —
-    /// the kwarg renderer omits it then (unrenderable source).
-    pub demand_dynamic: bool,
     pub command_delay: Duration,
     pub ramp_rate_w_per_s: f32,
     pub stream_jitter_pct: f32,
@@ -55,7 +52,6 @@ impl Default for SteamBoilerConfig {
             capacity_wh_per_bar: 10_000.0,
             wh_per_kg: 627.0,
             demand_kg_per_s: 0.0,
-            demand_dynamic: false,
             command_delay: Duration::from_millis(500),
             ramp_rate_w_per_s: f32::INFINITY,
             stream_jitter_pct: 0.0,
@@ -70,10 +66,9 @@ pub struct SteamBoiler {
     interval: Duration,
     cfg: SteamBoilerConfig,
     state: Mutex<BoilerState>,
-    /// Steam demand in kg/s. Either a constant (the cfg default or a
-    /// numeric `:demand-kg-per-s`) or a Lisp expression re-resolved
-    /// each tick by `refresh_inputs`.
-    demand_source: RwLock<DynamicScalar>,
+    /// Steam demand in kg/s: the cfg default, or what a `drive` write
+    /// set.
+    demand_source: Scalar,
     /// The electric heater: the command handed in through
     /// `set_command`, delayed and held inside rated ∩ [0, need].
     heater: DeviceAxis,
@@ -88,7 +83,7 @@ impl SteamBoiler {
     /// Bring a config into the range `tick` can run on: a pressure
     /// window of positive normal numbers with max at or above target,
     /// a finite initial pressure, and positive normal constants for
-    /// the two factors tick divides and multiplies by. The Lisp door
+    /// the two factors tick divides and multiplies by. The spec build
     /// rejects most of these configs with an error; a direct caller
     /// gets a running boiler and a warning per correction instead.
     fn guard(mut cfg: SteamBoilerConfig, id: u64) -> SteamBoilerConfig {
@@ -151,7 +146,7 @@ impl SteamBoiler {
             state: Mutex::new(BoilerState {
                 pressure_bar: init_bar,
             }),
-            demand_source: RwLock::new(DynamicScalar::constant(demand_kg_per_s)),
+            demand_source: Scalar::new(demand_kg_per_s),
             heater,
         }
     }
@@ -159,7 +154,7 @@ impl SteamBoiler {
     /// Steam demand in W (kg/s × 3600 s/h × Wh/kg); a negative demand,
     /// or one whose power is not finite, reads as 0.
     fn demand_w(&self) -> f32 {
-        let kg_per_s = self.demand_source.read().get() as f64;
+        let kg_per_s = self.demand_source.get() as f64;
         let w = (kg_per_s * 3600.0 * self.cfg.wh_per_kg as f64) as f32;
         if w.is_finite() { w.max(0.0) } else { 0.0 }
     }
@@ -212,10 +207,6 @@ impl SimulatedComponent for SteamBoiler {
     }
     fn stream_jitter_pct(&self) -> f32 {
         self.cfg.stream_jitter_pct
-    }
-
-    fn refresh_inputs(&self, ctx: &mut tulisp::TulispContext) {
-        self.demand_source.read().refresh(ctx);
     }
 
     fn tick(&self, world: &MicrogridSite, now: DateTime<Utc>, dt: Duration) {
@@ -289,25 +280,6 @@ impl SimulatedComponent for SteamBoiler {
         Some(self)
     }
 
-    fn snapshot_knob(&self, kind: KnobKind) -> Option<KnobSnapshot> {
-        match kind {
-            KnobKind::BoilerDemand => Some(KnobSnapshot::BoilerDemand(
-                self.demand_source.read().clone(),
-            )),
-            _ => None,
-        }
-    }
-
-    fn restore_knob(&self, snap: KnobSnapshot) -> bool {
-        match snap {
-            KnobSnapshot::BoilerDemand(scalar) => {
-                *self.demand_source.write() = scalar;
-                true
-            }
-            _ => false,
-        }
-    }
-
     fn physics_state(&self) -> Option<PhysicsState> {
         Some(PhysicsState::Boiler {
             pressure_bar: self.state.lock().pressure_bar,
@@ -319,67 +291,11 @@ impl SimulatedComponent for SteamBoiler {
             self.set_pressure_bar(pressure_bar);
         }
     }
-
-    fn make_fn(&self) -> &'static str {
-        "%make-steam-boiler"
-    }
-
-    fn has_unrenderable_source(&self) -> bool {
-        self.cfg.demand_dynamic || self.demand_source.read().is_dynamic()
-    }
-
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        let lf = crate::lisp::lisp_float32;
-        let d = SteamBoilerConfig::default();
-        let mut kw = Vec::new();
-        if self.cfg.rated_lower_w != d.rated_lower_w {
-            kw.push((":rated-lower-w", lf(self.cfg.rated_lower_w)));
-        }
-        kw.push((":rated-upper-w", lf(self.cfg.rated_upper_w)));
-        kw.push((":target-bar", lf(self.cfg.target_bar)));
-        kw.push((":max-bar", lf(self.cfg.max_bar)));
-        if self.cfg.capacity_wh_per_bar != d.capacity_wh_per_bar {
-            kw.push((":capacity-wh-per-bar", lf(self.cfg.capacity_wh_per_bar)));
-        }
-        if self.cfg.wh_per_kg != d.wh_per_kg {
-            kw.push((":wh-per-kg", lf(self.cfg.wh_per_kg)));
-        }
-        if let Some(initial) = self.cfg.initial_bar
-            && initial != self.cfg.target_bar
-        {
-            kw.push((":initial-bar", lf(initial)));
-        }
-        if !self.cfg.demand_dynamic {
-            kw.push((":demand-kg-per-s", lf(self.cfg.demand_kg_per_s)));
-        }
-        kw.push((
-            ":command-delay-s",
-            crate::lisp::lisp_float(self.cfg.command_delay.as_secs_f64()),
-        ));
-        if self.cfg.ramp_rate_w_per_s.is_finite() {
-            kw.push((":ramp-rate-w-per-s", lf(self.cfg.ramp_rate_w_per_s)));
-        }
-        kw.extend(crate::sim::inverter::device_delay_kw(self.cfg.device_delay));
-        if self.interval != Duration::from_millis(1000) {
-            kw.push((
-                ":interval-s",
-                crate::lisp::lisp_float(self.interval.as_secs_f64()),
-            ));
-        }
-        if self.cfg.stream_jitter_pct != d.stream_jitter_pct {
-            kw.push((":stream-jitter-pct", lf(self.cfg.stream_jitter_pct)));
-        }
-        kw
-    }
 }
 
 impl SteamDrive for SteamBoiler {
     fn set_steam_demand_kg_per_s(&self, kg_per_s: f32) {
-        *self.demand_source.write() = DynamicScalar::constant(kg_per_s);
-    }
-
-    fn set_steam_demand_source(&self, scalar: DynamicScalar) {
-        *self.demand_source.write() = scalar;
+        self.demand_source.set(kg_per_s);
     }
 
     /// Ignores a non-finite value (with a warning) and clamps the
@@ -392,19 +308,12 @@ impl SteamDrive for SteamBoiler {
         self.state.lock().pressure_bar = bar.clamp(f32::MIN_POSITIVE, self.cfg.max_bar);
     }
 
-    fn demand_reading(&self) -> ScalarReading {
-        let s = self.demand_source.read();
-        ScalarReading {
-            value: s.get(),
-            expr: s.source_text(),
-        }
+    fn demand_reading(&self) -> f32 {
+        self.demand_source.get()
     }
 
-    fn pressure_reading(&self) -> ScalarReading {
-        ScalarReading {
-            value: self.state.lock().pressure_bar,
-            expr: None,
-        }
+    fn pressure_reading(&self) -> f32 {
+        self.state.lock().pressure_bar
     }
 
     fn pressure_target_bar(&self) -> f32 {
@@ -761,103 +670,6 @@ mod tests {
         assert_eq!(t.reactive_power_var, Some(0.0));
         assert_eq!(t.pressure_bar, Some(8.0));
         assert_eq!(b.pressure_target_bar(), 8.0);
-    }
-
-    /// Every construction kwarg round-trips; :ramp-rate-w-per-s renders only
-    /// when finite, :interval-s only off-default, :demand-kg-per-s only when
-    /// the source is a plain number, :initial-bar only when it
-    /// departs from target.
-    #[test]
-    fn constructor_kwargs_round_trip() {
-        let b = SteamBoiler::new(
-            9,
-            Duration::from_millis(500),
-            SteamBoilerConfig {
-                rated_upper_w: 100_000.0,
-                target_bar: 6.0,
-                max_bar: 9.0,
-                demand_kg_per_s: 1.0,
-                stream_jitter_pct: 5.0,
-                ..Default::default()
-            },
-        );
-        assert_eq!(b.make_fn(), "%make-steam-boiler");
-        let s = b
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, v)| format!("{k} {v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(s.contains(":rated-upper-w 100000.0"));
-        assert!(s.contains(":target-bar 6.0"));
-        assert!(s.contains(":max-bar 9.0"));
-        assert!(s.contains(":demand-kg-per-s 1.0"), "{s}");
-        assert!(s.contains(":interval-s 0.5"));
-        assert!(s.contains(":stream-jitter-pct 5.0"));
-        assert!(!s.contains(":ramp-rate-w-per-s"), "infinite ramp omitted");
-        assert!(!s.contains(":initial-bar"), "default initial omitted");
-
-        // Dynamic demand is omitted entirely (unrenderable source).
-        let b2 = SteamBoiler::new(
-            10,
-            Duration::from_secs(1),
-            SteamBoilerConfig {
-                demand_dynamic: true,
-                ..Default::default()
-            },
-        );
-        let s2 = b2
-            .constructor_kwargs()
-            .iter()
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(!s2.contains(":demand"));
-        assert!(b2.has_unrenderable_source());
-    }
-
-    /// Snapshot/restore round-trip for the boiler-demand knob — the
-    /// steam-boiler twin of the sunlight test: a dynamic source
-    /// survives a scenario collapsing it to a constant and back.
-    #[test]
-    fn snapshot_restore_round_trip_boiler_demand_dynamic_source() {
-        let mut ctx = tulisp::TulispContext::new();
-        let b = boiler(SteamBoilerConfig::default());
-        let lambda = ctx.eval_string("(lambda () 77.0)").unwrap();
-        let scalar = DynamicScalar::from_funcall(lambda, 0.0);
-        b.set_steam_demand_source(scalar);
-        let text_before = b.demand_reading().expr;
-        assert!(text_before.is_some());
-
-        let snap = b.snapshot_knob(KnobKind::BoilerDemand).unwrap();
-
-        // A scenario collapses it to a constant.
-        b.set_steam_demand_kg_per_s(15.0 / 3600.0);
-        assert!(b.demand_reading().expr.is_none());
-        assert!(!b.has_unrenderable_source());
-
-        assert!(b.restore_knob(snap));
-        assert_eq!(b.demand_reading().expr, text_before);
-        assert!(b.has_unrenderable_source(), "dynamic source restored");
-    }
-
-    /// The one mismatch case worth a test: `Sunlight` and
-    /// `BoilerDemand` are the two scalar knobs a scenario drives the
-    /// same way, and are told apart only by their variant — a
-    /// sunlight snapshot wrapping the very same `DynamicScalar` a
-    /// boiler demand would carry must be refused, not written into
-    /// the demand slot. Every other cross-knob pairing is refused by
-    /// the same single `match` on the variant.
-    #[test]
-    fn restore_knob_rejects_a_sunlight_snapshot() {
-        use crate::sim::inverter::solar_inverter::SunlightSource;
-        let b = boiler(SteamBoilerConfig::default());
-        assert!(
-            !b.restore_knob(KnobSnapshot::Sunlight(SunlightSource::manual(
-                DynamicScalar::constant(1.0)
-            )))
-        );
-        assert_eq!(b.demand_reading().value, 0.0);
     }
 
     /// Register `b` in a fresh site and hand back both, so a test can

@@ -18,11 +18,11 @@ use crate::sim::{
     Battery, BatteryInverter, Category, EvCharger, Grid, Marker, Meter, OperationalMode,
     ReactiveSource, SimulatedComponent, SolarInverter, SteamBoiler, SteamBoilerConfig,
     battery::BatteryConfig,
-    dynamic_scalar::DynamicScalar,
     ev_charger::EvChargerConfig,
     inverter::{battery_inverter::BatteryInverterConfig, solar_inverter::SolarInverterConfig},
     reactive::ReactiveCapability,
     runtime::{CommandMode, ComponentRuntime, Health, TelemetryMode},
+    scalar::Scalar,
 };
 
 /// The physics tick of a microgrid whose spec sets none.
@@ -65,10 +65,9 @@ impl fmt::Debug for BuiltTopology {
 /// children first.
 ///
 /// Checked: a given `grpc_port` is not 0, every component has an id,
-/// no id appears twice, each
-/// connection names two components and appears once, the connections
-/// have no cycle, each component's values and the fields that go in
-/// pairs follow the rules of the Lisp `make-*` functions, and each
+/// no id appears twice, each connection names two components and
+/// appears once, the connections have no cycle, each component's
+/// values and the fields that go in pairs are consistent, and each
 /// component's modes agree ([`runtime_from_modes`]).
 pub fn build_topology(
     spec: &MicrogridSpec,
@@ -133,7 +132,7 @@ pub fn build_topology(
 
     let physics_tick_ms = match physics_tick_s {
         None => DEFAULT_PHYSICS_TICK_MS,
-        // Whole milliseconds, at least one, as `set-physics-tick-s`.
+        // Whole milliseconds, at least one.
         Some(s) => (secs("physics_tick_s", s)
             .map_err(SpecError::new)?
             .as_millis() as u64)
@@ -340,13 +339,13 @@ fn meter(id: u64, s: &MeterSpec) -> Result<Meter, String> {
                 leading: s.leading.unwrap_or(false),
             })
         }
-        (None, Some(var)) => Some(ReactiveSource::Var(DynamicScalar::constant(var as f32))),
+        (None, Some(var)) => Some(ReactiveSource::Var(Scalar::new(var as f32))),
         (None, None) => None,
     };
     Ok(Meter::new(
         id,
         interval(s.interval_s)?,
-        s.power_w.map(|w| DynamicScalar::constant(w as f32)),
+        s.power_w.map(|w| Scalar::new(w as f32)),
         reactive,
         jitter(s.stream_jitter_pct),
         s.hidden.unwrap_or(false),
@@ -684,7 +683,7 @@ mod tests {
         };
         assert_eq!(get(1).rated_fuse_current(), Some(63));
         let power = get(2).meter_drive().unwrap().meter_power_reading().unwrap();
-        assert_eq!(power.value, 2000.0);
+        assert_eq!(power, 2000.0);
         assert_eq!(built.initial[&2].name.as_deref(), Some("load"));
         assert_eq!(get(4).dc_storage().unwrap().soc_pct(), 30.0);
         assert_eq!(
@@ -694,7 +693,7 @@ mod tests {
     }
 
     /// One given side bounds the grid on that side; the other stays
-    /// open, as in Lisp.
+    /// open.
     #[test]
     fn a_one_sided_grid_band_bounds_that_side_only() {
         let rated = |side: &str| {
@@ -784,7 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn values_the_lisp_make_functions_refuse_are_refused() {
+    fn invalid_values_are_refused() {
         for (component, expected) in [
             (
                 r#"{"type": "meter", "id": 5, "reactive_power_var": 1.0, "power_factor": 0.9}"#,
@@ -857,8 +856,9 @@ mod tests {
         );
     }
 
-    /// `runtime_from_modes` agrees with the site's setters, applied in the
-    /// order the Lisp make functions apply them, on every combination.
+    /// `runtime_from_modes` agrees with the site's setters, applied
+    /// operational mode first, then health, telemetry and command
+    /// mode, on every combination.
     #[test]
     fn runtime_from_modes_agrees_with_the_site_on_every_combination() {
         use crate::sim::MicrogridSite;

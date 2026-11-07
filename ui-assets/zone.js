@@ -1,35 +1,44 @@
-// The display zone, which every displayed time is shown in: the simulation's
-// (enterprise) zone, from /api/clock, or UTC when the top bar's zone chip
-// says so. Times on the wire stay UTC; only display goes through here.
+// The display zone, which every displayed time is shown in: this
+// browser's own zone, or UTC when the top bar's zone chip says so. Times on
+// the wire stay UTC; only display goes through here.
 
-import { getJson } from "./http.js";
 import { readStorage, writeStorage } from "./storage.js";
 
-// localStorage: "utc", or "local" for the sim zone.
+// localStorage: "utc", or "local" for the browser's zone.
 const TZ_PREF_KEY = "macrocosim-tz";
-let simTz = "Europe/Berlin";
+
+// The zone this browser runs in, or UTC when its Intl names none.
+function browserZone() {
+  try {
+    return new Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch (_) {
+    return "UTC";
+  }
+}
+
+let localTz = browserZone();
 let utc = false;
 const listeners = new Set();
 // The Intl formatters for the display zone, by kind; emptied when it changes.
 let formatters = new Map();
 
-export const tz = () => (utc ? "UTC" : simTz);
+export const tz = () => (utc ? "UTC" : localTz);
 export const isUtc = () => utc;
 
-// Sets the sim zone. A name this browser's Intl does not know (its zone data
-// can be older than the server's) falls back to UTC.
-export function setSimZone(name) {
+// Sets the local zone, which is the browser's own unless a test sets another.
+// A name this browser's Intl does not know falls back to UTC.
+export function setLocalZone(name) {
   try {
     new Intl.DateTimeFormat("en-GB", { timeZone: name });
-    simTz = name;
+    localTz = name;
   } catch (_) {
-    simTz = "UTC";
+    localTz = "UTC";
   }
   formatters = new Map();
 }
 
-// Switches between the sim zone and UTC, re-formats the times already painted,
-// and tells the listeners.
+// Switches between the local zone and UTC, re-formats the times already
+// painted, and tells the listeners.
 export function setUtc(on) {
   utc = Boolean(on);
   formatters = new Map();
@@ -43,16 +52,9 @@ export function onChange(fn) {
   return () => listeners.delete(fn);
 }
 
-// Reads the sim zone and the chip's remembered choice, then tells the listeners
-// as a switch would. Without an answer from the server the zone stays
-// Europe/Berlin.
-export async function init() {
-  try {
-    const j = await getJson("/api/clock");
-    if (j.tz) setSimZone(j.tz);
-  } catch (_) {
-    // Keep the fallback zone.
-  }
+// Applies the chip's remembered choice, then tells the listeners as a switch
+// would.
+export function init() {
   setUtc(readStorage(TZ_PREF_KEY) === "utc");
 }
 

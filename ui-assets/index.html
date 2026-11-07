@@ -38,9 +38,7 @@
       <span id="status" class="status">connecting…</span>
       <nav id="mode-toggle" aria-label="view mode">
         <button type="button" class="mode-btn" data-mode="microgrids">Microgrids</button>
-        <button type="button" class="mode-btn" data-mode="scenarios">Scenarios</button>
       </nav>
-      <span id="active-scenarios" class="active-scenarios" hidden></span>
       <section id="pulse" aria-label="system pulse">
         <span class="pulse-group">
           <span class="pulse-label">setpoints/5s</span>
@@ -64,15 +62,14 @@
       <button type="button" class="pulse-chip script-chip" id="script-chip"
               popovertarget="script-popover" hidden>script</button>
       <div id="script-popover" class="script-popover" popover></div>
-      <button type="button" id="repl-btn" class="btn"
-              title="Lisp REPL against the selected microgrid — backtick opens it from anywhere">REPL</button>
       <button type="button" id="logs-btn" class="btn" title="The server's log tail">Logs</button>
       <button type="button" id="defaults-btn" class="btn">Defaults</button>
-      <button type="button" id="scenario-report-btn" class="btn">Report</button>
+      <button type="button" id="report-btn" class="btn"
+              title="The recording report of the selected microgrid">Report</button>
       <button type="button" id="help-btn" class="btn" title="Keyboard + mouse shortcuts">?</button>
       <button type="button" class="pulse-chip" id="theme-toggle" title="colour theme: auto follows the OS">◐ auto</button>
       <button type="button" class="pulse-chip" id="density-toggle" title="text size and spacing: compact or comfortable">compact</button>
-      <button type="button" class="pulse-chip" id="tz-toggle" title="toggle between local sim zone and UTC">local</button>
+      <button type="button" class="pulse-chip" id="tz-toggle" title="toggle between this browser's zone and UTC">local</button>
       <span class="pulse-clock" id="pulse-clock">--:--:--</span>
     </header>
     <div id="server-banner" role="alert" hidden>Server unreachable — retrying…</div>
@@ -90,13 +87,10 @@
         <span id="mg-breadcrumb-name" class="mg-name"></span>
         <span id="mg-breadcrumb-tso" class="muted"></span>
         <span id="mg-file-chips"></span>
-        <button type="button" id="mg-adopt-btn" class="btn"
-                title="Write the live structure into this file so macrocosim may rewrite it from now on"
-                hidden>Adopt</button>
         <button type="button" id="mg-copy-py-btn" class="btn"
-                title="Copy this microgrid as a Python module, to paste into a script" hidden>Copy as Python</button>
+                title="Copy this microgrid as a Python module, to paste into a script">Copy as Python</button>
         <button type="button" id="mg-save-py-btn" class="btn"
-                title="Download this microgrid as a Python module" hidden>Save as .py</button>
+                title="Download this microgrid as a Python module">Save as .py</button>
         <span class="spacer"></span>
         <nav id="mg-subtoggle" aria-label="microgrid view">
           <button type="button" class="mode-btn" data-subview="topology">Topology</button>
@@ -108,8 +102,6 @@
                 title="Formula explorer: how each derived metric is computed from the topology">Formulas</button>
         <button type="button" id="weather-btn" class="btn"
                 title="Site weather: the day's sunlight curve, cloud settings, and a pass-a-cloud trigger">Weather</button>
-        <button type="button" id="snapshots-btn" class="btn"
-                title="Save / load a copy of this microgrid's file">Snapshots</button>
       </header>
       <div id="topology"></div>
       <div id="topology-empty-hint">
@@ -120,28 +112,6 @@
           <li>Paste a structure copied from another microgrid (Ctrl/Cmd+V).</li>
         </ol>
         <p class="hint">Wire it up via Ctrl/Cmd+drag once it's on the canvas.</p>
-      </div>
-      <div id="scenarios">
-        <header class="scenarios-header">
-          <h2 class="scenarios-title">Scenarios</h2>
-          <span id="sc-count" class="muted"></span>
-        </header>
-        <section id="scenarios-list" class="scenarios-list" aria-label="registered scenarios"></section>
-        <section id="sc-run-view" class="sc-run-view" hidden>
-          <header class="sc-run-header">
-            <span id="sc-run-name" class="sc-run-name"></span>
-            <span id="sc-run-status" class="sc-badge"></span>
-            <span id="sc-run-elapsed" class="muted"></span>
-            <button type="button" id="sc-run-stop" class="btn">Stop</button>
-          </header>
-          <div id="sc-run-timeline" class="sc-run-timeline" aria-label="cue and check timeline"></div>
-          <div class="sc-run-cols">
-            <section id="sc-run-metrics" class="sc-run-metrics" aria-label="live metrics"></section>
-            <section id="sc-run-checks" class="sc-run-checks" aria-label="check ledger"></section>
-          </div>
-          <section id="sc-run-events" class="sc-run-events" aria-label="recent events"></section>
-          <section id="sc-run-csv" class="sc-run-csv" aria-label="recorded csvs"></section>
-        </section>
       </div>
       <div id="dispatches">
         <header class="dispatches-header">
@@ -226,48 +196,6 @@
           <button class="btn btn-quiet btn-icon float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
           <div id="inspect" class="panel-content">
             <p class="hint">Click a node to inspect. Right-click for the context menu.</p>
-          </div>
-        </aside>
-        <aside id="repl" class="float-panel" aria-label="repl">
-          <div class="panel-drag" title="Drag to move"><span class="drag-grip"></span>
-            <span class="repl-head-tools">
-              <button type="button" id="repl-mg-chip" class="repl-mg-chip" title="REPL targets this microgrid — click to jump"></button>
-              <label class="repl-keys-toggle"
-                     title="Emacs keys in the input: C-a, C-e, C-k, C-y, M-f, M-b, M-p, M-n, …"><input type="checkbox" id="repl-emacs"> Emacs keys</label>
-              <button type="button" id="repl-eval" class="btn btn-quiet repl-eval-btn" title="Evaluate the prompt (Ctrl/Cmd+Enter)">eval</button>
-            </span>
-          </div>
-          <button class="btn btn-quiet btn-icon float-close" type="button" title="Close (Esc)">×</button>
-          <button class="btn btn-quiet btn-icon float-dock" type="button" title="Dock…" aria-haspopup="menu">⤓</button>
-          <div id="repl-body" class="panel-content">
-            <!-- One scrolling transcript, like a terminal: the past entries,
-                 then the prompt with the hint under it. -->
-            <div id="repl-output">
-              <div id="repl-entries"></div>
-              <form id="repl-form">
-                <span class="repl-prompt-mark" aria-hidden="true">▸</span>
-                <div id="repl-input-wrap">
-                  <!-- Rainbow-paren overlay. The textarea sits on top with
-                       transparent text; this layer renders the same content
-                       with depth-coloured parens. aria-hidden because it's a
-                       visual mirror of the textarea, not its own input. -->
-                  <pre id="repl-input-overlay" aria-hidden="true"></pre>
-                  <textarea id="repl-input" rows="1" spellcheck="false"
-                            autocomplete="off"
-                            placeholder="(eval lisp here — ctrl/cmd+enter to run, tab to complete)"></textarea>
-                  <!-- The completion popup: repl.js sets its left edge at the
-                       start of the word being completed, and opens it below or
-                       above the prompt, whichever has more room. -->
-                  <div id="repl-popup" hidden>
-                    <ul id="repl-completions"></ul>
-                    <div id="repl-doc"></div>
-                  </div>
-                </div>
-                <!-- The signature of the call the cursor is in, its current
-                     argument marked, and the first line of its docstring. -->
-                <div id="repl-hint"></div>
-              </form>
-            </div>
           </div>
         </aside>
         <aside id="logs-panel" class="float-panel" aria-label="logs">
@@ -360,58 +288,6 @@
         </p>
       </div>
     </dialog>
-    <dialog id="snapshots-dialog">
-      <header>
-        <h3>Snapshots</h3>
-        <button id="snapshots-dialog-close" type="button" class="btn btn-quiet btn-icon">×</button>
-      </header>
-      <div id="snapshots-dialog-content">
-        <p id="snapshots-blocked" class="hint" hidden></p>
-        <form id="snapshot-save-form">
-          <label>
-            <span>Save this microgrid's file as</span>
-            <input type="text" id="snapshot-name-input" class="field" placeholder="snapshot name"
-                   pattern="[A-Za-z0-9_\-]+" autocomplete="off" required />
-          </label>
-          <button type="submit" class="btn btn-primary">Save</button>
-        </form>
-        <p id="snapshots-error" class="form-error" hidden></p>
-        <ul id="snapshots-list">
-          <li class="hint">No snapshots yet.</li>
-        </ul>
-        <p class="hint">
-          Saving copies the selected microgrid's managed file to
-          <code>snapshots/&lt;microgrid-id&gt;/&lt;name&gt;.lisp</code>.
-          Loading replaces that file with the snapshot and reloads the
-          microgrid (live ramp / SoC state is not captured).
-        </p>
-      </div>
-    </dialog>
-    <dialog id="load-script-dialog">
-      <header>
-        <h3>Load script</h3>
-        <button id="load-script-close" type="button" class="btn btn-quiet btn-icon">×</button>
-      </header>
-      <div id="load-script-content">
-        <div id="load-script-breadcrumb" class="hint"></div>
-        <div id="load-script-collision" class="collision-bar" hidden></div>
-        <ul id="load-script-list"></ul>
-        <form id="load-script-form">
-          <label>
-            <span>or type a path</span>
-            <input type="text" id="load-script-path" class="field"
-                   placeholder="examples/starter-site.lisp" autocomplete="off" />
-          </label>
-          <button type="submit" class="btn btn-primary">Load</button>
-        </form>
-        <p id="load-script-error" class="form-error" hidden></p>
-        <p class="hint">
-          Evals <code>(load "…")</code> on the server. The browser and
-          the typed path both resolve against the server's state dir.
-        </p>
-      </div>
-    </dialog>
-
     <dialog id="dispatch-dialog">
       <header>
         <h3>New dispatch</h3>
@@ -538,27 +414,18 @@
         <button id="help-dialog-close" type="button" class="btn btn-quiet btn-icon">×</button>
       </header>
       <div id="help-dialog-content">
-        <h4>Modes</h4>
-        <ul class="help-list">
-          <li>The chrome's <em>Microgrids</em> / <em>Scenarios</em> buttons swap the main pane. The REPL panel opens in either mode: from the <em>REPL</em> button in the top bar, or with a backtick. Press <kbd>1</kbd> for Microgrids, <kbd>2</kbd> for Scenarios.</li>
-          <li>Mode preference persists in <code>localStorage</code>; refresh restores the last-picked mode + last-selected microgrid.</li>
-        </ul>
         <h4>Microgrids</h4>
         <ul class="help-list">
-          <li>The <em>Microgrids</em> mode opens a card grid of every registered microgrid (one per <code>(make-microgrid …)</code> form, plus any added via the <em>+ New microgrid</em> card or <code>POST /api/microgrids</code>).</li>
+          <li>The <em>Microgrids</em> button in the top bar, or <kbd>1</kbd>, opens a card grid of every registered microgrid: the script's, plus any added via the <em>+ New microgrid</em> card or <code>POST /api/microgrids</code>. The last-selected microgrid persists in <code>localStorage</code>; a refresh restores it.</li>
           <li>The <em>⇪ Import site…</em> card creates a microgrid from a microgrid API site export: pick <code>components.json</code> and <code>connections.json</code> together (connections optional). Rated power bounds, battery capacity, SoC range and the grid's rated fuse current all carry over into the simulation.</li>
-          <li>Clicking a card drills into that microgrid's Topology + Dispatches sub-tabs. The <em>← Microgrids</em> button in the header returns to the list; a small <em>→ name</em> chip on the REPL form shows which microgrid the REPL's evals route to.</li>
+          <li>Clicking a card drills into that microgrid's Topology + Dispatches sub-tabs. The <em>← Microgrids</em> button in the header returns to the list.</li>
           <li>Each microgrid runs its own Microgrid gRPC server on <code>[::1]:&lt;port&gt;</code> (default 8800, 8810, 8820, …). PlatformAssets runs on a single shared port (default 9900).</li>
           <li>Component ids are <em>globally unique</em> across the enterprise — copying a selection from one microgrid and pasting into another (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>V</kbd>) re-creates the structure with fresh ids.</li>
         </ul>
         <h4>Aggregations</h4>
         <ul class="help-list">
           <li>The <em>Metrics</em> button in the microgrid bar opens live site metrics — power, reactive power / PF, frequency — read from the same <code>frequenz-microgrid</code> client a production control app would use. The <em>Formulas</em> button next to it shows how each of those aggregates is derived from the topology; every <code>#N</code> in a formula is a link back to the canvas.</li>
-          <li>Top-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>theme</em>, <em>density</em> + <em>TZ</em> toggle visual options.</li>
-        </ul>
-        <h4>Snapshots</h4>
-        <ul class="help-list">
-          <li><strong>Snapshots</strong> button in the microgrid bar — saves the microgrid's managed file under <code>snapshots/&lt;microgrid-id&gt;/&lt;name&gt;.lisp</code>; load to replay that state. Needs a managed microgrid. Headless: <code>macroctl snapshot save / load / list [--microgrid-id N]</code>.</li>
+          <li>Top-bar pills — <em>graph</em> (✓ / ⚠) summarises validation warnings from <code>frequenz-microgrid-component-graph</code>; <em>loopback</em> is the Microgrid client status; <em>theme</em> and <em>density</em> toggle visual options, and the zone chip shows every time in this browser's zone or in UTC.</li>
         </ul>
         <h4>Topology canvas</h4>
         <ul class="help-list">
@@ -576,24 +443,15 @@
         </ul>
         <h4>Inspector + chrome</h4>
         <ul class="help-list">
-          <li><strong>Inspector</strong> — one of the panels, alongside the formula explorer, metrics, weather, the REPL, the log tail, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
-          <li><strong>Docking</strong> — a panel opens docked the first time: the REPL and the logs along the bottom, every other panel down the right, and the canvas narrows to make room. A floating panel's <em>⤓</em> button offers to dock it into a strip along the bottom or down the right edge of the window, where it becomes a tile and stops covering the canvas; a strip appears only while it holds a tile, and the divider beside it drags to change its size. The tile's <em>⤒</em> floats it back to where it was, and the panel opens floating from then on. Several docked panels share a strip: drag the divider between two tiles to trade space, drag a tile's head along the strip to reorder. A docked panel that you close comes back docked. You can also drag a floating panel's grab strip onto the bottom or right edge of the canvas to dock it there, and drag a tile's head out of its strip to float it again.</li>
+          <li><strong>Inspector</strong> — one of the panels, alongside the formula explorer, metrics, weather, the log tail, Defaults and the Report; each closes with its <em>×</em> or <kbd>Esc</kbd> (newest first). The inspector appears when you click a node (charts + config + knobs), and also closes when you click empty canvas or switch tab.</li>
+          <li><strong>Docking</strong> — a panel opens docked the first time: the logs along the bottom, every other panel down the right, and the canvas narrows to make room. A floating panel's <em>⤓</em> button offers to dock it into a strip along the bottom or down the right edge of the window, where it becomes a tile and stops covering the canvas; a strip appears only while it holds a tile, and the divider beside it drags to change its size. The tile's <em>⤒</em> floats it back to where it was, and the panel opens floating from then on. Several docked panels share a strip: drag the divider between two tiles to trade space, drag a tile's head along the strip to reorder. A docked panel that you close comes back docked. You can also drag a floating panel's grab strip onto the bottom or right edge of the canvas to dock it there, and drag a tile's head out of its strip to float it again.</li>
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a button and a component appears under the lowest free id from 5000, with a color dot matching its node's category colour. <em>hidden meter</em> adds a meter the gRPC topology leaves out (its node draws dashed). Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC); the grid node shows the grid frequency, amber from 0.1 Hz away from 50 Hz and red from 0.2 Hz. Edges take the colour of the direction power actually flows (blue import, green export) and thicken with its magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — the values the engine fills into each component type's spec, read-only, in its own panel.</li>
-          <li><strong>Editing</strong> — every structural edit changes the microgrid's spec and rebuilds it; a component whose spec did not change keeps its state. A microgrid loaded from Lisp is read-only. An <em>edited here</em> chip marks a script's microgrid edited in the UI: saving the script replaces those edits, so export them to keep them. An <em>in memory only</em> chip marks a microgrid made here. <em>Copy as Python</em> and <em>Save as .py</em> in the microgrid bar export it as a Python module. An <em>unmanaged</em> chip marks a hand-written Lisp file; hit <em>Adopt</em> in the microgrid bar to take it over.</li>
+          <li><strong>Editing</strong> — every structural edit changes the microgrid's spec and rebuilds it. A component whose spec did not change, or changed only in its name or modes, keeps its SoC, plugged car, boiler pressure, history and energy; its health, modes and driven knobs go back to the spec, so a mode or health set in the inspector or the <em>Mode:</em> menu lasts until the next structural edit. An <em>edited here</em> chip marks a script's microgrid edited in the UI: saving the script replaces those edits, so export them to keep them. An <em>in memory only</em> chip marks a microgrid made here. <em>Copy as Python</em> and <em>Save as .py</em> in the microgrid bar export it as a Python module.</li>
+          <li><strong>Logs</strong> — the <em>Logs</em> button in the top bar opens the server's log tail. Its <em>show</em> dropdown sets a minimum level (lines below it stay hidden) and <em>clear</em> empties the tail.</li>
+          <li><strong>Report</strong> — the <em>Report</em> button in the top bar opens the recording of the selected microgrid, or of the lowest-numbered one while none is selected: whether it runs, its totals and peaks, its recent events and the CSV files it wrote. A script records with <code>Microgrid.record()</code>.</li>
           <li><strong>Script chip</strong> — in the top bar while the engine runs a script: its state, and on a click the last reload and the script's recent output.</li>
-        </ul>
-        <h4>REPL</h4>
-        <ul class="help-list">
-          <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Enter</kbd> or the <em>eval</em> button in the panel's head — eval. <kbd>Tab</kbd> — complete.</li>
-          <li>The REPL reads like a terminal: the prompt is the last line of the output and scrolls with it. A click in the output, other than on a past command, puts the cursor in the prompt without scrolling to it. The completion popup opens below the prompt or above it, whichever has more room.</li>
-          <li>The panel's head shows where evals go: a microgrid, or the enterprise when none is selected. Clicking it opens the Microgrids list, where you pick another; until you do, evals go to the enterprise. A floating REPL keeps the height you drag it to. Other panels shrink back to fit what they hold.</li>
-          <li><kbd>↑</kbd> on the input's first row brings back the previous command, and <kbd>↓</kbd> on its last row the next one. Going past the newest returns what you were typing. History is kept in this browser, across reloads and microgrids: the last 500 commands. A command over 16K characters runs but is not kept.</li>
-          <li>A click on a command in the output puts it back in the input, in place of what you were typing; <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> takes that back.</li>
-          <li>The <em>Emacs keys</em> checkbox in the panel's head turns on Emacs keys, remembered in this browser. <kbd>C-a</kbd> <kbd>C-e</kbd> <kbd>C-f</kbd> <kbd>C-b</kbd> <kbd>C-p</kbd> <kbd>C-n</kbd> <kbd>M-f</kbd> <kbd>M-b</kbd> <kbd>M-&lt;</kbd> <kbd>M-&gt;</kbd> move. <kbd>C-d</kbd> <kbd>M-d</kbd> <kbd>M-DEL</kbd> <kbd>C-k</kbd> delete and kill, and <kbd>C-y</kbd> yanks the last kill. <kbd>M-p</kbd> / <kbd>M-n</kbd> step through history from anywhere.</li>
-          <li>On Linux and Windows the browser keeps <kbd>C-n</kbd> (a new window) to itself; on a Mac it reaches the REPL. On Linux, the GTK Emacs key theme gives it to text fields, which works in Firefox: <code>gsettings set org.gnome.desktop.interface gtk-key-theme Emacs</code>. It changes every GTK 3 text field on the desktop; <code>gsettings reset org.gnome.desktop.interface gtk-key-theme</code> undoes it.</li>
-          <li>The <em>REPL</em> and <em>Logs</em> buttons in the top bar open the REPL and the server log tail, docked along the bottom at first — dock, float, resize and close them like any other panel. A backtick opens the REPL from anywhere; <kbd>Esc</kbd> in its input closes it. The Logs panel's <em>show</em> dropdown sets a minimum level (lines below it stay hidden) and <em>clear</em> empties the tail.</li>
         </ul>
       </div>
     </dialog>

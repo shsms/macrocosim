@@ -1,7 +1,6 @@
 //! `GET` and `POST /api/frequency`: the grid frequency every
-//! microgrid shares, and the model that drives it. The twins of
-//! `(current-frequency)`, `(set-frequency)`, `(set-frequency-model)`,
-//! `(override-frequency-model)` and `(clear-frequency-override)`.
+//! microgrid shares, and the model that drives it: read it, set it
+//! now, change the base model, and set or clear an override.
 
 use axum::extract::State;
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,7 @@
 """`connect`: attach to the microgrids of a simulator that is already running.
 
-Internal; imports `_process`, `_session`, `_spec`, `_topology`, `_microgrid`
-and `_units`.
+Internal; imports `_errors`, `_process`, `_session`, `_spec`, `_topology`,
+`_microgrid` and `_units`.
 """
 
 from __future__ import annotations
@@ -13,11 +13,12 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ._errors import ServerError
 from ._microgrid import Microgrid
 from ._process import Endpoints
 from ._session import _Session
 from ._spec import MicrogridSpec
-from ._topology import microgrid_from_json
+from ._topology import microgrid_from_value
 from ._units import check_type
 
 
@@ -40,13 +41,13 @@ def _attach(
 
 
 def _listing(body: Any) -> list[tuple[int, str | None]]:
-    """The id and gRPC address of each listed microgrid that has a stored spec."""
+    """The id of each listed microgrid, and the address of its gRPC server when
+    that server runs."""
     found = []
     for entry in body:
-        if not entry["has_spec"]:
-            continue
         runtime = entry["runtime"]
-        addr = None if runtime is None else runtime["grpc_addr"]
+        running = runtime is not None and runtime["status"] == "running"
+        addr = runtime["grpc_addr"] if running else None
         found.append((int(entry["id"]), None if addr is None else str(addr)))
     return found
 
@@ -75,7 +76,17 @@ async def _connect(
         microgrids: dict[int, Microgrid] = {}
         for microgrid_id, grpc_addr in listed:
             s = session(microgrid_id)
-            spec = microgrid_from_json(await s.get_json(s.microgrid_path("spec")))
+            try:
+                body = await s.get_json(s.microgrid_path("spec"))
+            except ServerError as exc:
+                if exc.status != 404:
+                    raise
+                relisted = await session(0).get_parsed("/api/microgrids", _listing)
+                if any(other == microgrid_id for other, _ in relisted):
+                    raise
+                # Unloaded since it was listed.
+                continue
+            spec = microgrid_from_value(body)
             microgrids[microgrid_id] = _attach(s, spec, parts.netloc, grpc_addr)
         yield microgrids
     finally:
@@ -94,9 +105,8 @@ async def connect(url: str) -> AsyncIterator[dict[int, Microgrid]]:
             await microgrids[7][1003].power.set(Power.from_kilowatts(20))
 
     Each `Microgrid` is built from the spec the simulator stores for it, so its
-    components are found by id (``microgrid[1003]``). Microgrids loaded from
-    Lisp have no stored spec and are left out. Leaving the block closes the
-    connections; the simulator keeps running.
+    components are found by id (``microgrid[1003]``). Leaving the block closes
+    the connections; the simulator keeps running.
     """
     async with _connect(url) as microgrids:
         yield microgrids

@@ -24,12 +24,12 @@ pub trait DcStorage: Send + Sync {
     /// The state of charge in %.
     fn soc_pct(&self) -> f32;
 
-    /// The usable SoC window (`:soc-lower-pct`, `:soc-upper-pct`,
-    /// `:soc-protect-margin-pct`) the gateway throttles the bounds by.
+    /// The usable SoC window (`soc_lower_pct`, `soc_upper_pct`,
+    /// `soc_protect_margin_pct`) the gateway throttles the bounds by.
     fn soc_window(&self) -> SocProtect;
 
     /// Teleport the state of charge to `pct` (clamped to 0..=100; a
     /// non-finite value is ignored). `MicrogridSite::set_soc_pct`
-    /// calls it for `set-battery-soc` and the HTTP `soc_pct` drive.
+    /// calls it for the HTTP `soc_pct` drive.
     fn set_soc_pct(&self, pct: f32);
 }

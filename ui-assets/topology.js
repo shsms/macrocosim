@@ -21,15 +21,8 @@ import { showContextMenu } from "./editor.js";
 import { createHoverCard, hoverCardModel } from "./hovercard.js";
 import { errorText } from "./http.js";
 import { blankLiveEntry, countText, DEAD_FLOW, deadBandW, edgeFlow } from "./live.js";
-import { notify } from "./notices.js";
 import { COLORS, cssToken, invalidateMeasureCache, lodFor, measurePill, pillFontsReady, pillModel, pillRenderer } from "./pill.js";
-import {
-  mgFetch,
-  READ_ONLY_TITLE,
-  readSelectedMg,
-  structureEditable,
-  visibleSubview,
-} from "./routing.js";
+import { mgFetch, readSelectedMg, visibleSubview } from "./routing.js";
 import { connect } from "./spec-edit.js";
 import { readStorage, removeStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
@@ -1016,7 +1009,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
         // (Cmd on Mac), drag from one node to another to wire them.
         // Gated on this canvas actually being visible (offsetParent
         // is null while its subview is hidden) so Ctrl-chords typed
-        // in the REPL or on other views don't arm edit mode.
+        // on other views don't arm edit mode.
         document.addEventListener("keydown", (e) => {
           if (
             (e.key === "Control" || e.key === "Meta") &&
@@ -2005,14 +1998,6 @@ export const topology = createGraphCanvas("topology", {
   tooltip: false,
   hoverCard: true,
   onConnect(from, to) {
-    // Wiring is structure, so it needs a spec. Refuse here
-    // rather than at the keydown that arms edit mode — the drag is
-    // already finished by the time vis calls back, and a silent drop
-    // would look like the canvas ate the gesture.
-    if (!structureEditable()) {
-      notify(READ_ONLY_TITLE);
-      return;
-    }
     connect(from, to);
   },
   onContextMenu: showContextMenu,

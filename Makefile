@@ -42,7 +42,7 @@ $(PLAYWRIGHT_STAMP):
 # python/. The server log is printed when the boot or a smoke fails;
 # the scratch state dir goes with the server.
 ui-e2e: ui-e2e-deps
-	cargo build --bin macrocosim
+	cargo build --bin macrocosim --bin macroctl
 	@set -e; sd=$$(mktemp -d); \
 	  $(TARGET_DIR)/debug/macrocosim --state-dir "$$sd" --ephemeral-ports \
 	      --emit-endpoints="$$sd/endpoints.json" \
@@ -52,6 +52,5 @@ ui-e2e: ui-e2e-deps
 	  for _ in $$(seq 1 30); do [ -s "$$sd/endpoints.json" ] && break; sleep 1; done; \
 	  [ -s "$$sd/endpoints.json" ] || { echo "server failed to boot:"; cat "$$sd/server.log"; exit 1; }; \
 	  ui=$$(sed -n 's/.*"ui":"\([^"]*\)".*/\1/p' "$$sd/endpoints.json"); \
-	  { MACROCOSIM_UI="http://$$ui" node tools/ui-smoke/live-topology.mjs \
-	    && MACROCOSIM_UI="http://$$ui" node tools/ui-smoke/repl.mjs; } \
+	  MACROCOSIM_UI="http://$$ui" MACROCTL=$(TARGET_DIR)/debug/macroctl node tools/ui-smoke/live-topology.mjs \
 	    || { echo "--- server log:"; cat "$$sd/server.log"; exit 1; }

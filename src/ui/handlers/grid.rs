@@ -1,6 +1,6 @@
-//! `POST /api/mg/{mg}/grid`: the grid state of one microgrid, the
-//! twin of `(set-voltage-per-phase)`. The grid frequency is shared by
-//! every microgrid and has its own route (`frequency.rs`).
+//! `POST /api/mg/{mg}/grid`: the grid state of one microgrid, its
+//! voltage per phase. The grid frequency is shared by every microgrid
+//! and has its own route (`frequency.rs`).
 
 use axum::http::StatusCode;
 use serde::Deserialize;

@@ -1,9 +1,9 @@
-//! Integration-test harness: spawn a `Config`-driven macrocosim
-//! server in-process on OS-assigned ports, expose its gRPC + UI
-//! addresses, and tear everything down on Drop.
+//! Integration-test harness: spawn a macrocosim engine in-process on
+//! OS-assigned ports with the microgrids of a topology document,
+//! expose its gRPC + UI addresses, and tear everything down on Drop.
 //!
-//! Each test gets its own temp dir for `config.lisp` and a fresh
-//! `Config`, so parallel tests can't stomp each other's state.
+//! Each test gets its own temp dir as its state dir and a fresh
+//! `Engine`, so parallel tests can't stomp each other's state.
 //!
 //! The fixture is in-process rather than out-of-process because:
 //! - cargo runs each `tests/<file>.rs` as its own binary already,
@@ -15,6 +15,7 @@
 //!   acceptable for a fixture.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -22,12 +23,16 @@ use macrocosim::proto::common::metrics::{Bounds, Metric};
 use macrocosim::proto::microgrid::{
     ReceiveElectricalComponentTelemetryStreamRequest, microgrid_client::MicrogridClient,
 };
+use macrocosim::runner::python::Interpreter;
 use macrocosim::runtime::MicrogridRuntimes;
+use macrocosim::sim::sim_clock::NowSource;
 use macrocosim::spec::TopologyDoc;
 use macrocosim::{
-    assets_server::AssetsServer, engine::Engine, lisp::Config,
+    assets_server::AssetsServer,
+    engine::{Engine, Metadata},
     proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer,
-    sim::MicrogridSite, ui,
+    sim::MicrogridSite,
+    ui,
 };
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -38,12 +43,10 @@ use tonic::transport::Server;
 static UNIQ: AtomicU64 = AtomicU64::new(0);
 
 /// A live macrocosim instance: gRPC + UI on OS-assigned localhost
-/// ports, plus the underlying [`Engine`] for direct world inspection
-/// and the [`Config`] for driving it through Lisp.
-/// `Drop` aborts the registration listener and the UI / assets server
-/// tasks in `handles`; per-microgrid servers live in the runtimes and
-/// are never aborted. The temp dir cleans up via the held `TempDir`
-/// handle.
+/// ports, plus the underlying [`Engine`] for direct world inspection.
+/// `Drop` aborts the UI / assets server tasks in `handles`;
+/// per-microgrid servers live in the runtimes and are never aborted.
+/// The temp dir cleans up via the held `TempDir` handle.
 ///
 /// Each integration-test binary picks the fields it needs; the
 /// `#[allow(dead_code)]` keeps the unused-warning quiet for tests
@@ -54,32 +57,34 @@ pub struct TestServer {
     pub ui_url: String,
     pub assets_url: String,
     pub engine: Engine,
-    pub config: Config,
-    /// Id of the default microgrid, the one `grpc_url` serves.
+    /// Id of the first microgrid, the one `grpc_url` serves.
     pub mg_id: u64,
     pub runtimes: MicrogridRuntimes,
+    /// The interpreter the UI's `.py` export runs on.
+    pub python: Arc<Interpreter>,
     handles: Vec<JoinHandle<()>>,
     _tempdir: TempDir,
 }
 
 impl TestServer {
-    /// Bring up a server backed by the supplied `config.lisp` body.
+    /// Bring up a server with every microgrid of `doc` built from its
+    /// spec through `engine::topology::create`, with `source` as its
+    /// file. `mg_id` and `grpc_url` are those of the first microgrid.
     /// Caller is on a tokio runtime (provided by `#[tokio::test]`).
-    pub async fn start(config_body: &str) -> Self {
+    #[allow(dead_code)]
+    pub async fn start_spec_from(doc: TopologyDoc, source: Option<PathBuf>) -> Self {
         let tempdir = TempDir::with_prefix(format!(
             "macrocosim-it-{}-",
             UNIQ.fetch_add(1, Ordering::Relaxed),
         ))
         .expect("create temp dir");
-        let path = tempdir.path().join("config.lisp");
-        let wrapped = wrap_body(config_body);
-        std::fs::write(&path, wrapped).expect("write config");
-
-        let config = Config::new(path.to_str().unwrap()).expect("config eval");
-        let engine = config.engine().clone();
-        // Same startup path as the binary: the runtimes start every
-        // registered microgrid, and the listener starts the ones a
-        // test registers later. Ephemeral ports keep parallel tests
+        let engine = Engine::new(
+            tempdir.path().to_path_buf(),
+            Metadata::default(),
+            NowSource::wall(),
+        );
+        // Same startup path as the binary: each create starts its
+        // microgrid's runtime. Ephemeral ports keep parallel tests
         // from colliding.
         let runtimes = macrocosim::runtime::MicrogridRuntimes::new(
             engine.clone(),
@@ -90,21 +95,27 @@ impl TestServer {
         )
         .expect("runtimes");
         let mut handles = Vec::new();
-        handles.push(runtimes.spawn_registration_listener().await);
 
-        // Single-microgrid tests: `mg_id` and the gRPC address are
-        // those of the default registry entry (the one auto-seeded by
-        // Config::new, or the id an explicit form in `config_body`
-        // chose).
-        let default_mg_id = {
-            let reg = engine.microgrids();
-            let r = reg.lock();
-            r.keys().copied().next().expect("default microgrid entry")
+        let first = {
+            let structural = engine.structural().await;
+            let mut first = None;
+            for spec in doc.microgrids {
+                let created = macrocosim::engine::topology::create(
+                    &structural,
+                    &runtimes,
+                    spec,
+                    source.clone(),
+                )
+                .await
+                .expect("create a microgrid from its spec");
+                first.get_or_insert(created);
+            }
+            first.expect("the document has a microgrid")
         };
-        let grpc_addr = runtimes
-            .status(default_mg_id)
-            .and_then(|v| v.grpc_addr)
-            .expect("the default microgrid started");
+        let grpc_addr = first
+            .runtime
+            .and_then(|r| r.grpc_addr)
+            .expect("the first microgrid started");
 
         // Bind the UI and assets servers to OS-assigned ports;
         // local_addr() reads back the chosen port before the listener
@@ -113,10 +124,13 @@ impl TestServer {
             .await
             .expect("bind ui port");
         let ui_addr = ui_listener.local_addr().expect("ui addr");
-        let ui_config = config.clone();
+        let ui_engine = engine.clone();
         let ui_runtimes = runtimes.clone();
+        let python = Arc::new(Interpreter::default());
+        let ui_python = python.clone();
         handles.push(tokio::spawn(async move {
-            let _ = ui::serve_with_listener(ui_listener, ui_config, ui_runtimes, None).await;
+            let _ =
+                ui::serve_with_listener(ui_listener, ui_engine, ui_runtimes, ui_python, None).await;
         }));
 
         // PlatformAssets has its own port, as in the binary.
@@ -162,43 +176,12 @@ impl TestServer {
             ui_url: format!("http://{ui_addr}"),
             assets_url: format!("http://{assets_addr}"),
             engine,
-            config,
-            mg_id: default_mg_id,
+            mg_id: first.id,
             runtimes,
+            python,
             handles,
             _tempdir: tempdir,
         }
-    }
-
-    /// [`Self::start`] with the Lisp starter, then every microgrid of
-    /// `doc` built from its spec through `engine::topology::create`,
-    /// with `source` as its file. `mg_id` and `grpc_url` are those of
-    /// the first spec microgrid.
-    #[allow(dead_code)]
-    pub async fn start_spec_from(doc: TopologyDoc, source: Option<PathBuf>) -> Self {
-        let mut server = Self::start("").await;
-        let lock = server.engine.create_lock();
-        let _structural = lock.lock().await;
-        let mut first = None;
-        for spec in doc.microgrids {
-            let created = macrocosim::engine::topology::create(
-                &server.engine,
-                &server.runtimes,
-                spec,
-                source.clone(),
-            )
-            .await
-            .expect("create a microgrid from its spec");
-            first.get_or_insert(created);
-        }
-        let first = first.expect("the document has a microgrid");
-        server.mg_id = first.id;
-        let addr = first
-            .runtime
-            .and_then(|r| r.grpc_addr)
-            .expect("the spec microgrid started");
-        server.grpc_url = format!("http://{addr}");
-        server
     }
 
     /// [`Self::start_spec_from`] with no source file: microgrids made
@@ -212,6 +195,12 @@ impl TestServer {
     #[allow(dead_code)]
     pub fn dir(&self) -> &std::path::Path {
         self._tempdir.path()
+    }
+
+    /// [`Self::start_spec`] with the one microgrid of [`mg_doc`].
+    #[allow(dead_code)]
+    pub async fn start_mg(mg: &str) -> Self {
+        Self::start_spec(mg_doc(mg)).await
     }
 
     /// The site of this server's microgrid, read from the registry.
@@ -231,14 +220,6 @@ impl TestServer {
     pub fn mg_url(&self, suffix: &str) -> String {
         format!("{}/api/mg/{}/{suffix}", self.ui_url, self.mg_id)
     }
-
-    /// Path of the config.lisp file backing this server. Tests
-    /// that exercise the watcher (hot-reload) overwrite this file
-    /// to trigger a reload.
-    #[allow(dead_code)]
-    pub fn config_path(&self) -> PathBuf {
-        self._tempdir.path().join("config.lisp")
-    }
 }
 
 impl Drop for TestServer {
@@ -247,26 +228,6 @@ impl Drop for TestServer {
             h.abort();
         }
     }
-}
-
-/// POST a Lisp body to `/api/eval` and fail the test unless the
-/// server answers 200 with a `value`. The shared spelling of "drive
-/// the sim the way the dashboard's REPL does" every integration test
-/// that needs a live eval uses.
-#[allow(dead_code)]
-pub async fn eval_or_panic(client: &reqwest::Client, s: &TestServer, body: &str) {
-    let r = client
-        .post(format!("{}/api/eval", s.ui_url))
-        .body(body.to_string())
-        .send()
-        .await
-        .unwrap();
-    let status = r.status();
-    let json: serde_json::Value = r.json().await.unwrap();
-    assert!(
-        status.is_success() && json["value"].is_string(),
-        "eval {body} failed: {status} {json}",
-    );
 }
 
 /// `GET /api/mg/{mg}/spec`: the status and the body.
@@ -453,20 +414,48 @@ impl WsClient {
     }
 }
 
-/// Wrap a test body in `(make-microgrid …)` if the body doesn't
-/// already register one. Tests that care about the microgrid's id
-/// supply their own `(make-microgrid …)` form; everything else gets
-/// the fixed default id 2200.
-fn wrap_body(body: &str) -> String {
-    if body.contains("make-microgrid") {
-        return body.to_string();
+/// A topology document holding the microgrid `mg` (a JSON object), as
+/// microgrid 2200 on gRPC port 8800 unless it says otherwise.
+///
+/// Its components keep the defaults of the bare constructors the
+/// physics tests are written against, not the spec defaults table,
+/// unless `mg` sets them: no stream jitter, no command delay, an
+/// instant ramp, and the inverters' 0.35 PF limit with no apparent
+/// power cap.
+#[allow(dead_code)]
+pub fn mg_doc(mg: &str) -> TopologyDoc {
+    let mut mg: serde_json::Value = serde_json::from_str(mg).expect("a JSON microgrid");
+    let fields = mg.as_object_mut().expect("a JSON object");
+    fields.entry("id").or_insert(2200.into());
+    fields.entry("grpc_port").or_insert(8800.into());
+    let components = fields
+        .entry("components")
+        .or_insert(serde_json::json!([]))
+        .as_array_mut()
+        .expect("a components array");
+    for c in components {
+        let kind = c["type"].as_str().expect("a component type").to_string();
+        let c = c.as_object_mut().expect("a JSON component");
+        let mut keep = |field: &str, value: serde_json::Value| {
+            c.entry(field).or_insert(value);
+        };
+        keep("stream_jitter_pct", 0.into());
+        if matches!(
+            kind.as_str(),
+            "battery_inverter" | "solar_inverter" | "ev_charger" | "steam_boiler"
+        ) {
+            keep("ramp_rate_w_per_s", 1e12.into());
+        }
+        if kind == "battery_inverter" {
+            keep("command_delay_s", 0.into());
+        }
+        if matches!(kind.as_str(), "battery_inverter" | "solar_inverter") {
+            keep("reactive_pf_limit", 0.35.into());
+            keep("reactive_apparent_va", 0.into());
+        }
     }
-    let inner = if body.trim().is_empty() {
-        "nil".to_string()
-    } else {
-        body.to_string()
-    };
-    format!("(make-microgrid :id 2200 :grpc-port 8800 :topology (lambda () {inner}))")
+    let doc = serde_json::json!({"schema_version": 1, "microgrids": [mg]});
+    TopologyDoc::from_value(doc).expect("a valid topology document")
 }
 
 /// The interpreter of `python/.venv`, where `uv sync` in `python/`
@@ -491,8 +480,8 @@ pub fn venv_python() -> Option<PathBuf> {
     None
 }
 
-/// `doc`'s components sorted by id and its connections sorted, so two
-/// renderings of one microgrid compare equal.
+/// `microgrid`'s components sorted by id and its connections sorted,
+/// so two renderings of one microgrid compare equal.
 #[allow(dead_code)]
 pub fn normalized(mut microgrid: serde_json::Value) -> serde_json::Value {
     if let Some(components) = microgrid["components"].as_array_mut() {

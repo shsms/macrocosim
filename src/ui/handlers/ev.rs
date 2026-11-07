@@ -100,7 +100,7 @@ pub(in crate::ui) struct PlugRequest {
 
 /// Plug a car into charger `id`: 204, 400 for a component that is not
 /// a charger or a value the car refuses, 409 when a car is already
-/// plugged in. Inside a Lisp scenario, its stop unplugs the car again.
+/// plugged in.
 pub(in crate::ui) async fn ev_plug(
     mg: Mg,
     Path(ComponentPath { id }): Path<ComponentPath>,

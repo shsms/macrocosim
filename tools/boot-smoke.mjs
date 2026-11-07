@@ -50,6 +50,9 @@ globalThis.CSS = stub();
 globalThis.ResizeObserver = stub();
 globalThis.MutationObserver = stub();
 globalThis.fetch = () => new Promise(() => {});
+// init() gets as far as the system pulse, which starts its polls; a real
+// interval would keep node running after the last line.
+globalThis.setInterval = () => 0;
 
 await import(new URL("../ui-assets/app.js", import.meta.url).href);
 console.log("boot smoke: module graph loaded");

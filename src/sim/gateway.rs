@@ -1,7 +1,7 @@
 //! `MicrogridGateway`: the Frequenz Microgrid API rules of one
 //! microgrid — setpoint validation, request lifetimes, bounds
-//! augmentations and their expiry. The gRPC service and the Lisp
-//! setpoint commands talk to it; the component models stay hardware.
+//! augmentations and their expiry. The gRPC service talks to it; the
+//! component models stay hardware.
 //!
 //! [`MicrogridGateway`] is the state, held by `MicrogridSite` for the
 //! site's whole life and cleared by `MicrogridSite::reset`.
@@ -40,7 +40,7 @@ pub const SITE_RESET: &str = "site was reset since the request was looked up";
 pub enum Mode {
     /// Refuse it, as the gRPC route does.
     Reject,
-    /// Clamp it into the envelope under the same lock (Lisp `CLAMP`).
+    /// Clamp it into the envelope under the same lock.
     Clamp,
 }
 

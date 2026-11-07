@@ -13,7 +13,7 @@ use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Category, Controllable, MicrogridSite, PhysicsState, SimulatedComponent, Telemetry,
     bounds::{VecBounds, closed},
-    component::{EvPort, GatewaySettings, KnobKind, KnobSnapshot},
+    component::{EvPort, GatewaySettings},
     decay::sanitize_soc_pct,
     device_axis::DeviceAxis,
     ev_presets::{ConnectedEv, EvDrawState, EvInfo, offered_current_a},
@@ -21,20 +21,25 @@ use crate::sim::{
 };
 use crate::timeout_tracker::SetpointAxis;
 
-tulisp::AsSymbol! {
-    /// What the charger offers when no command stands (or a TTL expired).
-    #[derive(
-        Clone, Copy, Debug, Default, PartialEq, Eq,
-        serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-    )]
-    #[serde(rename_all = "snake_case")]
-    pub enum EvIdle {
-        /// Offer nothing: the safe state the API's expiry semantics mean.
-        #[default]
-        Paused<"paused">,
-        /// Offer the full rating, as a charger with no EMS does.
-        Full<"full">,
-    }
+/// What the charger offers when no command stands (or a TTL expired).
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EvIdle {
+    /// Offer nothing: the safe state the API's expiry semantics mean.
+    #[default]
+    Paused,
+    /// Offer the full rating, as a charger with no EMS does.
+    Full,
 }
 
 #[derive(Clone, Debug)]
@@ -162,26 +167,6 @@ impl SimulatedComponent for EvCharger {
         Some(self)
     }
 
-    fn snapshot_knob(&self, kind: KnobKind) -> Option<KnobSnapshot> {
-        match kind {
-            KnobKind::Ev => Some(KnobSnapshot::Ev(self.state.lock().ev.clone())),
-            _ => None,
-        }
-    }
-
-    fn restore_knob(&self, snap: KnobSnapshot) -> bool {
-        match snap {
-            KnobSnapshot::Ev(ev) => {
-                let mut s = self.state.lock();
-                s.ev = ev;
-                s.draw_w = 0.0;
-                s.last = EvDrawState::Paused;
-                true
-            }
-            _ => false,
-        }
-    }
-
     fn physics_state(&self) -> Option<PhysicsState> {
         Some(PhysicsState::Ev {
             connected: self.state.lock().ev.clone(),
@@ -282,45 +267,6 @@ impl SimulatedComponent for EvCharger {
     fn controllable(&self) -> Option<&dyn Controllable> {
         Some(self)
     }
-
-    fn make_fn(&self) -> &'static str {
-        "%make-ev-charger"
-    }
-
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        let lf = crate::lisp::lisp_float32;
-        let mut kw = vec![
-            (":rated-lower-w", lf(self.cfg.rated_lower_w)),
-            (":rated-upper-w", lf(self.cfg.rated_upper_w)),
-            (
-                ":command-delay-s",
-                crate::lisp::lisp_float(self.cfg.command_delay.as_secs_f64()),
-            ),
-        ];
-        if self.cfg.phases != 3 {
-            kw.push((":phases", self.cfg.phases.to_string()));
-        }
-        if self.cfg.idle != EvIdle::Paused {
-            kw.push((":idle", format!("'{}", self.cfg.idle)));
-        }
-        if self.cfg.ramp_rate_w_per_s.is_finite() {
-            kw.push((":ramp-rate-w-per-s", lf(self.cfg.ramp_rate_w_per_s)));
-        }
-        kw.extend(crate::sim::inverter::device_delay_kw(self.cfg.device_delay));
-        if self.interval != Duration::from_millis(1000) {
-            kw.push((
-                ":interval-s",
-                crate::lisp::lisp_float(self.interval.as_secs_f64()),
-            ));
-        }
-        if self.cfg.stream_jitter_pct != 0.0 {
-            kw.push((":stream-jitter-pct", lf(self.cfg.stream_jitter_pct)));
-        }
-        if self.cfg.resume_on_recovery {
-            kw.push((":resume-on-recovery", "t".to_string()));
-        }
-        kw
-    }
 }
 
 impl Controllable for EvCharger {
@@ -367,9 +313,9 @@ impl EvPort for EvCharger {
         }
         s.ev = Some(ev);
         // A fresh car starts from a clean slate, the way `unplug_ev`
-        // and `restore_knob` leave one: otherwise the draw and state
-        // of whatever was here before are reported until the next
-        // tick overwrites them.
+        // and `restore_physics_state` leave one: otherwise the draw
+        // and state of whatever was here before are reported until
+        // the next tick overwrites them.
         s.draw_w = 0.0;
         s.last = EvDrawState::Paused;
         Ok(())
@@ -619,47 +565,8 @@ mod tests {
         assert_eq!(port(&ev).ev_info().unwrap().ev.soc_pct, 55.0);
     }
 
-    #[test]
-    fn knob_snapshot_restores_the_plug_state() {
-        let (_w, ev) = sited(instant());
-        let before = ev.snapshot_knob(KnobKind::Ev);
-        assert!(matches!(before, Some(KnobSnapshot::Ev(None))));
-        port(&ev).plug_ev(test_car("sedan", Some(30.0))).unwrap();
-        assert!(ev.restore_knob(before.unwrap()));
-        assert!(port(&ev).ev_info().is_none(), "restore unplugs");
-        port(&ev).plug_ev(test_car("van", Some(30.0))).unwrap();
-        let plugged = ev.snapshot_knob(KnobKind::Ev).unwrap();
-        assert!(port(&ev).unplug_ev());
-        assert!(ev.restore_knob(plugged));
-        assert_eq!(port(&ev).ev_info().unwrap().ev.preset, "van");
-    }
-
-    #[test]
-    fn constructor_kwargs_round_trip() {
-        let kw = |cfg: EvChargerConfig| {
-            EvCharger::new(9, Duration::from_secs(1), cfg)
-                .constructor_kwargs()
-                .into_iter()
-                .map(|(k, v)| format!("{k} {v}"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-        let d = kw(EvChargerConfig::default());
-        assert!(d.contains(":rated-upper-w 22000"), "{d}");
-        assert!(!d.contains(":phases"), "default phases omitted: {d}");
-        assert!(!d.contains(":idle"), "default idle omitted: {d}");
-        assert!(!d.contains(":capacity-wh"), "the pack is gone: {d}");
-        let s = kw(EvChargerConfig {
-            phases: 1,
-            idle: EvIdle::Full,
-            ..Default::default()
-        });
-        assert!(s.contains(":phases 1"), "{s}");
-        assert!(s.contains(":idle 'full"), "{s}");
-    }
-
-    /// With `:resume-on-recovery` the fault still zeroes the draw,
-    /// but the armed command survives it and charging ramps back when
+    /// With `resume_on_recovery` the fault still zeroes the draw, but
+    /// the armed command survives it and charging ramps back when
     /// health returns — the way the solar inverter keeps its
     /// curtailment, and unlike the default charger below. Killing
     /// mutation: `keeps_command_through_fault` → `false`.
@@ -695,7 +602,7 @@ mod tests {
     }
 
     /// Standby is offline exactly like Error — the gate is "not Ok",
-    /// not "is Error" — and, without `:resume-on-recovery`, waking up
+    /// not "is Error" — and, without `resume_on_recovery`, waking up
     /// does not resurrect the pre-fault command: the charger waits for
     /// the controller to re-dispatch.
     /// Killing mutation: `!= Health::Ok` → `== Health::Error`.
@@ -918,7 +825,7 @@ mod tests {
         );
     }
 
-    /// `:phases` is the charger's own wiring, and it enters the draw
+    /// `phases` is the charger's own wiring, and it enters the draw
     /// twice: it divides the limit into a per-phase current, and it
     /// caps how many of the car's phases can be used. A 22 kW rated
     /// charger wired on one phase can only ever deliver ~7.4 kW, even

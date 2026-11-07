@@ -5,15 +5,13 @@
 //! query when computing AC quantities.
 //!
 //! On every `physics_tick_ms` interval, `tick_once` walks the
-//! components in registration order (children first because Lisp
-//! evaluates `:successors` before the surrounding `make-*` call) and
-//! invokes `SimulatedComponent::tick` on each. That child-first
-//! registration order is the tick-order contract every emitter of
-//! `make-*` forms owes this scheduler — `site_import::forms()`, for
-//! one, sorts its output to satisfy it.
+//! components in registration order and invokes
+//! `SimulatedComponent::tick` on each. The spec build registers
+//! children before their parents (`spec::order`), so a parent reads
+//! children that have already ticked.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -29,24 +27,20 @@ use tokio::task::JoinHandle;
 
 use crate::sim::EnergyAccum;
 use crate::sim::component::OperationalMode;
-use crate::sim::component::{
-    ComponentHandle, EvPort, FIRST_AUTO_ID, KnobKind, KnobSnapshot, SimulatedComponent,
-};
+use crate::sim::component::{ComponentHandle, EvPort, SimulatedComponent};
 use crate::sim::ev_presets::ConnectedEv;
 use crate::sim::events::{EVENT_BUS_CAPACITY, KnobValue, SiteEvent};
 use crate::sim::gateway::{Gateway, MicrogridGateway};
 use crate::sim::history::ComponentHistory;
+use crate::sim::recording::RecordingJournal;
+use crate::sim::recording_csv::CsvSinks;
 use crate::sim::runtime::{CommandMode, ComponentRuntime, Health, TelemetryMode};
-use crate::sim::scenario::ScenarioJournal;
-use crate::sim::scenario_csv::CsvSinks;
 use crate::sim::setpoints::{SetpointEvent, SetpointLog, SetpointOutcome};
 use crate::sim::sim_clock::NowSource;
 
 mod history;
-mod scenarios;
+mod recording;
 mod swap;
-
-pub use swap::CarryPlan;
 
 /// The two tasks [`MicrogridSite::spawn_background`] starts, which
 /// [`MicrogridSite::stop_background`] ends.
@@ -56,9 +50,7 @@ pub struct BackgroundTasks {
     pub sampler: JoinHandle<()>,
 }
 
-pub(crate) use scenarios::{
-    RecordingError, RecordingReport, ScenarioReport, ScenarioSummary, recording_dir,
-};
+pub(crate) use recording::{RecordingError, RecordingReport, RecordingStatus, recording_dir};
 
 /// Hard cap on per-component-per-metric ring buffer length. At the
 /// fixed 1 Hz history sampling cadence (see `spawn_history_sampler`)
@@ -114,15 +106,25 @@ pub struct MicrogridSite {
     inner: Arc<MicrogridSiteInner>,
 }
 
+/// The component list installed on a site, replaced whole by a
+/// rebuild.
+pub(super) type Components = Arc<Vec<Arc<dyn SimulatedComponent>>>;
+
 impl MicrogridSite {
+    /// Whether `components` is the component list installed now;
+    /// false once a rebuild has replaced it.
+    fn is_current(&self, components: &Components) -> bool {
+        Arc::ptr_eq(components, &*self.inner.components.read())
+    }
+
     /// Whether two handles point at the same live site. Clones share
     /// the inner state, so pointer identity is site identity.
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Point this site's clock at `now`. `Config` does this for its
-    /// bootstrap site and `make-microgrid` for every site it creates.
+    /// Point this site's clock at `now`. `Engine::attach_site` does
+    /// this for every site it creates.
     pub fn set_now_source(&self, now: NowSource) {
         *self.inner.now.write() = now;
     }
@@ -188,7 +190,7 @@ struct MicrogridSiteInner {
     /// sampler pass. The inner Arc makes a snapshot one refcount bump
     /// instead of a Vec clone; structural mutations (rare) copy-on-
     /// write via `Arc::make_mut`.
-    components: RwLock<Arc<Vec<Arc<dyn SimulatedComponent>>>>,
+    components: RwLock<Components>,
     by_id: RwLock<HashMap<u64, Arc<dyn SimulatedComponent>>>,
     connections: RwLock<Vec<(u64, u64)>>,
     grid_state: RwLock<GridState>,
@@ -196,29 +198,12 @@ struct MicrogridSiteInner {
     /// Set once `spawn_background` has started the physics tick and
     /// the history sampler.
     background_spawned: AtomicBool,
-    /// *Process-wide* component-id allocator, cloned across every
-    /// `MicrogridSite` in the enterprise so component ids stay
-    /// globally unique across microgrids — matching the platform,
-    /// where ids are enterprise-scoped. Two sites in the same registry
-    /// share the same `Arc<AtomicU64>`; calling `next_id` on
-    /// either advances the same counter.
-    ///
-    /// Single-site / legacy paths construct a fresh allocator
-    /// per `MicrogridSite::new()` so they keep the prior
-    /// per-site numbering behaviour without coordination — only
-    /// the multi-microgrid path (`(make-microgrid …)` via the
-    /// registry) wires sites to a shared allocator via
-    /// `MicrogridSite::with_id_allocator`.
-    next_id: Arc<AtomicU64>,
     /// Bumped by every STRUCTURAL mutation — register, connect,
-    /// disconnect, remove, rename — and read by `Config::eval`, which
-    /// regenerates the microgrid's managed file only when this
-    /// counter moved; a transient poke like `set-meter-power` leaves
-    /// it untouched and writes nothing, so it can't resurrect as
-    /// config on the next reload. The UI's microgrid loopback reads it
-    /// too (`SiteShape`), to rebuild its graph handle only when this
-    /// counter or the run generation moved. Distinct from `version`,
-    /// which bumps on every eval as the UI's refetch signal.
+    /// disconnect, remove, rename, a rebuild. The UI's microgrid
+    /// loopback reads it (`SiteShape`), to rebuild its graph handle
+    /// only when this counter or the run generation moved; a knob
+    /// write leaves it untouched. Distinct from `version`, the UI's
+    /// refetch signal.
     structural_version: AtomicU64,
     /// Bumped by `cancel_all_streams()`. Streaming tasks in server.rs
     /// compare against the value they captured at start and break when
@@ -231,8 +216,8 @@ struct MicrogridSiteInner {
     /// delivers samples with stale timestamps.
     sample_lag_ms: AtomicU64,
     /// Per-component runtime mode flags (health, telemetry mode,
-    /// command mode). Defaulted on register, mutated via the
-    /// `set-component-*` Lisp defuns or directly from server.rs.
+    /// command mode). Defaulted on register, mutated via the `status`
+    /// route or directly from server.rs.
     runtime: RwLock<HashMap<u64, ComponentRuntime>>,
     /// Config-level operational mode per component (declared
     /// capability). Not a runtime knob: the runtime fault modes
@@ -241,14 +226,14 @@ struct MicrogridSiteInner {
     /// Lock order: `set_operational_mode` takes `runtime` then this
     /// one; nothing may take `runtime` while holding this.
     operational_modes: RwLock<HashMap<u64, OperationalMode>>,
-    /// User-facing name overrides set via `(rename-component …)`.
-    /// Reads go through `display_name`; the component's intrinsic
-    /// `SimulatedComponent::name()` stays as the auto-derived default.
+    /// User-facing component names from the spec. Reads go through
+    /// `display_name`; the component's intrinsic
+    /// `SimulatedComponent::name()` stays as the auto-derived
+    /// default.
     name_overrides: RwLock<HashMap<u64, String>>,
     /// Per-component telemetry history rings, populated by the
     /// `spawn_history_sampler` task. Read by the UI's
-    /// `component/{id}/history` endpoint. Cleared on `reset()` so a
-    /// hot-reload starts charts fresh.
+    /// `component/{id}/history` endpoint. Cleared on `reset()`.
     histories: RwLock<HashMap<u64, ComponentHistory>>,
     /// Per-component cumulative-energy accumulators, advanced on every
     /// physics `tick_once` from the power the component settled on (so
@@ -266,20 +251,20 @@ struct MicrogridSiteInner {
     /// `component/{id}/setpoints` for the UI's control inspector.
     setpoint_logs: RwLock<HashMap<u64, SetpointLog>>,
     /// Monotonic version counter; bumped via `bump_version` on every
-    /// accepted eval (and future programmatic mutations) so UI tabs
-    /// know to refetch /api/mg/{mg}/topology.
+    /// change the topology payload shows, so UI tabs know to refetch
+    /// /api/mg/{mg}/topology.
     version: AtomicU64,
-    /// Run generation — bumped by `reset()`, which a config hot-reload
-    /// runs before rebuilding the site. Readers holding cumulative state
+    /// Run generation — bumped by `reset()` and by a rebuild with
+    /// carry (`swap_topology`). Readers holding cumulative state
     /// derived from this site (the UI's aggregate energy totals and
     /// stream caches) compare it to tell a fresh run (clear) from a
     /// topology mutation (keep); the UI's microgrid loopback also
     /// rebuilds its graph handle when it moved (`SiteShape`).
     run_generation: AtomicU64,
     /// Bumped by `reset()` only. The UI's aggregate energy totals
-    /// belong to one epoch: a reset (a Lisp reload) starts a new one
-    /// and clears them, while a rebuild with carry
-    /// (`swap_topology`) moves the run generation and keeps them.
+    /// belong to one epoch: a reset starts a new one and clears them,
+    /// while a rebuild with carry (`swap_topology`) moves the run
+    /// generation and keeps them.
     energy_epoch: AtomicU64,
     /// Broadcast bus for live UI subscribers. Senders are cheap to
     /// clone; receivers are obtained via `subscribe_events`.
@@ -294,84 +279,47 @@ struct MicrogridSiteInner {
     /// The manual clock `tick_n` installs as the site's clock and
     /// advances.
     #[cfg(test)]
-    test_clock: parking_lot::Mutex<Option<Arc<tulisp_async::ManualClock>>>,
-    /// Scenario lifecycle + event journal. Scoped to the MicrogridSite
-    /// rather than the Config because long-running scenarios
-    /// outlive an `eval_file` call and the gRPC server reads from
-    /// it via `MicrogridSite::scenario_*`.
-    scenario: RwLock<ScenarioJournal>,
-    /// Pre-scenario baseline for every driven knob a running scenario
-    /// has displaced — first-snapshot-wins per `(component id, knob
-    /// kind)`, so a scenario that re-drives the same knob repeatedly
-    /// still restores to what was there *before the scenario started*,
-    /// not to some intermediate value. Populated by
-    /// `scenario_snapshot_knob`; cleared on `scenario_start`; drained
-    /// (and each entry written back) on `scenario_stop`. Pruned
-    /// per-component alongside `energy_baseline_wh` so a removed-then-
-    /// re-registered id never restores a stale snapshot.
-    ///
-    /// Lock-order invariant: this lock is always taken BEFORE any
-    /// component's own knob lock, never the reverse.
-    /// `scenario_snapshot_knob` holds this map's write guard across
-    /// the call into `component.snapshot_knob` — safe only because
-    /// every caller respects this as the strict outer lock, so no
-    /// path ever holds a component lock first and then reaches for
-    /// this one. `scenario_stop` keeps to the same order by design:
-    /// it drains the whole map (dropping this lock) before touching
-    /// any component via `restore_knob`, rather than holding it
-    /// across the restore loop.
-    scenario_knob_baseline: RwLock<BTreeMap<(u64, KnobKind), KnobSnapshot>>,
-    /// Per-component CSV sinks active during the scenario.
-    /// Populated by `(scenario-record-csv DIR)`; drained on
-    /// `(scenario-stop-csv)` or implicitly by `scenario-stop`.
-    /// Empty by default — recording is opt-in.
-    scenario_csv: RwLock<CsvSinks>,
+    test_clock: parking_lot::Mutex<Option<Arc<crate::sim::sim_clock::ManualClock>>>,
+    /// The recording journal: its lifecycle, events and metrics. The
+    /// gRPC server and the loopback feed it through the site.
+    recording: RwLock<RecordingJournal>,
+    /// Per-component telemetry CSV sinks of a recording that asked
+    /// for CSV files; empty otherwise.
+    recording_csv: RwLock<CsvSinks>,
     /// Received-setpoint CSV sinks — one per envelope-bearing
     /// component, written event-driven from `log_setpoint`. Same
-    /// open/close lifecycle as `scenario_csv`.
-    scenario_setpoints_csv: RwLock<CsvSinks>,
+    /// open/close lifecycle as `recording_csv`.
+    recording_setpoints_csv: RwLock<CsvSinks>,
     /// Effective-active-bounds CSV sinks — one per envelope-bearing
     /// component, sampled by `record_history_snapshot` at the same
-    /// 1 Hz pass as telemetry. Same lifecycle as `scenario_csv`.
-    scenario_bounds_csv: RwLock<CsvSinks>,
+    /// 1 Hz pass as telemetry. Same lifecycle as `recording_csv`.
+    recording_bounds_csv: RwLock<CsvSinks>,
     /// Effective-reactive-bounds CSV sinks — the Q twin of
-    /// `scenario_bounds_csv`, one per component with a Q axis
+    /// `recording_bounds_csv`, one per component with a Q axis
     /// (`bounds_of(id, Reactive)` is `Some`), sampled at the same
-    /// pass. Same lifecycle as `scenario_csv`.
-    scenario_reactive_bounds_csv: RwLock<CsvSinks>,
+    /// pass. Same lifecycle as `recording_csv`.
+    recording_reactive_bounds_csv: RwLock<CsvSinks>,
     /// Directory the active (or most recent) CSV recording wrote to,
     /// so the UI can list + offer the files for download. Set by
-    /// `scenario_open_csv`; survives `scenario-stop-csv` so links work
-    /// after a run ends.
-    scenario_csv_dir: RwLock<Option<std::path::PathBuf>>,
-    /// Optional handle on the grid frequency state. Wired
-    /// in by `Config::new` so every MicrogridSite in the registry
-    /// reads the same OU-driven frequency value (one AC grid →
-    /// one frequency, by physics). Bootstrap MicrogridSites built
-    /// outside that path (tags pass, unit tests) leave it `None`
-    /// and fall back to the per-mg `grid_state.frequency_hz`.
+    /// `recording_open_csv`; survives the stop so links work after a
+    /// recording ends.
+    recording_csv_dir: RwLock<Option<std::path::PathBuf>>,
+    /// Optional handle on the grid frequency state. Wired in by
+    /// `Engine::attach_site` so every MicrogridSite in the registry
+    /// reads the same OU-driven frequency value (one AC grid → one
+    /// frequency, by physics). Sites built outside that path (unit
+    /// tests) leave it `None` and fall back to the per-mg
+    /// `grid_state.frequency_hz`.
     grid_frequency: RwLock<Option<crate::sim::frequency::SharedFrequency>>,
-    /// Site-wide sunlight model. Run-scoped: installed by whichever
-    /// `make-weather` form (if any) the loaded config carries, advanced
-    /// once per tick by `tick_once` before components read it, and
-    /// cleared by `reset()` so a reload that dropped its `make-weather`
-    /// form does not leave stale weather behind. `None` when no
-    /// weather is configured.
+    /// Site-wide sunlight model: installed from the spec's weather or
+    /// by `POST .../weather`, advanced once per tick by `tick_once`
+    /// before components read it, and cleared by `reset()`. A rebuild
+    /// keeps it. `None` when no weather is configured.
     weather: RwLock<Option<crate::sim::weather::Weather>>,
 }
 
 impl MicrogridSite {
     pub fn new() -> Self {
-        Self::with_id_allocator(Arc::new(AtomicU64::new(FIRST_AUTO_ID)))
-    }
-
-    /// Build a `MicrogridSite` that shares the supplied id
-    /// allocator with whichever other sites already hold a clone.
-    /// `(make-microgrid …)` uses this so every site in the
-    /// registry draws auto-ids from one process-wide counter and
-    /// the enterprise-wide id-uniqueness invariant holds without
-    /// coordination on the lisp side.
-    pub fn with_id_allocator(next_id: Arc<AtomicU64>) -> Self {
         Self {
             inner: Arc::new(MicrogridSiteInner {
                 components: RwLock::new(Arc::new(Vec::new())),
@@ -380,7 +328,6 @@ impl MicrogridSite {
                 grid_state: RwLock::new(GridState::default()),
                 physics_tick_ms: AtomicU64::new(100),
                 background_spawned: AtomicBool::new(false),
-                next_id,
                 runtime: RwLock::new(HashMap::new()),
                 operational_modes: RwLock::new(HashMap::new()),
                 name_overrides: RwLock::new(HashMap::new()),
@@ -396,13 +343,12 @@ impl MicrogridSite {
                 gateway: MicrogridGateway::new(),
                 #[cfg(test)]
                 test_clock: parking_lot::Mutex::new(None),
-                scenario: RwLock::new(ScenarioJournal::default()),
-                scenario_knob_baseline: RwLock::new(BTreeMap::new()),
-                scenario_csv: RwLock::new(CsvSinks::new()),
-                scenario_setpoints_csv: RwLock::new(CsvSinks::new()),
-                scenario_bounds_csv: RwLock::new(CsvSinks::new()),
-                scenario_reactive_bounds_csv: RwLock::new(CsvSinks::new()),
-                scenario_csv_dir: RwLock::new(None),
+                recording: RwLock::new(RecordingJournal::default()),
+                recording_csv: RwLock::new(CsvSinks::new()),
+                recording_setpoints_csv: RwLock::new(CsvSinks::new()),
+                recording_bounds_csv: RwLock::new(CsvSinks::new()),
+                recording_reactive_bounds_csv: RwLock::new(CsvSinks::new()),
+                recording_csv_dir: RwLock::new(None),
                 grid_frequency: RwLock::new(None),
                 weather: RwLock::new(None),
                 stream_cancel_epoch: AtomicU64::new(0),
@@ -412,9 +358,9 @@ impl MicrogridSite {
     }
 
     /// Monotonic count of structural mutations (register / connect /
-    /// disconnect / remove / rename) on this site. `Config::eval`
-    /// snapshots it around an eval to decide whether the source is
-    /// config worth persisting or a transient poke.
+    /// disconnect / remove / rename / rebuild) and operational-mode
+    /// changes on this site. [`Self::version`] counts every change
+    /// the topology payload shows.
     pub fn structural_version(&self) -> u64 {
         self.inner.structural_version.load(Ordering::Acquire)
     }
@@ -423,16 +369,6 @@ impl MicrogridSite {
         self.inner
             .structural_version
             .fetch_add(1, Ordering::Release);
-    }
-
-    /// Mark this site's *config* as moved without touching a
-    /// component. The site's own mutators bump the structural
-    /// version themselves; this is for edits that live one level up,
-    /// on the microgrid's `MicrogridDef` — its name, its TSO label —
-    /// which the managed file's `(make-microgrid …)` head carries and
-    /// which therefore have to reach the same persist trigger.
-    pub fn bump_structural_version(&self) {
-        self.bump_structural();
     }
 
     /// Read the current sample-lag offset (ms). The server uses this
@@ -475,8 +411,8 @@ impl MicrogridSite {
         *self.inner.grid_frequency.write() = Some(freq);
     }
 
-    /// Install or remove this site's weather. `None` clears it, same
-    /// as `reset()` does on a reload without a `make-weather` form.
+    /// Install or remove this site's weather. `None` clears it, as
+    /// `DELETE .../weather` does.
     pub fn set_weather(&self, w: Option<crate::sim::weather::Weather>) {
         *self.inner.weather.write() = w;
     }
@@ -498,25 +434,25 @@ impl MicrogridSite {
     }
 
     /// Feed one loopback grid-formula active-power sample to the
-    /// scenario journal. Called from the UI loopback's publish path —
-    /// the reporter's site metrics read the same microgrid-rs streams
+    /// recording journal. Called from the UI loopback's publish path
+    /// — the report's site metrics read the same microgrid-rs streams
     /// the metrics panel shows, not a raw meter. Lives on the site so
-    /// the `scenario` lock stays private to this module.
+    /// the `recording` lock stays private to this module.
     pub fn record_grid_power_sample(&self, value: f32, ts: DateTime<Utc>) {
-        self.inner.scenario.write().record_grid_power(value, ts);
+        self.inner.recording.write().record_grid_power(value, ts);
     }
 
     /// The reactive twin of `record_grid_power_sample`, fed from the
     /// loopback's `grid_reactive_power` stream.
     pub fn record_grid_reactive_sample(&self, value: f32, ts: DateTime<Utc>) {
-        self.inner.scenario.write().record_grid_reactive(value, ts);
+        self.inner.recording.write().record_grid_reactive(value, ts);
     }
 
     // ─── Version counter + event broadcast bus ────────────────────────
     //
-    // Every accepted eval bumps `version`, which fires a
-    // `TopologyChanged` on the broadcast bus. Live UI tabs listen and
-    // refetch /api/mg/{mg}/topology on each bump.
+    // A change the topology payload shows bumps `version`, which
+    // fires a `TopologyChanged` on the broadcast bus. Live UI tabs
+    // listen and refetch /api/mg/{mg}/topology on each bump.
 
     pub fn version(&self) -> u64 {
         self.inner.version.load(Ordering::Relaxed)
@@ -539,24 +475,12 @@ impl MicrogridSite {
         self.inner.events.subscribe()
     }
 
-    /// Broadcast a `ConfigError` on the site event bus. Used by the
-    /// watcher's reload-failure path so UI subscribers can render a
-    /// "config invalid" banner instead of seeing the post-reset
-    /// empty site without explanation. Fire-and-forget — a send
-    /// error means there are no live subscribers, which is fine.
-    pub fn broadcast_config_error(&self, message: String) {
-        let _ = self.inner.events.send(SiteEvent::ConfigError {
-            ts_ms: chrono::Utc::now().timestamp_millis(),
-            message,
-        });
-    }
-
     /// Broadcast one aggregated-stream sample from the loopback
     /// Microgrid client. The forwarder tasks in
-    /// `ui::spawn_microgrid_loopback` call this for each
-    /// `Sample<Q>` they receive; the SPA's WS reads them off
-    /// `/ws/events`. Fire-and-forget for the same reason
-    /// [`Self::broadcast_config_error`] is.
+    /// `ui::spawn_microgrid_loopback` call this for each `Sample<Q>`
+    /// they receive; the SPA's WS reads them off `/ws/events`.
+    /// Fire-and-forget: a send error means there are no live
+    /// subscribers, which is fine.
     pub fn broadcast_microgrid_sample(
         &self,
         stream: &'static str,
@@ -574,35 +498,16 @@ impl MicrogridSite {
         });
     }
 
-    /// Broadcast a `KnobChanged` event. Called from the defun
-    /// chokepoints (`set-meter-power` and friends) and from the
-    /// typed control API's drive handlers — the two doors that write
-    /// a runtime knob — on the success path only. Fire-and-forget for
-    /// the same reason [`Self::broadcast_config_error`] is.
+    /// Broadcast a `KnobChanged` event: `id` is `None` for a knob of
+    /// the whole microgrid, `value` is `None` when the knob was
+    /// cleared. Called from the typed control API's handlers, the
+    /// handlers that write a runtime knob, on the success path only.
+    /// Fire-and-forget, like [`Self::broadcast_microgrid_sample`].
     pub fn note_knob_changed(
-        &self,
-        id: u64,
-        knob: &'static str,
-        value: Option<f32>,
-        expr: Option<String>,
-        leading: Option<bool>,
-    ) {
-        self.send_knob_changed(Some(id), knob, value.map(KnobValue::Number), expr, leading);
-    }
-
-    /// Broadcast a `KnobChanged` for a knob whose value is not one
-    /// number, or one of the whole microgrid (`id` is `None`). Called
-    /// from the typed control API's handlers on the success path.
-    pub fn note_knob_value(&self, id: Option<u64>, knob: &'static str, value: KnobValue) {
-        self.send_knob_changed(id, knob, Some(value), None, None);
-    }
-
-    fn send_knob_changed(
         &self,
         id: Option<u64>,
         knob: &'static str,
         value: Option<KnobValue>,
-        expr: Option<String>,
         leading: Option<bool>,
     ) {
         let _ = self.inner.events.send(SiteEvent::KnobChanged {
@@ -611,7 +516,6 @@ impl MicrogridSite {
             knob,
             unit: crate::sim::events::knob_unit(knob),
             value,
-            expr,
             leading,
         });
     }
@@ -622,22 +526,6 @@ impl MicrogridSite {
     // every component's `tick`. `grid_state` is the environmental
     // state (per-phase voltage + frequency) that components read
     // during tick.
-
-    pub fn next_id(&self) -> u64 {
-        self.inner.next_id.fetch_add(1, Ordering::Relaxed)
-    }
-
-    /// Move the shared auto-id allocator past `id`. Called for every
-    /// explicit `:id` registration, so replayed overrides and imports
-    /// advance the allocator the same way live imports do — a later
-    /// auto-assigned id can never collide with a pinned one, in any
-    /// microgrid sharing the allocator. Saturating so `u64::MAX`
-    /// pins the allocator at the ceiling instead of overflowing.
-    pub fn reserve_id(&self, id: u64) {
-        self.inner
-            .next_id
-            .fetch_max(id.saturating_add(1), Ordering::SeqCst);
-    }
 
     pub fn physics_tick(&self) -> Duration {
         Duration::from_millis(self.inner.physics_tick_ms.load(Ordering::Relaxed))
@@ -653,10 +541,6 @@ impl MicrogridSite {
             state.frequency_hz = freq.read().read_hz();
         }
         state
-    }
-
-    pub fn set_grid_state(&self, state: GridState) {
-        *self.inner.grid_state.write() = state;
     }
 
     /// Set the grid voltage of each phase, in V, keeping the rest of
@@ -681,13 +565,13 @@ impl MicrogridSite {
     /// Register a component. Writes `components`, `by_id`, and
     /// `runtime` under separate short guards — NOT atomically. The
     /// standing invariant making that safe: every structural mutation
-    /// (register / remove / connect, all reached via the `make-*` and
-    /// editing defuns) runs while the caller holds the interpreter
-    /// lock, so two structural writers never interleave; concurrent
-    /// READERS (tick, gRPC, history) may observe a component in one
-    /// map and not yet the other for the duration of this call, which
-    /// every reader tolerates (`get` returning None / a skipped tick
-    /// for one pass).
+    /// (register / remove / connect, all reached from
+    /// `engine::topology`) runs while the caller holds the engine's
+    /// structural lock, so two structural writers never interleave;
+    /// concurrent READERS (tick, gRPC, history) may observe a
+    /// component in one map and not yet the other for the duration of
+    /// this call, which every reader tolerates (`get` returning None,
+    /// or a skipped tick for one pass).
     pub fn register_arc(&self, c: Arc<dyn SimulatedComponent>) -> ComponentHandle {
         let id = c.id();
         // The gateway drops whatever a raced removal left under this
@@ -701,17 +585,13 @@ impl MicrogridSite {
         // Default runtime mode: every flag at "Normal" — i.e. emit
         // telemetry, accept commands, report physics-derived state.
         self.inner.runtime.write().entry(id).or_default();
-        // A fresh component starts its history from zero: drop any leftover
-        // energy accumulator, scenario baseline, chart history, and setpoint
-        // ring under this id (a removal that raced the history sampler or a
-        // gRPC setpoint log can leave a re-created entry behind, and a stale
-        // energy cursor would integrate the removal-to-reregister gap).
+        // A fresh component starts its history from zero: drop any
+        // leftover energy accumulator, chart history, and setpoint
+        // ring under this id (a removal that raced the history
+        // sampler or a gRPC setpoint log can leave a re-created entry
+        // behind, and a stale energy cursor would integrate the
+        // removal-to-reregister gap).
         self.inner.component_energy.write().remove(&id);
-        self.inner.scenario.write().energy_baseline_wh.remove(&id);
-        self.inner
-            .scenario_knob_baseline
-            .write()
-            .retain(|(cid, _), _| *cid != id);
         self.inner.histories.write().remove(&id);
         self.inner.setpoint_logs.write().remove(&id);
         ComponentHandle::from_arc(c)
@@ -757,8 +637,7 @@ impl MicrogridSite {
     /// Every `(parent, child)` edge, hidden or not, in insertion
     /// order — an unfiltered clone of the raw connections graph.
     /// Unlike [`Self::children_of`] this isn't scoped to one parent;
-    /// the microgrid-file renderer walks the whole graph to emit
-    /// `:successors` / `(connect …)` forms.
+    /// the graph adapter and the tests walk the whole graph.
     pub fn all_connections(&self) -> Vec<(u64, u64)> {
         self.inner.connections.read().clone()
     }
@@ -781,13 +660,13 @@ impl MicrogridSite {
             .collect()
     }
 
-    /// Every edge from `parent`, hidden or not. Used by aggregation
-    /// paths (meter / inverter / the gateway's child envelope) that
-    /// need to walk the *physical* graph; the visible-only filter in
-    /// [`Self::connections`] is for the user-facing surface.
-    /// `connect` and `disconnect` flow through the same
-    /// underlying vec, so anything wired up post-make from the UI /
-    /// REPL automatically lands here.
+    /// The ids of every child of `parent`, hidden or not. Used by
+    /// aggregation paths (meter / inverter / the gateway's child
+    /// envelope) that need to walk the *physical* graph; the
+    /// visible-only filter in [`Self::connections`] is for the
+    /// user-facing surface. `connect` and `disconnect` flow through
+    /// the same underlying vec, so anything wired up after a build
+    /// lands here.
     pub fn children_of(&self, parent: u64) -> Vec<u64> {
         self.inner
             .connections
@@ -918,20 +797,10 @@ impl MicrogridSite {
         }
     }
 
-    /// Wipe every registered component. Called from `(reset-state)` in
-    /// the config DSL on hot-reload. Also resets the id allocator so a
-    /// reloaded config sees the same ids the previous load saw,
-    /// matching microsim's `(setq comp--id--counter 1000)` behaviour.
-    ///
-    /// Reset *also* clears scenario-scoped state (the journal and the
-    /// per-component CSV sinks) so a hot-reload truly starts from
-    /// scratch — leaving them in place leaked stale integrals against
-    /// gone-and-reborn ids.
-    ///
-    /// Grid state is environmental (set by the config's `every`
-    /// timer); we deliberately keep it across reloads so the first
-    /// tick after reload still has plausible per-phase voltage /
-    /// frequency values.
+    /// Wipe every registered component, and with them the run-scoped
+    /// state: the recording journal and its CSV sinks, the gateway's
+    /// commands and the weather. Grid state is environmental and
+    /// stays.
     pub fn reset(&self) {
         // A reset starts a new run; see `run_generation` and
         // `energy_epoch`.
@@ -955,22 +824,13 @@ impl MicrogridSite {
         self.inner.setpoint_logs.write().clear();
         // Commands, lifetimes and augmentations are run-scoped.
         self.inner.gateway.clear();
-        *self.inner.scenario.write() = ScenarioJournal::default();
-        self.inner.scenario_knob_baseline.write().clear();
+        *self.inner.recording.write() = RecordingJournal::default();
         // `clear()` drops every sink; each BufWriter flushes on drop.
-        self.inner.scenario_csv.write().clear();
-        self.inner.scenario_setpoints_csv.write().clear();
-        self.inner.scenario_bounds_csv.write().clear();
-        self.inner.scenario_reactive_bounds_csv.write().clear();
-        // Weather is run-scoped: a reload that dropped its make-weather
-        // form must not leave stale weather behind.
+        self.inner.recording_csv.write().clear();
+        self.inner.recording_setpoints_csv.write().clear();
+        self.inner.recording_bounds_csv.write().clear();
+        self.inner.recording_reactive_bounds_csv.write().clear();
         *self.inner.weather.write() = None;
-        // Deliberately do NOT rewind `next_id`: the allocator is shared
-        // across every site in an enterprise, so a per-site reset (a lone
-        // `(reset-microgrid)`) must not rewind the global counter while
-        // other sites still hold live components at higher ids — the next
-        // auto-allocation would then collide. A full `Config::reload`
-        // resets the allocator explicitly when every site is rebuilt.
     }
 
     /// Remove a component from the registry and drop every edge that
@@ -990,14 +850,6 @@ impl MicrogridSite {
             .retain(|(p, c)| *p != id && *c != id);
         self.inner.histories.write().remove(&id);
         self.inner.component_energy.write().remove(&id);
-        // The scenario's energy baseline too: a component re-registered
-        // under this id restarts its accumulator at zero, and subtracting
-        // the old baseline would read negative energy.
-        self.inner.scenario.write().energy_baseline_wh.remove(&id);
-        self.inner
-            .scenario_knob_baseline
-            .write()
-            .retain(|(cid, _), _| *cid != id);
         self.inner.runtime.write().remove(&id);
         self.inner.operational_modes.write().remove(&id);
         self.inner.setpoint_logs.write().remove(&id);
@@ -1032,16 +884,13 @@ impl MicrogridSite {
     /// lines and physics-derived state keep their stable default.
     pub fn rename(&self, id: u64, name: String) {
         self.inner.name_overrides.write().insert(id, name);
-        // Renames count as structural for persistence purposes — a
-        // display name set from the UI should survive a reload.
         self.bump_structural();
     }
 
     /// The raw `name_overrides` entry for `id`, or `None` if the
-    /// component has never been renamed. Unlike [`Self::display_name`]
-    /// this never falls back to the component's auto-generated
-    /// default — the microgrid-file renderer needs to know whether
-    /// `:name` was actually set, not just what name currently reads.
+    /// component has never been renamed. Unlike
+    /// [`Self::display_name`] this never falls back to the
+    /// component's auto-generated default.
     pub fn name_override(&self, id: u64) -> Option<String> {
         self.inner.name_overrides.read().get(&id).cloned()
     }
@@ -1062,10 +911,7 @@ impl MicrogridSite {
     }
 
     /// Set `c`'s state of charge. On a charger this writes the
-    /// plugged car, and first takes the `Ev` knob snapshot: that
-    /// baseline holds the whole car, so a running scenario's teardown
-    /// puts it back as it was, whatever order the run did its plugs
-    /// and its SoC writes in. A battery's SoC has no snapshot.
+    /// plugged car.
     pub(crate) fn set_soc_pct(
         &self,
         c: &dyn SimulatedComponent,
@@ -1075,7 +921,6 @@ impl MicrogridSite {
             return Err(refusal);
         }
         if let Some(port) = c.ev_port() {
-            self.scenario_snapshot_knob(c.id(), KnobKind::Ev);
             // An unplug can still land between the check and the
             // write.
             if !port.set_ev_soc_pct(pct) {
@@ -1091,38 +936,28 @@ impl MicrogridSite {
 
     /// Plug `ev` into charger `id` through its `port`. A car already
     /// plugged in refuses it before anything changes; otherwise the
-    /// `Ev` knob snapshot comes first, so a running scenario's
-    /// teardown unplugs the car again, and the write is broadcast.
+    /// write is broadcast.
     pub(crate) fn plug_ev(
         &self,
         id: u64,
         port: &dyn EvPort,
         ev: ConnectedEv,
     ) -> Result<(), String> {
-        // Refused before the snapshot: an `Ev` baseline holds a live
-        // clone of the car, so seeding one from a refused plug would
-        // make the scenario's stop rewind that car's SoC and energy.
         if port.ev_info().is_some() {
             return Err("an EV is already plugged in".to_string());
         }
         let soc = ev.soc_pct;
-        self.scenario_snapshot_knob(id, KnobKind::Ev);
         port.plug_ev(ev)?;
-        self.note_knob_changed(id, "ev", Some(soc), None, None);
+        self.note_knob_changed(Some(id), "ev", Some(KnobValue::Number(soc)), None);
         Ok(())
     }
 
     /// Unplug the car from charger `id` through its `port`; `false`
-    /// when it was empty. The `Ev` knob snapshot is taken only when
-    /// there is a car to take away, so a scenario's teardown leaves a
-    /// charger the run never displaced alone.
+    /// when it was empty.
     pub(crate) fn unplug_ev(&self, id: u64, port: &dyn EvPort) -> bool {
-        if port.ev_info().is_some() {
-            self.scenario_snapshot_knob(id, KnobKind::Ev);
-        }
         let had = port.unplug_ev();
         if had {
-            self.note_knob_changed(id, "ev", None, None, None);
+            self.note_knob_changed(Some(id), "ev", None, None);
         }
         had
     }
@@ -1130,9 +965,9 @@ impl MicrogridSite {
     // ─── Per-component runtime modes ─────────────────────────────────
     //
     // Health / telemetry mode / command mode flags carried in
-    // `runtime`. Defaulted on register; mutated via the
-    // `set-component-*` Lisp defuns or gRPC. `runtime_of` returns
-    // the current snapshot; the per-setter methods mutate in place.
+    // `runtime`. Defaulted on register; mutated via the `status`
+    // route or gRPC. `runtime_of` returns the current snapshot; the
+    // per-setter methods mutate in place.
 
     /// Errors unless `id` names a currently registered component.
     fn require_registered(&self, id: u64) -> Result<(), String> {
@@ -1263,10 +1098,9 @@ impl MicrogridSite {
     }
 
     /// Set a component's operational mode — a CONFIG change, so it
-    /// bumps the structural version (the overrides gate persists the
-    /// eval that did it). Rejected for an unregistered id: the change
-    /// would persist, and a later component allocated on that id
-    /// would silently inherit it.
+    /// bumps the structural version. Rejected for an unregistered id:
+    /// a later component allocated on that id would silently inherit
+    /// it.
     ///
     /// The runtime knobs are re-derived from the new mode: a mode
     /// without telemetry silences the stream, one without control
@@ -1316,20 +1150,11 @@ impl MicrogridSite {
     //
     // `tick_once` runs one synchronous pass over every component;
     // `spawn_physics` is the long-running task that does it on a
-    // `tokio::time::interval`. Pre-tick hook fires first so Lisp-
-    // driven inputs resolve once per tick before any `tick()` reads
-    // an atomic.
+    // `tokio::time::interval`.
 
     /// Tick every registered component once. Children are stored before
     /// parents, so a single forward pass updates leaves before the
     /// meters that aggregate them.
-    ///
-    /// Pure Rust — does NOT enter the Lisp interpreter. Lambda-bound
-    /// component inputs (`:power-w`, `:sunlight-pct`, …) are refreshed
-    /// by `Config`'s dedicated lisp-refresh task on its own 100 ms
-    /// cadence; this method only reads the atomic scalars those
-    /// refreshes leave behind. Tests that need a synchronous refresh
-    /// before driving `tick_once` should call `Config::refresh_once`.
     pub fn tick_once(&self, now: DateTime<Utc>, dt: Duration) {
         if let Some(w) = self.inner.weather.write().as_mut() {
             w.advance(now);
@@ -1342,16 +1167,18 @@ impl MicrogridSite {
         self.integrate_energy(&components, now);
     }
 
-    /// Advance each component's cumulative-energy accumulator from the
-    /// power it settled on this tick. Runs on every `tick_once`, so
-    /// `EnergyWh` accrues identically in the live server and the headless
-    /// stepped runner. A component in `Health::Error` has its cursor
-    /// dropped — a faulted device isn't moving real metered energy; a
-    /// healthy but telemetry-silent component keeps accruing, since the
-    /// physics power is real whether or not a sample is being streamed.
-    /// Components carrying no AC active power (batteries) never get an
-    /// entry, matching the sparse `EnergyWh` history metric.
-    fn integrate_energy(&self, components: &[Arc<dyn SimulatedComponent>], now: DateTime<Utc>) {
+    /// Advance each component's cumulative-energy accumulator from
+    /// the power it settled on this tick. Runs on every `tick_once`,
+    /// so `EnergyWh` accrues identically in the live server and the
+    /// tests that step the clock. A component in `Health::Error` has
+    /// its cursor dropped — a faulted device isn't moving real
+    /// metered energy; a healthy but telemetry-silent component keeps
+    /// accruing, since the physics power is real whether or not a
+    /// sample is being streamed. Components carrying no AC active
+    /// power (batteries) never get an entry, matching the sparse
+    /// `EnergyWh` history metric. Nothing is written when a rebuild
+    /// replaced `components` meanwhile.
+    fn integrate_energy(&self, components: &Components, now: DateTime<Utc>) {
         // Health first, under one runtime-lock read for the whole
         // pass (not held across the power reads — `active_power_w`
         // re-enters `connections` / `by_id` locks for meters).
@@ -1371,6 +1198,9 @@ impl MicrogridSite {
             .collect();
         let ts_ms = now.timestamp_millis();
         let mut acc = self.inner.component_energy.write();
+        if !self.is_current(components) {
+            return;
+        }
         for (id, power, health) in samples {
             let Some(power_w) = power else { continue };
             let e = acc.entry(id).or_default();
@@ -1380,6 +1210,12 @@ impl MicrogridSite {
                 e.advance(power_w, ts_ms);
             }
         }
+    }
+
+    /// How many handles on this site exist, this one included.
+    #[cfg(test)]
+    pub(crate) fn handle_count(&self) -> usize {
+        Arc::strong_count(&self.inner)
     }
 
     /// The running cumulative AC energy (Wh) a component has moved since
@@ -1393,25 +1229,6 @@ impl MicrogridSite {
             .read()
             .get(&id)
             .map(|e| e.total_wh)
-    }
-
-    /// The cumulative AC energy (Wh) a component has moved since the
-    /// current scenario started: the running total minus the baseline
-    /// `scenario_start` snapshotted. Equal to the full total when no
-    /// scenario has started (empty baseline) or when the component
-    /// first ticked mid-scenario (no baseline entry). `None` when the
-    /// component has no accumulator entry (see `component_energy_wh`).
-    pub fn component_energy_since_scenario_wh(&self, id: u64) -> Option<f64> {
-        let total = self.component_energy_wh(id)?;
-        let base = self
-            .inner
-            .scenario
-            .read()
-            .energy_baseline_wh
-            .get(&id)
-            .copied()
-            .unwrap_or(0.0);
-        Some(total - base)
     }
 
     /// The current run generation. `reset()` bumps it; a changed value
@@ -1502,11 +1319,11 @@ impl MicrogridSite {
             SetpointOutcome::Accepted { .. } => (true, None),
             SetpointOutcome::Rejected { reason } => (false, Some(reason.clone())),
         };
-        // Scenario recording first (the ring push consumes the event).
-        // Event-driven rather than sampled: a control app can issue
-        // several requests between two 1 Hz passes and a replay wants
-        // every one of them.
-        if let Some(sink) = self.inner.scenario_setpoints_csv.write().get_mut(&id)
+        // The recording's CSV first (the ring push consumes the
+        // event). Event-driven rather than sampled: a control app can
+        // issue several requests between two 1 Hz passes and a replay
+        // wants every one of them.
+        if let Some(sink) = self.inner.recording_setpoints_csv.write().get_mut(&id)
             && let Err(e) = sink.write_setpoint_row(&event)
         {
             log::warn!("setpoints CSV write failed for {id}: {e}");
@@ -1562,7 +1379,7 @@ impl MicrogridSite {
             .test_clock
             .lock()
             .get_or_insert_with(|| {
-                let clock = Arc::new(tulisp_async::ManualClock::new());
+                let clock = Arc::new(crate::sim::sim_clock::ManualClock::new());
                 self.set_now_source(NowSource::sim(self.now(), clock.clone()));
                 clock
             })
@@ -1614,8 +1431,7 @@ mod tests {
     use super::*;
 
     /// Weather is a run-scoped site singleton: tick advances it, and
-    /// `reset()` clears it so a reload that dropped its make-weather
-    /// form does not leave stale weather behind.
+    /// `reset()` clears it.
     #[test]
     fn weather_is_advanced_by_tick_and_cleared_by_reset() {
         use crate::sim::weather::{Weather, WeatherConfig};
@@ -1726,6 +1542,29 @@ mod tests {
         assert_eq!(w.runtime_of(5).command, CommandMode::Timeout);
     }
 
+    /// Energy read off a component list a rebuild has replaced is
+    /// dropped, so a removed id gets no entry back.
+    #[test]
+    fn energy_off_a_replaced_list_is_dropped() {
+        let meter = || crate::sim::Meter::new(5, Duration::from_secs(1), None, None, 0.0, false);
+        let now = chrono::Utc::now();
+        let live = MicrogridSite::new();
+        live.register(meter());
+        let current = live.inner.components.read().clone();
+        live.integrate_energy(&current, now);
+        assert!(
+            live.component_energy_wh(5).is_some(),
+            "the current list counts"
+        );
+
+        let w = MicrogridSite::new();
+        w.register(meter());
+        let stale = w.inner.components.read().clone();
+        *w.inner.components.write() = Arc::new(Vec::new());
+        w.integrate_energy(&stale, now);
+        assert!(w.component_energy_wh(5).is_none());
+    }
+
     /// The runtime knobs belong to registered components: poking an
     /// unknown id is an error, not a ghost entry a later component on
     /// that id would inherit.
@@ -1783,8 +1622,7 @@ mod tests {
         w.set_command_mode(5, CommandMode::Normal).unwrap();
     }
 
-    /// A config-level mode change bumps the structural version, so
-    /// the overrides gate persists the eval that made it.
+    /// A config-level mode change bumps the structural version.
     #[test]
     fn operational_mode_changes_are_structural() {
         let w = MicrogridSite::new();
@@ -1980,18 +1818,9 @@ mod tests {
         assert_eq!(w.parent_count(101), 0);
     }
 
-    // `tick_once` used to invoke a pre-tick hook installed by
-    // `Config::new` to refresh Lisp-driven component inputs. That
-    // hook moved off the per-site tick to a dedicated Lisp-refresh
-    // tokio task on `Config`, decoupling physics from the
-    // interpreter lock. The ordering test the old shape relied on
-    // no longer makes sense — physics is pure Rust now and the
-    // refresh runs at its own cadence — so the test was deleted
-    // along with the hook field.
-
     /// `bump_version` advances the counter and broadcasts a
-    /// `TopologyChanged` event with the new version. Used by
-    /// `Config::eval` after every eval so UI tabs refetch.
+    /// `TopologyChanged` event with the new version, so UI tabs
+    /// refetch.
     #[tokio::test]
     async fn bump_version_broadcasts_event() {
         let w = MicrogridSite::new();
@@ -2043,12 +1872,6 @@ mod tests {
         fn tick(&self, _: &MicrogridSite, _: DateTime<Utc>, _: Duration) {}
         fn telemetry(&self, _: &MicrogridSite) -> crate::sim::Telemetry {
             crate::sim::Telemetry::default()
-        }
-        fn make_fn(&self) -> &'static str {
-            "%make-test-stub"
-        }
-        fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-            Vec::new()
         }
     }
 
@@ -2135,9 +1958,9 @@ mod tests {
         assert!(site.connections().is_empty(), "visible-only stays filtered");
     }
 
-    /// `reset()` clears history alongside the rest of the MicrogridSite so a
-    /// hot-reload starts charts fresh — old component-id histories
-    /// don't linger as orphan entries.
+    /// `reset()` clears history alongside the rest of the
+    /// MicrogridSite, so old component-id histories don't linger as
+    /// orphan entries.
     #[test]
     fn reset_clears_history() {
         let w = MicrogridSite::new();
@@ -2148,26 +1971,6 @@ mod tests {
         );
         w.reset();
         assert!(w.inner.histories.read().is_empty());
-    }
-
-    /// A per-site `reset()` must not rewind the enterprise-wide id
-    /// allocator shared across sites — otherwise resetting one microgrid
-    /// hands out ids that collide with components still live on another.
-    #[test]
-    fn reset_does_not_rewind_a_shared_id_allocator() {
-        let alloc = Arc::new(AtomicU64::new(FIRST_AUTO_ID));
-        let site_a = MicrogridSite::with_id_allocator(alloc.clone());
-        let site_b = MicrogridSite::with_id_allocator(alloc.clone());
-        // Site A advances the shared counter.
-        assert_eq!(site_a.next_id(), FIRST_AUTO_ID);
-        assert_eq!(site_a.next_id(), FIRST_AUTO_ID + 1);
-        // Resetting B must leave the shared counter where A left it.
-        site_b.reset();
-        assert_eq!(
-            site_a.next_id(),
-            FIRST_AUTO_ID + 2,
-            "a per-site reset rewound the shared id allocator"
-        );
     }
 
     /// An errored device never accepts commands: `set_command_mode`
@@ -2187,30 +1990,10 @@ mod tests {
         assert!(w.set_command_mode(1, CommandMode::Normal).is_ok());
     }
 
-    /// `reserve_id` moves the shared allocator past a pinned id, so a
-    /// replayed `(make-* :id N)` in one microgrid can never collide
-    /// with a later auto-assigned id in a sibling.
+    /// Beyond histories, `reset()` also flushes the recording
+    /// journal, the setpoint logs, and any open CSV sinks.
     #[test]
-    fn reserve_id_advances_the_shared_allocator() {
-        let alloc = Arc::new(AtomicU64::new(FIRST_AUTO_ID));
-        let site_a = MicrogridSite::with_id_allocator(alloc.clone());
-        let site_b = MicrogridSite::with_id_allocator(alloc);
-        site_a.reserve_id(2000);
-        assert_eq!(site_b.next_id(), 2001);
-        // Reserving below the watermark is a no-op.
-        site_a.reserve_id(5);
-        assert_eq!(site_b.next_id(), 2002);
-        // The ceiling saturates instead of wrapping to 0.
-        site_a.reserve_id(u64::MAX);
-        assert_eq!(site_b.next_id(), u64::MAX);
-    }
-
-    /// Beyond histories, `reset()` also flushes the scenario journal,
-    /// the setpoint logs, and any open CSV sinks. Leaving these across a
-    /// hot-reload leaks stale integrals against ids that have since been
-    /// re-registered.
-    #[test]
-    fn reset_clears_scenario_and_setpoints() {
+    fn reset_clears_the_recording_and_setpoints() {
         use crate::sim::setpoints::{SetpointEvent, SetpointKind, SetpointOutcome};
         let w = MicrogridSite::new();
         w.register(Stub::new(1));
@@ -2226,8 +2009,9 @@ mod tests {
                 },
             },
         );
-        w.scenario_start("smoke".into(), Utc::now());
-        w.scenario_record("k".into(), "v".into(), Utc::now());
+        w.recording_start("smoke".into(), None, Utc::now()).unwrap();
+        w.recording_event("k".into(), "v".into(), Utc::now())
+            .unwrap();
 
         w.reset();
 
@@ -2236,9 +2020,9 @@ mod tests {
             "setpoint_logs must clear",
         );
         assert!(
-            w.inner.scenario.read().started_at.is_none(),
-            "scenario journal must reset",
+            w.inner.recording.read().started_at.is_none(),
+            "the recording journal must reset",
         );
-        assert_eq!(w.inner.scenario.read().event_count(), 0);
+        assert_eq!(w.inner.recording.read().event_count(), 0);
     }
 }

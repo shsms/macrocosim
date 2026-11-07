@@ -62,7 +62,7 @@ fn import_exported(python: &Path, path: &Path) -> serde_json::Value {
 async fn server_with(python: PathBuf) -> TestServer {
     let doc = TopologyDoc::from_json(EVERY_CATEGORY).unwrap();
     let s = TestServer::start_spec(doc).await;
-    s.engine.set_python(python);
+    s.python.set_override(python);
     s
 }
 
@@ -85,18 +85,6 @@ async fn an_exported_microgrid_imports_and_gives_its_spec_back() {
         normalized(rendered[0].clone()),
         normalized(stored),
         "{text}"
-    );
-}
-
-#[tokio::test]
-async fn a_lisp_microgrid_has_no_export() {
-    let s = TestServer::start("").await;
-    let r = reqwest::get(s.mg_url("spec.py")).await.unwrap();
-    assert_eq!(r.status(), StatusCode::CONFLICT);
-    let body: serde_json::Value = r.json().await.unwrap();
-    assert!(
-        body["error"].as_str().unwrap().contains("loaded from Lisp"),
-        "{body}"
     );
 }
 

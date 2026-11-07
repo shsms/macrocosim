@@ -85,3 +85,34 @@ async def test_microgrid_fields_match_the_server(schema: dict[str, Any]) -> None
     for name in s._field_kinds(s.MicrogridSpec):
         ours |= MICROGRID_TREE.get(name, {s.json_key(s.MicrogridSpec, name)})
     assert ours == set(microgrid["properties"])
+
+
+ENUMS = [mc.Health, mc.TelemetryMode, mc.CommandMode, mc.OperationalMode, mc.EvIdle]
+
+SERVER_ONLY = {"OperationalMode": {"unspecified"}}
+"""Values the server takes that the client reads as unset."""
+
+
+def _enum_values(schema: dict[str, Any], name: str) -> set[str]:
+    """The string values the schema's definition `name` allows."""
+    defs = schema.get("$defs", {})
+    assert name in defs, f"no {name} in the schema's $defs: {sorted(defs)}"
+    found, stack = set(), [defs[name]]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            if "enum" in value:
+                found |= {v for v in value["enum"] if isinstance(v, str)}
+            if isinstance(value.get("const"), str):
+                found.add(value["const"])
+            stack.extend(v for k, v in value.items() if k in ("oneOf", "anyOf"))
+        elif isinstance(value, list):
+            stack.extend(value)
+    return found
+
+
+@pytest.mark.parametrize("enum", ENUMS, ids=lambda e: e.__name__)
+async def test_enum_values_match_the_server(enum: type, schema: dict[str, Any]) -> None:
+    ours = {m.value for m in enum}  # type: ignore[attr-defined]
+    server = _enum_values(schema, enum.__name__)
+    assert ours == server - SERVER_ONLY.get(enum.__name__, set())

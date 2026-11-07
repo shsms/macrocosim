@@ -5,13 +5,8 @@
 // through the typed routes, so anything done in the UI is also
 // scriptable from outside.
 
-import { pulseBar, setupScriptChip, setupThemeChip, setupZoneChip } from "./chrome.js";
-import {
-  setupDefaultsToggle,
-  setupHelpButton,
-  setupScenarioReportToggle,
-  setupSnapshotsDialog,
-} from "./dialogs.js";
+import { pulseBar, refreshScriptStatus, setupScriptChip, setupThemeChip, setupZoneChip } from "./chrome.js";
+import { setupDefaultsToggle, setupHelpButton, setupReportToggle } from "./dialogs.js";
 import { dispatchForm } from "./dispatch-form.js";
 import {
   copySelection,
@@ -34,8 +29,7 @@ import { errorText, jsonInit } from "./http.js";
 import { setupInspectorChips, showComponent } from "./inspect.js";
 import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
 import { clearFormError, notify } from "./notices.js";
-import { microgridsPanel, scenariosPanel } from "./panels.js";
-import { setupRepl } from "./repl.js";
+import { microgridsPanel } from "./panels.js";
 import {
   jumpToTopology,
   mgJson,
@@ -45,10 +39,9 @@ import {
   selectMicrogrid,
   setupDensityToggle,
   setupModeToggle,
-  setupReplMgChip,
   visibleSubview,
 } from "./routing.js";
-import { closePanel, closeTopPanel, isPanelOpen, makeSidePanelToggle, openPanel } from "./side-panel.js";
+import { closePanel, closeTopPanel, isPanelOpen, makeSidePanelToggle } from "./side-panel.js";
 import { readStorage, removeStorage, writeStorage } from "./storage.js";
 import * as theme from "./theme.js";
 import { topology } from "./topology.js";
@@ -341,10 +334,9 @@ async function init() {
   });
   setupAddForm();
   setupDefaultsToggle();
-  setupScenarioReportToggle();
+  setupReportToggle();
   setupFloatingPanels();
   setupInspectorChips();
-  setupSnapshotsDialog();
   // A dialog's form errors belong to one visit: closing it clears them.
   document.addEventListener(
     "close",
@@ -376,7 +368,6 @@ async function init() {
   const valuesBtn = document.querySelector("#topology-controls .values-btn");
   if (valuesBtn) valuesBtn.classList.toggle("active", topology.valuesOn());
   setupFormulaToggle();
-  const focusRepl = () => document.getElementById("repl-input").focus();
   // Lines appended while the tail was display:none could not scroll
   // it, so it would open on its oldest lines.
   const pinLogTail = () => {
@@ -407,31 +398,27 @@ async function init() {
   );
   document.addEventListener("focusin", trackTarget);
   // Editor-style keyboard shortcuts. All check that focus isn't in
-  // a text editor (REPL textarea, dialog inputs) before firing, so
+  // a text field (dialog inputs, inspector knobs) before firing, so
   // typing remains unaffected.
   document.addEventListener("keydown", (e) => {
     const inEditable = e.target.matches?.("input, textarea, select, [contenteditable]");
     // …except Esc pressed on a checkbox: the panels are full of them
     // (the formula explorer is seven), and the in-app help promises
     // Esc closes a panel. Text fields keep Esc for their own cancel
-    // (the REPL's completion popup, an inspector knob's revert).
+    // (an inspector knob's revert).
     const escOnCheckbox =
       e.key === "Escape" && e.target.matches?.('input[type="checkbox"], input[type="radio"]');
     if (inEditable && !escOnCheckbox) return;
     // A modal owns the keyboard while it is up — its own Esc closes it.
     if (document.querySelector("dialog[open]")) return;
-    // Backtick summons the REPL from anywhere: its pill lives on the
-    // Topology controls, but evals are not Topology-bound.
-    if (e.key === "`" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      openPanel("repl-btn", focusRepl);
-      return;
-    }
+    // Esc on the open script popover closes the popover, not a panel
+    // as well.
+    if (e.key === "Escape" && isScriptPopoverOpen()) return;
     // The editing shortcuts drive the Topology canvas's selection.
     // Anywhere else they must stay inert — Delete pressed on the
-    // Dispatches sub-tab, the Scenarios mode, or the microgrid list
-    // must not remove whatever happens to be selected on the (hidden)
-    // Topology canvas. visibleSubview() checks all three body flags.
+    // Dispatches sub-tab or the microgrid list must not remove whatever
+    // happens to be selected on the (hidden) Topology canvas.
+    // visibleSubview() checks the body flags.
     const visible = visibleSubview();
     if (visible !== "topology") {
       if (e.key === "Escape") closeTopPanel();
@@ -451,7 +438,7 @@ async function init() {
       undoMgr.redo();
     } else if (usingCanvas && meta && (key === "c" || key === "v" || key === "x")) {
       // With text selected somewhere on the page (inspector, log
-      // panel, REPL output), the user means the NATIVE clipboard —
+      // panel), the user means the NATIVE clipboard —
       // hijacking Ctrl+C there loses the copy, and Ctrl+X would
       // delete canvas components when they only meant text.
       if (!window.getSelection().isCollapsed) return;
@@ -479,30 +466,34 @@ async function init() {
   setupContextMenu();
   setupHelpButton();
   setupModeToggle();
-  setupReplMgChip();
   setupMetricsPanel();
-  // REPL and Logs are static-markup panels (side-panel.js
-  // STATIC_PANELS): the render callbacks only focus or pin, the
-  // markup is already in place.
-  makeSidePanelToggle("repl-btn", focusRepl);
+  // Logs is a static-markup panel (side-panel.js STATIC_PANELS): the
+  // render callback only pins the tail, the markup is already in place.
   makeSidePanelToggle("logs-btn", pinLogTail);
-  // The drawer these panels replaced left its height and its two open flags
-  // behind; nothing reads them now.
-  for (const k of ["macrocosim-drawer-h", "macrocosim-drawer-logs", "macrocosim-drawer-repl"]) removeStorage(k);
+  // Keys nothing reads now: the drawer these panels replaced left its height
+  // and its two open flags, and the removed REPL its history and key mode.
+  for (const k of [
+    "macrocosim-drawer-h",
+    "macrocosim-drawer-logs",
+    "macrocosim-drawer-repl",
+    "mc-repl-history",
+    "mc-repl-emacs",
+  ]) {
+    removeStorage(k);
+  }
   setupLogsPanel();
   setupWeatherPanel();
-  scenariosPanel.setup();
   dispatchesPanel.setup();
   theme.init();
   setupThemeChip();
-  await zone.init();
+  zone.init();
   setupZoneChip();
   setupScriptChip();
   pulseBar.setup();
   await refreshTopology();
   // WS push: refresh the topology (so the canvas reflects the
-  // mutation) and the microgrid list (so the unsaved / unmanaged
-  // chips track the edit) on TopologyChanged. Sample events go
+  // mutation) and the microgrid list (so the unsaved chip tracks the
+  // edit) on TopologyChanged. Sample events go
   // straight into the live-charts router.
   const onTopologyChanged = () => {
     refreshTopology();
@@ -518,7 +509,7 @@ async function init() {
     // On a structural change the loopback supervisor debounces ~300ms
     // and rebuilds the Microgrid handle; metrics/status reports not
     // connected and metrics/formulas answers 503 mid-rebuild. (A
-    // runtime poke such as set-meter-power fires this event too but
+    // runtime poke such as a meter's power drive fires this event too but
     // triggers no rebuild; the backfill below then just refetches an
     // unchanged history.) Delay the metrics-panel re-fetch so it
     // lands after the supervisor settles. At most one backfill timer
@@ -548,8 +539,8 @@ async function init() {
       }
     }, 800);
   };
-  // A burst of edits (multi-step undo, scripted import, hot reload)
-  // fires one topology_changed per accepted eval, and every refresh
+  // A burst of edits (multi-step undo, scripted import, a script
+  // reload) fires one topology_changed per accepted change, and every refresh
   // is a topology fetch (a server-side graph build) plus a canvas
   // repaint. Leading-edge throttle with trailing catch-up: the first
   // event refreshes immediately, the rest of the burst collapses into
@@ -572,8 +563,18 @@ async function init() {
       }, 300);
     },
     (id) => microgridsPanel.removed(id),
+    refreshScriptStatus,
   );
-  setupRepl();
 }
 
 init();
+
+// Whether the script chip's popover is open; false where the browser
+// has no popovers.
+function isScriptPopoverOpen() {
+  try {
+    return document.getElementById("script-popover")?.matches(":popover-open") ?? false;
+  } catch (_) {
+    return false;
+  }
+}

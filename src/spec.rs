@@ -187,6 +187,17 @@ macro_rules! component_spec {
                 take(&mut self.command_mode, &defaults.command_mode);
             }
 
+            /// Clear the fields a rebuild applies from the spec to
+            /// every component, carried or not: the name, the health
+            /// and the operational, telemetry and command modes.
+            fn clear_applied(&mut self) {
+                self.name = None;
+                self.operational_mode = None;
+                self.health = None;
+                self.telemetry_mode = None;
+                self.command_mode = None;
+            }
+
             fn modes(&self) -> Modes {
                 Modes {
                     operational_mode: self.operational_mode,
@@ -406,6 +417,16 @@ impl ComponentSpec {
 
     pub fn modes(&self) -> Modes {
         each_variant!(self, s => s.modes())
+    }
+
+    /// A copy of this spec without its name, health and modes, which
+    /// every rebuild applies anyway. A rebuild carries a component's
+    /// state when the carry keys of its old and new defaults-filled
+    /// specs are equal.
+    pub fn carry_key(&self) -> ComponentSpec {
+        let mut key = self.clone();
+        each_variant!(&mut key, s => s.clear_applied());
+        key
     }
 
     /// The `type` tag, as the JSON spells it.

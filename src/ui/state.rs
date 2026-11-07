@@ -90,9 +90,8 @@ pub struct MicrogridState {
     /// The site energy epoch the `energy` totals belong to (see
     /// `MicrogridSite::energy_epoch`). A rebuild seeing a different
     /// epoch clears the totals, and `latest` and `history` with them:
-    /// the site was reset by a Lisp reload, so they all belong to a
-    /// previous run. A rebuild with carry keeps the epoch, and the
-    /// totals.
+    /// the site was reset, so they all belong to a previous run. A
+    /// rebuild with carry keeps the epoch, and the totals.
     pub energy_epoch: AtomicU64,
 }
 

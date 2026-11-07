@@ -74,8 +74,8 @@ pub(crate) fn nearly_full_pack(id: u64) -> Battery {
 }
 
 /// A site on a hand-advanced clock that starts at `headless_base`.
-pub(crate) fn sim_site() -> (MicrogridSite, Arc<tulisp_async::ManualClock>) {
-    let clock = Arc::new(tulisp_async::ManualClock::new());
+pub(crate) fn sim_site() -> (MicrogridSite, Arc<crate::sim::sim_clock::ManualClock>) {
+    let clock = Arc::new(crate::sim::sim_clock::ManualClock::new());
     let site = MicrogridSite::new();
     site.set_now_source(NowSource::sim(headless_base(), clock.clone()));
     (site, clock)
@@ -157,12 +157,6 @@ impl SimulatedComponent for Hw {
     }
     fn controllable(&self) -> Option<&dyn Controllable> {
         Some(self)
-    }
-    fn make_fn(&self) -> &'static str {
-        "%make-test-hw"
-    }
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        Vec::new()
     }
 }
 
@@ -248,12 +242,6 @@ impl SimulatedComponent for Pq {
     }
     fn reactive_limits(&self) -> Option<&dyn ReactiveLimits> {
         Some(self)
-    }
-    fn make_fn(&self) -> &'static str {
-        "%make-test-pq"
-    }
-    fn constructor_kwargs(&self) -> Vec<(&'static str, String)> {
-        Vec::new()
     }
 }
 

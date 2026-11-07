@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 from frequenz.quantities import Energy, Frequency, Percentage, Power, Voltage
 
 from ._components import LIVE_CLASS, Component
-from ._errors import UnknownComponent, fmt_ids
+from ._errors import LaunchError, UnknownComponent, fmt_ids
 from ._recording import Recording
 from ._signals import (
     AGGREGATES,
@@ -38,7 +38,11 @@ L = TypeVar("L")
 
 def _microgrid_repr(mg: Microgrid) -> str:
     """The tree, one component per line, with ids."""
-    lines = [f"Microgrid {mg.id} at {mg.grpc_url}"]
+    try:
+        at = mg.grpc_url
+    except LaunchError:
+        at = "no running gRPC server"
+    lines = [f"Microgrid {mg.id} at {at}"]
     ids = mg._spec._ids
     seen: set[int] = set()
 
@@ -146,7 +150,15 @@ class Microgrid:
     @property
     def grpc_url(self) -> str:
         """The Microgrid API address for the app under test
-        (``grpc://host:port``)."""
+        (``grpc://host:port``). Raises `LaunchError` when the microgrid's gRPC
+        server was not running when this client attached: it was still starting
+        or moving to a new port, or it failed to start or ended, in which case
+        the simulator's log says why."""
+        if not self._endpoints.grpc_addr:
+            raise LaunchError(
+                f"microgrid {self.id} had no running gRPC server when this "
+                "client attached"
+            )
         return f"grpc://{self._endpoints.grpc_addr}"
 
     @property

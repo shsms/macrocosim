@@ -11,7 +11,7 @@ import { deadBandW, formatScaled } from "./live.js";
 import { metricsStore } from "./metrics-store.js";
 import { notify } from "./notices.js";
 import { powerColor, reactiveColor } from "./pill.js";
-import { mgJson, mgSend, READ_ONLY_TITLE, structureEditable } from "./routing.js";
+import { mgJson, mgSend } from "./routing.js";
 import { openPanel } from "./side-panel.js";
 import { disconnect, rename } from "./spec-edit.js";
 import { readStorage, writeStorage } from "./storage.js";
@@ -193,9 +193,9 @@ function clearGridChart() {
 export const OPERATIONAL_MODES = [
   { value: "unspecified", hint: "not explicitly set; treated as full capability" },
   { value: "inactive", hint: "no telemetry, no control" },
-  { value: "telemetry-only", hint: "streams telemetry, rejects commands" },
-  { value: "control-only", hint: "accepts commands, streams no telemetry" },
-  { value: "control-and-telemetry", hint: "full capability, explicitly declared" },
+  { value: "telemetry_only", hint: "streams telemetry, rejects commands" },
+  { value: "control_only", hint: "accepts commands, streams no telemetry" },
+  { value: "control_and_telemetry", hint: "full capability, explicitly declared" },
 ];
 
 // Categories that the gRPC server actually accepts setpoints on.
@@ -213,12 +213,6 @@ export const ACCEPTS_SETPOINTS = new Set(["battery", "inverter", "ev-charger", "
 // knob_changed events use for it. Construction-time args (capacity,
 // rated bounds, …) aren't here: they are the spec's, and change with
 // the structure.
-// `dynamic: true` knobs may be driven by a Lisp expression on a
-// microgrid loaded from Lisp; their input is text, so it can show that
-// expression, and a commit takes a number. `unit`, on a dynamic knob
-// only, labels the resolved per-tick value line paintKnobEntry shows
-// beneath an expression's printed source — see knobDisplay/
-// paintKnobEntry below.
 // `group` places each knob in the Component card: "config" rows are
 // device configuration (a Config sub-section of their own), anything
 // else is an environment/simulation driver and joins the Simulation
@@ -241,16 +235,12 @@ const KNOBS_BY_CATEGORY = {
       label: "power (W)",
       token: "meter-power",
       field: "power_w",
-      dynamic: true,
-      unit: "W",
       clear: "clear_power",
     },
     {
       label: "reactive power (VAr)",
       token: "meter-reactive-power",
       field: "reactive_power_var",
-      dynamic: true,
-      unit: "VAr",
       clear: "clear_reactive",
     },
     {
@@ -276,14 +266,8 @@ const KNOBS_BY_CATEGORY = {
     },
   ],
   "steam-boiler": [
-    {
-      label: "demand (kg/s)",
-      token: "boiler-demand",
-      field: "steam_demand_kg_per_s",
-      dynamic: true,
-      unit: "kg/s",
-    },
-    { label: "pressure (bar)", token: "boiler-pressure", field: "pressure_bar", unit: "bar" },
+    { label: "demand (kg/s)", token: "boiler-demand", field: "steam_demand_kg_per_s" },
+    { label: "pressure (bar)", token: "boiler-pressure", field: "pressure_bar" },
   ],
 };
 
@@ -295,8 +279,10 @@ function knobsFor(d) {
       label: "sunlight (%)",
       token: "solar-sunlight",
       field: "sunlight_pct",
-      dynamic: true,
-      unit: "%",
+      clear: "clear_sunlight",
+      clearAlways: true,
+      clearAction: "Follow the weather",
+      clearTitle: "follow the site's weather again",
     });
   }
   return knobs;
@@ -557,16 +543,10 @@ function renderInspect(d, parentIds, childIds) {
   // that would each read blank.
   const isGrid = d.category === "grid";
 
-  // Rename and disconnect change the microgrid's spec; on one loaded
-  // from Lisp they are shown but inert, with the reason on hover.
-  // Everything below them — modes, health, knobs — is runtime state
-  // and stays live either way.
-  const locked = !structureEditable();
-  const lockAttrs = locked ? ` disabled title="${escapeHtml(READ_ONLY_TITLE)}"` : "";
   const renderEdgeRow = (id, dataAttr) => {
     const c = topology.get(id);
     const label = c ? c.name : `id ${id}`;
-    return `<li>${escapeHtml(label)} <button class="btn btn-quiet btn-icon" ${dataAttr}="${id}"${lockAttrs}>✕</button></li>`;
+    return `<li>${escapeHtml(label)} <button class="btn btn-quiet btn-icon" ${dataAttr}="${id}">✕</button></li>`;
   };
   const parentList = parentIds.length
     ? parentIds.map((id) => renderEdgeRow(id, "data-disconnect-from")).join("")
@@ -577,9 +557,6 @@ function renderInspect(d, parentIds, childIds) {
 
   const knobs = knobsFor(d);
   const knobRow = (k) => {
-      const inputAttrs = k.dynamic
-        ? `type="text" inputmode="decimal" placeholder="value"`
-        : `type="number" step="any" placeholder="value"`;
       // `k.flag`, when set, renders a checkbox alongside the input
       // for an optional boolean arg (e.g. power factor's LEADING).
       // The checkbox by itself never submits anything — it only
@@ -589,30 +566,16 @@ function renderInspect(d, parentIds, childIds) {
       const flagHtml = k.flag
         ? `<label class="knob-flag"><input type="checkbox" class="knob-flag-input" /> ${escapeHtml(k.flag)}</label>`
         : "";
-      // Dynamic knobs (meter-power / meter-reactive-power / solar-
-      // sunlight) additionally carry a small "expr" chip, shown
-      // whenever the input's current text is a Lisp expression
-      // rather than a plain number — see knobDisplay/toggleExprChip
-      // below.
-      const exprChipHtml = k.dynamic
-        ? `<span class="knob-expr-chip" hidden>expr</span>`
-        : "";
-      // Same chip condition drives a resolved-value line beneath the
-      // input — the printed source alone doesn't say what it's
-      // currently evaluating to. Hidden until paintKnobEntry has a
-      // reading to show; `data-unit` carries the display unit through
-      // to paintKnobEntry without another lookup table there.
-      const resolvedHtml = k.dynamic ? `<div class="knob-resolved" hidden></div>` : "";
       // `k.clear`: the small "✕ measure" button, styled like the
       // ✕ disconnect buttons above. Starts hidden — shown
       // only while this token carries a live override, toggled by
       // paintKnobEntry/setKnobText alongside the input text itself.
       const measureBtnHtml = k.clear
-        ? `<button type="button" class="btn btn-quiet btn-icon knob-measure-btn" data-clear="${k.clear}" hidden title="clear override, measure from children again">✕</button>`
+        ? `<button type="button" class="btn btn-quiet btn-icon knob-measure-btn" data-clear="${k.clear}"${k.clearAlways ? " data-always" : " hidden"} data-action="${escapeHtml(k.clearAction ?? "Measure")}" title="${escapeHtml(k.clearTitle ?? "clear override, measure from children again")}">✕</button>`
         : "";
       return `<dt>${escapeHtml(k.label)}</dt><dd>
-        <input ${inputAttrs} class="field field-sm knob-input"
-               data-token="${k.token}" data-field="${k.field}"${k.flag ? ` data-flag="${k.flag}"` : ""}${k.dynamic ? ` data-dynamic="1" data-unit="${escapeHtml(k.unit || "")}"` : ""} />${exprChipHtml}${flagHtml}${measureBtnHtml}${resolvedHtml}
+        <input type="number" step="any" placeholder="value" class="field field-sm knob-input"
+               data-token="${k.token}" data-field="${k.field}"${k.flag ? ` data-flag="${k.flag}"` : ""} />${flagHtml}${measureBtnHtml}
       </dd>`;
     };
   const configKnobsHtml = knobs.filter((k) => k.group === "config").map(knobRow).join("");
@@ -628,7 +591,7 @@ function renderInspect(d, parentIds, childIds) {
       : "none";
 
   inspectEl.innerHTML = `
-    <h2><input id="rename" class="name-input" value="${escapeHtml(d.name)}"${lockAttrs} /></h2>
+    <h2><input id="rename" class="name-input" value="${escapeHtml(d.name)}" /></h2>
     <div class="insp-meta">
       <span class="insp-meta-id">id ${d.id}</span>
       <span class="insp-chip insp-cat-chip" style="color:var(--cat-${escapeHtml(d.category)});border-color:var(--cat-${escapeHtml(d.category)})">${d.subtype ? `${escapeHtml(d.category)} · ${escapeHtml(d.subtype)}` : escapeHtml(d.category)}</span>
@@ -648,9 +611,9 @@ function renderInspect(d, parentIds, childIds) {
         <h4>Simulation</h4>
         <dl>
           <dt>health</dt><dd>${renderSegRow("health", d.health, ["ok", "error", "standby"])}</dd>
-          <dt>telemetry</dt><dd>${selectField("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error-empty", "not-found"], d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null)}</dd>
+          <dt>telemetry</dt><dd>${selectField("telemetry-mode", d.telemetry_mode, ["normal", "silent", "closed", "error_empty", "not_found"], d.provides_telemetry === false ? `operational mode ${d.operational_mode} streams no telemetry` : null)}</dd>
           ${ACCEPTS_SETPOINTS.has(d.category)
-            ? `<dt>commands</dt><dd>${selectField("command-mode", d.command_mode, ["normal", "timeout", "error", "over-bound"], d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null)}</dd>`
+            ? `<dt>commands</dt><dd>${selectField("command-mode", d.command_mode, ["normal", "timeout", "error", "over_bound"], d.accepts_control === false ? `operational mode ${d.operational_mode} accepts no commands` : null)}</dd>`
             : ""}
           ${simKnobsHtml}
         </dl>
@@ -755,11 +718,8 @@ function renderInspect(d, parentIds, childIds) {
     // a wheel over a focused type=number steps the value without
     // committing it, and the next snapshot reverts it. Arrow KEYS are
     // left alone — those are deliberate keyboard edits, one Enter from a
-    // commit. Non-passive so preventDefault holds; number fields only,
-    // so a wheel over a text knob still scrolls the inspector.
-    if (inp.type === "number") {
-      inp.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
-    }
+    // commit. Non-passive so preventDefault holds.
+    inp.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
     inp.addEventListener("focus", () => {
       inp.dataset.editing = "1";
     });
@@ -797,14 +757,6 @@ function renderInspect(d, parentIds, childIds) {
           }
           inp.dataset.live = v;
           if (flag) flag.dataset.live = flag.checked ? "1" : "0";
-          if (inp.dataset.dynamic === "1") {
-            // The actual reading arrives shortly via the WS
-            // knob_changed event (paintKnobEntry); until then, a
-            // just-committed number can't be showing a stale expr chip
-            // or resolved line from a previous expression.
-            toggleExprChip(inp, false);
-            paintResolved(inp, false, null);
-          }
         });
       } else if (e.key === "Escape") {
         e.preventDefault();
@@ -907,85 +859,34 @@ function snapshotFetchStale(token) {
   return snapshotAlive.stale(token.alive) || token.seq !== snapshotSeq;
 }
 
-const EXPR_PLACEHOLDER = "(expression)";
-
-// Decide what a knob input should show, given a snapshot/WS reading's
-// `value` + `expr`. The server ships `expr` unfiltered on both paths
-// (no server-side normalization) — an unquoted `(lambda …)` literal
-// evaluates to tulisp's opaque `CompiledDefun` closure before the
-// component ever sees it, and that opaque Display is caught here,
-// the one place both the snapshot and WS paths funnel through, so
-// they can't render it differently.
-//
-// `value == null && expr == null` on a dynamic knob is a CLEARED
-// override (clear-meter-power/clear-meter-reactive broadcast exactly
-// this) — blank the input, same as any other knob with nothing
-// configured. That's distinct from a dynamic source with a captured
-// expression but no resolved value yet, which the `expr != null`
-// branch above already renders (placeholder for the opaque closure
-// Display, printed source otherwise) — there's no live case left
-// where a dynamic knob's null/null pair means anything but "cleared".
-function knobDisplay(value, expr) {
-  if (expr != null) {
-    const opaque = expr.startsWith("CompiledDefun");
-    return { text: opaque ? EXPR_PLACEHOLDER : expr, hasExpr: true };
-  }
-  return { text: value != null ? String(value) : "", hasExpr: false };
-}
-
-function toggleExprChip(input, show) {
-  const chip = input.closest("dd")?.querySelector(".knob-expr-chip");
-  if (chip) chip.hidden = !show;
-}
-
 // The meter knobs' small "✕ measure" button — visible only while
-// this token carries a live override (a value present, whether or
-// not it's expression-driven). Shared by paintKnobEntry (WS/snapshot
-// updates) and setKnobText (the "no state for this token" blank-out),
-// so a cleared or never-set override can't leave the button showing.
+// this token carries a live override (a value present). Shared by
+// paintKnobEntry (WS/snapshot updates) and setKnobText (the "no state
+// for this token" blank-out), so a cleared or never-set override
+// can't leave the button showing.
 function toggleMeasureBtn(input, show) {
   const btn = input.closest("dd")?.querySelector(".knob-measure-btn");
-  if (btn) btn.hidden = !show;
-}
-
-// The small muted line beneath an expression-driven knob's input,
-// showing what it's currently resolving to this tick — the printed
-// source above doesn't say that on its own. Always live, never frozen
-// by data-editing: it's read-only, reporting the last-committed
-// expression's current output, not whatever the user is mid-typing.
-function paintResolved(input, show, value) {
-  const el = input.closest("dd")?.querySelector(".knob-resolved");
-  if (!el) return;
-  if (!show || value == null) {
-    // Clear as well as hide: a stale "→ …" line must not reappear
-    // if anything ever unhides the element without repainting it.
-    el.textContent = "";
-    el.hidden = true;
-    return;
-  }
-  el.textContent = `→ ${formatScaled(value, input.dataset.unit || "")} this tick`;
-  el.hidden = false;
+  if (btn) btn.hidden = !show && !("always" in btn.dataset);
 }
 
 // Paint one knob entry's input (+ its optional leading checkbox + its
-// resolved-value line + its measure button) from a {value, expr,
-// leading} reading — shared by the snapshot prefill and the WS
-// knob_changed apply, so the two paths can't drift.
+// measure button) from a {value, leading} reading — shared by the
+// snapshot prefill and the WS knob_changed apply, so the two paths
+// can't drift.
 //
 // `input.dataset.live` (and the flag's own `dataset.live`) are ALWAYS
 // refreshed to the newest reading, even while the user has the field
 // focused — otherwise a live update that arrives during an edit is
 // silently dropped, and Esc/blur restores a value as stale as focus
 // time instead of the actual current one. Only the visible WRITES
-// (input.value, the expr chip, the flag checkbox) are frozen while
-// `data-editing` is set, so a live update can't yank text out from
-// under the user mid-edit. The measure button is deliberately NOT
-// frozen — like `paintResolved`, it runs above the editing guard
-// below, always live.
-function paintKnobEntry(entry, value, expr, leading) {
+// (input.value, the flag checkbox) are frozen while `data-editing` is
+// set, so a live update can't yank text out from under the user
+// mid-edit. The measure button is deliberately NOT frozen: it runs
+// above the editing guard below, always live.
+function paintKnobEntry(entry, value, leading) {
   const { input } = entry;
-  const disp = knobDisplay(value, expr);
-  input.dataset.live = disp.text;
+  const text = value != null ? String(value) : "";
+  input.dataset.live = text;
   const flag = input.closest("dd")?.querySelector(".knob-flag-input");
   // `leading` is only meaningful on the power-factor knob — every
   // other token's event carries it null, and there's no flag sibling
@@ -997,31 +898,25 @@ function paintKnobEntry(entry, value, expr, leading) {
     if (leading != null) flag.dataset.live = leading ? "1" : "0";
     else if (value == null) flag.dataset.live = "0";
   }
-  paintResolved(input, disp.hasExpr, value);
   toggleMeasureBtn(input, value != null);
   if (input.dataset.editing) return;
-  input.value = disp.text;
-  toggleExprChip(input, disp.hasExpr);
+  input.value = text;
   if (flag) {
     if (leading != null) flag.checked = leading;
     else if (value == null) flag.checked = false;
   }
 }
 
-// Write a plain (non-expr) text reading to a knob input — used by
-// prefillKnobs' "no state for this token" blank-out, which doesn't
-// go through knobDisplay. Same live-vs-editing discipline as
-// paintKnobEntry: dataset.live always updates, the visible write is
-// frozen while the user has the field focused. No state for the
-// token also means no override in force, so the measure button hides
-// along with everything else.
+// Blank a knob input — prefillKnobs' "no state for this token" case.
+// Same live-vs-editing discipline as paintKnobEntry: dataset.live
+// always updates, the visible write is frozen while the user has the
+// field focused. No state for the token also means no override in
+// force, so the measure button hides along with everything else.
 function setKnobText(input, text) {
   input.dataset.live = text;
-  paintResolved(input, false, null);
   toggleMeasureBtn(input, false);
   if (input.dataset.editing) return;
   input.value = text;
-  toggleExprChip(input, false);
 }
 
 // Bar geometry — same clamped formula as hovercard.js's envelopeBar
@@ -1103,7 +998,7 @@ function paintAugmented(flags) {
 // Prefill every knob input from a snapshot's `knobs` list, keyed by
 // the input's `data-token`.
 // An input with `data-editing` (the user has it focused) still gets
-// its `dataset.live` refreshed — only the visible input/chip/checkbox
+// its `dataset.live` refreshed — only the visible input/checkbox
 // write is skipped — matching the same freeze setKnobText/
 // paintKnobEntry apply, and inspectorLive.applyKnob relies on below.
 function prefillKnobs(snap) {
@@ -1114,7 +1009,7 @@ function prefillKnobs(snap) {
       setKnobText(entry.input, "");
       continue;
     }
-    paintKnobEntry(entry, state.value, state.expr, state.leading);
+    paintKnobEntry(entry, state.value, state.leading);
   }
 }
 
@@ -1268,10 +1163,10 @@ export const inspectorLive = {
     // Only the numeric knob inputs have an entry; a token whose value
     // is a string or a list (operational mode, grid voltage) has none.
     if (!entry) return;
-    // paintKnobEntry always refreshes dataset.live (and the resolved
-    // line); it only skips the visible input/chip/checkbox write
-    // while the field is focused (data-editing).
-    paintKnobEntry(entry, ev.value, ev.expr, ev.leading);
+    // paintKnobEntry always refreshes dataset.live; it only skips the
+    // visible input/checkbox write while the field is focused
+    // (data-editing).
+    paintKnobEntry(entry, ev.value, ev.leading);
   },
   applySample(ev) {
     if (!liveState || Number(ev.component_id) !== liveState.id) return;
@@ -1345,7 +1240,7 @@ let shownId = null;
 export function showComponent(d) {
   if (!d) return;
   const gen = ++showGen;
-  // Any eval bumps the topology version, and the refresh re-renders
+  // Any knob write bumps the topology version, and the refresh re-renders
   // the inspector through here. For the charger already on screen,
   // keep its EV body: a half-filled plug form survives, and the card
   // does not flash back to "loading…". Read before openPanel runs the

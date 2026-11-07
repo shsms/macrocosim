@@ -648,7 +648,7 @@ mod tests {
     async fn files_count_only_modify_events_and_follow_a_replaced_file() {
         let dir = tempfile::TempDir::with_prefix("mc-watch-").unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let file = root.join("site.lisp");
+        let file = root.join("site.cfg");
         std::fs::write(&file, "a").unwrap();
         let batches: Batches = Arc::default();
         let seen = batches.clone();
@@ -668,7 +668,7 @@ mod tests {
         wait_for(&batches, &file).await;
         // The batch re-armed the watch, so a write after an atomic
         // save is seen.
-        let tmp = root.join("site.lisp.tmp");
+        let tmp = root.join("site.cfg.tmp");
         std::fs::write(&tmp, "c").unwrap();
         std::fs::rename(&tmp, &file).unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;

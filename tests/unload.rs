@@ -47,12 +47,11 @@ async fn delete(client: &reqwest::Client, s: &TestServer, mg: u64) -> (StatusCod
     (r.status(), r.text().await.unwrap())
 }
 
-/// Create `spec` the way a structural route does, under the create
-/// lock; the new runtime's gRPC address.
+/// Create `spec` the way a structural route does, under the
+/// structural lock; the new runtime's gRPC address.
 async fn create(s: &TestServer, spec: MicrogridSpec) -> String {
-    let lock = s.engine.create_lock();
-    let _structural = lock.lock().await;
-    macrocosim::engine::topology::create(&s.engine, &s.runtimes, spec, None)
+    let structural = s.engine.structural().await;
+    macrocosim::engine::topology::create(&structural, &s.runtimes, spec, None)
         .await
         .expect("create")
         .runtime
@@ -85,8 +84,7 @@ async fn component_ids(addr: &str) -> Vec<u64> {
 }
 
 /// After a `DELETE` the microgrid is gone, its port can be bound, and
-/// its id and component ids can be taken by a new microgrid. A
-/// microgrid loaded from Lisp is refused.
+/// its id and component ids can be taken by a new microgrid.
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_frees_the_port_and_the_ids() {
     let s = TestServer::start_spec(doc(vec![plant()])).await;
@@ -109,13 +107,6 @@ async fn delete_frees_the_port_and_the_ids() {
     again["id"] = json!(9);
     let addr = create(&s, spec(again)).await;
     assert_eq!(component_ids(&addr).await, vec![1, 2, 3, 4]);
-
-    let (code, body) = delete(&client, &s, 2200).await;
-    assert_eq!(code, StatusCode::CONFLICT, "{body}");
-    assert!(
-        body.contains("microgrid 2200 was loaded from Lisp"),
-        "{body}"
-    );
 }
 
 /// A client holding a telemetry stream open does not hold the
@@ -258,10 +249,11 @@ async fn a_put_with_a_new_grpc_port_moves_the_server() {
     assert_eq!(component_ids(&new).await, vec![1, 2, 3, 4]);
 }
 
-/// The events socket tells the UI a microgrid was removed, and
-/// follows a microgrid created again under the same id right after:
-/// its events arrive, though the two notices may reach the socket in
-/// either order.
+/// The events socket follows a microgrid created again under the same
+/// id right after an unload: it tells the UI the microgrid was
+/// unloaded, or, when the new one is already registered by the time
+/// the socket handles the notice, that its topology changed; and the
+/// new microgrid's events arrive.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_events_socket_follows_an_unload_and_a_recreate() {
     let s = TestServer::start_spec(doc(vec![plant()])).await;
@@ -282,19 +274,19 @@ async fn the_events_socket_follows_an_unload_and_a_recreate() {
     again["connections"] = json!([[1, 50]]);
     create(&s, spec(again)).await;
 
-    let (mut removed, mut new_sample) = (false, false);
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !(removed && new_sample) {
-            let ev = ws.next_json().await;
-            if ev["microgrid_id"] != 7 {
-                continue;
+    let (mut told, mut new_sample) = (false, false);
+    ws.wait_for(
+        Duration::from_secs(10),
+        "notice and sample of 50 from the new microgrid 7",
+        |ev| {
+            if ev["microgrid_id"] == 7 {
+                told |= ev["kind"] == "microgrid_unloaded" || ev["kind"] == "topology_changed";
+                new_sample |= ev["kind"] == "sample" && ev["component_id"] == 50;
             }
-            removed |= ev["kind"] == "microgrid_unloaded";
-            new_sample |= ev["kind"] == "sample" && ev["component_id"] == 50;
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("removed: {removed}, a sample of 50: {new_sample}"));
+            told && new_sample
+        },
+    )
+    .await;
 }
 
 /// A plain unload reaches the events socket as `microgrid_unloaded`.

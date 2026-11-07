@@ -36,6 +36,9 @@ globalThis.CSS = stub();
 globalThis.ResizeObserver = stub();
 globalThis.MutationObserver = stub();
 globalThis.fetch = () => new Promise(() => {});
+// init() gets as far as the system pulse, which starts its polls; a real
+// interval would keep node running after the last line.
+globalThis.setInterval = () => 0;
 
 // app.js and routing.js import each other (app.js for its own
 // exports, routing.js back for dispatchesPanel/setStatus). Entering

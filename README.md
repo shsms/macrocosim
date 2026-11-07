@@ -49,8 +49,12 @@ document instead, with no script; that is how the Python client's
 `launch` starts a simulator for a test.
 
 Recordings are written under `--state-dir`, which defaults to the
-directory the server was started from. `GET /api/defaults` lists the
-per-category defaults a spec's missing fields take.
+directory the server was started from. A `.lisp` argument, or a state
+directory that still holds 0.1's `enterprise.lisp` or
+`microgrids/*.lisp`, stops the binary with a message naming the files:
+port them to a Python script, or pass another `--state-dir`.
+`GET /api/defaults` lists the per-category defaults a spec's missing
+fields take.
 
 The proto roots ([frequenz-api-microgrid](https://github.com/frequenz-floss/frequenz-api-microgrid),
 frequenz-api-assets, frequenz-api-dispatch) are vendored as git
@@ -102,10 +106,6 @@ macroctl set-reactive-power 1001 2000                          # VAr
 macroctl augment-bounds 1001 --lower-w -1000 --upper-w 5000    # TTL-limited bounds
 macroctl augment-reactive-bounds 1001 --lower-var -500 --upper-var 500
 macroctl pool battery                                          # loopback BatteryPool snapshot
-macroctl scenario report                                       # journal report / CI gate
-macroctl scenario list                                         # registered scenarios
-macroctl scenario run cloud-fade --wait --assert              # run one live + gate
-macroctl snapshot save before-test                             # freeze the mg's managed file
 macroctl dashboard --tail                                      # one-line/sec pulse bar
 macroctl dispatch list                                         # dispatch API CRUD
 macroctl dispatch create <type> battery --duration-s 3600
@@ -113,26 +113,19 @@ macroctl --microgrid-id 2 info                                 # pick another mi
 ```
 
 `--microgrid-id` selects the microgrid for the gRPC commands,
-`dispatch`, `snapshot`, `pool`, `dashboard` and the scenario readouts
-(`summary`, `report`, `events`, `run --wait`); the default is the
-lowest id. `scenario list` / `load` are site-wide. `scenario start` /
-`stop` and a run's start and stop reach every microgrid's journal;
-`scenario event` and a scenario's checks and recordings land on the
-lowest microgrid, so `--assert` works only on that one. `--addr`
-names the gRPC server directly; with `--microgrid-id` the lookup
-still runs and the two must agree. `--ui-addr` (default
+`dispatch`, `pool` and `dashboard`; the default is the lowest id.
+`--addr` names the gRPC server directly; with `--microgrid-id` the
+lookup still runs and the two must agree. `--ui-addr` (default
 `http://127.0.0.1:8801`) points at the UI server, which the
-HTTP-driven verbs (`scenario*`, `snapshot`, `dashboard`, `pool`) talk
-to. The gRPC commands ask it for the microgrid's address unless
-`--addr` alone is given, and `dispatch` asks it for the lowest
-microgrid id when `--microgrid-id` is not given. `--json` swaps any
-human table for the raw JSON.
+HTTP-driven verbs (`dashboard`, `pool`) talk to. The gRPC commands
+ask it for the microgrid's address unless `--addr` alone is given,
+and `dispatch` asks it for the lowest microgrid id when
+`--microgrid-id` is not given. `--json` swaps any human table for the
+raw JSON.
 
-The `scenario` subcommand covers both the ad-hoc journal verbs
-(start / stop / event / load / report / events / summary) and the
-registered scenarios from `(define-scenario …)`: `list` them and
-`run NAME` — live (`--wait`) or headless deterministic (`--stepped`),
-with `--assert` to gate CI.
+Recordings and scenarios run inside the script (see
+[`docs/python-scripts.md`](docs/python-scripts.md)); macroctl has no
+scenario or snapshot commands.
 
 ## Configuration knobs
 

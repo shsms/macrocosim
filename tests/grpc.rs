@@ -96,21 +96,15 @@ async fn expect_accepted_then_success(
     );
 }
 
-const TINY_TOPOLOGY: &str = r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-meter :id 2
-                               :successors
-                               (list (%make-battery-inverter
-                                      :id 4
-                                      :rated-lower-w -5000.0
-                                      :rated-upper-w  5000.0
-                                      :successors
-                                      (list (%make-battery
-                                             :id 3
-                                             :rated-lower-w -5000.0
-                                             :rated-upper-w  5000.0)))))))
-"#;
+const TINY_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "battery", "id": 3, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0},
+    {"type": "battery_inverter", "id": 4, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0},
+    {"type": "meter", "id": 2},
+    {"type": "grid_connection_point", "id": 1}
+  ],
+  "connections": [[4, 3], [2, 4], [1, 2]]
+}"#;
 
 async fn connect(s: &TestServer) -> MicrogridClient<tonic::transport::Channel> {
     MicrogridClient::connect(s.grpc_url.clone())
@@ -120,7 +114,7 @@ async fn connect(s: &TestServer) -> MicrogridClient<tonic::transport::Channel> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn list_components_returns_topology() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let resp = c
         .list_electrical_components(ListElectricalComponentsRequest::default())
@@ -136,7 +130,7 @@ async fn list_components_returns_topology() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn list_connections_returns_edges() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let resp = c
         .list_electrical_component_connections(ListElectricalComponentConnectionsRequest::default())
@@ -149,7 +143,7 @@ async fn list_connections_returns_edges() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn set_power_streams_accepted_then_success() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let resp = c
         .set_electrical_component_power(SetElectricalComponentPowerRequest {
@@ -163,57 +157,46 @@ async fn set_power_streams_accepted_then_success() {
     expect_accepted_then_success(resp.into_inner()).await;
 }
 
-const ERRORED_INVERTER_TOPOLOGY: &str = r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-meter :id 2
-                               :successors
-                               (list (%make-battery-inverter
-                                      :id 4 :health 'error
-                                      :rated-lower-w -5000.0
-                                      :rated-upper-w  5000.0
-                                      :successors
-                                      (list (%make-battery
-                                             :id 3
-                                             :rated-lower-w -5000.0
-                                             :rated-upper-w  5000.0)))))))
-"#;
+const ERRORED_INVERTER_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "battery", "id": 3, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0},
+    {"type": "battery_inverter", "id": 4, "health": "error", "rated_lower_w": -5000.0, "rated_upper_w": 5000.0},
+    {"type": "meter", "id": 2},
+    {"type": "grid_connection_point", "id": 1}
+  ],
+  "connections": [[4, 3], [2, 4], [1, 2]]
+}"#;
 
 /// Inverter rated ±5 kW but its battery only ±1 kW, so the combined
 /// envelope the gateway must enforce is ±1 kW — narrower than the
 /// inverter's own bounds.
-const NARROW_BATTERY_TOPOLOGY: &str = r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-meter :id 2
-                               :successors
-                               (list (%make-battery-inverter
-                                      :id 4
-                                      :rated-lower-w -5000.0
-                                      :rated-upper-w  5000.0
-                                      :successors
-                                      (list (%make-battery
-                                             :id 3
-                                             :rated-lower-w -1000.0
-                                             :rated-upper-w  1000.0)))))))
-"#;
+const NARROW_BATTERY_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "battery", "id": 3, "rated_lower_w": -1000.0, "rated_upper_w": 1000.0},
+    {"type": "battery_inverter", "id": 4, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0},
+    {"type": "meter", "id": 2},
+    {"type": "grid_connection_point", "id": 1}
+  ],
+  "connections": [[4, 3], [2, 4], [1, 2]]
+}"#;
 
 /// A boiler at its default 8 bar target with no steam demand: it needs
 /// no electricity, so its per-tick derate band is `[0, 0]` — the
 /// narrowest live envelope any component in these tests advertises.
-const BOILER_TOPOLOGY: &str = r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-meter :id 2
-                               :successors
-                               (list (%make-steam-boiler :id 5)))))
-"#;
+const BOILER_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "steam_boiler", "id": 5},
+    {"type": "meter", "id": 2},
+    {"type": "grid_connection_point", "id": 1}
+  ],
+  "connections": [[2, 5], [1, 2]]
+}"#;
 
 /// An errored inverter refuses every command — both setpoints and bounds
 /// augmentations (the latter were previously accepted unconditionally).
 #[tokio::test(flavor = "multi_thread")]
 async fn errored_component_rejects_power_and_bounds() {
-    let s = TestServer::start(ERRORED_INVERTER_TOPOLOGY).await;
+    let s = TestServer::start_mg(ERRORED_INVERTER_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let power_err = c
         .set_electrical_component_power(SetElectricalComponentPowerRequest {
@@ -284,7 +267,7 @@ async fn health_drives_the_streamed_state_code() {
             .expect("one sample")
     }
 
-    let s = TestServer::start(ERRORED_INVERTER_TOPOLOGY).await;
+    let s = TestServer::start_mg(ERRORED_INVERTER_TOPOLOGY).await;
     let mut c = connect(&s).await;
 
     let error_code = ElectricalComponentStateCode::Error as i32;
@@ -307,7 +290,7 @@ async fn health_drives_the_streamed_state_code() {
 /// sees an error.
 #[tokio::test(flavor = "multi_thread")]
 async fn out_of_range_lifetime_rejects_without_actuating() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let err = c
         .set_electrical_component_power(SetElectricalComponentPowerRequest {
@@ -355,7 +338,7 @@ async fn out_of_range_lifetime_rejects_without_actuating() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn set_power_outside_envelope_is_rejected() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     // Inverter rated bounds are ±5 kW; +10 kW is outside.
     let err = c
@@ -380,7 +363,7 @@ async fn set_power_outside_envelope_is_rejected() {
 /// silently saturated. The complement of the inverter-only-bounds test.
 #[tokio::test(flavor = "multi_thread")]
 async fn set_power_outside_battery_inverter_intersection_is_rejected() {
-    let s = TestServer::start(NARROW_BATTERY_TOPOLOGY).await;
+    let s = TestServer::start_mg(NARROW_BATTERY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     // +3 kW: within the inverter's ±5 kW, outside the battery's ±1 kW.
     let err = c
@@ -415,7 +398,7 @@ async fn set_power_outside_battery_inverter_intersection_is_rejected() {
 /// augmentation has narrowed the envelope to exclude it.
 #[tokio::test(flavor = "multi_thread")]
 async fn zero_power_is_always_allowed() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     // Narrow inverter 4 to discharge-only [-5 kW, -1 kW], excluding 0 W.
     c.augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
@@ -459,7 +442,7 @@ async fn zero_power_is_always_allowed() {
 /// documented 5 s default, not SetPower's 60 s.
 #[tokio::test(flavor = "multi_thread")]
 async fn augment_without_lifetime_expires_after_five_seconds() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let before = std::time::SystemTime::now();
     let resp = c
@@ -490,7 +473,7 @@ async fn augment_without_lifetime_expires_after_five_seconds() {
 /// setpoint then rejected while the running output goes unconstrained).
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_augmentation_is_rejected() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
 
     let inverted = c
@@ -541,7 +524,7 @@ async fn malformed_augmentation_is_rejected() {
 /// the same answer a setpoint gets from a component that takes none.
 #[tokio::test(flavor = "multi_thread")]
 async fn augment_on_a_component_without_storage_is_unimplemented() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     for (id, what) in [(3, "the battery"), (2, "the meter"), (1, "the grid")] {
         let err = c
@@ -575,7 +558,7 @@ async fn augment_on_a_component_without_storage_is_unimplemented() {
 /// neither is a matter of the client picking better numbers.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_axis_less_component_refuses_every_augmentation_band() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     for (lower, upper, what) in [
         (50_000.0, 60_000.0, "a band disjoint from the battery"),
@@ -610,15 +593,16 @@ async fn an_axis_less_component_refuses_every_augmentation_band() {
 /// every component, so the axis check is what answers.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_setpoint_on_a_missing_axis_is_unimplemented() {
-    let topology = r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-meter :id 2
-                               :successors
-                               (list (%make-battery :id 3)
-                                     (%make-steam-boiler :id 5)))))
-"#;
-    let s = TestServer::start(topology).await;
+    let topology = r#"{
+      "components": [
+        {"type": "battery", "id": 3},
+        {"type": "steam_boiler", "id": 5},
+        {"type": "meter", "id": 2},
+        {"type": "grid_connection_point", "id": 1}
+      ],
+      "connections": [[2, 3], [2, 5], [1, 2]]
+    }"#;
+    let s = TestServer::start_mg(topology).await;
     let mut c = connect(&s).await;
     for (id, power_type, what) in [
         (1, PowerType::Active, "the grid"),
@@ -654,7 +638,7 @@ async fn a_setpoint_on_a_missing_axis_is_unimplemented() {
 /// `[0, 0]` envelope the client can actually command.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_augmentation_disjoint_from_a_derate_is_rejected() {
-    let s = TestServer::start(BOILER_TOPOLOGY).await;
+    let s = TestServer::start_mg(BOILER_TOPOLOGY).await;
     let mut c = connect(&s).await;
 
     let err = c
@@ -696,7 +680,7 @@ async fn an_augmentation_disjoint_from_a_derate_is_rejected() {
 /// the per-axis answer, not a per-component one.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_component_with_only_an_active_axis_refuses_reactive_augmentation() {
-    let s = TestServer::start(BOILER_TOPOLOGY).await;
+    let s = TestServer::start_mg(BOILER_TOPOLOGY).await;
     let mut c = connect(&s).await;
 
     let err = c
@@ -741,7 +725,7 @@ async fn a_component_with_only_an_active_axis_refuses_reactive_augmentation() {
 /// gateway_axis.rs.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_second_disjoint_augmentation_is_rejected_and_the_first_stays_live() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
 
     c.augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
@@ -800,30 +784,22 @@ async fn a_second_disjoint_augmentation_is_rejected_and_the_first_stays_live() {
 /// reactive envelope: no PF limit (the inherited default would pin Q
 /// to 0 at idle) and a 5 kVA apparent-power cap, so its Q band at
 /// P = 0 is ±5 kVAr.
-const REACTIVE_TOPOLOGY: &str = r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-meter :id 2
-                               :successors
-                               (list (%make-battery-inverter
-                                      :id 4
-                                      :rated-lower-w -5000.0
-                                      :rated-upper-w  5000.0
-                                      :reactive-pf-limit 0
-                                      :reactive-apparent-va 5000.0
-                                      :successors
-                                      (list (%make-battery
-                                             :id 3
-                                             :rated-lower-w -5000.0
-                                             :rated-upper-w  5000.0)))))))
-"#;
+const REACTIVE_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "battery", "id": 3, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0},
+    {"type": "battery_inverter", "id": 4, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0, "reactive_pf_limit": 0, "reactive_apparent_va": 5000.0},
+    {"type": "meter", "id": 2},
+    {"type": "grid_connection_point", "id": 1}
+  ],
+  "connections": [[4, 3], [2, 4], [1, 2]]
+}"#;
 
 /// An `AC_POWER_REACTIVE` augmentation is accepted end-to-end: the
 /// response carries the expiry the augmentation was armed with, and
 /// the live telemetry stream reports the narrowed Q band.
 #[tokio::test(flavor = "multi_thread")]
 async fn reactive_augmentation_is_accepted_and_narrows_the_stream() {
-    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let s = TestServer::start_mg(REACTIVE_TOPOLOGY).await;
     let mut c = connect(&s).await;
 
     // Baseline: the un-augmented band is the ±5 kVAr apparent cap.
@@ -895,7 +871,7 @@ async fn reactive_augmentation_is_accepted_and_narrows_the_stream() {
 /// on the axis. An empty envelope is disjoint from everything.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_disjoint_q_augmentation_is_rejected_at_zero_headroom() {
-    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let s = TestServer::start_mg(REACTIVE_TOPOLOGY).await;
     let mut c = connect(&s).await;
 
     // 1. At P = 0 the caps band is ±5 kVAr, so a [-4, -3] kVAr
@@ -970,33 +946,22 @@ async fn a_disjoint_q_augmentation_is_rejected_at_zero_headroom() {
 /// kVAr). No production topology nests a Q-reporting child under an
 /// inverter yet; this is how the reactive gateway's intersect branch
 /// gets reached end-to-end.
-const NESTED_REACTIVE_TOPOLOGY: &str = r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-meter :id 2
-                               :successors
-                               (list (%make-battery-inverter
-                                      :id 4
-                                      :rated-lower-w -5000.0
-                                      :rated-upper-w  5000.0
-                                      :reactive-pf-limit 0
-                                      :reactive-apparent-va 5000.0
-                                      :successors
-                                      (list (%make-solar-inverter
-                                             :id 3
-                                             :sunlight-pct 0
-                                             :rated-lower-w -1000.0
-                                             :rated-upper-w  0.0
-                                             :reactive-pf-limit 0
-                                             :reactive-apparent-va 1000.0)))))))
-"#;
+const NESTED_REACTIVE_TOPOLOGY: &str = r#"{
+  "components": [
+    {"type": "solar_inverter", "id": 3, "sunlight_pct": 0, "rated_lower_w": -1000.0, "rated_upper_w": 0.0, "reactive_pf_limit": 0, "reactive_apparent_va": 1000.0},
+    {"type": "battery_inverter", "id": 4, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0, "reactive_pf_limit": 0, "reactive_apparent_va": 5000.0},
+    {"type": "meter", "id": 2},
+    {"type": "grid_connection_point", "id": 1}
+  ],
+  "connections": [[4, 3], [2, 4], [1, 2]]
+}"#;
 
 /// The SetPower gateway gates the reactive axis against the combined
 /// Q envelope, mirroring the active axis — right down to the message,
 /// which reports VAr rather than W.
 #[tokio::test(flavor = "multi_thread")]
 async fn set_reactive_power_outside_the_combined_envelope_is_rejected() {
-    let s = TestServer::start(NESTED_REACTIVE_TOPOLOGY).await;
+    let s = TestServer::start_mg(NESTED_REACTIVE_TOPOLOGY).await;
     let mut c = connect(&s).await;
     // 3 kVAr is inside the inverter's own ±5 kVAr but outside the
     // ±1 kVAr intersection with its Q-reporting child.
@@ -1035,7 +1000,7 @@ async fn set_reactive_power_outside_the_combined_envelope_is_rejected() {
 /// that was asked for so a client can see what it got wrong.
 #[tokio::test(flavor = "multi_thread")]
 async fn augment_rejects_an_unsupported_metric_by_name() {
-    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let s = TestServer::start_mg(REACTIVE_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let err = c
         .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
@@ -1062,7 +1027,7 @@ async fn augment_rejects_an_unsupported_metric_by_name() {
 /// nothing would be armed, so an ACK would lie.
 #[tokio::test(flavor = "multi_thread")]
 async fn reactive_augmentation_on_a_q_less_component_is_unimplemented() {
-    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let s = TestServer::start_mg(REACTIVE_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let err = c
         .augment_electrical_component_bounds(AugmentElectricalComponentBoundsRequest {
@@ -1090,7 +1055,7 @@ async fn reactive_augmentation_on_a_q_less_component_is_unimplemented() {
 /// was.
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_reactive_augmentation_is_rejected() {
-    let s = TestServer::start(REACTIVE_TOPOLOGY).await;
+    let s = TestServer::start_mg(REACTIVE_TOPOLOGY).await;
     let mut c = connect(&s).await;
 
     let nan = c
@@ -1145,7 +1110,7 @@ async fn malformed_reactive_augmentation_is_rejected() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn telemetry_stream_emits_samples_for_a_component() {
-    let s = TestServer::start(TINY_TOPOLOGY).await;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
     let mut c = connect(&s).await;
     let resp = c
         .receive_electrical_component_telemetry_stream(
@@ -1179,21 +1144,15 @@ async fn telemetry_stream_emits_samples_for_a_component() {
 #[tokio::test(flavor = "multi_thread")]
 async fn battery_telemetry_carries_the_throttled_bounds() {
     use macrocosim::sim::decay::{SocProtect, soc_protected_bounds};
-    let s = TestServer::start(
-        r#"
-(%make-grid-connection-point :id 1
-            :successors
-            (list (%make-battery-inverter
-                   :id 4
-                   :rated-lower-w -5000.0
-                   :rated-upper-w  5000.0
-                   :successors
-                   (list (%make-battery
-                          :id 3
-                          :initial-soc-pct 85.0
-                          :rated-lower-w -5000.0
-                          :rated-upper-w  5000.0)))))
-"#,
+    let s = TestServer::start_mg(
+        r#"{
+          "components": [
+            {"type": "battery", "id": 3, "initial_soc_pct": 85.0, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0},
+            {"type": "battery_inverter", "id": 4, "rated_lower_w": -5000.0, "rated_upper_w": 5000.0},
+            {"type": "grid_connection_point", "id": 1}
+          ],
+          "connections": [[4, 3], [1, 4]]
+        }"#,
     )
     .await;
     let mut c = connect(&s).await;

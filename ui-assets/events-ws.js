@@ -9,7 +9,7 @@ import { getJson } from "./http.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
 import { appendLog } from "./logs.js";
 import { metricsStore } from "./metrics-store.js";
-import { logUi, notify } from "./notices.js";
+import { logUi } from "./notices.js";
 import { readSelectedMg, readSubview } from "./routing.js";
 import { readStorage, writeStorage } from "./storage.js";
 import { topology } from "./topology.js";
@@ -70,7 +70,6 @@ export function openWebSocket(onTopologyChanged, onMicrogridUnloaded, onOpen = (
   const MIN_DELAY = 1000;
   const MAX_DELAY = 30000;
   let delay = MIN_DELAY;
-  let lastConfigError = { message: null, tsMs: 0 };
   // The pending reconnect while the socket is closed, else null.
   let retry = null;
   // Whether the socket has closed since it last opened.
@@ -154,20 +153,6 @@ export function openWebSocket(onTopologyChanged, onMicrogridUnloaded, onOpen = (
         topology.applyKnob(ev);
       } else if (ev.kind === "log") {
         appendLog(ev);
-      } else if (ev.kind === "config_error") {
-        // A failed hot-reload (site already reset) or an eval the
-        // microgrid's file could not record — the one moment the user most
-        // needs an explanation, so toast it (which also logs it).
-        // A reload failure is broadcast on every registered site's
-        // bus (the WS pump has no enterprise channel for it), so a
-        // multi-microgrid setup delivers N copies — collapse repeats
-        // of the same message arriving close together into one toast.
-        const tsMs = Date.parse(ev.ts);
-        if (ev.message === lastConfigError.message && tsMs - lastConfigError.tsMs < 1000) {
-          return;
-        }
-        lastConfigError = { message: ev.message, tsMs };
-        notify(ev.message);
       } else if (ev.kind === "script_status") {
         onScriptStatusEvent(ev);
       } else if (ev.kind === "microgrid_unloaded") {

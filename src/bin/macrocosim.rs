@@ -1,20 +1,22 @@
-//! Headless macrocosim simulator: run a Python script, boot the
-//! microgrids of a topology document (`--topology`) or of Lisp
-//! scripts, spawn the physics tick, serve the Microgrid gRPC API and
-//! the UI.
+//! Headless macrocosim simulator: run a Python script or boot the
+//! microgrids of a topology document (`--topology`), spawn the
+//! physics tick, serve the Microgrid gRPC API and the UI.
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use macrocosim::runner::python::Interpreter;
 use macrocosim::{
     assets_server::AssetsServer,
     dispatch_server::DispatchServer,
-    lisp::Config,
+    engine::{Engine, Metadata},
     proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer,
     proto::dispatch::microgrid_dispatch_service_server::MicrogridDispatchServiceServer as DispatchGrpcServer,
     runtime::{MicrogridRuntimes, RuntimeOptions, RuntimeStatus},
+    sim::sim_clock::NowSource,
     ui, ui_log,
 };
 use simplelog::{
@@ -27,12 +29,11 @@ use tokio_stream::wrappers::TcpListenerStream;
 /// Headless macrocosim microgrid simulator.
 #[derive(Parser)]
 struct Args {
-    /// A Python script (`plant.py`) to run, or Lisp scripts to
-    /// evaluate at boot, in order. A Python script runs alone, in a
-    /// child process that is started again whenever a `.py` file in
-    /// its directory tree changes. With none, the engine boots bare:
-    /// UI + REPL up, empty registry — load a topology on demand with
-    /// `(load "…")` from the REPL or the Microgrids tab.
+    /// The Python script (`plant.py`) to run, in a child process that
+    /// is started again whenever a `.py` file in its directory tree
+    /// changes. With none, the engine boots with an empty registry;
+    /// create microgrids from the Microgrids tab.
+    #[arg(value_name = "SCRIPT")]
     scripts: Vec<PathBuf>,
 
     /// Boot the microgrids of this topology document (JSON), each
@@ -41,34 +42,32 @@ struct Args {
     #[arg(long, value_name = "PATH", conflicts_with = "scripts")]
     topology: Option<PathBuf>,
 
-    /// The enterprise id every microgrid reports. Overrides
-    /// `enterprise.lisp`.
+    /// The enterprise id every microgrid reports.
     #[arg(long, value_name = "ID")]
     enterprise_id: Option<u64>,
 
     /// Address of the PlatformAssets gRPC server (default
-    /// `[::1]:9900`). Overrides `enterprise.lisp`.
+    /// `[::1]:9900`).
     #[arg(long, value_name = "ADDR")]
     assets_addr: Option<SocketAddr>,
 
     /// Address of the MicrogridDispatchService gRPC server (default
-    /// `[::1]:8900`). Overrides `enterprise.lisp`.
+    /// `[::1]:8900`).
     #[arg(long, value_name = "ADDR")]
     dispatch_addr: Option<SocketAddr>,
 
     /// Request lifetime of a setpoint that carries none, in seconds
-    /// (default 60). Overrides `enterprise.lisp`.
+    /// (default 60).
     #[arg(long, value_name = "SECONDS", value_parser = parse_seconds)]
     request_lifetime: Option<Duration>,
 
-    /// Lifetime of a bounds augmentation that carries none, in seconds
-    /// (default 5). Overrides `enterprise.lisp`.
+    /// Lifetime of a bounds augmentation that carries none, in
+    /// seconds (default 5).
     #[arg(long, value_name = "SECONDS", value_parser = parse_seconds)]
     augment_lifetime: Option<Duration>,
 
-    /// Anchor directory for persistent state (enterprise.lisp,
-    /// snapshots/, managed microgrid files) and for relative
-    /// `(load …)` paths. Defaults to the current directory.
+    /// The directory recordings write their CSV files under
+    /// (`recordings/`). Defaults to the current directory.
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,
 
@@ -90,9 +89,9 @@ struct Args {
     ephemeral_ports: bool,
 
     /// Once every listener is bound, write the resolved endpoints as
-    /// one JSON line — to `--emit-endpoints=PATH`, or stdout if the flag
-    /// is given bare. Requires `=` so it can't swallow the `config`
-    /// positional. The machine-readable readiness signal.
+    /// one JSON line — to `--emit-endpoints=PATH`, or stdout if the
+    /// flag is given bare. Requires `=` so it can't swallow the
+    /// script positional. The machine-readable readiness signal.
     #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true, default_missing_value = "-")]
     emit_endpoints: Option<String>,
 }
@@ -104,25 +103,88 @@ fn parse_seconds(text: &str) -> Result<Duration, String> {
         .map_err(|_| format!("{s} is not a non-negative number of seconds"))
 }
 
-/// Lay the enterprise flags over the settings `enterprise.lisp` gave.
-fn apply_enterprise_flags(args: &Args, engine: &macrocosim::engine::Engine) {
-    engine.update_metadata(|m| {
-        if let Some(id) = args.enterprise_id {
-            m.enterprise_id = id;
+/// The enterprise settings: the defaults, with the enterprise flags
+/// laid over them.
+fn metadata_of(args: &Args) -> Metadata {
+    let mut m = Metadata::default();
+    if let Some(id) = args.enterprise_id {
+        m.enterprise_id = id;
+    }
+    if let Some(addr) = args.assets_addr {
+        m.assets_socket_addr = addr.to_string();
+    }
+    if let Some(addr) = args.dispatch_addr {
+        m.dispatch_socket_addr = addr.to_string();
+    }
+    if let Some(d) = args.request_lifetime {
+        m.default_request_lifetime = d;
+    }
+    if let Some(d) = args.augment_lifetime {
+        m.default_augment_lifetime = d;
+    }
+    m
+}
+
+/// The Lisp files of macrocosim 0.1 a run found, which this version
+/// refuses.
+#[derive(Debug, PartialEq)]
+struct LispInputs {
+    /// The `.lisp` arguments.
+    args: Vec<PathBuf>,
+    /// The state directory's `enterprise.lisp` and
+    /// `microgrids/*.lisp`.
+    in_state_dir: Vec<PathBuf>,
+}
+
+impl LispInputs {
+    fn is_empty(&self) -> bool {
+        self.args.is_empty() && self.in_state_dir.is_empty()
+    }
+
+    /// The error the binary exits with when Lisp files were found. It
+    /// points at `--state-dir` only when the state directory holds
+    /// some of them.
+    fn refusal(&self) -> String {
+        let found = self
+            .args
+            .iter()
+            .chain(&self.in_state_dir)
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut message = format!(
+            "macrocosim 0.2 no longer reads Lisp; support ended with 0.1.\n\
+             Found: {found}. Port these files to a Python script (see docs/python-scripts.md)"
+        );
+        if !self.in_state_dir.is_empty() {
+            message.push_str(",\nor pass --state-dir to start from another directory");
         }
-        if let Some(addr) = args.assets_addr {
-            m.assets_socket_addr = addr.to_string();
-        }
-        if let Some(addr) = args.dispatch_addr {
-            m.dispatch_socket_addr = addr.to_string();
-        }
-        if let Some(d) = args.request_lifetime {
-            m.default_request_lifetime = d;
-        }
-        if let Some(d) = args.augment_lifetime {
-            m.default_augment_lifetime = d;
-        }
-    });
+        message.push('.');
+        message
+    }
+}
+
+/// The Lisp files of macrocosim 0.1 a run was given or finds: every
+/// `.lisp` argument, and the state directory's `enterprise.lisp` and
+/// `microgrids/*.lisp`.
+fn lisp_inputs(scripts: &[PathBuf], state_dir: &Path) -> LispInputs {
+    let is_lisp = |p: &Path| p.extension().is_some_and(|e| e == "lisp");
+    let args = scripts.iter().filter(|p| is_lisp(p)).cloned().collect();
+    let mut in_state_dir = Vec::new();
+    let enterprise = state_dir.join("enterprise.lisp");
+    if enterprise.exists() {
+        in_state_dir.push(enterprise);
+    }
+    let mut managed: Vec<PathBuf> = std::fs::read_dir(state_dir.join("microgrids"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| is_lisp(p))
+        .collect();
+    managed.sort();
+    in_state_dir.extend(managed);
+    LispInputs { args, in_state_dir }
 }
 
 /// Build every microgrid of the topology document at `path`, with the
@@ -141,37 +203,32 @@ async fn boot_topology(
     let doc =
         macrocosim::spec::TopologyDoc::from_json(&text).unwrap_or_else(|e| fail(e.to_string()));
     let source = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let lock = engine.create_lock();
-    let _structural = lock.lock().await;
-    let created = topology::create_doc(engine, runtimes, doc, Some(source))
+    let structural = engine.structural().await;
+    let created = topology::create_doc(&structural, runtimes, doc, Some(source))
         .await
         .unwrap_or_else(|e| fail(e.to_string()));
-    for c in created {
-        log::info!("Microgrid #{} built from {}", c.id, path.display());
-    }
+    let ids: Vec<u64> = created.iter().map(|c| c.id).collect();
+    log::info!("--topology {}: microgrids {ids:?} built", path.display());
 }
 
-/// Split the positional arguments into the one Python script and the
-/// Lisp scripts, refusing a second `.py` or a `.py` beside anything
-/// else.
-fn split_scripts(paths: &[PathBuf]) -> Result<(Option<PathBuf>, Vec<PathBuf>), String> {
-    let (py, lisp): (Vec<&PathBuf>, Vec<&PathBuf>) = paths
-        .iter()
-        .partition(|p| p.extension().is_some_and(|e| e == "py"));
-    let shown = |ps: &[&PathBuf]| {
-        ps.iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    match py.as_slice() {
-        [] => Ok((None, lisp.into_iter().cloned().collect())),
-        [script] if lisp.is_empty() => Ok((Some((*script).clone()), Vec::new())),
-        [_] => Err(format!(
-            "a Python script runs alone; it cannot be combined with {}",
-            shown(&lisp)
+/// The one Python script among the positional arguments, if any;
+/// refuses a second script and a file that is not a `.py`.
+fn script_arg(paths: &[PathBuf]) -> Result<Option<PathBuf>, String> {
+    match paths {
+        [] => Ok(None),
+        [script] if script.extension().is_some_and(|e| e == "py") => Ok(Some(script.clone())),
+        [other] => Err(format!(
+            "a script is a Python file (.py); got {}",
+            other.display()
         )),
-        _ => Err(format!("one Python script per engine; got {}", shown(&py))),
+        _ => Err(format!(
+            "one Python script per engine; got {}",
+            paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
     }
 }
 
@@ -190,7 +247,9 @@ async fn bind_or_exit(addr: SocketAddr, label: &str) -> (tokio::net::TcpListener
 }
 
 fn main() {
-    macrocosim::tokio_runtime::build()
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
         .expect("Failed building the Runtime")
         .block_on(serve());
 }
@@ -240,7 +299,15 @@ async fn serve() {
     ])
     .unwrap();
 
-    let (python_script, lisp_scripts) = split_scripts(&args.scripts).unwrap_or_else(|e| {
+    // 0.1's Lisp inputs, given or left in the state directory, stop
+    // the run before anything binds.
+    let state_dir = args.state_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+    let found = lisp_inputs(&args.scripts, &state_dir);
+    if !found.is_empty() {
+        log::error!("{}", found.refusal());
+        std::process::exit(1);
+    }
+    let python_script = script_arg(&args.scripts).unwrap_or_else(|e| {
         log::error!("{e}");
         std::process::exit(1);
     });
@@ -250,35 +317,27 @@ async fn serve() {
             std::process::exit(1);
         })
     });
-    let scripts: Vec<String> = lisp_scripts
-        .iter()
-        .map(|p| {
-            p.to_str().map(str::to_owned).unwrap_or_else(|| {
-                log::error!("Script path is not valid UTF-8: {}", p.display());
-                std::process::exit(1);
-            })
-        })
-        .collect();
-    if let Some(script) = &python_script {
-        log::info!("Running script {}", script.display());
-    } else if scripts.is_empty() {
-        log::info!("No boot scripts given — starting a bare engine");
-    } else {
-        log::info!("Evaluating boot script(s): {}", scripts.join(", "));
+    match &python_script {
+        Some(script) => log::info!("Running script {}", script.display()),
+        None if args.topology.is_none() => {
+            log::info!("No script given — starting with no microgrids")
+        }
+        None => {}
     }
-    let config = Config::new_with(&scripts, args.state_dir.clone()).unwrap_or_else(|e| {
-        log::error!("Failed to eval boot scripts:\n{e}");
+    if let Err(e) = std::fs::create_dir_all(&state_dir) {
+        log::error!("state dir {} cannot be created: {e}", state_dir.display());
         std::process::exit(1);
-    });
-    let engine = config.engine().clone();
-    apply_enterprise_flags(&args, &engine);
+    }
+    let engine = Engine::new(state_dir, metadata_of(&args), NowSource::wall());
+    // The interpreter the script and the `.py` export run on.
+    let interpreter = Arc::new(Interpreter::default());
     if let Some(python) = &args.python {
-        engine.set_python(python.clone());
+        interpreter.set_override(python.clone());
     }
     // A script needs a usable interpreter; without one, say how to
     // get one before anything binds.
     let python = match &python_script {
-        Some(_) => Some(engine.python().await.unwrap_or_else(|e| {
+        Some(_) => Some(interpreter.resolve().await.unwrap_or_else(|e| {
             log::error!("{e}");
             std::process::exit(1);
         })),
@@ -286,8 +345,7 @@ async fn serve() {
     };
 
     // Every microgrid runtime, boot-time and later, starts through
-    // MicrogridRuntimes. The listener subscribes before the file
-    // watcher starts, so no reload can register a microgrid unseen.
+    // MicrogridRuntimes: each structural create starts its own.
     let runtimes = MicrogridRuntimes::new(
         engine.clone(),
         RuntimeOptions {
@@ -299,7 +357,6 @@ async fn serve() {
         log::error!("{e}");
         std::process::exit(1);
     });
-    let _listener = runtimes.spawn_registration_listener().await;
     if let Some(path) = &args.topology {
         boot_topology(path, &engine, &runtimes).await;
     }
@@ -316,9 +373,6 @@ async fn serve() {
         }
     }
 
-    // Watch the config file in the background so saves trigger reload.
-    tokio::spawn(config.clone().watch());
-
     // Bind the UI, assets and dispatch listeners up front so
     // ephemeral (:0) ports resolve to real ones before the endpoints
     // are emitted. Hosts stay loopback (UI 127.0.0.1, gRPC [::1]); a
@@ -328,11 +382,10 @@ async fn serve() {
     let ui_port = if eph { 0 } else { args.ui_port };
     let (ui_listener, ui_addr) =
         bind_or_exit(SocketAddr::from((Ipv4Addr::LOCALHOST, ui_port)), "UI").await;
-    let ui_config = config.clone();
 
     // Assets + dispatch: single enterprise-wide sockets (defaults
-    // [::1]:9900 / [::1]:8900, lisp-overridable). --ephemeral-ports
-    // zeroes the port for an OS-chosen one.
+    // [::1]:9900 / [::1]:8900, or --assets-addr / --dispatch-addr).
+    // --ephemeral-ports zeroes the port for an OS-chosen one.
     let mut assets_addr: SocketAddr = engine.assets_socket_addr().parse().unwrap_or_else(|e| {
         log::error!("invalid assets socket addr: {e}");
         std::process::exit(1);
@@ -367,15 +420,16 @@ async fn serve() {
     // process is limping with a dead surface, so main notices the
     // FIRST exit and shuts the whole binary down instead of serving
     // degraded. A microgrid's gRPC server reports through its runtime
-    // status instead. (The lisp refresh loop lives inside Config and
-    // stays fire-and-forget for now.)
+    // status instead.
     let mut tasks: tokio::task::JoinSet<&'static str> = tokio::task::JoinSet::new();
     log::info!("Macrocosim UI listening on http://{ui_addr}");
+    let ui_engine = engine.clone();
     let ui_runtimes = runtimes.clone();
     let ui_runner = supervisor.clone();
+    let ui_python = interpreter.clone();
     tasks.spawn(async move {
         if let Err(e) =
-            ui::serve_with_listener(ui_listener, ui_config, ui_runtimes, ui_runner).await
+            ui::serve_with_listener(ui_listener, ui_engine, ui_runtimes, ui_python, ui_runner).await
         {
             log::error!("UI server exited: {e}");
         }
@@ -539,17 +593,17 @@ async fn stop_script_and_exit(supervisor: &macrocosim::runner::ScriptSupervisor)
 mod tests {
     use super::*;
 
-    /// A bare `macrocosim some.lisp` invocation keeps the documented
+    /// A bare `macrocosim plant.py` invocation keeps the documented
     /// defaults: UI on 8801, no state dir, the script positional.
     /// CI always boots with --ephemeral-ports and --state-dir, so
     /// nothing else exercises these defaults.
     #[test]
     fn bare_invocation_keeps_the_documented_defaults() {
-        let a = Args::parse_from(["macrocosim", "some.lisp"]);
+        let a = Args::parse_from(["macrocosim", "plant.py"]);
         assert_eq!(a.ui_port, 8801);
         assert!(a.state_dir.is_none());
         assert!(!a.ephemeral_ports);
-        assert_eq!(a.scripts, vec![std::path::PathBuf::from("some.lisp")]);
+        assert_eq!(a.scripts, vec![std::path::PathBuf::from("plant.py")]);
         assert!(a.topology.is_none() && a.enterprise_id.is_none());
     }
 
@@ -557,27 +611,24 @@ mod tests {
     fn a_topology_takes_no_script() {
         let a = Args::parse_from(["macrocosim", "--topology", "t.json"]);
         assert_eq!(a.topology, Some(PathBuf::from("t.json")));
-        assert!(Args::try_parse_from(["macrocosim", "--topology", "t.json", "x.lisp"]).is_err());
+        assert!(Args::try_parse_from(["macrocosim", "--topology", "t.json", "x.py"]).is_err());
     }
 
     #[test]
     fn one_python_script_runs_alone() {
         let paths = |ps: &[&str]| ps.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(script_arg(&[]).unwrap(), None);
         assert_eq!(
-            split_scripts(&paths(&["plant.py"])).unwrap(),
-            (Some(PathBuf::from("plant.py")), vec![])
+            script_arg(&paths(&["plant.py"])).unwrap(),
+            Some(PathBuf::from("plant.py"))
         );
         assert_eq!(
-            split_scripts(&paths(&["a.lisp", "b.lisp"])).unwrap(),
-            (None, paths(&["a.lisp", "b.lisp"]))
-        );
-        assert_eq!(
-            split_scripts(&paths(&["a.py", "b.py"])).unwrap_err(),
+            script_arg(&paths(&["a.py", "b.py"])).unwrap_err(),
             "one Python script per engine; got a.py, b.py"
         );
         assert_eq!(
-            split_scripts(&paths(&["a.py", "b.lisp"])).unwrap_err(),
-            "a Python script runs alone; it cannot be combined with b.lisp"
+            script_arg(&paths(&["topology.json"])).unwrap_err(),
+            "a script is a Python file (.py); got topology.json"
         );
         assert!(Args::try_parse_from(["macrocosim", "--topology", "t.json", "a.py"]).is_err());
         let a = Args::parse_from(["macrocosim", "--python", "/opt/py/bin/python", "a.py"]);
@@ -585,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn the_enterprise_flags_parse() {
+    fn the_enterprise_flags_reach_the_settings() {
         let a = Args::parse_from([
             "macrocosim",
             "--enterprise-id",
@@ -605,5 +656,76 @@ mod tests {
         assert_eq!(a.request_lifetime, Some(Duration::from_secs(30)));
         assert_eq!(a.augment_lifetime, Some(Duration::from_millis(2500)));
         assert!(Args::try_parse_from(["macrocosim", "--request-lifetime", "-1"]).is_err());
+
+        let m = metadata_of(&a);
+        assert_eq!(m.enterprise_id, 42);
+        assert_eq!(m.assets_socket_addr, "[::1]:9911");
+        assert_eq!(m.dispatch_socket_addr, "127.0.0.1:8911");
+        assert_eq!(m.default_request_lifetime, Duration::from_secs(30));
+        assert_eq!(m.default_augment_lifetime, Duration::from_millis(2500));
+    }
+
+    /// With no enterprise flags, the settings are the defaults.
+    #[test]
+    fn no_enterprise_flags_keep_the_defaults() {
+        let m = metadata_of(&Args::parse_from(["macrocosim"]));
+        let d = Metadata::default();
+        assert_eq!(m.enterprise_id, d.enterprise_id);
+        assert_eq!(m.assets_socket_addr, d.assets_socket_addr);
+        assert_eq!(m.dispatch_socket_addr, d.dispatch_socket_addr);
+        assert_eq!(m.default_request_lifetime, d.default_request_lifetime);
+        assert_eq!(m.default_augment_lifetime, d.default_augment_lifetime);
+    }
+
+    /// A `.lisp` argument and a state directory's `enterprise.lisp`
+    /// and `microgrids/*.lisp` are found, other files are not.
+    #[test]
+    fn lisp_inputs_finds_the_lisp_arguments_and_state() {
+        let dir = tempfile::TempDir::with_prefix("mc-old-inputs-").unwrap();
+        let state = dir.path();
+        assert!(lisp_inputs(&[PathBuf::from("plant.py")], state).is_empty());
+        std::fs::create_dir(state.join("microgrids")).unwrap();
+        std::fs::write(state.join("microgrids/README"), "").unwrap();
+        assert!(lisp_inputs(&[], state).is_empty());
+        let args = [PathBuf::from("site.lisp"), PathBuf::from("a.py")];
+        assert_eq!(
+            lisp_inputs(&args, state).refusal(),
+            "macrocosim 0.2 no longer reads Lisp; support ended with 0.1.\n\
+             Found: site.lisp. Port these files to a Python script (see docs/python-scripts.md)."
+        );
+        std::fs::write(state.join("microgrids/2.lisp"), "").unwrap();
+        std::fs::write(state.join("microgrids/1.lisp"), "").unwrap();
+        std::fs::write(state.join("enterprise.lisp"), "").unwrap();
+        let found = lisp_inputs(&args, state);
+        assert_eq!(
+            found,
+            LispInputs {
+                args: vec![PathBuf::from("site.lisp")],
+                in_state_dir: vec![
+                    state.join("enterprise.lisp"),
+                    state.join("microgrids/1.lisp"),
+                    state.join("microgrids/2.lisp"),
+                ],
+            }
+        );
+        assert!(
+            found.refusal().ends_with(
+                "(see docs/python-scripts.md),\nor pass --state-dir to start from another directory."
+            ),
+            "a state-dir file names the flag"
+        );
+    }
+
+    /// An argument in the state directory is still an argument: the
+    /// refusal does not point at `--state-dir` for it.
+    #[test]
+    fn a_lisp_argument_in_the_state_dir_does_not_name_the_flag() {
+        let dir = tempfile::TempDir::with_prefix("mc-old-inputs-").unwrap();
+        let found = lisp_inputs(&[dir.path().join("site.lisp")], dir.path());
+        assert!(
+            !found.refusal().contains("--state-dir"),
+            "{}",
+            found.refusal()
+        );
     }
 }

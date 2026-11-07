@@ -10,18 +10,11 @@ import { nextFreeIds } from "./ids.js";
 import { notify } from "./notices.js";
 import { readSelectedMg } from "./routing.js";
 
-// Every microgrid's components, as specs: the stored spec of one that
-// has a spec, and the live components of one loaded from Lisp, whose
-// ids count all the same.
+// Every microgrid's stored spec: new component ids must be free
+// across all of them.
 async function allSpecs() {
   const list = await getJson("/api/microgrids");
-  return Promise.all(
-    list.map(async (m) =>
-      m.has_spec
-        ? getJson(`/api/mg/${m.id}/spec`)
-        : { components: (await getJson(`/api/mg/${m.id}/topology`)).components },
-    ),
-  );
+  return Promise.all(list.map((m) => getJson(`/api/mg/${m.id}/spec`)));
 }
 
 // Apply `change(spec, ids)` to the selected microgrid's spec and PUT
