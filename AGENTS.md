@@ -151,6 +151,8 @@ is wiring the topology + animating the environment.
 - `ui-assets/` — the SPA as hand-rolled ES modules (`app.js` is the
   entry; `topology.js`, `live.js`, `metrics-store.js`,
   `metrics-panel.js`, `inspect.js`, `repl.js`, `routing.js`,
+  `events-ws.js` (the events socket's pump, the Logs panel's head and
+  its backfill),
   `repl-symbols.js` (the names the REPL completes and describes, from
   `/api/symbols`, which lists every name the interpreter defines with its
   kind, signature and docstring),

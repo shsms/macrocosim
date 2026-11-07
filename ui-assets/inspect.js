@@ -1190,7 +1190,7 @@ function appendSetpointEvent(ev) {
   while (list.children.length > 100) list.removeChild(list.lastChild);
 }
 
-// Exported so the WS hub (repl.js openWebSocket) can feed it knob /
+// Exported so the WS hub (events-ws.js openWebSocket) can feed it knob /
 // sample / setpoint events for whichever node the inspector currently
 // has open. Every entry point no-ops when nothing is open or the
 // event is for a different component — same "is the right component
@@ -1411,7 +1411,7 @@ async function renderNode(d, gen, keptEvCard) {
 // component/{id}/history, because the sim's Grid publishes no
 // per-component telemetry — the old per-component frequency_hz fetch
 // is exactly what drew an empty chart here. Same source as the
-// metrics panel's Frequency card, and the store is fed by repl.js on
+// metrics panel's Frequency card, and the store is fed by events-ws.js on
 // every microgrid_sample frame regardless of that panel's open state,
 // so this chart grows live on its own.
 //

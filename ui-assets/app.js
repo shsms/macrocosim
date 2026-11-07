@@ -23,6 +23,7 @@ import {
   setupContextMenu,
   undoMgr,
 } from "./editor.js";
+import { backfillLogs, openWebSocket, setupLogsPanel } from "./events-ws.js";
 import {
   formulaSelectionChanged,
   refreshFormula,
@@ -34,7 +35,7 @@ import { setupInspectorChips, showComponent } from "./inspect.js";
 import { metricsTopologyRefresh, setupMetricsPanel } from "./metrics-panel.js";
 import { clearFormError, notify } from "./notices.js";
 import { microgridsPanel, scenariosPanel } from "./panels.js";
-import { backfillLogs, openWebSocket, setupLogsPanel, setupRepl } from "./repl.js";
+import { setupRepl } from "./repl.js";
 import {
   jumpToTopology,
   mgJson,
