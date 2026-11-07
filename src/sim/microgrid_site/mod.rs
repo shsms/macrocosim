@@ -33,7 +33,7 @@ use crate::sim::component::{
     ComponentHandle, EvPort, FIRST_AUTO_ID, KnobKind, KnobSnapshot, SimulatedComponent,
 };
 use crate::sim::ev_presets::ConnectedEv;
-use crate::sim::events::{EVENT_BUS_CAPACITY, SiteEvent};
+use crate::sim::events::{EVENT_BUS_CAPACITY, KnobValue, SiteEvent};
 use crate::sim::gateway::{Gateway, MicrogridGateway};
 use crate::sim::history::ComponentHistory;
 use crate::sim::runtime::{CommandMode, ComponentRuntime, Health, TelemetryMode};
@@ -584,6 +584,24 @@ impl MicrogridSite {
         id: u64,
         knob: &'static str,
         value: Option<f32>,
+        expr: Option<String>,
+        leading: Option<bool>,
+    ) {
+        self.send_knob_changed(Some(id), knob, value.map(KnobValue::Number), expr, leading);
+    }
+
+    /// Broadcast a `KnobChanged` for a knob whose value is not one
+    /// number, or one of the whole microgrid (`id` is `None`). Called
+    /// from the typed control API's handlers on the success path.
+    pub fn note_knob_value(&self, id: Option<u64>, knob: &'static str, value: KnobValue) {
+        self.send_knob_changed(id, knob, Some(value), None, None);
+    }
+
+    fn send_knob_changed(
+        &self,
+        id: Option<u64>,
+        knob: &'static str,
+        value: Option<KnobValue>,
         expr: Option<String>,
         leading: Option<bool>,
     ) {

@@ -16,6 +16,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::sim::component::{KnobKind, OperationalMode};
+use crate::sim::events::KnobValue;
 use crate::sim::microgrid_site::{MicrogridSite, SocRefusal};
 use crate::sim::runtime::{CommandMode, Health, TelemetryMode};
 use crate::ui::api::{ApiError, ComponentPath, Json, Mg, Path};
@@ -481,6 +482,11 @@ fn apply_runtime(
     // The only refusal is a component removed since the check.
     site.set_operational_mode(id, mode)
         .map_err(ApiError::not_found)?;
+    site.note_knob_value(
+        Some(id),
+        "operational-mode",
+        KnobValue::Text(mode.symbol_name()),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -523,6 +529,13 @@ pub(in crate::ui) async fn sample_lag(
     // Rounded down to whole milliseconds, as `set-sample-lag-s` does.
     let ms = u64::try_from(lag.as_millis()).unwrap_or(u64::MAX);
     mg.site.set_sample_lag_ms(ms);
+    // The lag in force, after the rounding.
+    mg.site.note_knob_changed(
+        None,
+        "sample-lag",
+        Some(KnobValue::Number(ms as f32 / 1000.0)),
+        None,
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -825,7 +838,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 crate::sim::events::SiteEvent::KnobChanged {
-                    id: 5,
+                    id: Some(5),
                     knob: "meter-reactive-power",
                     value: None,
                     expr: None,
@@ -838,7 +851,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 crate::sim::events::SiteEvent::KnobChanged {
-                    id: 5,
+                    id: Some(5),
                     knob: "meter-power-factor",
                     value: None,
                     expr: None,

@@ -78,7 +78,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
 #[cfg(test)]
 mod tests {
     use super::super::super::test_support::{assert_lenient_noop, config_with};
-    use crate::sim::events::SiteEvent;
+    use crate::sim::events::{KnobValue, SiteEvent};
 
     /// `set-reactive-pf-limit` on a component with no reactive
     /// limits returns t, changes nothing, and still broadcasts.
@@ -122,7 +122,7 @@ mod tests {
         assert!(
             seen.iter().any(|ev| matches!(
                 ev,
-                SiteEvent::KnobChanged { id: 4, knob: "reactive-pf-limit", value: Some(v), expr: None, .. }
+                SiteEvent::KnobChanged { id: Some(4), knob: "reactive-pf-limit", value: Some(KnobValue::Number(v)), expr: None, .. }
                     if (*v - 0.95).abs() < 1e-6
             )),
             "no matching KnobChanged (set) on the bus; saw: {seen:?}"
@@ -137,7 +137,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 4,
+                    id: Some(4),
                     knob: "reactive-pf-limit",
                     value: None,
                     expr: None,
@@ -163,7 +163,7 @@ mod tests {
         assert!(
             seen.iter().any(|ev| matches!(
                 ev,
-                SiteEvent::KnobChanged { id: 4, knob: "reactive-apparent-va", value: Some(v), expr: None, .. }
+                SiteEvent::KnobChanged { id: Some(4), knob: "reactive-apparent-va", value: Some(KnobValue::Number(v)), expr: None, .. }
                     if (*v - 3000.0).abs() < 1e-6
             )),
             "no matching KnobChanged (set) on the bus; saw: {seen:?}"
@@ -178,7 +178,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 4,
+                    id: Some(4),
                     knob: "reactive-apparent-va",
                     value: None,
                     expr: None,

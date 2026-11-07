@@ -82,6 +82,7 @@ an unknown field answers 400.
 - The `unit` of a reactive `microgrid_sample` is `"VAr"`. It was
   `"var"`.
 - The `boiler-demand` `knob_changed` `value` is in kg/s. It was kg/h.
+- `knob_changed` also reports the `operational-mode`, `grid-voltage` and `sample-lag` knobs. Its `component_id` is null for a knob of the whole microgrid (`grid-voltage`, `sample-lag`), and its `value` is a number, a string (`operational-mode`) or a list of three phase voltages (`grid-voltage`).
 
 ### Endpoints file
 

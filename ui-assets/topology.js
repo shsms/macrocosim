@@ -1595,7 +1595,7 @@ export function createGraphCanvas(containerId, adapter = {}) {
     /// stream.
     applyKnob(ev) {
       const field = KNOB_LIVE_FIELD.get(ev.knob);
-      if (!field) return;
+      if (!field || ev.component_id == null) return;
       const mg = readSelectedMg();
       if (mg == null || (ev.microgrid_id != null && ev.microgrid_id !== mg)) return;
       syncLiveMg();

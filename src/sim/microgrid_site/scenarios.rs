@@ -999,7 +999,10 @@ mod tests {
         let mut saw_reactive = false;
         let mut saw_pf = false;
         while let Ok(ev) = rx.try_recv() {
-            if let SiteEvent::KnobChanged { id: 6, knob, .. } = ev {
+            if let SiteEvent::KnobChanged {
+                id: Some(6), knob, ..
+            } = ev
+            {
                 match knob {
                     "meter-power" => saw_power = true,
                     "meter-reactive-power" => saw_reactive = true,

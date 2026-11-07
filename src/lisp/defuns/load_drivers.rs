@@ -786,7 +786,7 @@ mod tests {
     use super::super::super::test_support::{assert_lenient_noop, config_with, err_line};
     use crate::lisp::Config;
     use crate::sim::component::ReactiveReading;
-    use crate::sim::events::SiteEvent;
+    use crate::sim::events::{KnobValue, SiteEvent};
 
     /// `(set-meter-power id (lambda () X))` installs a dynamic
     /// source. `Config::refresh_once` resolves the lambda and
@@ -887,7 +887,7 @@ mod tests {
         assert!(
             seen.iter().any(|ev| matches!(
                 ev,
-                SiteEvent::KnobChanged { id: 7, knob: "meter-power", value: Some(v), expr: None, .. }
+                SiteEvent::KnobChanged { id: Some(7), knob: "meter-power", value: Some(KnobValue::Number(v)), expr: None, .. }
                     if (*v - 1500.0).abs() < 1e-6
             )),
             "no matching KnobChanged on the bus; saw: {seen:?}"
@@ -908,7 +908,7 @@ mod tests {
         assert!(
             seen.iter().any(|ev| matches!(
                 ev,
-                SiteEvent::KnobChanged { id: 7, knob: "meter-reactive-power", value: Some(v), expr: None, .. }
+                SiteEvent::KnobChanged { id: Some(7), knob: "meter-reactive-power", value: Some(KnobValue::Number(v)), expr: None, .. }
                     if (*v - 500.0).abs() < 1e-6
             )),
             "no matching KnobChanged on the bus; saw: {seen:?}"
@@ -931,9 +931,9 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 7,
+                    id: Some(7),
                     knob: "meter-power-factor",
-                    value: Some(v),
+                    value: Some(KnobValue::Number(v)),
                     expr: None,
                     leading: Some(true),
                     ..
@@ -957,7 +957,7 @@ mod tests {
         assert!(
             seen.iter().any(|ev| matches!(
                 ev,
-                SiteEvent::KnobChanged { id: 8, knob: "solar-sunlight", value: Some(v), expr: None, .. }
+                SiteEvent::KnobChanged { id: Some(8), knob: "solar-sunlight", value: Some(KnobValue::Number(v)), expr: None, .. }
                     if (*v - 63.0).abs() < 1e-6
             )),
             "no matching KnobChanged on the bus; saw: {seen:?}"
@@ -979,7 +979,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 7,
+                    id: Some(7),
                     knob: "meter-power",
                     expr: Some(_),
                     ..
@@ -1063,7 +1063,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 7,
+                    id: Some(7),
                     knob: "meter-reactive-power",
                     value: None,
                     expr: None,
@@ -1076,7 +1076,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 7,
+                    id: Some(7),
                     knob: "meter-power-factor",
                     value: None,
                     expr: None,
@@ -1104,7 +1104,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 7,
+                    id: Some(7),
                     knob: "meter-power",
                     value: None,
                     expr: None,
@@ -1302,7 +1302,7 @@ mod tests {
             seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 8,
+                    id: Some(8),
                     knob: "solar-sunlight",
                     expr: Some(e),
                     ..
@@ -2146,7 +2146,7 @@ mod tests {
             !seen.iter().any(|ev| matches!(
                 ev,
                 SiteEvent::KnobChanged {
-                    id: 7,
+                    id: Some(7),
                     knob: "ev",
                     ..
                 }

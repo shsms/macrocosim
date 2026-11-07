@@ -2535,7 +2535,7 @@ mod tests {
     /// reads back and for the `KnobChanged` the restore broadcasts.
     #[test]
     fn stepped_runner_restores_a_dynamic_source_at_its_current_value() {
-        use crate::sim::events::SiteEvent;
+        use crate::sim::events::{KnobValue, SiteEvent};
         use std::time::Duration;
         let (cfg, _dir) = stepped_config(
             "restore-refresh",
@@ -2580,7 +2580,7 @@ mod tests {
         let mut last_broadcast = None;
         while let Ok(ev) = rx.try_recv() {
             if let SiteEvent::KnobChanged {
-                id: 2,
+                id: Some(2),
                 knob: "meter-power",
                 value,
                 ..
@@ -2591,7 +2591,7 @@ mod tests {
         }
         assert_eq!(
             last_broadcast,
-            Some(4242.0),
+            Some(KnobValue::Number(4242.0)),
             "the restore's KnobChanged must carry the re-resolved value"
         );
     }

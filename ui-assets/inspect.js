@@ -1197,8 +1197,12 @@ function appendSetpointEvent(ev) {
 // selected" guard liveCharts.pushSample uses.
 export const inspectorLive = {
   applyKnob(ev) {
-    if (!liveState || Number(ev.component_id) !== liveState.id) return;
+    // A knob of the whole microgrid (grid voltage, sample lag) has a
+    // null component_id, which Number() would turn into 0.
+    if (!liveState || ev.component_id == null || Number(ev.component_id) !== liveState.id) return;
     const entry = liveState.knobEntries.get(ev.knob);
+    // Only the numeric knob inputs have an entry; a token whose value
+    // is a string or a list (operational mode, grid voltage) has none.
     if (!entry) return;
     // paintKnobEntry always refreshes dataset.live (and the resolved
     // line); it only skips the visible input/chip/checkbox write

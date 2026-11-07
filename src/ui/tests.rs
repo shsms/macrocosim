@@ -3313,7 +3313,7 @@ async fn component_snapshot_reads_reactive_var_knob() {
 /// `lisp/defuns/load_drivers.rs`, driven over HTTP instead of `eval`.
 #[tokio::test]
 async fn control_drive_broadcasts_knob_changed() {
-    use crate::sim::events::SiteEvent;
+    use crate::sim::events::{KnobValue, SiteEvent};
 
     let (cfg, _dir) = config_with("(%make-meter :id 7)").await;
     let mut rx = cfg.site().subscribe_events();
@@ -3331,11 +3331,120 @@ async fn control_drive_broadcasts_knob_changed() {
     assert!(
         seen.iter().any(|ev| matches!(
             ev,
-            SiteEvent::KnobChanged { id: 7, knob: "meter-power", value: Some(v), expr: None, .. }
+            SiteEvent::KnobChanged { id: Some(7), knob: "meter-power", value: Some(KnobValue::Number(v)), expr: None, .. }
                 if (*v - 1234.5).abs() < 1e-6
         )),
         "no matching KnobChanged on the bus; saw: {seen:?}"
     );
+}
+
+/// The JSON of every `knob_changed` for `knob` on the bus, as the
+/// WebSocket sends it.
+fn knob_events_json(
+    rx: &mut tokio::sync::broadcast::Receiver<crate::sim::events::SiteEvent>,
+    knob: &str,
+) -> Vec<serde_json::Value> {
+    let mut found = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        let json = serde_json::to_value(&ev).unwrap();
+        if json["kind"] == "knob_changed" && json["knob"] == knob {
+            found.push(json);
+        }
+    }
+    found
+}
+
+/// A knob of one component keeps a plain number for its `value`.
+#[tokio::test]
+async fn drive_knob_changed_value_is_a_number() {
+    let (cfg, _dir) = config_with("(%make-meter :id 7)").await;
+    let mut rx = cfg.site().subscribe_events();
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/component/7/drive", r#"{"power_w": 1234.5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let evs = knob_events_json(&mut rx, "meter-power");
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    assert_eq!(evs[0]["component_id"], 7);
+    assert_eq!(evs[0]["value"], 1234.5);
+    assert_eq!(evs[0]["unit"], "W");
+}
+
+/// `POST .../runtime` sends the mode's token as the value, with no
+/// unit.
+#[tokio::test]
+async fn runtime_route_sends_knob_changed_with_the_mode() {
+    let (cfg, _dir) = config_with("(%make-meter :id 7)").await;
+    let mut rx = cfg.site().subscribe_events();
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/component/7/runtime",
+            r#"{"operational_mode": "telemetry_only"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let evs = knob_events_json(&mut rx, "operational-mode");
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    assert_eq!(evs[0]["component_id"], 7);
+    assert_eq!(evs[0]["value"], "telemetry_only");
+    assert!(evs[0]["unit"].is_null(), "{}", evs[0]);
+    assert!(evs[0]["expr"].is_null(), "{}", evs[0]);
+}
+
+/// `POST .../grid` sends the three phase voltages as a list, with a
+/// null `component_id`.
+#[tokio::test]
+async fn grid_route_sends_knob_changed_with_the_voltages() {
+    let (cfg, _dir) = config_with("").await;
+    let mut rx = cfg.site().subscribe_events();
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/grid",
+            r#"{"voltage_per_phase_v": [231, 229.5, 230]}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let evs = knob_events_json(&mut rx, "grid-voltage");
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    assert!(evs[0]["component_id"].is_null(), "{}", evs[0]);
+    assert_eq!(evs[0]["value"], serde_json::json!([231.0, 229.5, 230.0]));
+    assert_eq!(evs[0]["unit"], "V");
+
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/grid",
+            r#"{"voltage_per_phase_v": [231, -1, 230]}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(knob_events_json(&mut rx, "grid-voltage").is_empty());
+}
+
+/// `POST .../sample-lag` sends the lag in force, in seconds, with a
+/// null `component_id`.
+#[tokio::test]
+async fn sample_lag_route_sends_knob_changed_in_seconds() {
+    let (cfg, _dir) = config_with("").await;
+    let mut rx = cfg.site().subscribe_events();
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/sample-lag", r#"{"sample_lag_s": 1.5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let evs = knob_events_json(&mut rx, "sample-lag");
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    assert!(evs[0]["component_id"].is_null(), "{}", evs[0]);
+    assert_eq!(evs[0]["value"], 1.5);
+    assert_eq!(evs[0]["unit"], "s");
 }
 
 /// `clear_sunlight: true` on the typed drive door must broadcast the
@@ -3378,7 +3487,7 @@ async fn control_drive_clear_sunlight_broadcasts_weather_marker() {
         seen.iter().any(|ev| matches!(
             ev,
             SiteEvent::KnobChanged {
-                id: 8,
+                id: Some(8),
                 knob: "solar-sunlight",
                 expr: Some(e),
                 ..

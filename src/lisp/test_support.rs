@@ -91,7 +91,7 @@ pub(super) fn assert_lenient_noop(cfg: &Config, id: u64, src: &str, knob: Option
         assert!(
             seen.iter().any(|ev| matches!(
                 ev,
-                crate::sim::events::SiteEvent::KnobChanged { id: i, knob: k, .. }
+                crate::sim::events::SiteEvent::KnobChanged { id: Some(i), knob: k, .. }
                     if *i == id && *k == knob
             )),
             "{src}: no {knob} KnobChanged for {id}; saw: {seen:?}"

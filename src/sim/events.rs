@@ -141,8 +141,10 @@ pub enum SiteEvent {
     /// handlers, and both emit this. The inspector refreshes its
     /// edit-in-place inputs from it.
     KnobChanged {
+        /// `None` for a knob of the whole microgrid (`grid-voltage`,
+        /// `sample-lag`).
         #[serde(rename = "component_id")]
-        id: u64,
+        id: Option<u64>,
         #[serde(
             rename = "ts",
             serialize_with = "crate::timefmt::serialize_millis_as_rfc3339"
@@ -151,14 +153,15 @@ pub enum SiteEvent {
         /// One of: "meter-power" / "meter-reactive-power" /
         /// "meter-power-factor" / "solar-sunlight" / "boiler-demand" /
         /// "boiler-pressure" / "ev" / "reactive-pf-limit" /
-        /// "reactive-apparent-va".
+        /// "reactive-apparent-va" / "operational-mode" /
+        /// "grid-voltage" / "sample-lag".
         knob: &'static str,
         /// Unit of `value`, from the knob; `None` for a unitless
-        /// ratio.
+        /// ratio or a token.
         unit: Option<&'static str>,
         /// New value; None when the knob was cleared (pf-limit /
         /// apparent-va accept clearing).
-        value: Option<f32>,
+        value: Option<KnobValue>,
         /// Printed Lisp source when the write installed an expression.
         expr: Option<String>,
         /// meter-power-factor only.
@@ -166,9 +169,21 @@ pub enum SiteEvent {
     },
 }
 
+/// The value of a `KnobChanged`, serialized as the bare JSON value.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum KnobValue {
+    Number(f32),
+    /// An operational mode, by its snake_case name.
+    Mode(crate::sim::OperationalMode),
+    /// One number per phase, such as the grid voltage.
+    List(Vec<f32>),
+}
+
 /// Unit of a `KnobChanged` value, by knob token. `None` for the
-/// unitless power-factor knobs, and for a token with no entry here
-/// (a debug build panics on one, so a new knob gets its unit).
+/// unitless power-factor knobs and the operational mode, and for a
+/// token with no entry here (a debug build panics on one, so a new
+/// knob gets its unit).
 pub fn knob_unit(knob: &str) -> Option<&'static str> {
     match knob {
         "meter-power" => Some("W"),
@@ -177,7 +192,9 @@ pub fn knob_unit(knob: &str) -> Option<&'static str> {
         "boiler-demand" => Some("kg/s"),
         "boiler-pressure" => Some("bar"),
         "reactive-apparent-va" => Some("VA"),
-        "meter-power-factor" | "reactive-pf-limit" => None,
+        "grid-voltage" => Some("V"),
+        "sample-lag" => Some("s"),
+        "meter-power-factor" | "reactive-pf-limit" | "operational-mode" => None,
         other => {
             debug_assert!(false, "knob_unit: no entry for knob {other}");
             None
@@ -218,16 +235,17 @@ mod tests {
         assert_eq!(setpoint["component_id"], 7);
         assert_eq!(setpoint["unit"], "VAr");
         let knob = json(&SiteEvent::KnobChanged {
-            id: 7,
+            id: Some(7),
             ts_ms,
             knob: "reactive-apparent-va",
             unit: knob_unit("reactive-apparent-va"),
-            value: Some(1.0),
+            value: Some(KnobValue::Number(1.5)),
             expr: None,
             leading: None,
         });
         assert_eq!(knob["component_id"], 7);
         assert_eq!(knob["unit"], "VA");
+        assert_eq!(knob["value"], 1.5);
         for ev in [sample, setpoint, knob] {
             assert!(ev.get("id").is_none() && ev.get("ts_ms").is_none(), "{ev}");
         }

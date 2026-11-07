@@ -5,6 +5,7 @@
 use axum::http::StatusCode;
 use serde::Deserialize;
 
+use crate::sim::events::KnobValue;
 use crate::ui::api::{ApiError, Json, Mg};
 
 #[derive(Deserialize)]
@@ -28,5 +29,11 @@ pub(in crate::ui) async fn grid_post(
         }
     }
     mg.site.set_voltage_per_phase((l1, l2, l3));
+    mg.site.note_knob_changed(
+        None,
+        "grid-voltage",
+        Some(KnobValue::List(vec![l1, l2, l3])),
+        None,
+    );
     Ok(StatusCode::NO_CONTENT)
 }
