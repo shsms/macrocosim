@@ -796,7 +796,7 @@ mod tests {
     /// of which point at node k+1. Every node below the root is a
     /// shared subtree, so a walk that only marks `seen` on the way
     /// back up re-descends node 25 once per root-to-leaf path — 2^25
-    /// of them, minutes of spinning while the import lock is held.
+    /// of them, minutes of spinning while the create lock is held.
     ///
     /// Counted, not timed. The regressed walk reaches the SAME answer,
     /// just after exponentially many calls — about three minutes on

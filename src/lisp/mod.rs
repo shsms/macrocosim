@@ -219,11 +219,6 @@ impl Config {
         self.scenarios.clone()
     }
 
-    /// See [`Engine::import_lock`].
-    pub(crate) fn import_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
-        self.engine.import_lock()
-    }
-
     /// See [`Engine::create_lock`].
     pub(crate) fn create_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
         self.engine.create_lock()

@@ -147,8 +147,8 @@ async fn create_serialized(
 /// microgrid's declaration, and nothing else may insert one. Leaves
 /// `runtime` unset; the handler starts the runtime and fills it.
 ///
-/// Callers must hold the create lock; [`create_serialized`] is the
-/// only way in.
+/// Callers must hold the create lock: [`create_serialized`] takes
+/// it, and the import holds it already.
 fn create_core(
     config: &Config,
     name: &str,
@@ -286,14 +286,13 @@ pub(in crate::ui) async fn microgrids_import(
 ) -> Result<Json<ImportMicrogridResp>, ApiError> {
     let import = crate::sim::site_import::parse(body.components, body.connections)
         .map_err(ApiError::bad_request)?;
-    // One import at a time, from here to the eval that registers
-    // the components. The collision check below is authoritative
-    // only while no other import can add components between the
-    // scan and this import's own eval — the make-* re-check at
-    // replay is per site and cannot see a cross-site collision.
-    // Parsing stays outside the lock; it touches no shared state.
-    let import_lock = config.import_lock();
-    let serialized = import_lock.lock().await;
+    // The create lock, from here to the eval that registers the
+    // components. The collision check below is authoritative only
+    // while no other structural change can add components between the
+    // scan and this import's own eval — the make-* re-check at replay
+    // is per site and cannot see a cross-site collision. Parsing stays
+    // outside the lock; it touches no shared state.
+    let serialized = config.create_lock().lock_owned().await;
     // Collision check against every registered site, plus the
     // bootstrap site legacy single-site configs run on.
     // `import.components` comes from a dedup-validated
@@ -331,10 +330,15 @@ pub(in crate::ui) async fn microgrids_import(
     }
     // The requested microgrid id (or None for the lowest free one)
     // goes through the create path's own claim: one place decides
-    // whether an id is free, under the create lock that makes the
-    // decision hold until the load inserts the entry.
-    let created =
-        create_serialized(&config, &body.name, body.id, None, body.tso.as_deref()).await?;
+    // whether an id is free. `create_core` directly, not
+    // `create_serialized`: this task already holds the create lock,
+    // and a tokio mutex cannot be taken twice by one task.
+    let created = {
+        let cfg = config.clone();
+        let (name, tso) = (body.name.clone(), body.tso.clone());
+        let id = body.id;
+        super::blocking(move || create_core(&cfg, &name, id, None, tso.as_deref())).await??
+    };
     // Move the shared allocator past the imported ids before any
     // component is built, so nothing auto-allocates into that range.
     // Saturating: an export carrying id u64::MAX must not overflow

@@ -66,10 +66,11 @@ pub struct Engine {
     /// `:grpc-port` on a reload. See
     /// [`crate::sim::microgrids::PortPins`].
     pub(crate) port_pins: PortPins,
-    /// Serializes the routes that claim a microgrid id and a port,
-    /// then write and load a file: `POST /api/microgrids` (import's
-    /// create step included), `/api/load-as`, and a snapshot loaded
-    /// as a new microgrid. The load cannot run under the registry
+    /// The one structural lock. Serializes the routes that claim a
+    /// microgrid id and a port, then write and load a file:
+    /// `POST /api/microgrids`, the import (held from its collision
+    /// scan to the eval that registers its components),
+    /// `/api/load-as`, and a snapshot loaded as a new microgrid. The load cannot run under the registry
     /// lock (it evaluates lisp), so one claim at a time is what keeps
     /// each route's validation authoritative. A plain `(load …)` or
     /// an eval of `(make-microgrid …)` takes its port as it registers
@@ -77,15 +78,6 @@ pub struct Engine {
     /// without blocking the runtime and its owned guard can move into
     /// the blocking task.
     pub(crate) create_lock: Arc<tokio::sync::Mutex<()>>,
-    /// Serializes `/api/microgrids/import` requests. The import
-    /// handler scans every site for id collisions and only then
-    /// evals the components into its new site; no registry lock
-    /// spans both steps, so two racing imports could each pass the
-    /// scan before the other's components exist — silently breaking
-    /// the enterprise-unique component-id invariant. One import at
-    /// a time keeps the scan authoritative. A tokio mutex because
-    /// the handler holds it across `await`s.
-    pub(crate) import_lock: Arc<tokio::sync::Mutex<()>>,
     /// Enterprise-wide notification fired when a microgrid lands in
     /// `microgrids`. The WS event pump subscribes so it can spawn a
     /// forwarder for the new site's event bus on the fly, and the
@@ -114,7 +106,6 @@ impl Engine {
             id_allocator: Arc::new(AtomicU64::new(crate::sim::component::FIRST_AUTO_ID)),
             port_pins: crate::sim::microgrids::new_port_pins(),
             create_lock: Arc::new(tokio::sync::Mutex::new(())),
-            import_lock: Arc::new(tokio::sync::Mutex::new(())),
             // Capacity = 1024 to absorb a mass-create burst (e.g. a
             // script POST'ing /api/microgrids a few hundred times
             // back-to-back) without lagging the WS event pump's
@@ -213,11 +204,6 @@ impl Engine {
     /// The create-serialization lock — see the field doc.
     pub(crate) fn create_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
         self.create_lock.clone()
-    }
-
-    /// The import-serialization lock — see the field doc.
-    pub(crate) fn import_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
-        self.import_lock.clone()
     }
 
     /// Subscribe to `microgrid_registered` notifications.
