@@ -129,7 +129,7 @@ async def test_a_transport_failure_after_the_process_exited() -> None:
 
 async def test_a_request_the_teardown_breaks_raises_microgrid_closed() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        s.mark_closed()  # the launch block exits while this request runs
+        s.mark_closed()  # the block exits while this request runs
         raise httpx.ReadError("connection reset", request=request)
 
     s = _session(handler, exit_probe=lambda: (-15, ""))
@@ -169,7 +169,9 @@ async def test_calls_after_close_raise_microgrid_closed_before_any_io() -> None:
 
     s = _session(handler)
     await s.close()
-    with pytest.raises(MicrogridClosed, match="microgrid 7 is closed: its launch block"):
+    with pytest.raises(
+        MicrogridClosed, match="microgrid 7 is closed: its block has exited"
+    ):
         await s.get_json("/x")
     with pytest.raises(MicrogridClosed):
         await s.post_json("/x/drive", {}, call="x")

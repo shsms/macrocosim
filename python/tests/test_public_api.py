@@ -9,7 +9,7 @@ import macrocosim
 pytestmark = pytest.mark.filterwarnings("error")
 
 EXPECTED = [
-    "launch", "Microgrid", "Recording", "RecordingReport",
+    "launch", "connect", "load_topology", "Microgrid", "Recording", "RecordingReport",
     "Component", "GridConnectionPoint", "Meter", "Battery",
     "BatteryInverter", "SolarInverter", "Chp", "EvCharger", "SteamBoiler",
     "WindTurbine", "PowerTransformer", "Breaker",
@@ -43,5 +43,5 @@ def test_every_name_imports(name: str) -> None:
 
 
 def test_no_0_1_names_remain() -> None:
-    for old in ("aio", "Site", "grid", "meter", "raw", "Scenario", "connect"):
+    for old in ("aio", "Site", "grid", "meter", "raw", "Scenario"):
         assert not hasattr(macrocosim, old), old

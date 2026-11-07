@@ -124,7 +124,8 @@ class ExpectationFailed(MacrocosimError, AssertionError):
 
 
 class MicrogridClosed(MacrocosimError):
-    """The microgrid was used after its launch block exited."""
+    """The microgrid was used after its block exited (`launch`, `connect`, or a
+    script's `run`)."""
 
     def __init__(self, message: str, *, microgrid_id: int) -> None:
         super().__init__(message)

@@ -20,6 +20,7 @@ ORDER = [
     "_matchers",
     "_spec",
     "_render",
+    "_topology",
     "_process",
     "_session",
     "_sampling",
@@ -28,6 +29,7 @@ ORDER = [
     "_recording",
     "_microgrid",
     "_launch",
+    "_connect",
     "__init__",
 ]
 """A module may import only modules listed before it."""

@@ -1,5 +1,4 @@
-"""The HTTP session to one launched simulator, and how its answers become
-errors.
+"""The HTTP session to one simulator, and how its answers become errors.
 
 Internal; imports `_errors`. Every request goes through `_Session`, which
 refuses to run once the microgrid is closed, and maps each failure to the error
@@ -174,12 +173,12 @@ class _Session:
         call: str | None = None,
     ) -> Any:
         if self._closed:
-            raise self._closed_error("is closed: its launch block has exited")
+            raise self._closed_error("is closed: its block has exited")
         try:
             response = await self._client.request(method, path, params=params, json=json)
         except httpx.TransportError as exc:
             if self._closed:
-                # The launch block stopped the simulator under this request.
+                # The block ended the session under this request.
                 raise self._closed_error(f"was closed during {method} {path}") from exc
             raise self._transport_error(method, path, exc) from exc
         status = response.status_code

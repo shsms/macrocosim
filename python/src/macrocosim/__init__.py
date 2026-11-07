@@ -21,6 +21,7 @@ from ._components import (
     SteamBoiler,
     WindTurbine,
 )
+from ._connect import connect
 from ._enums import CommandMode, EvIdle, Health, OperationalMode, TelemetryMode
 from ._errors import (
     ExpectationFailed,
@@ -66,10 +67,11 @@ from ._spec import (
     make_steam_boiler,
     make_wind_turbine,
 )
+from ._topology import load_topology
 from ._units import MassFlow, Pressure
 
 __all__ = [
-    "launch", "Microgrid", "Recording", "RecordingReport",
+    "launch", "connect", "load_topology", "Microgrid", "Recording", "RecordingReport",
     "Component", "GridConnectionPoint", "Meter", "Battery",
     "BatteryInverter", "SolarInverter", "Chp", "EvCharger", "SteamBoiler",
     "WindTurbine", "PowerTransformer", "Breaker",
