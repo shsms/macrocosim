@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
 use crate::sim::{
-    Category, DcStorage, MicrogridSite, SimulatedComponent, Telemetry,
+    Category, DcStorage, MicrogridSite, PhysicsState, SimulatedComponent, Telemetry,
     decay::{SocProtect, integrate_soc_pct, sanitize_soc_pct},
 };
 
@@ -132,6 +132,18 @@ impl SimulatedComponent for Battery {
 
     fn dc_storage(&self) -> Option<&dyn DcStorage> {
         Some(self)
+    }
+
+    fn physics_state(&self) -> Option<PhysicsState> {
+        Some(PhysicsState::Battery {
+            soc_pct: self.state.lock().soc_pct,
+        })
+    }
+
+    fn restore_physics_state(&self, state: PhysicsState) {
+        if let PhysicsState::Battery { soc_pct } = state {
+            self.set_soc_pct(soc_pct);
+        }
     }
 
     fn tick(&self, _world: &MicrogridSite, _now: DateTime<Utc>, dt: Duration) {

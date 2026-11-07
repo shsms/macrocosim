@@ -9,6 +9,7 @@ use crate::sim::{
     inverter::solar_inverter::SunlightSource,
     meter::{ConstructedReactive, ReactiveSource},
     microgrid_site::MicrogridSite,
+    physics_state::PhysicsState,
 };
 
 mod controllable;
@@ -512,6 +513,19 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
     fn restore_knob(&self, _snap: KnobSnapshot) -> bool {
         false
     }
+
+    // ── carry across a rebuild ───────────────────────────────────────
+
+    /// The physics state a rebuilt copy of this component should keep
+    /// (its SoC, its plugged car, its pressure). `None` for a
+    /// component with none, the default.
+    fn physics_state(&self) -> Option<PhysicsState> {
+        None
+    }
+
+    /// Write a state read by [`Self::physics_state`] into this
+    /// component. A state of another type is ignored.
+    fn restore_physics_state(&self, _state: PhysicsState) {}
 
     // ── bounds telemetry ─────────────────────────────────────────────
 

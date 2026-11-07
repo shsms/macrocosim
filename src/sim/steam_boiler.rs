@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, RwLock};
 
 use crate::sim::{
-    Category, Controllable, MicrogridSite, SimulatedComponent, Telemetry,
+    Category, Controllable, MicrogridSite, PhysicsState, SimulatedComponent, Telemetry,
     bounds::VecBounds,
     component::{GatewaySettings, KnobKind, KnobSnapshot, ScalarReading, SteamDrive},
     device_axis::DeviceAxis,
@@ -304,6 +304,18 @@ impl SimulatedComponent for SteamBoiler {
                 true
             }
             _ => false,
+        }
+    }
+
+    fn physics_state(&self) -> Option<PhysicsState> {
+        Some(PhysicsState::Boiler {
+            pressure_bar: self.state.lock().pressure_bar,
+        })
+    }
+
+    fn restore_physics_state(&self, state: PhysicsState) {
+        if let PhysicsState::Boiler { pressure_bar } = state {
+            self.set_pressure_bar(pressure_bar);
         }
     }
 

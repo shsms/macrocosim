@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
 use crate::sim::{
-    Category, Controllable, MicrogridSite, SimulatedComponent, Telemetry,
+    Category, Controllable, MicrogridSite, PhysicsState, SimulatedComponent, Telemetry,
     bounds::VecBounds,
     component::{EvPort, GatewaySettings, KnobKind, KnobSnapshot},
     decay::sanitize_soc_pct,
@@ -174,6 +174,23 @@ impl SimulatedComponent for EvCharger {
                 true
             }
             _ => false,
+        }
+    }
+
+    fn physics_state(&self) -> Option<PhysicsState> {
+        Some(PhysicsState::Ev {
+            connected: self.state.lock().ev.clone(),
+        })
+    }
+
+    /// The car comes along with its own state of charge; the draw
+    /// starts over, as after a plug.
+    fn restore_physics_state(&self, state: PhysicsState) {
+        if let PhysicsState::Ev { connected } = state {
+            let mut s = self.state.lock();
+            s.ev = connected;
+            s.draw_w = 0.0;
+            s.last = EvDrawState::Paused;
         }
     }
 

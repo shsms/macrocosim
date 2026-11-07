@@ -43,6 +43,10 @@ is wiring the topology + animating the environment.
     shared by the battery and the connected car
   - `battery.rs`, `meter.rs`, `grid.rs`, `ev_charger.rs`,
     `inverter/{battery,solar}_inverter.rs`, `steam_boiler.rs`
+  - `physics_state.rs` — `PhysicsState`, what a rebuilt component
+    keeps (battery SoC, the plugged car, boiler pressure), read and
+    written through `SimulatedComponent::physics_state` /
+    `restore_physics_state`
   - `ev_presets.rs` — the connected car: preset catalog, per-plug
     overrides, taper, draw law; owned by the charger, never a site
     component
