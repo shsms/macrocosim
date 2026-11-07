@@ -13,6 +13,7 @@ use super::{
     GridConnectionPointSpec, MarkerSpec, MeterSpec, MicrogridSpec, Modes, SolarInverterSpec,
     SpecError, SteamBoilerSpec, fill, order,
 };
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Battery, BatteryInverter, Category, EvCharger, Grid, Marker, Meter, OperationalMode,
     ReactiveSource, SimulatedComponent, SolarInverter, SteamBoiler, SteamBoilerConfig,
@@ -311,22 +312,13 @@ impl Reactive {
 }
 
 fn grid(id: u64, s: &GridConnectionPointSpec) -> Grid {
-    let bounds = match (s.rated_lower_w, s.rated_upper_w) {
-        (Some(l), Some(u)) => Some((l as f32, u as f32)),
-        (None, None) => None,
-        // A half band leaves the grid unbounded, as in Lisp.
-        (l, u) => {
-            log::warn!(
-                "grid connection point {id}: only one of rated_lower_w/rated_upper_w given \
-                 ({l:?}, {u:?}); the grid stays unbounded"
-            );
-            None
-        }
-    };
     Grid::new(
         id,
         s.rated_fuse_current_a.unwrap_or(0),
-        bounds,
+        Bounds {
+            lower: s.rated_lower_w.map(|v| v as f32),
+            upper: s.rated_upper_w.map(|v| v as f32),
+        },
         jitter(s.stream_jitter_pct),
     )
 }
@@ -648,6 +640,35 @@ mod tests {
         assert_eq!(
             get(7).physics_state(),
             Some(crate::sim::PhysicsState::Boiler { pressure_bar: 9.5 })
+        );
+    }
+
+    /// One given side bounds the grid on that side; the other stays
+    /// open, as in Lisp.
+    #[test]
+    fn a_one_sided_grid_band_bounds_that_side_only() {
+        let rated = |side: &str| {
+            let built = build(&format!(
+                r#"{{"components": [
+                    {{"type": "grid_connection_point", "id": 1, {side}}}
+                ]}}"#
+            ))
+            .unwrap();
+            built.components[0].rated_active_bounds()
+        };
+        assert_eq!(
+            rated(r#""rated_upper_w": 40000.0"#),
+            Some(Bounds {
+                lower: None,
+                upper: Some(40_000.0)
+            })
+        );
+        assert_eq!(
+            rated(r#""rated_lower_w": -25000.0"#),
+            Some(Bounds {
+                lower: Some(-25_000.0),
+                upper: None
+            })
         );
     }
 

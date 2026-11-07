@@ -5,11 +5,12 @@ use std::{fmt, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Battery, BatteryInverter, Category, Controllable, MicrogridSite, ReactiveLimits,
     SimulatedComponent, Telemetry,
     battery::BatteryConfig,
-    bounds::VecBounds,
+    bounds::{VecBounds, closed},
     component::GatewaySettings,
     inverter::battery_inverter::BatteryInverterConfig,
     reactive::ReactiveCapability,
@@ -151,8 +152,8 @@ impl SimulatedComponent for Hw {
     fn active_power_w(&self, _: &MicrogridSite) -> Option<f32> {
         Some(self.last().unwrap_or(0.0))
     }
-    fn rated_active_bounds(&self) -> Option<(f32, f32)> {
-        Some((-1000.0, 1000.0))
+    fn rated_active_bounds(&self) -> Option<Bounds> {
+        Some(closed(-1000.0, 1000.0))
     }
     fn controllable(&self) -> Option<&dyn Controllable> {
         Some(self)
@@ -239,8 +240,8 @@ impl SimulatedComponent for Pq {
     fn active_power_w(&self, _: &MicrogridSite) -> Option<f32> {
         Some(*self.p.lock())
     }
-    fn rated_active_bounds(&self) -> Option<(f32, f32)> {
-        Some((-1000.0, 1000.0))
+    fn rated_active_bounds(&self) -> Option<Bounds> {
+        Some(closed(-1000.0, 1000.0))
     }
     fn controllable(&self) -> Option<&dyn Controllable> {
         Some(self)

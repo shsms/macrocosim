@@ -182,10 +182,6 @@ class GridConnectionPointSpec(ComponentSpec["GridConnectionPoint"]):
             raise SpecError(
                 f"{self!r}: rated_fuse_current must be whole amperes, not {fuse}"
             )
-        if (self.rated_lower is None) != (self.rated_upper is None):
-            raise SpecError(
-                f"{self!r}: give both rated_lower and rated_upper, or neither"
-            )
 
 
 @dataclass(frozen=True, eq=False, kw_only=True, repr=False)

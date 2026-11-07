@@ -3,8 +3,10 @@ use std::{fmt, time::Duration};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Category, DcStorage, MicrogridSite, PhysicsState, SimulatedComponent, Telemetry,
+    bounds::closed,
     decay::{SocProtect, integrate_soc_pct, sanitize_soc_pct},
 };
 
@@ -213,8 +215,8 @@ impl SimulatedComponent for Battery {
         self.state.lock().power_w
     }
 
-    fn rated_active_bounds(&self) -> Option<(f32, f32)> {
-        Some((self.cfg.rated_lower_w, self.cfg.rated_upper_w))
+    fn rated_active_bounds(&self) -> Option<Bounds> {
+        Some(closed(self.cfg.rated_lower_w, self.cfg.rated_upper_w))
     }
 
     fn make_fn(&self) -> &'static str {

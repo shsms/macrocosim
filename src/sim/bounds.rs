@@ -45,12 +45,17 @@ impl fmt::Display for BoundsDisplay<'_> {
     }
 }
 
+/// A band closed on both sides.
+pub fn closed(lower: f32, upper: f32) -> Bounds {
+    Bounds {
+        lower: Some(lower),
+        upper: Some(upper),
+    }
+}
+
 impl VecBounds {
     pub fn single(lower: f32, upper: f32) -> Self {
-        Self(vec![Bounds {
-            lower: Some(lower),
-            upper: Some(upper),
-        }])
+        Self(vec![closed(lower, upper)])
     }
 
     pub fn new(mut bounds: Vec<Bounds>) -> Self {

@@ -271,12 +271,11 @@ def test_an_int_no_float_can_hold_raises_where_the_spec_is_built() -> None:
         s.make_meter(power_factor=10**400)
 
 
-def test_a_half_rated_band_on_the_grid_connection_point_raises() -> None:
-    with pytest.raises(SpecError, match="both rated_lower and rated_upper"):
-        s.make_grid_connection_point(rated_lower=Power.from_kilowatts(-10))
-    s.make_grid_connection_point(
-        rated_lower=Power.from_kilowatts(-10), rated_upper=Power.from_kilowatts(10)
-    )
+def test_the_grid_connection_point_takes_a_one_sided_rated_band() -> None:
+    lower = s.make_grid_connection_point(rated_lower=Power.from_kilowatts(-10))
+    assert s.spec_wire_fields(lower) == [("rated_lower_w", -10000.0)]
+    upper = s.make_grid_connection_point(rated_upper=Power.from_kilowatts(40))
+    assert s.spec_wire_fields(upper) == [("rated_upper_w", 40000.0)]
 
 
 def test_the_base_class_cannot_be_built() -> None:

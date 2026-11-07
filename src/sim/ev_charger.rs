@@ -9,9 +9,10 @@ use std::{fmt, time::Duration};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Category, Controllable, MicrogridSite, PhysicsState, SimulatedComponent, Telemetry,
-    bounds::VecBounds,
+    bounds::{VecBounds, closed},
     component::{EvPort, GatewaySettings, KnobKind, KnobSnapshot},
     decay::sanitize_soc_pct,
     device_axis::DeviceAxis,
@@ -274,8 +275,8 @@ impl SimulatedComponent for EvCharger {
         self.state.lock().draw_w
     }
 
-    fn rated_active_bounds(&self) -> Option<(f32, f32)> {
-        Some((self.cfg.rated_lower_w, self.cfg.rated_upper_w))
+    fn rated_active_bounds(&self) -> Option<Bounds> {
+        Some(closed(self.cfg.rated_lower_w, self.cfg.rated_upper_w))
     }
 
     fn controllable(&self) -> Option<&dyn Controllable> {

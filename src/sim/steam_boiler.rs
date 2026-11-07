@@ -10,9 +10,10 @@ use std::{fmt, time::Duration};
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, RwLock};
 
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Category, Controllable, MicrogridSite, PhysicsState, SimulatedComponent, Telemetry,
-    bounds::VecBounds,
+    bounds::{VecBounds, closed},
     component::{GatewaySettings, KnobKind, KnobSnapshot, ScalarReading, SteamDrive},
     device_axis::DeviceAxis,
     dynamic_scalar::DynamicScalar,
@@ -276,8 +277,8 @@ impl SimulatedComponent for SteamBoiler {
         self.heater.output()
     }
 
-    fn rated_active_bounds(&self) -> Option<(f32, f32)> {
-        Some((self.cfg.rated_lower_w, self.cfg.rated_upper_w))
+    fn rated_active_bounds(&self) -> Option<Bounds> {
+        Some(closed(self.cfg.rated_lower_w, self.cfg.rated_upper_w))
     }
 
     fn controllable(&self) -> Option<&dyn Controllable> {

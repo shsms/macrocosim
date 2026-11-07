@@ -1114,7 +1114,13 @@ and the test burned its whole 10 s poll budget. Fixed with the
 oneshot readiness hook (=watch_with_ready=) the entry proposed;
 the downstream version-bump poll was already correct.
 
-*** TODO [#C] One-sided rated bounds are dropped          :fidelity:bounds:
+*** DONE [#C] One-sided rated bounds are dropped          :fidelity:bounds:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa] \\
+  The grid connection point keeps each given side; the other side
+  stays open, silently, in Lisp, the spec build and the Python
+  client. rated_active_bounds now returns optional edges.
+:END:
 
 Site exports can configure only one side of a component's rated
 range, and =site_import= emits =:rated-lower= / =:rated-upper=

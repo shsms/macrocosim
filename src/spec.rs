@@ -204,9 +204,11 @@ component_spec! {
     GridConnectionPointSpec {
         /// Fuse rating, in whole amperes.
         rated_fuse_current_a: u32,
-        /// Lower end of the rated band; give both ends or neither.
+        /// Lower end of the rated band; left out, that side is
+        /// unbounded.
         rated_lower_w: f64,
-        /// Upper end of the rated band; give both ends or neither.
+        /// Upper end of the rated band; left out, that side is
+        /// unbounded.
         rated_upper_w: f64,
     }
 }

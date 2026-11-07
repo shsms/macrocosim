@@ -16,9 +16,10 @@ use parking_lot::{Mutex, RwLock};
 use rand::Rng;
 use tulisp::TulispContext;
 
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Category, Controllable, MicrogridSite, ReactiveLimits, SimulatedComponent, Telemetry,
-    bounds::VecBounds,
+    bounds::{VecBounds, closed},
     component::{GatewaySettings, KnobKind, KnobSnapshot, ScalarReading, SunlightDrive},
     device_axis::DeviceAxis,
     dynamic_scalar::DynamicScalar,
@@ -413,8 +414,8 @@ impl SimulatedComponent for SolarInverter {
         Some(self)
     }
 
-    fn rated_active_bounds(&self) -> Option<(f32, f32)> {
-        Some((self.cfg.rated_lower_w, self.cfg.rated_upper_w))
+    fn rated_active_bounds(&self) -> Option<Bounds> {
+        Some(closed(self.cfg.rated_lower_w, self.cfg.rated_upper_w))
     }
 
     fn subtype(&self) -> Option<&'static str> {

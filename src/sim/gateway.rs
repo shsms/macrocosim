@@ -160,12 +160,15 @@ impl MicrogridGateway {
                 }
             }
         }
-        if let (Some(store), Some(rated)) = (c.dc_storage(), c.rated_active_bounds()) {
+        if let (Some(store), Some((lo, hi))) = (
+            c.dc_storage(),
+            c.rated_active_bounds().and_then(|b| b.lower.zip(b.upper)),
+        ) {
             let protect = store.soc_window();
             protect.warn_if_overwide(&format!("battery {id}"));
             st.batteries.insert(
                 id,
-                window::BatteryWindow::new(protect, rated, store.soc_pct()),
+                window::BatteryWindow::new(protect, (lo, hi), store.soc_pct()),
             );
         }
     }
@@ -395,9 +398,7 @@ impl<'a> Gateway<'a> {
             return Some(w.bounds());
         }
         match axis {
-            SetpointAxis::Active => c
-                .rated_active_bounds()
-                .map(|(lo, hi)| VecBounds::single(lo, hi)),
+            SetpointAxis::Active => c.rated_active_bounds().map(|b| VecBounds(vec![b])),
             SetpointAxis::Reactive => None,
         }
     }
@@ -409,7 +410,7 @@ impl<'a> Gateway<'a> {
         match axis {
             SetpointAxis::Active => c
                 .rated_active_bounds()
-                .map(|(lo, hi)| VecBounds::single(lo, hi))
+                .map(|b| VecBounds(vec![b]))
                 .unwrap_or_default(),
             SetpointAxis::Reactive => c
                 .reactive_limits()
@@ -949,7 +950,7 @@ mod tests {
         site.register(crate::sim::Grid::new(
             9,
             100,
-            Some((-50_000.0, 50_000.0)),
+            crate::sim::bounds::closed(-50_000.0, 50_000.0),
             0.0,
         ));
         site.gateway()
@@ -1264,7 +1265,7 @@ mod tests {
         site.register(crate::sim::Grid::new(
             9,
             100,
-            Some((-5_000.0, 5_000.0)),
+            crate::sim::bounds::closed(-5_000.0, 5_000.0),
             0.0,
         ));
         let gw = site.gateway();

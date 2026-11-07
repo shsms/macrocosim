@@ -126,7 +126,7 @@ pub fn make_component_proto(
     };
 
     let mut bounds = Vec::new();
-    if let Some((lower, upper)) = c.rated_active_bounds() {
+    if let Some(rated) = c.rated_active_bounds() {
         let metric = if cat == ElectricalComponentCategory::Battery {
             Metric::DcPower
         } else {
@@ -134,10 +134,7 @@ pub fn make_component_proto(
         };
         bounds.push(MetricConfigBounds {
             metric: metric as i32,
-            config_bounds: Some(Bounds {
-                lower: Some(lower),
-                upper: Some(upper),
-            }),
+            config_bounds: Some(rated),
         });
         // Reactive config bounds: the capability hull — the widest Q
         // reachable at any P in the rated range — not a live sample at
@@ -150,7 +147,11 @@ pub fn make_component_proto(
         // None`) honestly advertises `(0.0, 0.0)` instead of a fake
         // ±p_max edge.
         if cat != ElectricalComponentCategory::Battery {
-            let p_max = lower.abs().max(upper.abs());
+            // An open side reaches any P.
+            let p_max = [rated.lower, rated.upper]
+                .into_iter()
+                .map(|edge| edge.map_or(f32::INFINITY, f32::abs))
+                .fold(0.0, f32::max);
             let (rlo, rhi) = c
                 .reactive_limits()
                 .map(|r| r.reactive_capability().hull(p_max))
@@ -393,7 +394,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::{
-        proto::common::metrics::Metric,
+        proto::common::metrics::{Bounds, Metric},
         proto_conv::{make_component_proto, telemetry_to_proto},
         sim::{
             Battery, BatteryInverter, EvCharger, Grid, MicrogridSite, SimulatedComponent,
@@ -518,10 +519,28 @@ mod tests {
         assert_eq!((lo, hi), (0.0, 0.0));
     }
 
+    /// A one-sided grid band goes out with its other side unset.
+    #[test]
+    fn a_one_sided_grid_band_advertises_one_edge() {
+        let upper = Bounds {
+            lower: None,
+            upper: Some(40_000.0),
+        };
+        let grid = Grid::new(1, 100, upper, 0.0);
+        let proto = make_component_proto(&grid, &MicrogridSite::new(), 1);
+        let active = proto
+            .metric_config_bounds
+            .iter()
+            .find(|b| b.metric == Metric::AcPowerActive as i32)
+            .and_then(|b| b.config_bounds);
+        assert_eq!(active, Some(upper));
+        assert_eq!(reactive_config_bounds(&grid), Some((0.0, 0.0)));
+    }
+
     /// Same honest-zero requirement for the grid connection point.
     #[test]
     fn grid_advertises_zero_reactive_config_bounds() {
-        let grid = Grid::new(1, 100, Some((-50_000.0, 50_000.0)), 0.0);
+        let grid = Grid::new(1, 100, crate::sim::bounds::closed(-50_000.0, 50_000.0), 0.0);
         let (lo, hi) =
             reactive_config_bounds(&grid).expect("a config-bounds entry is present, honestly zero");
         assert_eq!((lo, hi), (0.0, 0.0));

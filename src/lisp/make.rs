@@ -14,6 +14,7 @@ use std::time::Duration;
 use tulisp::{AsList, Error, Plist, TulispContext, TulispObject};
 
 use crate::lisp::renames::Renamed;
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Battery, BatteryInverter, Category, ComponentHandle, EvCharger, Grid, Marker, Meter,
     MicrogridSite, OperationalMode, ReactiveSource, SolarInverter, SteamBoiler, SteamDrive,
@@ -327,22 +328,6 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             let w = r.structural_site().map_err(Error::invalid_argument)?;
             let a = args.into_inner().0;
             let id = id_or_next(&r, &w, a.id)?;
-            let rated_active_bounds = match (a.rated_lower, a.rated_upper) {
-                (Some(l), Some(u)) => Some((l as f32, u as f32)),
-                (None, None) => None,
-                // Real site exports can carry only one side (the
-                // importer emits each side independently), but the
-                // bounds plumbing wants a full pair — so a half pair
-                // keeps the grid unbounded. Warn instead of staying
-                // silent; one-sided support is a todo.org item.
-                (l, u) => {
-                    log::warn!(
-                        "make-grid-connection-point: only one of :rated-lower-w/:rated-upper-w \
-                         given ({l:?}, {u:?}); the grid stays unbounded"
-                    );
-                    None
-                }
-            };
             let fuse = match a.rated_fuse_current.unwrap_or(0) {
                 // The proto field is unsigned; a negative here would
                 // wrap through `as u32` into a ~4 GA fuse.
@@ -356,7 +341,10 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             let grid = Grid::new(
                 id,
                 fuse,
-                rated_active_bounds,
+                Bounds {
+                    lower: a.rated_lower.map(|v| v as f32),
+                    upper: a.rated_upper.map(|v| v as f32),
+                },
                 a.stream_jitter_pct.unwrap_or(0.0) as f32,
             );
             let h = register_with_modes(
@@ -1181,6 +1169,7 @@ fn apply_initial_modes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sim::bounds::closed;
 
     /// Builds a context wired to a fresh MicrogridSite, evaluates `src`, and
     /// returns the MicrogridSite so the test can introspect what got registered.
@@ -1770,7 +1759,7 @@ mod tests {
                                   :operational-mode 'control-only)"#);
         let b = site.get(41).unwrap();
         assert_eq!(b.category().as_str(), "steam-boiler");
-        assert_eq!(b.rated_active_bounds(), Some((0.0, 100_000.0)));
+        assert_eq!(b.rated_active_bounds(), Some(closed(0.0, 100_000.0)));
         assert_eq!(b.steam_drive().unwrap().pressure_target_bar(), 6.0);
 
         // Bare marker-style form — existing worlds' `(%make-steam-boiler
@@ -1905,6 +1894,33 @@ mod tests {
             .eval_string("(%make-meter :id 1 :interval-s -1.0)")
             .unwrap_err();
         assert!(err.to_string().contains(":interval-s"), "{err}");
+    }
+
+    /// One given side bounds the grid on that side; the other stays
+    /// open.
+    #[test]
+    fn a_one_sided_grid_band_bounds_that_side_only() {
+        let site = run("(%make-grid-connection-point :id 1 :rated-upper-w 40000.0)
+             (%make-grid-connection-point :id 2 :rated-lower-w -25000.0)");
+        let active = |id| {
+            site.bounds_of(id, crate::timeout_tracker::SetpointAxis::Active)
+                .unwrap()
+                .0
+        };
+        assert_eq!(
+            active(1),
+            vec![Bounds {
+                lower: None,
+                upper: Some(40_000.0)
+            }]
+        );
+        assert_eq!(
+            active(2),
+            vec![Bounds {
+                lower: Some(-25_000.0),
+                upper: None
+            }]
+        );
     }
 
     #[test]

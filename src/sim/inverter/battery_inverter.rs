@@ -3,10 +3,14 @@ use std::{fmt, time::Duration};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     Category, Controllable, MicrogridSite, ReactiveLimits, SimulatedComponent, Telemetry,
-    bounds::VecBounds, component::GatewaySettings, device_axis::DeviceAxis,
-    reactive::ReactiveCapability, runtime::Health,
+    bounds::{VecBounds, closed},
+    component::GatewaySettings,
+    device_axis::DeviceAxis,
+    reactive::ReactiveCapability,
+    runtime::Health,
 };
 use crate::timeout_tracker::SetpointAxis;
 
@@ -201,8 +205,8 @@ impl SimulatedComponent for BatteryInverter {
         *self.measured_var.lock()
     }
 
-    fn rated_active_bounds(&self) -> Option<(f32, f32)> {
-        Some((self.cfg.rated_lower_w, self.cfg.rated_upper_w))
+    fn rated_active_bounds(&self) -> Option<Bounds> {
+        Some(closed(self.cfg.rated_lower_w, self.cfg.rated_upper_w))
     }
 
     fn subtype(&self) -> Option<&'static str> {

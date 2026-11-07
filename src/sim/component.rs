@@ -3,6 +3,7 @@ use std::{fmt, sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use tulisp::TulispContext;
 
+use crate::proto::common::metrics::Bounds;
 use crate::sim::{
     bounds::VecBounds,
     dynamic_scalar::DynamicScalar,
@@ -533,10 +534,10 @@ pub trait SimulatedComponent: Send + Sync + fmt::Display {
 
     // ── bounds telemetry ─────────────────────────────────────────────
 
-    /// Static rated active-power bounds (W). Used by
-    /// `ListElectricalComponents` to populate `metric_config_bounds`.
-    /// Doesn't change at runtime.
-    fn rated_active_bounds(&self) -> Option<(f32, f32)> {
+    /// Static rated active-power bounds (W); a side left `None` is
+    /// unbounded. Used by `ListElectricalComponents` to populate
+    /// `metric_config_bounds`. Doesn't change at runtime.
+    fn rated_active_bounds(&self) -> Option<Bounds> {
         None
     }
 
@@ -676,7 +677,7 @@ mod tests {
     fn capability_table() {
         let sec = Duration::from_secs(1);
         let rows: Vec<(Box<dyn SimulatedComponent>, &[&str])> = vec![
-            (Box::new(Grid::new(1, 0, None, 0.0)), &[]),
+            (Box::new(Grid::new(1, 0, Bounds::default(), 0.0)), &[]),
             (
                 Box::new(Meter::new(2, sec, None, None, 0.0, false)),
                 &["meter_drive"],

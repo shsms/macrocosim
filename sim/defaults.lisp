@@ -90,8 +90,8 @@ Keys:
   :id  component id, a positive integer; default: the next free id
   :name  display name
   :rated-fuse-current-a  fuse rating in A, not negative
-  :rated-lower-w  lower end of the rated band in W; give both ends or neither
-  :rated-upper-w  upper end of the rated band in W; without both, no band
+  :rated-lower-w  lower end of the rated band in W; left out, no lower bound
+  :rated-upper-w  upper end of the rated band in W; left out, no upper bound
   :successors  list of handles of the components below it
   :stream-jitter-pct  random spread of each telemetry interval, in percent
   :operational-mode, :health, :telemetry-mode, :command-mode
