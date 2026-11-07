@@ -35,7 +35,12 @@ is wiring the topology + animating the environment.
     traits `MeterDrive`, `SunlightDrive`, `SteamDrive`, `EvPort`),
     each reached through an accessor on `SimulatedComponent`
   - `microgrid_site/` — per-microgrid registry, physics tick, grid state,
-    topology (+ `history.rs` sampler, `scenarios.rs` event log)
+    topology (+ `history.rs` sampler, `scenarios.rs` event log,
+    `swap.rs` the rebuild with carry: `swap_topology` installs a built
+    topology in place, restoring each matching component's
+    `PhysicsState` and keeping its history and energy, while weather,
+    grid state, sample lag and the UI's aggregate energy, keyed on the
+    `energy_epoch` only `reset()` moves, stay)
   - `microgrids.rs` — enterprise registry + per-mg routing
   - `dispatch.rs` — enterprise dispatch store (per-`microgrid_id`, id
     allocator, lifecycle broadcast); backs the dispatch gRPC + UI

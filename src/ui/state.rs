@@ -87,12 +87,13 @@ pub struct MicrogridState {
     /// re-derives its `*_energy` snapshot from this on the next
     /// forwarded sample.
     pub energy: RwLock<HashMap<&'static str, EnergyAccum>>,
-    /// The site run generation the `energy` totals belong to (see
-    /// `MicrogridSite::run_generation`). A rebuild seeing a different
-    /// generation clears the totals, and `latest` and `history` with
-    /// them: the site was reset by a config reload, so they all
-    /// belong to a previous run.
-    pub energy_generation: AtomicU64,
+    /// The site energy epoch the `energy` totals belong to (see
+    /// `MicrogridSite::energy_epoch`). A rebuild seeing a different
+    /// epoch clears the totals, and `latest` and `history` with them:
+    /// the site was reset by a Lisp reload, so they all belong to a
+    /// previous run. A rebuild with carry keeps the epoch, and the
+    /// totals.
+    pub energy_epoch: AtomicU64,
 }
 
 pub type SharedMicrogrid = Arc<MicrogridState>;
@@ -104,7 +105,7 @@ pub fn new_microgrid_slot() -> SharedMicrogrid {
         history: RwLock::new(HashMap::new()),
         forwarders: Mutex::new(Vec::new()),
         energy: RwLock::new(HashMap::new()),
-        energy_generation: AtomicU64::new(0),
+        energy_epoch: AtomicU64::new(0),
     })
 }
 

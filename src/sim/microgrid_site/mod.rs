@@ -42,6 +42,9 @@ use crate::sim::sim_clock::NowSource;
 
 mod history;
 mod scenarios;
+mod swap;
+
+pub use swap::CarryPlan;
 
 pub(crate) use scenarios::{ScenarioReport, ScenarioSummary};
 
@@ -261,6 +264,11 @@ struct MicrogridSiteInner {
     /// topology mutation (keep); the UI's microgrid loopback also
     /// rebuilds its graph handle when it moved (`SiteShape`).
     run_generation: AtomicU64,
+    /// Bumped by `reset()` only. The UI's aggregate energy totals
+    /// belong to one epoch: a reset (a Lisp reload) starts a new one
+    /// and clears them, while a rebuild with carry
+    /// (`swap_topology`) moves the run generation and keeps them.
+    energy_epoch: AtomicU64,
     /// Broadcast bus for live UI subscribers. Senders are cheap to
     /// clone; receivers are obtained via `subscribe_events`.
     events: broadcast::Sender<SiteEvent>,
@@ -369,6 +377,7 @@ impl MicrogridSite {
                 setpoint_logs: RwLock::new(HashMap::new()),
                 version: AtomicU64::new(0),
                 run_generation: AtomicU64::new(0),
+                energy_epoch: AtomicU64::new(0),
                 structural_version: AtomicU64::new(0),
                 events: broadcast::channel(EVENT_BUS_CAPACITY).0,
                 now: RwLock::new(NowSource::wall()),
@@ -888,8 +897,10 @@ impl MicrogridSite {
     /// tick after reload still has plausible per-phase voltage /
     /// frequency values.
     pub fn reset(&self) {
-        // A reset starts a new run; see `run_generation`.
+        // A reset starts a new run; see `run_generation` and
+        // `energy_epoch`.
         self.inner.run_generation.fetch_add(1, Ordering::Relaxed);
+        self.inner.energy_epoch.fetch_add(1, Ordering::Relaxed);
         // Cancel active telemetry streams: each stream task holds an
         // Arc to its component from subscribe time, and a component
         // cleared below is never ticked again — without the epoch
@@ -1334,6 +1345,12 @@ impl MicrogridSite {
     /// belongs to a previous run.
     pub fn run_generation(&self) -> u64 {
         self.inner.run_generation.load(Ordering::Relaxed)
+    }
+
+    /// The energy epoch: moved by `reset()`, never by a rebuild with
+    /// carry. See the field doc.
+    pub fn energy_epoch(&self) -> u64 {
+        self.inner.energy_epoch.load(Ordering::Relaxed)
     }
 
     /// Start the physics tick and the history sampler, once per site:

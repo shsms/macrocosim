@@ -125,8 +125,9 @@ async fn build_microgrid(
     //
     // A site reset (config hot-reload) started a new run: the caches
     // belong to the previous run and go, like the site's own
-    // per-component accumulators and histories. A plain topology
-    // mutation (same generation) keeps the energy totals and prunes
+    // per-component accumulators and histories. A topology mutation or
+    // a rebuild with carry (same energy epoch) keeps the energy totals
+    // and prunes
     // the caches to the streams the new graph publishes, so the charts
     // reading the survivors carry on instead of restarting from empty.
     prune_for_rebuild(slot, site, &forwarders.streams);
@@ -135,7 +136,7 @@ async fn build_microgrid(
     // delivering). Dropping it costs at most one real ~1 s interval and
     // guarantees no stream integrates across the swap gap.
     reset_energy_cursors(slot);
-    // The cumulative energy totals survive a same-generation rebuild —
+    // The cumulative energy totals survive a same-epoch rebuild —
     // re-expose the ones the prune dropped from the cache.
     republish_energy_totals(slot, site);
     *slot.forwarders.lock() = forwarders.handles;
@@ -694,26 +695,27 @@ fn retain_streams(state: &SharedMicrogrid, live: &[&'static str]) {
 }
 
 /// Bring the slot's caches in line with the rebuilt graph. On a new run
-/// (the run generation moved: `reset()`, a config hot-reload) every
-/// cached stream goes, the energy totals included. On a same-generation
-/// rebuild the totals stay and the caches keep the streams in `live`.
+/// (the energy epoch moved: `reset()`, a config hot-reload) every
+/// cached stream goes, the energy totals included. On any other
+/// rebuild, a rebuild with carry included, the totals stay and the
+/// caches keep the streams in `live`.
 fn prune_for_rebuild(state: &SharedMicrogrid, site: &MicrogridSite, live: &[&'static str]) {
     let new_run = clear_energy_on_new_run(state, site);
     retain_streams(state, if new_run { &[] } else { live });
 }
 
-/// Clear the aggregate energy totals when `site`'s run generation moved
+/// Clear the aggregate energy totals when `site`'s energy epoch moved
 /// past the one the slot's totals were gathered under: the site was reset
 /// (a config hot-reload), so the energy belongs to a previous run — just
 /// like the site's own per-component accumulators, which `reset()` clears.
-/// Same-generation rebuilds (topology mutations) keep the totals. Returns
-/// whether the generation moved.
+/// Other rebuilds (topology mutations, a rebuild with carry) keep the
+/// totals. Returns whether the epoch moved.
 fn clear_energy_on_new_run(state: &SharedMicrogrid, site: &MicrogridSite) -> bool {
-    let generation = site.run_generation();
+    let epoch = site.energy_epoch();
     let new_run = state
-        .energy_generation
-        .swap(generation, std::sync::atomic::Ordering::Relaxed)
-        != generation;
+        .energy_epoch
+        .swap(epoch, std::sync::atomic::Ordering::Relaxed)
+        != epoch;
     if new_run {
         state.energy.write().clear();
     }
@@ -947,18 +949,26 @@ mod tests {
         assert_eq!(state.latest.read()["grid_energy"].ts_ms, fresh_ts);
     }
 
-    /// A config reload resets the site and bumps its run generation: the
-    /// aggregate totals belong to the previous run and clear, matching
-    /// the per-component accumulators `reset()` cleared. A rebuild in the
-    /// same generation (a topology mutation) keeps them.
+    /// A config reload resets the site and moves its energy epoch:
+    /// the aggregate totals belong to the previous run and clear,
+    /// matching the per-component accumulators `reset()` cleared. A
+    /// topology mutation, or a rebuild with carry, which moves the
+    /// run generation but not the epoch, keeps them.
     #[test]
-    fn energy_clears_on_a_new_run_generation_only() {
+    fn energy_clears_on_a_new_energy_epoch_only() {
         let state = new_microgrid_slot();
         let site = MicrogridSite::new();
         accumulate_energy("grid_energy", Some(1000.0), 0, &site, &state);
         accumulate_energy("grid_energy", Some(1000.0), HOUR_MS, &site, &state);
 
-        // Same generation: a mutation rebuild keeps the totals.
+        // Same epoch: a mutation rebuild keeps the totals.
+        clear_energy_on_new_run(&state, &site);
+        assert!(!state.energy.read().is_empty());
+
+        // A rebuild with carry keeps them too.
+        let spec = crate::spec::MicrogridSpec::default();
+        let built = crate::spec::build_topology(&spec, &Default::default()).unwrap();
+        site.swap_topology(built, &crate::sim::microgrid_site::CarryPlan::default());
         clear_energy_on_new_run(&state, &site);
         assert!(!state.energy.read().is_empty());
 

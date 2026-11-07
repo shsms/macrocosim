@@ -15,7 +15,7 @@
 //! gateway only while holding no registry guard. The lock is never
 //! held across an `.await`.
 
-use std::{collections::HashMap, fmt, time::Duration};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -127,8 +127,23 @@ impl MicrogridGateway {
     /// at the component's initial value, and for a battery its SoC
     /// window at its initial SoC.
     pub(crate) fn on_register(&self, c: &dyn SimulatedComponent) {
-        let id = c.id();
+        Self::register_locked(&mut self.state.lock(), c);
+    }
+
+    /// Clear everything and set up `components` afresh, under one
+    /// hold of the lock: what a rebuild with carry installs.
+    pub(crate) fn reinstall(&self, components: &[Arc<dyn SimulatedComponent>]) {
         let mut st = self.state.lock();
+        st.lifetimes.clear();
+        st.axes.clear();
+        st.batteries.clear();
+        for c in components {
+            Self::register_locked(&mut st, c.as_ref());
+        }
+    }
+
+    fn register_locked(st: &mut GatewayState, c: &dyn SimulatedComponent) {
+        let id = c.id();
         st.forget(id);
         if let Some(ctl) = c.controllable() {
             let settings = ctl.gateway_settings();
