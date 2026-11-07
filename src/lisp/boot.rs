@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use notify::{RecommendedWatcher, Watcher};
 use parking_lot::{Mutex, RwLock};
 use tulisp::{Error, SharedMut, TulispContext, TulispObject};
 
@@ -1182,162 +1181,40 @@ impl Config {
     /// rewrite sequenced after the signal is seen by the watcher or
     /// never will be, so tests can rewrite deterministically instead
     /// of sleeping and hoping the inotify hook beat them to it.
+    ///
+    /// Each debounced batch of edits is reloaded. Reload errors are
+    /// logged by the reload path and surfaced on the site event bus
+    /// so the UI can show a banner; the watch keeps going, so a typo
+    /// doesn't kill the live-edit feedback path.
     pub async fn watch_with_ready(self, ready: Option<tokio::sync::oneshot::Sender<()>>) {
-        // Fires on every exit from the arming phase, the error
-        // bail-outs included — a waiting test must not hang on a
-        // watcher that decided not to run.
-        let mut ready = ready;
-        let mut armed_signal = move || {
-            if let Some(tx) = ready.take() {
-                let _ = tx.send(());
-            }
+        let files = self.clone();
+        let watch = crate::watch::Watch {
+            mode: crate::watch::Mode::Files(Box::new(move || files.watched_files())),
+            filter: Box::new(|_: &Path| true),
+            // 150 ms is comfortably above the inotify event-batch
+            // latency on a busy machine and still feels instant to a
+            // human editing.
+            debounce: Duration::from_millis(150),
         };
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        // notify can fail at construction (out of inotify slots —
-        // `fs.inotify.max_user_watches` exhausted by an IDE running
-        // alongside) or at watch-registration time (file vanished).
-        // Either case kills hot-reload but the rest of the binary
-        // should keep serving; log and bail out of just this task.
-        let mut watcher = match RecommendedWatcher::new(
-            move |res| {
-                futures::executor::block_on(async {
-                    let _ = tx.send(res).await;
-                });
-            },
-            notify::Config::default(),
-        ) {
-            Ok(w) => w,
-            Err(e) => {
-                log::error!("watch: notify init failed: {e}; hot-reload disabled");
-                armed_signal();
-                return;
-            }
-        };
-        // Arm the initial watch set: enterprise.lisp, every file the
-        // loader evaluated, and every `(watch-file …)` registration.
-        let mut armed: HashSet<PathBuf> = HashSet::new();
-        let wanted = self.rearm_watches(&mut watcher, &mut armed);
-        if armed.is_empty() {
-            if wanted == 0 {
-                log::info!("watch: nothing to watch; hot-reload idle");
-            } else {
-                log::error!("watch: no watch could be registered; hot-reload disabled");
-            }
-            armed_signal();
-            return;
-        }
-        armed_signal();
-
-        // Debounce window. Editors typically fire several notify
-        // events for a single save (write + close-after-write +
-        // plugin reformat); we coalesce anything arriving within
-        // this window into one reload. 150 ms is comfortably above
-        // the inotify event-batch latency on a busy machine and
-        // still feels instant to a human editing.
-        const DEBOUNCE: Duration = Duration::from_millis(150);
-        // How often the watch set is rebuilt when nothing happens.
-        // Two things go stale on their own: a file loaded at runtime
-        // has no watch yet, and an atomic save (write temp + rename)
-        // leaves the inotify watch on the REPLACED inode — the event
-        // does arrive, but every later edit lands on the new file the
-        // dead watch no longer follows. Both fix themselves within
-        // this interval; re-arming a handful of paths is cheap.
-        const REARM: Duration = Duration::from_secs(5);
-
-        loop {
-            let res = match tokio::time::timeout(REARM, rx.recv()).await {
-                Ok(Some(res)) => res,
-                // Channel closed — the watcher is gone.
-                Ok(None) => return,
-                Err(_) => {
-                    self.rearm_watches(&mut watcher, &mut armed);
-                    continue;
-                }
-            };
-            // Which files this batch touched. Only Modify events
-            // count — a create/remove on a watched file is not an
-            // edit of live content.
-            let mut touched: HashSet<PathBuf> = HashSet::new();
-            match res {
-                Ok(event) => collect_modified(&event, &mut touched),
-                Err(e) => {
-                    log::error!("watch error: {:?}", e);
-                    return;
-                }
-            }
-            // After the first event, drain any further events that
-            // arrive within DEBOUNCE; each additional event restarts
-            // the window. Once the window goes quiet, reload what the
-            // whole batch touched. Reload errors are logged by the
-            // reload path and surfaced on the site event bus so the UI
-            // can show a banner; the loop intentionally keeps going so
-            // a typo doesn't kill the live-edit feedback path.
-            loop {
-                match tokio::time::timeout(DEBOUNCE, rx.recv()).await {
-                    Ok(Some(Ok(event))) => {
-                        collect_modified(&event, &mut touched);
-                        continue;
-                    }
-                    Ok(Some(Err(e))) => {
-                        log::error!("watch error: {:?}", e);
-                        return;
-                    }
-                    Ok(None) => return,
-                    Err(_) => break,
-                }
-            }
-            if !touched.is_empty() {
+        watch
+            .run(ready, |touched| {
                 self.reload_touched(&touched);
-            }
-            // Re-arm after every batch, reload or not: a reload can
-            // change what there is to watch (a file may have
-            // registered a new microgrid, or dropped its last one),
-            // and the events we ignored may have been the replaced
-            // file our watch was following.
-            self.rearm_watches(&mut watcher, &mut armed);
-        }
+                async {}
+            })
+            .await;
     }
 
-    /// Point `watcher` at exactly the files worth watching now:
-    /// `enterprise.lisp`, every file the loader evaluated, and every
-    /// `(watch-file …)` registration. `armed` is the set currently
-    /// watched; it is updated in place. Returns how many paths were
-    /// wanted, so a caller can tell "nothing to watch" from "every
-    /// watch failed to register".
+    /// The files worth watching now: `enterprise.lisp`, every file the
+    /// loader evaluated, and every `(watch-file …)` registration.
     ///
     /// Loader-visited files, not just the registry's sources: a
     /// driver script that arms timers and registers no microgrid is
     /// still a file an operator edits and expects to take effect.
-    fn rearm_watches(
-        &self,
-        watcher: &mut RecommendedWatcher,
-        armed: &mut HashSet<PathBuf>,
-    ) -> usize {
+    fn watched_files(&self) -> Vec<PathBuf> {
         let mut want: Vec<PathBuf> = vec![self.enterprise_path()];
         want.extend(self.loader_visited_files());
         want.extend(self.extra_watches.lock().iter().cloned());
-        let want: HashSet<PathBuf> = want
-            .into_iter()
-            .map(|p| p.canonicalize().unwrap_or(p))
-            .filter(|p| p.exists())
-            .collect();
-        for gone in armed.difference(&want) {
-            let _ = watcher.unwatch(gone);
-        }
-        // Re-arm every wanted path, the already-armed ones included:
-        // an atomic save replaces the file, leaving the old watch on
-        // an inode nothing writes to any more.
-        let mut next = HashSet::new();
-        for path in &want {
-            match watcher.watch(path, notify::RecursiveMode::NonRecursive) {
-                Ok(()) => {
-                    next.insert(path.clone());
-                }
-                Err(e) => log::warn!("watch {}: {}", path.display(), e),
-            }
-        }
-        *armed = next;
-        want.len()
+        want
     }
 
     /// React to one debounced batch of file edits: re-evaluate
@@ -1399,14 +1276,6 @@ impl Config {
                 entry.site.broadcast_config_error(msg.clone());
             }
         }
-    }
-}
-
-/// Add the paths of a Modify event to `touched`. Anything else (a
-/// create, a remove, an access) is not an edit of live content.
-fn collect_modified(event: &notify::Event, touched: &mut HashSet<PathBuf>) {
-    if matches!(event.kind, notify::EventKind::Modify(_)) {
-        touched.extend(event.paths.iter().cloned());
     }
 }
 

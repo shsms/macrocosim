@@ -17,3 +17,4 @@ pub mod ui;
 pub mod ui_log;
 pub mod undo;
 pub mod version;
+pub mod watch;

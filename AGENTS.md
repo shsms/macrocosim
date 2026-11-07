@@ -36,6 +36,10 @@ is wiring the topology + animating the environment.
   (`0.2.0-alpha.0` is `0.2.0a0`), the form the Python package carries
 - `src/undo.rs` — `UndoHistory<T>`, the per-microgrid undo / redo
   stack (capped at 20 steps), generic over what one step stores
+- `src/watch.rs` — the debounced file watcher: `Files` watches a named
+  set of files and re-arms them after an atomic save (the Lisp hot
+  reload in `lisp/boot.rs`); `Tree` watches every directory under a
+  root that passes a filter, adding new ones
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback), its
   started / failed status, and the handles of the tasks it started:
