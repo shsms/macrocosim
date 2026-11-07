@@ -50,6 +50,32 @@ def error_text(response: httpx.Response) -> str:
     return response.text
 
 
+def error_fields(response: httpx.Response) -> dict[str, Any]:
+    """The fields of a failed response's JSON object besides ``error``;
+    empty for any other body."""
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    if not isinstance(body, dict):
+        return {}
+    return {k: v for k, v in body.items() if k != "error"}
+
+
+def _parse_answer(method: str, path: str, body: Any, parse: Callable[[Any], T]) -> T:
+    """`parse` of the answer `body` to `method` `path`; a `ServerError` when
+    it cannot be read."""
+    try:
+        return parse(body)
+    except WRONG_SHAPE as exc:
+        raise ServerError(
+            f"{method} {path} answered something the client did not expect "
+            f"({exc!r}); do the client and the simulator binary match?",
+            method=method,
+            path=path,
+        ) from exc
+
+
 class _Session:
     """One `httpx.AsyncClient` bound to a simulator's UI server."""
 
@@ -101,16 +127,7 @@ class _Session:
     ) -> T:
         """GET `path` and return `parse` of the decoded body; an answer that
         `parse` cannot read raises `ServerError`."""
-        body = await self.get_json(path, params)
-        try:
-            return parse(body)
-        except WRONG_SHAPE as exc:
-            raise ServerError(
-                f"GET {path} answered something the client did not expect "
-                f"({exc!r}); do the client and the simulator binary match?",
-                method="GET",
-                path=path,
-            ) from exc
+        return _parse_answer("GET", path, await self.get_json(path, params), parse)
 
     async def get_json_object(self, path: str) -> dict[str, Any]:
         """GET `path`; the decoded body. An answer that is not a JSON object
@@ -128,6 +145,19 @@ class _Session:
         with that description.
         """
         return await self._request("POST", path, json=body, call=call)
+
+    async def post_parsed(
+        self,
+        path: str,
+        body: Mapping[str, Any] | None,
+        parse: Callable[[Any], T],
+        *,
+        call: str,
+    ) -> T:
+        """`post_json`, returning `parse` of the decoded answer; an answer
+        that `parse` cannot read raises `ServerError`."""
+        answer = await self.post_json(path, body, call=call)
+        return _parse_answer("POST", path, answer, parse)
 
     async def delete(self, path: str, *, call: str) -> Any:
         """DELETE `path`; the decoded body, or ``None`` for 204. A 400 or 409
@@ -167,7 +197,12 @@ class _Session:
                 ) from exc
         text = error_text(response)
         if call is not None and status in (400, 409):
-            raise Rejected(f"{call} was rejected: {text}", call=call, text=text)
+            raise Rejected(
+                f"{call} was rejected: {text}",
+                call=call,
+                text=text,
+                fields=error_fields(response),
+            )
         raise ServerError(
             f"{method} {path} answered {status}: {text}",
             method=method,

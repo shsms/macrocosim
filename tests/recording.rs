@@ -141,6 +141,7 @@ async fn start_event_stop_and_report() {
     assert_eq!(code, StatusCode::CONFLICT, "{body}");
     let (code, body) = post(&client, &s, "recording/event", json!({"kind": "late"})).await;
     assert_eq!(code, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body.get("ended_by"), None, "{body}");
 }
 
 #[tokio::test]
@@ -213,6 +214,7 @@ async fn a_put_ends_the_recording_and_keeps_its_report() {
     assert!(!running(&client, &s).await);
     let (code, body) = post(&client, &s, "recording/event", json!({"kind": "late"})).await;
     assert_eq!(code, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["ended_by"], "rebuild", "{body}");
 
     let (code, report) = stop(&client, &s).await;
     assert_eq!(code, StatusCode::OK, "{report}");

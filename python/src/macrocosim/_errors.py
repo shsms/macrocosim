@@ -15,9 +15,10 @@ value, or an int too large for a float in a float field, raises a plain
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 WRONG_SHAPE = (AttributeError, KeyError, TypeError, ValueError)
 """What reading an answer or file of an unexpected shape raises."""
@@ -79,10 +80,19 @@ class SimulatorExited(ServerError):
 class Rejected(MacrocosimError):
     """The simulator refused a value the test set, or a fault it asked for."""
 
-    def __init__(self, message: str, *, call: str, text: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        call: str,
+        text: str,
+        fields: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.call = call
         self.text = text
+        # The refusal's JSON fields beside ``error``; the client reads them.
+        self._fields: dict[str, Any] = dict(fields or {})
 
 
 class UnknownComponent(MacrocosimError, LookupError):

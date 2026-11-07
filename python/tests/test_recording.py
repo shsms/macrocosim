@@ -48,6 +48,7 @@ class _Fake:
     def __init__(self, stop: httpx.Response | None = None) -> None:
         self.stop = stop or httpx.Response(200, json=_report())
         self.start = httpx.Response(204)
+        self.event = httpx.Response(200, json={"id": 4})
         self.requests: list[tuple[str, Any]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -59,7 +60,7 @@ class _Fake:
         if route == "stop":
             return self.stop
         if route == "event":
-            return httpx.Response(200, json={"id": 4})
+            return self.event
         return httpx.Response(404, json={"error": "no route"})
 
     @property
@@ -114,6 +115,38 @@ async def test_a_rebuild_warns_and_does_not_raise(
     [record] = caplog.records
     assert record.levelno == logging.WARNING
     assert "Microgrid 7 was rebuilt during recording 'peak'" in record.getMessage()
+
+
+async def test_an_event_after_a_rebuild_warns_and_is_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake = _Fake(httpx.Response(200, json=_report(ended_by="rebuild")))
+    fake.event = httpx.Response(
+        409,
+        json={
+            "error": "the recording in microgrid 7 ended when the microgrid was rebuilt",
+            "ended_by": "rebuild",
+        },
+    )
+    mg = _mg(fake)
+    with caplog.at_level(logging.WARNING, logger="macrocosim"):
+        async with mg.record("peak") as r:
+            assert await r.event("late", 1) is None
+    first = caplog.records[0].getMessage()
+    assert "Microgrid 7 dropped event 'late' of recording 'peak'" in first
+    assert "ended when the microgrid was rebuilt" in first
+    assert fake.paths == ["start", "event", "stop"]
+
+
+async def test_an_event_refused_for_another_reason_raises() -> None:
+    fake = _Fake()
+    fake.event = httpx.Response(
+        409, json={"error": "no recording is running in microgrid 7"}
+    )
+    mg = _mg(fake)
+    with pytest.raises(Rejected, match="no recording is running"):
+        async with mg.record("peak") as r:
+            await r.event("late", 1)
 
 
 async def test_an_unload_warns_and_leaves_no_report(
@@ -225,7 +258,8 @@ async def test_live_recording(tmp_path: Path, caplog: pytest.LogCaptureFixture) 
             async with mg.record("edited") as r:
                 async with httpx.AsyncClient(base_url=mg.ui_url, trust_env=False) as c:
                     (await c.put(spec_path, json=spec)).raise_for_status()
-                with pytest.raises(Rejected, match="no recording is running"):
-                    await r.event("late")
+                assert await r.event("late") is None
         assert r.report().ended_by == "rebuild"
-        assert any("was rebuilt" in rec.getMessage() for rec in caplog.records)
+        messages = [rec.getMessage() for rec in caplog.records]
+        assert any("dropped event 'late'" in m for m in messages)
+        assert any("was rebuilt" in m for m in messages)

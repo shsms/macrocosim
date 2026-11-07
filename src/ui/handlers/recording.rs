@@ -22,6 +22,10 @@ fn refused(mg: u64, e: RecordingError) -> ApiError {
         RecordingError::NotRunning => {
             ApiError::conflict(format!("no recording is running in microgrid {mg}"))
         }
+        RecordingError::EndedByRebuild => ApiError::conflict(format!(
+            "the recording in microgrid {mg} ended when the microgrid was rebuilt"
+        ))
+        .with("ended_by", "rebuild"),
         RecordingError::Csv(e) => {
             ApiError::internal(format!("recording CSV files for microgrid {mg}: {e}"))
         }
@@ -81,7 +85,8 @@ pub(in crate::ui) struct RecordedEvent {
 }
 
 /// POST /api/mg/{mg}/recording/event — add an event to the running
-/// recording; answers its id. 409 when no recording runs.
+/// recording; answers its id. 409 when no recording runs, with
+/// `"ended_by": "rebuild"` beside the error when a rebuild ended it.
 pub(in crate::ui) async fn recording_event(
     mg: Mg,
     Json(req): Json<EventRequest>,

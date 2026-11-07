@@ -7,13 +7,12 @@ Internal; imports `_errors` and `_units`, and `_session` for typing only.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from ._errors import WRONG_SHAPE, ServerError
+from ._errors import Rejected, ServerError
 from ._units import check_type
 
 if TYPE_CHECKING:
@@ -21,7 +20,6 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("macrocosim")
 
-T = TypeVar("T")
 
 EndedBy = Literal["stop", "rebuild"]
 """What ended a recording: its own stop, or a rebuild of the microgrid."""
@@ -133,18 +131,6 @@ class _Host(Protocol):
     _recording: Recording | None
 
 
-def _parsed(path: str, body: Any, parse: Callable[[Any], T]) -> T:
-    try:
-        return parse(body)
-    except WRONG_SHAPE as exc:
-        raise ServerError(
-            f"POST {path} answered something the client did not expect "
-            f"({exc!r}); do the client and the simulator binary match?",
-            method="POST",
-            path=path,
-        ) from exc
-
-
 class Recording:
     """A recording of one microgrid, from `Microgrid.record`.
 
@@ -153,10 +139,10 @@ class Recording:
     `event`; after the block, `report` gives what it measured.
 
     A UI edit or an undo that rebuilds the microgrid ends the recording early.
-    The block goes on, unrecorded from the rebuild on; leaving it logs a
-    warning, and the report says ``ended_by="rebuild"``. A microgrid unloaded
-    during the block leaves no report: leaving it logs a warning, and `report`
-    raises.
+    The block goes on, unrecorded from the rebuild on: `event` logs a warning
+    and drops the event, leaving the block logs a warning, and the report says
+    ``ended_by="rebuild"``. A microgrid unloaded during the block leaves no
+    report: leaving it logs a warning, and `report` raises.
     """
 
     def __init__(self, session: _Session, host: _Host, name: str, csv: bool) -> None:
@@ -214,7 +200,9 @@ class Recording:
         mg = self._session.microgrid_id
         path = self._session.microgrid_path("recording/stop")
         try:
-            body = await self._session.post_json(path, None, call=f"{self._label} stop")
+            report = await self._session.post_parsed(
+                path, None, RecordingReport._from_json, call=f"{self._label} stop"
+            )
         except ServerError as err:
             if err.status != 404:
                 raise
@@ -225,8 +213,8 @@ class Recording:
                 self._name,
             )
             return
-        self._report = _parsed(path, body, RecordingReport._from_json)
-        if self._report.ended_by == "rebuild":
+        self._report = report
+        if report.ended_by == "rebuild":
             _log.warning(
                 "Microgrid %d was rebuilt during recording %r, which ended at the "
                 "rebuild; the rest of the block was not recorded",
@@ -234,20 +222,33 @@ class Recording:
                 self._name,
             )
 
-    async def event(self, kind: str, payload: Any = None) -> int:
+    async def event(self, kind: str, payload: Any = None) -> int | None:
         """Add an event named `kind` to the recording, with any JSON value as
-        its `payload`; returns the event's id. Raises `Rejected` once a rebuild
-        has ended the recording."""
+        its `payload`; returns the event's id. Once a rebuild has ended the
+        recording, logs a warning, drops the event and returns ``None``; any
+        other refusal raises `Rejected`."""
         check_type(f"{self._label} event kind", kind, str)
         if not self._open:
             raise RuntimeError(f"{self._label} is not open; call event inside its block")
         path = self._session.microgrid_path("recording/event")
-        body = await self._session.post_json(
-            path,
-            {"kind": kind, "payload": payload},
-            call=f"{self._label}.event({kind!r})",
-        )
-        return _parsed(path, body, lambda b: int(b["id"]))
+        try:
+            return await self._session.post_parsed(
+                path,
+                {"kind": kind, "payload": payload},
+                lambda b: int(b["id"]),
+                call=f"{self._label}.event({kind!r})",
+            )
+        except Rejected as err:
+            if err._fields.get("ended_by") != "rebuild":
+                raise
+            _log.warning(
+                "Microgrid %d dropped event %r of recording %r: %s",
+                self._session.microgrid_id,
+                kind,
+                self._name,
+                err.text,
+            )
+            return None
 
     def report(self) -> RecordingReport:
         """What the recording measured, once its block has exited. Raises
