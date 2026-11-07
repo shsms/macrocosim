@@ -97,7 +97,7 @@ pub struct Engine {
     /// the microgrids with a stored spec. In memory only.
     pub(crate) spec_undo: Arc<Mutex<HashMap<u64, UndoHistory<MicrogridSpec>>>>,
     /// The Python interpreter a script and the export run on, found
-    /// and checked on first use.
+    /// and checked on use until a check passes.
     pub(crate) python: Arc<Interpreter>,
     /// One export at a time: the permit a `.py` export holds.
     pub(crate) exports: Arc<tokio::sync::Semaphore>,
@@ -258,15 +258,15 @@ impl Engine {
     }
 
     /// Run scripts and exports on `path` (`--python`) instead of
-    /// looking for an interpreter. Only takes effect before the first
-    /// [`Self::python`].
+    /// looking for an interpreter. Only takes effect until a
+    /// [`Self::python`] passes.
     pub fn set_python(&self, path: PathBuf) {
         self.python.set_flag(path);
     }
 
-    /// The checked Python interpreter, found on the first call; the
-    /// install message when there is none that passes. See
-    /// [`crate::runner::python`].
+    /// The checked Python interpreter; the install message when there
+    /// is none that passes. A failed check runs again on the next
+    /// call. See [`crate::runner::python`].
     pub async fn python(&self) -> Result<PathBuf, String> {
         self.python.get().await
     }

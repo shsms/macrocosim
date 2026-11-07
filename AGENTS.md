@@ -52,9 +52,10 @@ is wiring the topology + animating the environment.
   which is ended once the child has ended);
   `runner/hello.rs` the hello and its error codes.
   `runner/python.rs` finds the Python interpreter (`--python`,
-  `$MACROCOSIM_PYTHON`, beside the binary, `PATH`) and checks it once
-  per engine: 3.11 or later with the `macrocosim` package of the
-  binary's version. The `.py` export (`GET /api/mg/{mg}/spec.py`) pipes
+  `$MACROCOSIM_PYTHON`, beside the binary, `PATH`) and checks it: 3.11
+  or later with the `macrocosim` package of the binary's version. A
+  passed check is kept for the engine's life; a failed one runs again
+  on the next script start or export. The `.py` export (`GET /api/mg/{mg}/spec.py`) pipes
   the stored spec into `python -P -m macrocosim.export`, one export at
   a time
 - `src/watch.rs` — the debounced file watcher: `Files` watches a named

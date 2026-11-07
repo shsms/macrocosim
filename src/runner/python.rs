@@ -1,6 +1,8 @@
 //! Finding the Python interpreter that runs a script and the export,
-//! and checking it once: Python 3.11 or later, with the `macrocosim`
-//! package of the binary's own version.
+//! and checking it: Python 3.11 or later, with the `macrocosim`
+//! package of the binary's own version. A passed check is kept for
+//! the life of the engine; a failed one runs again on the next use,
+//! so installing the package fixes the export without a restart.
 //!
 //! The first match wins: `--python`, then `$MACROCOSIM_PYTHON`, then
 //! a `python` or `python3` next to the running binary (the wheel's
@@ -12,7 +14,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use tokio::sync::OnceCell;
 
 use crate::version::VERSION;
 
@@ -34,40 +35,41 @@ const CHECK_SCRIPT: &str = "import sys\n\
                      print(*sys.version_info[:2])\n\
                      import importlib.metadata as m; print(m.version('macrocosim'))";
 
-/// The interpreter an engine uses, found and checked on first use.
+/// The interpreter an engine uses, found and checked on use until a
+/// check passes.
 #[derive(Default)]
 pub struct Interpreter {
     /// `--python`.
-    flag: Mutex<Option<PathBuf>>,
-    /// The checked interpreter, or the message saying why there is
-    /// none. Kept for the life of the engine.
-    checked: OnceCell<Result<PathBuf, String>>,
+    override_path: Mutex<Option<PathBuf>>,
+    /// The interpreter that passed the check, kept for the life of
+    /// the engine. Held across a check, so two uses never check at
+    /// once.
+    checked: tokio::sync::Mutex<Option<PathBuf>>,
 }
 
 impl Interpreter {
     /// Use `path` (`--python`) instead of looking for one. Only takes
-    /// effect before the first [`Self::get`].
-    pub fn set_flag(&self, path: PathBuf) {
-        *self.flag.lock() = Some(path);
+    /// effect until a [`Self::resolve`] passes.
+    pub fn set_override(&self, path: PathBuf) {
+        *self.override_path.lock() = Some(path);
     }
 
-    /// The interpreter, found and checked on the first call; the
-    /// install message when there is none that passes.
-    pub async fn get(&self) -> Result<PathBuf, String> {
-        let flag = self.flag.lock().clone();
-        self.checked
-            .get_or_init(|| async move {
-                // Absolute, since the check and the children run in
-                // other directories.
-                let path = find(flag)?;
-                let path = std::path::absolute(&path).unwrap_or(path);
-                match check(&path).await {
-                    Ok(()) => Ok(path),
-                    Err(what) => Err(message(&path.display().to_string(), &what)),
-                }
-            })
+    /// The interpreter to run. Returns the one a check already
+    /// passed, without checking again. Until a check has passed, each
+    /// call finds an interpreter and checks it now. Errs with the
+    /// install message when the check fails.
+    pub async fn resolve(&self) -> Result<PathBuf, String> {
+        let mut checked = self.checked.lock().await;
+        if let Some(path) = &*checked {
+            return Ok(path.clone());
+        }
+        let override_path = self.override_path.lock().clone();
+        let path = locate(find(override_path)?, std::env::var_os("PATH"));
+        check(&path)
             .await
-            .clone()
+            .map_err(|what| message(&path.display().to_string(), &what))?;
+        *checked = Some(path.clone());
+        Ok(path)
     }
 }
 
@@ -141,7 +143,7 @@ fn find_in(
 /// other relative path is taken from the current directory. A bare
 /// name `PATH` does not have is left as it is, for the check to
 /// report.
-fn resolve(path: PathBuf) -> PathBuf {
+fn locate(path: PathBuf, path_var: Option<std::ffi::OsString>) -> PathBuf {
     if path.components().count() == 1 && !path.is_absolute() {
         return on_path_var(&[&path], path_var).unwrap_or(path);
     }
@@ -219,8 +221,8 @@ mod tests {
     async fn checked(stdout: &str) -> Result<PathBuf, String> {
         let dir = tempfile::TempDir::with_prefix("mc-python-").unwrap();
         let interpreter = Interpreter::default();
-        interpreter.set_flag(fake(dir.path(), stdout));
-        interpreter.get().await
+        interpreter.set_override(fake(dir.path(), stdout));
+        interpreter.resolve().await
     }
 
     #[tokio::test]
@@ -313,17 +315,20 @@ mod tests {
 
     #[test]
     fn a_bare_name_is_looked_up_on_the_path() {
-        let found = resolve(PathBuf::from("sh"));
+        let found = locate(PathBuf::from("sh"), std::env::var_os("PATH"));
         assert!(
             found.is_absolute() && found.is_file(),
             "{}",
             found.display()
         );
         assert_eq!(
-            resolve(PathBuf::from("no-such-python-here")),
+            locate(
+                PathBuf::from("no-such-python-here"),
+                std::env::var_os("PATH")
+            ),
             PathBuf::from("no-such-python-here")
         );
-        let relative = resolve(PathBuf::from("venv/bin/python"));
+        let relative = locate(PathBuf::from("venv/bin/python"), std::env::var_os("PATH"));
         assert_eq!(
             relative,
             std::env::current_dir().unwrap().join("venv/bin/python")
@@ -376,16 +381,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_interpreter_is_reported_and_the_result_kept() {
+    async fn a_missing_interpreter_is_reported() {
         let _spawns = SPAWNS.lock().await;
         let interpreter = Interpreter::default();
-        interpreter.set_flag(PathBuf::from("/nonexistent/python"));
-        let err = interpreter.get().await.unwrap_err();
+        interpreter.set_override(PathBuf::from("/nonexistent/python"));
+        let err = interpreter.resolve().await.unwrap_err();
         assert!(
             err.contains("Found: /nonexistent/python (it does not run:"),
             "{err}"
         );
-        interpreter.set_flag(PathBuf::from("/usr/bin/true"));
-        assert_eq!(interpreter.get().await.unwrap_err(), err, "checked once");
+    }
+
+    /// A failed check runs again on the next use, so installing the
+    /// package needs no restart; a passed one is kept. The fake is
+    /// written once, before anything runs, and reads its answer from
+    /// a file the test changes.
+    #[tokio::test]
+    async fn only_a_passed_check_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let _spawns = SPAWNS.lock().await;
+        let dir = tempfile::TempDir::with_prefix("mc-python-").unwrap();
+        let answer = dir.path().join("answer");
+        let python = dir.path().join("python");
+        std::fs::write(&python, format!("#!/bin/sh\ncat '{}'\n", answer.display())).unwrap();
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let interpreter = Interpreter::default();
+        interpreter.set_override(python.clone());
+
+        std::fs::write(&answer, "3 12\n").unwrap();
+        let err = interpreter.resolve().await.unwrap_err();
+        assert!(err.contains("(no macrocosim package)"), "{err}");
+
+        std::fs::write(&answer, format!("3 12\n{}\n", *VERSION)).unwrap();
+        assert_eq!(
+            interpreter.resolve().await.unwrap(),
+            python,
+            "checked again"
+        );
+
+        std::fs::write(&answer, "3 12\n").unwrap();
+        assert_eq!(
+            interpreter.resolve().await.unwrap(),
+            python,
+            "the pass is kept"
+        );
     }
 }
