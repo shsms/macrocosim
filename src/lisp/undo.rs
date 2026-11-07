@@ -10,9 +10,10 @@
 //!
 //! Only the structure is versioned. The hand-written script section
 //! is the author's and is carried through untouched, so an undo never
-//! reverts a line a person typed.
+//! reverts a line a person typed. The stack is
+//! [`crate::undo::UndoHistory`] over blocks.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -20,37 +21,15 @@ use parking_lot::Mutex;
 
 use super::Config;
 use super::microgrid_file;
+pub use crate::undo::UndoDepths;
+use crate::undo::{Direction, UndoHistory};
 
-/// How many undo steps one microgrid keeps. Older steps fall off the
-/// back — the stack is a convenience for taking back a few clicks,
-/// not a history store (that is what snapshots and git are for).
-const UNDO_CAP: usize = 20;
-
-/// One microgrid's edit history: generated blocks, newest last.
-#[derive(Default)]
-pub struct UndoHistory {
-    /// Blocks the file used to carry, oldest first. `undo` pops the
-    /// back.
-    undo: VecDeque<String>,
-    /// Blocks undone and not yet re-applied, newest last. Cleared by
-    /// any fresh edit — a new branch of history drops the old one.
-    redo: Vec<String>,
-}
-
-/// The per-microgrid histories, shared like the rest of `Config`.
-pub type SharedUndo = Arc<Mutex<HashMap<u64, UndoHistory>>>;
+/// The per-microgrid histories of generated blocks, shared like the
+/// rest of `Config`.
+pub type SharedUndo = Arc<Mutex<HashMap<u64, UndoHistory<String>>>>;
 
 pub fn new_undo_histories() -> SharedUndo {
     Arc::new(Mutex::new(HashMap::new()))
-}
-
-/// How deep each stack is — what `GET /api/mg/{id}/undo` reports and
-/// what the mutating endpoints echo back so the UI can grey out its
-/// buttons.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UndoDepths {
-    pub undo: usize,
-    pub redo: usize,
 }
 
 impl Config {
@@ -63,13 +42,7 @@ impl Config {
     /// AFTER the write succeeds, or a failed write leaves a step that
     /// undoes to a state the file never had.
     pub(super) fn push_undo_block(&self, id: u64, block: String) {
-        let mut histories = self.undo.lock();
-        let history = histories.entry(id).or_default();
-        history.undo.push_back(block);
-        while history.undo.len() > UNDO_CAP {
-            history.undo.pop_front();
-        }
-        history.redo.clear();
+        self.undo.lock().entry(id).or_default().record(block);
     }
 
     /// Stack depths for microgrid `id`, both zero when it has no
@@ -77,10 +50,7 @@ impl Config {
     pub fn undo_depths(&self, id: u64) -> UndoDepths {
         let histories = self.undo.lock();
         match histories.get(&id) {
-            Some(h) => UndoDepths {
-                undo: h.undo.len(),
-                redo: h.redo.len(),
-            },
+            Some(h) => h.depths(),
             None => UndoDepths { undo: 0, redo: 0 },
         }
     }
@@ -205,26 +175,11 @@ impl Config {
     }
 
     fn pop(&self, id: u64, dir: Direction) -> Option<String> {
-        let mut histories = self.undo.lock();
-        let history = histories.get_mut(&id)?;
-        match dir {
-            Direction::Undo => history.undo.pop_back(),
-            Direction::Redo => history.redo.pop(),
-        }
+        self.undo.lock().get_mut(&id)?.pop(dir)
     }
 
     fn push(&self, id: u64, dir: Direction, block: String) {
-        let mut histories = self.undo.lock();
-        let history = histories.entry(id).or_default();
-        match dir {
-            Direction::Undo => {
-                history.undo.push_back(block);
-                while history.undo.len() > UNDO_CAP {
-                    history.undo.pop_front();
-                }
-            }
-            Direction::Redo => history.redo.push(block),
-        }
+        self.undo.lock().entry(id).or_default().push(dir, block);
     }
 }
 
@@ -241,31 +196,6 @@ enum StepFailure {
     /// failed. The step counts as taken, and `displaced` — the block
     /// the write replaced — belongs on the opposite stack.
     ReloadFailed { error: String, displaced: String },
-}
-
-/// Which stack a step comes off.
-#[derive(Clone, Copy)]
-enum Direction {
-    Undo,
-    Redo,
-}
-
-impl Direction {
-    fn opposite(self) -> Self {
-        match self {
-            Direction::Undo => Direction::Redo,
-            Direction::Redo => Direction::Undo,
-        }
-    }
-}
-
-impl std::fmt::Display for Direction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Direction::Undo => f.write_str("undo"),
-            Direction::Redo => f.write_str("redo"),
-        }
-    }
 }
 
 /// The generated block of the file at `path`, or `None` when the

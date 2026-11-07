@@ -23,6 +23,8 @@ is wiring the topology + animating the environment.
   not use specs
 - `src/version.rs` — `VERSION`, the crate version in PEP 440 form
   (`0.2.0-alpha.0` is `0.2.0a0`), the form the Python package carries
+- `src/undo.rs` — `UndoHistory<T>`, the per-microgrid undo / redo
+  stack (capped at 20 steps), generic over what one step stores
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback) and its
   started / failed status
@@ -83,7 +85,8 @@ is wiring the topology + animating the environment.
   - `overrides.rs` — structural-eval persist-on-write: regenerates a
     microgrid's managed file, or `enterprise.lisp` for enterprise-wide
     state
-  - `undo.rs` — per-microgrid undo stack over the managed-file rewrites
+  - `undo.rs` — per-microgrid undo over the managed-file rewrites, on
+    the stack type in `src/undo.rs`
   - `snapshots.rs` — per-mg snapshot save/load under `snapshots/{id}/`
   - `make.rs` — `(make-*)` constructors via `AsList!`
   - `handle.rs` — `ComponentHandle` as an opaque lisp value
