@@ -311,7 +311,7 @@ async fn every_microgrid_route_shares_the_unregistered_404() {
             "POST {suffix}"
         );
     }
-    for suffix in ["dispatches/1", "component/1/ev"] {
+    for suffix in ["dispatches/1", "component/1/ev", "weather"] {
         let req = delete_req(&format!("/api/mg/9999/{suffix}"));
         let (status, resp) = call(cfg.clone(), req).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "DELETE {suffix}");
@@ -3710,6 +3710,34 @@ async fn steam_demand_is_driven_and_read_in_kg_per_s() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(error_of(&body).contains("steam_demand_kg_h"));
+}
+
+/// A weather `seed` rebuilds the weather, as `:seed` does, and
+/// `DELETE` removes it: the route answers 404 until weather is set
+/// again.
+#[tokio::test]
+async fn weather_takes_a_seed_and_delete_removes_it() {
+    let (cfg, _dir) = config_with("").await;
+    let (status, body) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/weather",
+            r#"{"sunrise": "07:00", "seed": 3, "pass_cloud": {"depth_pct": 40, "duration_s": 60}}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let seed_of = |cfg: &Config| cfg.site().with_weather(|w| w.config().seed).flatten();
+    assert_eq!(seed_of(&cfg), Some(3));
+
+    let (status, body) = call(cfg.clone(), delete_req("/api/mg/2200/weather")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_empty());
+    assert!(cfg.site().with_weather(|_| ()).is_none());
+    let (status, _) = call(cfg.clone(), get("/api/mg/2200/weather")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(cfg, delete_req("/api/mg/2200/weather")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]

@@ -85,7 +85,7 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         spec::{microgrid_delete, spec_get, spec_put, spec_schema},
         topology::topology,
         undo::{redo, undo, undo_depths},
-        weather::{weather_get, weather_post},
+        weather::{weather_delete, weather_get, weather_post},
     };
     let per_mg = Router::new()
         .route("/", delete(microgrid_delete))
@@ -105,7 +105,10 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         )
         .route("/sample-lag", post(sample_lag))
         .route("/streams/cancel", post(streams_cancel))
-        .route("/weather", get(weather_get).post(weather_post))
+        .route(
+            "/weather",
+            get(weather_get).post(weather_post).delete(weather_delete),
+        )
         .route("/grid", post(grid_post))
         .route("/metrics/status", get(metrics_status))
         .route("/metrics/latest", get(metrics_latest))

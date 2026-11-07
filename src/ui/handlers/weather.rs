@@ -1,7 +1,9 @@
 //! Site weather over HTTP: `GET`/`POST /api/mg/{mg}/weather` mirror
 //! the Lisp `(make-weather)`, `(set-weather)`, `(pass-cloud)` and
 //! `(weather-status)` doors (`src/lisp/defuns/weather.rs`) for the
-//! weather panel, which has no Lisp console of its own.
+//! weather panel, which has no Lisp console of its own, and for
+//! scripts. `DELETE` removes the weather, as a reload without
+//! `(make-weather)` does.
 //!
 //! Unlike the typed drive door in `control.rs`, weather isn't
 //! component-addressed — it's a property of the site — so it gets
@@ -10,6 +12,7 @@
 //! doors enforce, so a request that would be rejected in the console
 //! is rejected here too, and vice versa.
 
+use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -127,6 +130,9 @@ pub(in crate::ui) struct WeatherPostRequest {
     cloud_depth_pct: Option<(f32, f32)>,
     cloud_duration_s: Option<(f32, f32)>,
     cloud_ramp_s: Option<(f32, f32)>,
+    /// Seed the random clouds, so they are the same in every run. It
+    /// replaces the weather: the clouds in the sky go.
+    seed: Option<u64>,
     pass_cloud: Option<PassCloudRequest>,
 }
 
@@ -143,6 +149,7 @@ impl WeatherPostRequest {
             || self.cloud_depth_pct.is_some()
             || self.cloud_duration_s.is_some()
             || self.cloud_ramp_s.is_some()
+            || self.seed.is_some()
     }
 }
 
@@ -176,9 +183,7 @@ fn patch_of(req: &WeatherPostRequest) -> Result<WeatherPatch, String> {
         cloud_depth: req.cloud_depth_pct,
         cloud_duration: req.cloud_duration_s,
         cloud_ramp: req.cloud_ramp_s,
-        // No JSON field for it: re-seeding the ambient generator is a
-        // console operation, not something the panel offers.
-        seed: None,
+        seed: req.seed,
     })
 }
 
@@ -265,6 +270,14 @@ pub(in crate::ui) async fn weather_post(
     Json(req): Json<WeatherPostRequest>,
 ) -> WeatherResult {
     apply_weather(&mg.site, &req)
+}
+
+/// `DELETE weather`: the site has no weather from now on, and a solar
+/// inverter that followed it sees none. 204 whether or not it had
+/// one.
+pub(in crate::ui) async fn weather_delete(mg: Mg) -> StatusCode {
+    mg.site.set_weather(None);
+    StatusCode::NO_CONTENT
 }
 
 #[cfg(test)]

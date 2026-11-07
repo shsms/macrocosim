@@ -368,7 +368,9 @@ UI").
   `(clear-solar-sunlight ID)` is the way back to Follow.
   `GET`/`POST /api/mg/{mg}/weather` mirror the same four doors for the
   weather panel (day curve, live site-% readout, pass-a-cloud
-  trigger), which has no Lisp console of its own.
+  trigger), which has no Lisp console of its own; a `seed` in the
+  `POST` rebuilds the weather as `:seed` does, and `DELETE` removes
+  the weather.
 
 ## HTTP API
 

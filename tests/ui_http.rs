@@ -711,6 +711,30 @@ async fn weather_http_round_trip() {
     let after = json(&client, s.mg_url("weather")).await;
     assert_eq!(after["events"].as_array().unwrap().len(), 1, "{after}");
     assert_eq!(after["sunrise"], "05:00", "{after}");
+
+    // A seed rebuilds the weather, as `:seed` does: the settings stay
+    // and the cloud in the sky goes.
+    let seeded: Value = client
+        .post(s.mg_url("weather"))
+        .json(&serde_json::json!({"seed": 7}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(seeded["sunrise"], "05:00", "{seeded}");
+    assert!(seeded["events"].as_array().unwrap().is_empty(), "{seeded}");
+
+    // DELETE removes the weather, and again on a site without one.
+    for _ in 0..2 {
+        let gone = client.delete(s.mg_url("weather")).send().await.unwrap();
+        assert_eq!(gone.status(), reqwest::StatusCode::NO_CONTENT);
+        let resp = client.get(s.mg_url("weather")).send().await.unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::NOT_FOUND);
+    }
 }
 
 const SOLAR_TOPOLOGY: &str = r#"
