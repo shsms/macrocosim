@@ -51,8 +51,7 @@ output to verify.
   =Macrocosim UI listening= readiness marker, returns
   ={ uiUrl }=. Tear-down kills the process.
 - Tests: page loads at =/=, =/api/mg/{mg}/topology= returns a
-  non-empty graph, clicking a node populates the inspect pane, the
-  REPL textarea accepts =42= and renders =42= in the output.
+  non-empty graph, clicking a node populates the inspect pane.
 
 Acceptance: =npm test= passes on a clean checkout in <30 s; one
 flake-free pass over 10 consecutive runs.
@@ -69,19 +68,13 @@ no CI wiring. Remaining value here: restructure into a proper
 tests-browser/ project (per-area specs, parallel projects) if and
 when the monolith gets painful. B4 (CI) is where the leverage is.
 
-*** TODO B2. Scenario flow + REPL interaction tests                 :testing:
+*** TODO B2. Recording flow + chart update interaction tests        :testing:
 
 Build on B1 to cover the more state-ful flows.
 
-- Drive a small scenario through =/api/eval= (=(scenario-start
-  …)=, =(set-meter-power 100 (lambda () N))=), open the Report
-  panel, assert =peak_grid_w= updates within a few
-  polling cycles.
-- REPL: type =(set=, assert the autocomplete popup shows
-  =set-meter-power=, Tab inserts it. Type =(=, assert the
-  electric-pair handler inserts =)= and the cursor lands
-  between. Inspect the rainbow overlay's DOM (=.paren-0= /
-  =.paren-1=) for a known input string.
+- Start a recording (=POST /api/mg/{mg}/recording/start=), drive a
+  meter through its typed route, open the Report panel, assert
+  =peak_grid_w= updates within a few polling cycles.
 - WebSocket-driven chart update: register a battery, drive a
   setpoint via gRPC, wait for the next history sample, assert
   the charts panel renders a non-empty series for that
@@ -90,9 +83,7 @@ Build on B1 to cover the more state-ful flows.
 Acceptance: each flow runs deterministically when the server is
 fresh; tests don't share state between runs.
 
-Update 2026-08-29: partially covered — the live smoke exercises
-scenario compile paths (drive-boiler) and REPL eval; dedicated
-scenario-flow browser tests remain unwritten.
+Rewritten for 0.2, which removed eval, Lisp scenarios and the REPL.
 
 *** TODO [#A] B3. Visual regression on a small set of stable views  :testing:
 
@@ -102,10 +93,8 @@ Avoids the topology-layout flake.
 Candidates:
 - Help dialog (=#help-dialog= contents) — pure markup, font-sensitive
   but small.
-- Scenario report card with deterministic synthetic numbers
-  (drive via =/api/eval= setting fixed values, then snapshot).
-- REPL textarea with a canned input showing all 7 paren depths
-  + a string + a comment, snapshot the overlay.
+- Recording report card with deterministic synthetic numbers
+  (drive fixed values through the typed routes, then snapshot).
 
 Skip the topology canvas: vis-network's animation + minor
 font-metric drift across runners makes pixel diffs flake.
@@ -115,7 +104,7 @@ Use Playwright's =toMatchSnapshot()=; baselines committed under
 diff threshold rather than 0 so anti-aliasing variance doesn't
 fail every run.
 
-Acceptance: three snapshot tests, baselines checked in, second
+Acceptance: two snapshot tests, baselines checked in, second
 run on the same machine matches.
 
 *** DONE [#A] B4. CI integration for the browser tests              :testing:
@@ -154,7 +143,11 @@ script that exists today.
 
 ** U. On-demand microgrid lifecycle
 
-*** TODO U1. Unload/drop a loaded microgrid from memory      :rust:design:
+*** DONE U1. Unload/drop a loaded microgrid from memory         :rust:design:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  Shipped in 0.2: DELETE /api/mg/{mg}, and a script save that drops a microgrid, unload it; its dispatches are deleted.
+:END:
 
 Counterpart to on-demand loading (the config.lisp-dissolution
 track, discussed 2026-07-23): drop a registered microgrid and its
@@ -210,13 +203,14 @@ it.
 
 ** R. REPL editing experience polish
 
-The shipped first cut covers the common case: =/api/format=
-behind =Tab=, paren-stack indent on =Enter=, and a special-form
-vs function-call distinction in the overlay. What's left are
-correctness gaps where the simple "first symbol after =(= is a
-function head" model misclassifies things.
+0.2 removed the REPL with Lisp. A Python REPL in the UI is a
+roadmap item of its own.
 
-*** TODO R1. =Enter=-on-empty-line outdent                               :ui:
+*** CANCELLED R1. =Enter=-on-empty-line outdent                          :ui:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed the REPL.
+:END:
 
 =indentForNewline= always indents at the innermost open paren's
 column + 2. Hitting =Enter= twice in a row from a fresh blank
@@ -231,7 +225,11 @@ addition to =indentForNewline=, no server roundtrip.
 
 ** E. Smaller deferred items
 
-*** TODO E1. Compact: rewrite per-mg :topology body                 :ui:lisp:
+*** CANCELLED E1. Compact: rewrite per-mg :topology body            :ui:lisp:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 has no Lisp files; Save as .py exports a microgrid's spec.
+:END:
 
 UI button → =POST /api/mg/<id>/compact=. Server walks the
 microgrid's =MicrogridSite=, emits a fresh =:topology= lambda body,
@@ -245,17 +243,15 @@ Why deferred: real value depends on having heavy override files to
 flatten; until users accumulate one, hard to validate the output
 shape.
 
-*** TODO E2. Form auto-generation from =AsList!=                         :ui:
+*** TODO E2. Form auto-generation from the spec schema                  :ui:
 
 Right-pane edit form is currently hardcoded per category in JS.
-Long-term: a =/api/component-schema= endpoint returns each
-=%make-*='s argument list and types from the =AsList!= macro
-output, and the UI builds the form from that. Removes the
+Long-term: the UI builds the form from the topology document's JSON
+Schema (=GET /api/spec/schema=) and the defaults table
+(=GET /api/defaults=), both served at run time since 0.2. Removes the
 JS-vs-Rust schema drift.
 
-Why deferred: requires either a tulisp-side reflection API or a
-=macrocosim::lisp::make= self-describing module. Hardcoded JS works
-fine for the current category count.
+Why deferred: hardcoded JS works fine for the current category count.
 
 ** P. Physics realism upgrades
 
@@ -429,7 +425,8 @@ app's CI can spin it up as a high-fidelity fake microgrid, drive a scenario,
 and gate on the result — exercising the app end-to-end through the real
 frequenz gRPC API rather than a hand-rolled mock. The app under test runs as a
 separate process talking gRPC; macrocosim drives the environment and records
-the assertions (=scenario-expect= → =macroctl scenario report --assert=).
+the assertions (=expect= in a pytest test or a script's =run=; see
+=docs/e2e-testing.md=).
 
 *** TODO D3. Routable bind address (deferred — only if cross-container)     :rust:ui:
 
@@ -443,6 +440,9 @@ consumer concretely needs bridge-networked / cross-host separation — and pair 
 with a "trusted networks only" startup warning + a lockdown decision (e.g.
 =--no-eval= when bound non-loopback). The cross-origin hardening that used to
 live here is now D10 (worth doing on loopback regardless).
+
+Note [2026-11-07]: 0.2 removed =/api/eval=, so no eval endpoint is
+left to guard; the write routes still change the simulation.
 
 *** TODO D5. Distribution + crates.io publish                        :packaging:
 
@@ -480,7 +480,11 @@ Still open:
   =frequenz-microgrid-component-graph= dependency moved off its git pin
   (=git = …, rev = "8bab132"= in Cargo.toml) — crates.io rejects git deps.
 
-*** TODO D7. Per-microgrid scenario scope                            :scenarios:
+*** DONE D7. Per-microgrid scenario scope                         :scenarios:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2: a recording is per microgrid, and a scenario is a script function that takes one microgrid.
+:END:
 
 Today a scenario is enterprise-wide: =scenario-start= fans out to every site and
 resets all journals, and the report endpoint reads the current site — so two
@@ -500,7 +504,14 @@ fast and bit-reproducible, but needs the app to honour an external tick. Worth i
 only if a consumer opts in; the absolute-schedule live-cue gap (J-era) belongs
 here too.
 
-*** TODO D9. Embedded-prelude follow-ups (optional, non-blocking)      :rust:dsl:
+Note [2026-11-07]: 0.2 removed the stepped clock with Lisp, so this
+needs a virtual clock in the engine again.
+
+*** CANCELLED D9. Embedded-prelude follow-ups (optional, non-blocking) :rust:dsl:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed the embedded Lisp.
+:END:
 
 The minimal embed (D1) is in and is the accepted long-term shape:
 =Config::new_inner= bakes the three =sim/*.lisp= files into the binary via
@@ -526,8 +537,10 @@ needs no =(load "sim/…")=. Two independent follow-ups, neither urgent:
 
 Shipped. 0.2 replaced the first client: one async API (=launch=, =Microgrid=, =make_*= specs), reads over HTTP, no Lisp in the API. See =python/README.md=.
 
-** TODO Microgrid-file generated block: readable, nested, formatted :microgrid-files:
+** CANCELLED Microgrid-file generated block: readable, nested, formatted :microgrid-files:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 has no managed Lisp files; the .py export renders a microgrid's spec.
 - State "TODO"       from              [2026-08-24 Mo 15:16]
 :END:
 
@@ -560,8 +573,10 @@ this branch merges.
 - State "TODO"       from              [2026-11-06 Fr 11:51]
 :END:
 
-** TODO EV chargers and steam boilers in the Python client, with a typed plug route on the server :python:
+** DONE EV chargers and steam boilers in the Python client, with a typed plug route on the server :python:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  Shipped in 0.2: make_ev_charger and make_steam_boiler, and EvCharger.plug / unplug over POST / DELETE .../component/{id}/ev.
 - State "TODO"       from              [2026-11-06 Fr 11:51]
 :END:
 
@@ -575,15 +590,19 @@ this branch merges.
 - State "TODO"       from              [2026-11-06 Fr 11:51]
 :END:
 
-** TODO Python topology inside the simulator via pyo3, reusing plist(spec) :python:
+** DONE Python topology inside the simulator via pyo3, reusing plist(spec) :python:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  Done without pyo3: macrocosim plant.py runs the script in a child process (docs/python-scripts.md).
+- State "TODO"       from              [2026-11-06 Fr 11:51]
+:END:
+
+** TODO Optional: stream filter on /metrics/history; 400 for an out-of-range SoC set :python:
 :LOGBOOK:
 - State "TODO"       from              [2026-11-06 Fr 11:51]
 :END:
 
-** TODO Optional: version field in the endpoints file; stream filter on /metrics/history; 400 for an out-of-range SoC set :python:
-:LOGBOOK:
-- State "TODO"       from              [2026-11-06 Fr 11:51]
-:END:
+The endpoints file has carried =version= since 0.2.
 
 ** TODO Typed Python wrappers for the dispatch and assets APIs       :python:
 :LOGBOOK:
@@ -594,6 +613,68 @@ this branch merges.
 :LOGBOOK:
 - State "TODO"       from              [2026-11-06 Fr 16:26]
 :END:
+
+** TODO A Python REPL in the UI                                   :ui:python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-07 Sa 23:57]
+:END:
+
+0.2 removed the Lisp REPL. Options: a supervised Jupyter kernel or
+=InteractiveConsole= child with live-object completion, or Pyodide in
+the browser. Until then, =python -m asyncio= with =mc.connect(url)=.
+
+** TODO Coalesce UI knob events, if the UI lags                     :ui:perf:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-07 Sa 23:57]
+:END:
+
+Each write sends one =knob_changed=. =tools/write-rate.py= measured
+1600 writes per second on one simulator (the python/README.md rate),
+and a 30 s run at 1250 writes per second delivered every
+=knob_changed= on =/ws/events= with none late. If a browser lags at
+that rate, send at most one event per knob every 250 ms.
+
+** TODO Review the licence now that tulisp is gone                :packaging:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-07 Sa 23:57]
+:END:
+
+The crate is GPL-3.0-only because tulisp is, and was linked in (D5).
+0.2 removed tulisp, so the licence can be reconsidered.
+
+** TODO Plug an EV only if the charger is empty, or read its car from the client :python:api:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-07 Sa 23:57]
+:END:
+
+A car stays plugged in across a reload, so a script's =plug()= on the
+next start is refused. Add a client call that plugs only an empty
+charger, or one that reads the charger's car state
+(=GET .../component/{id}/ev=).
+
+** TODO Port the browser smoke's dragged-panel-height check to another panel :testing:ui:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-07 Sa 23:57]
+:END:
+
+The smoke's only check that a floating card keeps a dragged height
+went with the REPL panel in 0.2.
+
+** TODO Delete watch::Mode::Files, MicrogridSite::reset() and gateway::Mode::Clamp? :cleanup:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-07 Sa 23:57]
+:END:
+
+None has a production caller after the Lisp removal; only tests use
+them. Decide whether to delete them.
+
+** TODO A recordings view in the main pane, if wanted                    :ui:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-07 Sa 23:57]
+:END:
+
+0.2 removed the Scenarios mode; the Report panel is the one recording
+view now.
 
 * Review backlog — 2026-06-01
 
@@ -607,7 +688,11 @@ against the code.
 
 ** Medium
 
-*** TODO [#B] Snapshot save/load ignore the per-request microgrid scope :concurrency:
+*** CANCELLED [#B] Snapshot save/load ignore the per-request microgrid scope :concurrency:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed snapshots.
+:END:
 
 =snapshots_save= / =snapshots_load= (=src/ui/handlers/snapshots.rs=)
 resolve the target via the ambient =current_microgrid= (set by the last
@@ -957,7 +1042,11 @@ no telemetry revealing the gap. Options: filter to children that
 accept DC pushes (needs a trait predicate), or reject the connect
 at topology time.
 
-*** TODO [#B] Overrides removal can break the reload         :ui:lisp:reload:
+*** CANCELLED [#B] Overrides removal can break the reload    :ui:lisp:reload:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed the overrides files; a rebuild is checked and built aside before the swap.
+:END:
 
 Deleting a =(make-* :id N)= form from the Overrides dialog while a
 later persisted =(connect P N)= (or =(set-component-operational-mode
@@ -1131,7 +1220,11 @@ booting real imported sites). Supporting one-sided bounds means
 widening the pair to optional edges through the component trait,
 the envelope math and the proto conversion.
 
-*** TODO [#C] REPL (reset-state) only resets the active site  :design:lisp:
+*** CANCELLED [#C] REPL (reset-state) only resets the active site :design:lisp:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed the REPL and Lisp.
+:END:
 
 =reset-state= → =(reset-microgrid)= resets the router-resolved
 site only. On the reload path the other sites are reset Rust-side
@@ -1164,14 +1257,22 @@ it. Either include the proto trees in the sdist and smoke-test the
 build, or stop shipping the artifact. Overlaps the D5
 crates-publish notes.
 
-*** TODO [#C] tulisp =etags= feature is always on                   :build:
+*** DONE [#C] tulisp =etags= feature is always on                     :build:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed tulisp and the etags binary.
+:END:
 
 Only the feature-gated =macrocosim-etags= bin needs it; default
 builds (and the wheel) pay for it. Shape: =tulisp = { features =
 ["sync"] }= plus =etags = ["tulisp/etags"]= on the crate's own
 =etags= feature — verify the lib truly compiles without it first.
 
-*** TODO [#C] Orphaned data files                                 :cleanup:
+*** DONE [#C] Orphaned data files                                   :cleanup:
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  sim/example_load.csv went with Lisp in 0.2.
+:END:
 
 =sim/example_load.csv= is referenced by nothing (its shape is
 valid for =csv_profile=) — delete it or reference it from the
@@ -1405,7 +1506,11 @@ Done 2026-09-06: per-RPC knob =default_augment_lifetime= (5 s) with
 
 ** Config semantics
 
-*** TODO [#C] set-physics-tick-ms in config.lisp is a no-op   :lisp:design:
+*** CANCELLED [#C] set-physics-tick-ms in config.lisp is a no-op :lisp:design:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2: physics_tick is a field of the microgrid's spec.
+:END:
 It runs while the registry is empty (before =load-microgrid-configs=),
 so it configures the never-ticking bootstrap site; each real
 microgrid gets the built-in default. After a hot reload it applies
@@ -1428,7 +1533,11 @@ should restore displaced dynamic sources (snapshot + reinstall in
 the runner) or whether last-state-wins is the intended sim semantic
 (then say so in the scenario docs).
 
-*** TODO [#C] scenario-record-csv resolves DIR against CWD    :lisp:design:
+*** CANCELLED [#C] scenario-record-csv resolves DIR against CWD :lisp:design:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2: recordings write under the state directory.
+:END:
 Unlike =csv-load= / =file-exists-p= / =watch-file= / =(load …)=,
 which all resolve against the config's load dir (the divergence
 d1/csv_profile already litigated). A server launched outside the
@@ -1520,7 +1629,11 @@ the field with the browser zone.
 
 ** Tests / CI / packaging
 
-*** TODO [#C] scenario.rs energy-integral tolerance can flake :testing:
+*** CANCELLED [#C] scenario.rs energy-integral tolerance can flake  :testing:
+:LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  tests/scenario.rs went with Lisp in 0.2.
+:END:
 =driver_run_aggregates…= asserts 8..=12 Wh around an analytic 10 Wh
 from manual timestamp-driven ticks, but the fixture's background
 physics loop concurrently advances the same accumulator at wall
@@ -1551,7 +1664,11 @@ shows up on main, before a tag.
 
 * Open design questions
 
-** d1. Rethink ~file-exists-p~ resolving against the config's load dir :design:lisp:
+** CANCELLED d1. Rethink ~file-exists-p~ resolving against the config's load dir :design:lisp:
+:LOGBOOK:
+- State "CANCELLED"  from              [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp.
+:END:
 
 The current =defuns::fs::register= (=src/lisp/defuns/fs.rs=) resolves
 relative paths in =(file-exists-p PATH)= against the config file's
@@ -1607,7 +1724,11 @@ over =load_dir: PathBuf=, propagated from =Config::new= via
 local =load-overrides= defun and relies on this resolution to find
 the override file.
 
-** d2. Promote per-mg override file into the per-mg config file :design:lisp:ui:
+** CANCELLED d2. Promote per-mg override file into the per-mg config file :design:lisp:ui:
+:LOGBOOK:
+- State "CANCELLED"  from              [2026-11-07 Sa 23:57] \\
+  0.2 removed the override and microgrid files.
+:END:
 
 Currently every successful eval lands in the per-microgrid override
 file (=microgrids/config.<id>.overrides.lisp=). The next step in
@@ -1732,7 +1853,11 @@ reopens; the battery itself only clips at 0 % and 100 %. The
 wall-clock / tick-clock asymmetry is gone too: lifetimes,
 augmentations and every bounds read run on the site clock.
 
-** d6. Persist-gate follow-ups (origin gating, form splitting) :design:lisp:
+** CANCELLED d6. Persist-gate follow-ups (origin gating, form splitting) :design:lisp:
+:LOGBOOK:
+- State "CANCELLED"  from              [2026-11-07 Sa 23:57] \\
+  0.2 removed eval and its persistence.
+:END:
 
 The core landed 2026-06-12: =Config::eval= persists a source to the
 per-mg overrides file only when it moved the enterprise structural
@@ -1818,14 +1943,14 @@ Retitled 2026-08-29: the Dashboard subview is gone; if built, this
 is a canvas overlay/panel (or pill-level badging), not a Dashboard
 strip.
 
-** TODO Scenario run timeline                                     :ux:design:
+** TODO Recording timeline                                        :ux:design:
 :LOGBOOK:
 - State "TODO"       from              [2026-08-20 Do 15:12]
 :END:
 
-Cues, checks, events as markers on a horizontal time axis with a
-progress cursor; pass/fail lands where it fired; optionally overlay
-the key metric (battery power during an outage). (Medium.)
+A recording's events as markers on a horizontal time axis with a
+progress cursor; optionally overlay the key metric (battery power
+during an outage). (Medium.)
 
 ** TODO Dispatch calendar/timeline view                                  :ux:
 :LOGBOOK:
@@ -1895,8 +2020,10 @@ silently showing old numbers; reconnect toast. (Small-medium.)
 Filter by level/component, search, click a component id in a log
 line to select its node. (Medium.)
 
-** TODO REPL history browser and snippets                                :ux:
+** CANCELLED REPL history browser and snippets                           :ux:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed the REPL.
 - State "TODO"       from              [2026-08-20 Do 15:12]
 :END:
 
@@ -1912,13 +2039,13 @@ Collapse a meter's subtree into one summary node (sum of powers,
 worst health) for 100+-component sites; expand on click. (Medium-
 large.)
 
-** TODO Scenario run comparison                                          :ux:
+** TODO Recording comparison                                             :ux:
 :LOGBOOK:
 - State "TODO"       from              [2026-08-20 Do 15:12]
 :END:
 
-Diff two runs' reports side by side (checks passed/failed, peak
-stats) — regression checking after a physics change. (Medium.)
+Diff two recordings' reports side by side (peak stats, energy
+totals) — regression checking after a physics change. (Medium.)
 
 ** TODO Per-row mini sparklines                                          :ux:
 :LOGBOOK:
@@ -1935,7 +2062,7 @@ with many rows.)
 :END:
 
 PNG export of the topology canvas; CSV download buttons where the
-data already exists (history windows, scenario CSVs are served
+data already exists (history windows, recording CSVs are served
 already). (Small.)
 
 ** TODO Pill nodes: colour that pops at every zoom level             :ux:design:
@@ -2239,8 +2366,10 @@ target), so all three pressure clamps have a valid range; NaN demand
 is covered by a test. Left open: a non-finite :initial-bar starts the
 pressure at NaN (no panic) and is validated at neither door.
 
-** TODO Runtime knob pokes don't round-trip into saved worlds :microgrid-files:design:
+** CANCELLED Runtime knob pokes don't round-trip into saved worlds :microgrid-files:design:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 saves no worlds: a rebuild takes knobs from the spec, and a script sets them in run.
 - State "TODO"       from              [2026-08-29 Sa 06:47]
 :END:
 
@@ -2272,8 +2401,10 @@ id, a pre-reload deadline can fire and reset a fresh component's
 axis that was never commanded. Pre-existing (the old drain path had
 the same hole), surfaced during the 2026-08-29 race fix review.
 
-** TODO Typed Python weather surface :python:api:
+** DONE Typed Python weather surface                             :python:api:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  Shipped in 0.2: Microgrid.set_weather, pass_cloud and clear_weather.
 - Note taken on [2026-08-29 Sa 23:59] \\
   Widened per Sahas: fold the missing drive() clear fields into a
   typed weather surface for the SDK.
@@ -2305,8 +2436,10 @@ silently into the following check, which then asserts stale state —
 the one mechanism that could go green-but-hollow now that CI gates
 on the script. Convert to explicit failing checks.
 
-** TODO [#C] Stale scenario-end-after timer tears down the wrong scenario :scenarios:design:
+** CANCELLED [#C] Stale scenario-end-after timer tears down the wrong scenario :scenarios:design:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp scenarios.
 - State "TODO"       from              [2026-08-29 Sa 12:05]
 :END:
 
@@ -2316,8 +2449,10 @@ cancelling B's timers and restoring B's knobs, not just closing a
 journal. Pre-existing shape, sharpened by teardown. Needs the
 end-after timer to carry its scenario's identity.
 
-** TODO state-dir default differs between the binary and Config::new :design:consistency:
+** CANCELLED state-dir default differs between the binary and Config::new :design:consistency:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  Config::new went with Lisp; the binary's default is the only one.
 - State "TODO"       from              [2026-08-29 Sa 15:13]
 :END:
 
@@ -2344,8 +2479,10 @@ cleared) on any non-Ok health while the gas side keeps holding
 pressure; reset_setpoint slews via PowerAxis::reset(0.0). Trait doc on
 reset_setpoint now says the ramp is retargeted, never snapped.
 
-** TODO macroctl --assert exits 0 when a scenario ran no check :api:scenarios:
+** CANCELLED macroctl --assert exits 0 when a scenario ran no check :api:scenarios:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed macroctl scenario.
 - State "TODO"       from              [2026-09-06 So 01:14]
 :END:
 
@@ -2426,8 +2563,10 @@ the four gated components, but a Standby meter or grid still
 accumulates. A MicrogridSite::is_offline helper would name the rule
 once.
 
-** TODO A failed structural eval keeps the components it already made :lisp:concurrency:reload:
+** CANCELLED A failed structural eval keeps the components it already made :lisp:concurrency:reload:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed eval; a spec rebuild is checked and built aside first.
 - State "TODO"       from              [2026-09-14 Mo 20:10]
 :END:
 
@@ -2471,8 +2610,10 @@ augmentations with it; drive setpoint expiry from =sim_step=.
 Fixed 2026-10-04 by the per-microgrid gateway: see the d5b update.
 
 * Review backlog — 2026-10-06
-** TODO Remove the old Lisp names                                  :lisp:cleanup:
+** DONE Remove the old Lisp names                              :lisp:cleanup:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp, and the old names with it.
 - State "TODO"       from              [2026-10-06 Di 12:00]
 :END:
 
@@ -2533,7 +2674,7 @@ stops at them. Return =Power= / =Energy= / =Percentage= by stream, the
 way =grid_power()= and =grid_energy()= already do, and give =latest()=
 a typed record with =ts= as a =datetime=.
 
-** TODO Site-import body uses an outside camelCase format           :api:lisp:
+** TODO Site-import body uses an outside camelCase format               :api:
 :LOGBOOK:
 - State "TODO"       from              [2026-10-06 Di 12:00]
 :END:
@@ -2556,8 +2697,10 @@ lands, pick suffixes (=-c=, =-w-per-m2=, a price unit) and extend the
 rules, the Lisp / HTTP / macroctl / Python tables and the rename
 checks together, before Modbus or CAN register maps copy the names.
 
-** TODO A stop route that names the scenario it stops                :api:scenarios:
+** CANCELLED A stop route that names the scenario it stops    :api:scenarios:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed the scenario routes; a recording is per microgrid.
 - State "TODO"       from              [2026-10-06 Di 12:00]
 :END:
 
@@ -2567,8 +2710,10 @@ which stops whichever scenario the journal holds. =POST
 lopsided. Decide whether stop should be =/api/scenarios/{name}/stop=,
 and what it answers when that scenario is not the running one.
 
-** TODO Say which microgrid a whole-site scenario's records land on  :api:scenarios:
+** CANCELLED Say which microgrid a whole-site scenario's records land on :api:scenarios:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2: a recording is per microgrid.
 - State "TODO"       from              [2026-10-06 Di 12:00]
 :END:
 
@@ -2633,8 +2778,10 @@ a selected component disappears.
 
 Note [2026-11-06]: the history route answers 404 for an unknown component since the 0.2 client work; the setpoints route still answers empty.
 
-** TODO Deferred Lisp runs on the lowest microgrid, not its own :lisp:scenarios:
+** CANCELLED Deferred Lisp runs on the lowest microgrid, not its own :lisp:scenarios:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp.
 - State "TODO"       from              [2026-10-08 Do 01:36]
 :END:
 
@@ -2652,8 +2799,10 @@ deferred code is created (the timer, the cue, the source) and restore it
 when it runs. Related: D7.
 
 * Review backlog — 2026-10-09
-** TODO Scenario clock times count from the run's start           :scenarios:
+** CANCELLED Scenario clock times count from the run's start      :scenarios:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp scenarios.
 - State "TODO"       from              [2026-10-09 Fr 20:38]
 :END:
 
@@ -2669,8 +2818,10 @@ Decide whether an absolute schedule should fire at the clock time (in
 the sim zone), or whether the three keys go. The define-scenario
 docstring states the current behavior; update it with the fix.
 
-** TODO A live scenario run does not stop at :length              :scenarios:
+** CANCELLED A live scenario run does not stop at :length         :scenarios:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp scenarios.
 - State "TODO"       from              [2026-10-09 Fr 20:38]
 :END:
 
@@ -2681,8 +2832,10 @@ progress bar use the length. Decide whether a live run should stop
 itself at =:length= (a timer armed by =scenario--run=), and update
 the define-scenario docstring to match.
 
-** TODO scenario-record-csv resolves a relative directory from the working directory :lisp:scenarios:
+** CANCELLED scenario-record-csv resolves a relative directory from the working directory :lisp:scenarios:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2: recordings write under the state directory.
 - State "TODO"       from              [2026-10-09 Fr 20:38]
 :END:
 
@@ -2693,8 +2846,10 @@ lands under the process's working directory. =csv-load=,
 the state directory. Resolve it the same way, and drop the sentence
 about it from the docstring.
 
-** TODO Component queries take only an integer id                      :lisp:
+** CANCELLED Component queries take only an integer id                 :lisp:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp.
 - State "TODO"       from              [2026-10-09 Fr 20:38]
 :END:
 
@@ -2710,8 +2865,10 @@ Related: when the current-microgrid pointer names an id that no
 registered microgrid has, =current-microgrid-id= returns that id, while
 =microgrid-name= falls back to the lowest-id microgrid. Pick one rule.
 
-** TODO rename-component accepts an id no component has                :lisp:
+** CANCELLED rename-component accepts an id no component has           :lisp:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp; names are spec fields.
 - State "TODO"       from              [2026-10-09 Fr 20:38]
 :END:
 
@@ -2721,8 +2878,10 @@ The name then sits in the site's name map for no component. Signal an
 error for an unknown id (=remove-component= returns nil for one), and
 update the docstring.
 
-** TODO battery-inverter-defaults turns the reactive PF limit off :lisp:design:
+** CANCELLED battery-inverter-defaults turns the reactive PF limit off :lisp:design:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 has one construction path: the defaults table fills every spec, with the limit off (0.0).
 - State "TODO"       from              [2026-10-09 Fr 20:38]
 :END:
 
@@ -2733,8 +2892,10 @@ while =%make-battery-inverter='s built-in value is 0.35. So
 reactive envelopes. Decide which one is meant, and make the default
 plist and the built-in value agree or say why they differ.
 
-** TODO Lisp helpers shadow tulisp's floor, ceiling, sin, cos and random :lisp:cleanup:
+** CANCELLED Lisp helpers shadow tulisp's floor, ceiling, sin, cos and random :lisp:cleanup:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed Lisp.
 - State "TODO"       from              [2026-10-09 Fr 20:38]
 :END:
 
@@ -2750,8 +2911,10 @@ of 0 or less to 1 and is seeded by =set-random-seed= for the whole
 process, while tulisp's raises =args-out-of-range=. Keep it unless the
 seeding moves to tulisp's =(random "seed")=.
 
-** TODO Stale comments around the Lisp defuns                       :cleanup:
+** CANCELLED Stale comments around the Lisp defuns                  :cleanup:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  The files went with Lisp in 0.2; MicrogridSite::reset() is in the dead-code follow-up.
 - State "TODO"       from              [2026-10-09 Fr 20:38]
 :END:
 
@@ -2775,8 +2938,10 @@ Seen while writing docstrings; the docstrings themselves are right.
   =MicrogridSite::reset= says it resets the id allocator; the body
   keeps it, as the =reset-microgrid= docstring says.
 
-** TODO REPL and docstring follow-ups                               :ui:lisp:
+** CANCELLED REPL and docstring follow-ups                          :ui:lisp:
 :LOGBOOK:
+- State "CANCELLED"  from "TODO"       [2026-11-07 Sa 23:57] \\
+  0.2 removed the REPL and Lisp.
 - State "TODO"       from              [2026-10-09 Fr 21:30]
 :END:
 
@@ -2806,8 +2971,10 @@ Left from the review of the docstrings and the REPL completion.
   selected one, while the doc pane follows only the selection. Give
   hover its own style, or move the selection on hover.
 
-** TODO set-frequency-model takes a NaN :nominal-hz                    :lisp:
+** DONE set-frequency-model takes a NaN :nominal-hz                    :lisp:
 :LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-07 Sa 23:57] \\
+  POST /api/frequency refuses a nominal that is not finite; the Lisp defun is gone.
 - State "TODO"       from              [2026-10-09 Fr 21:46]
 :END:
 
