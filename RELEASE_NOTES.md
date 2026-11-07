@@ -2,127 +2,91 @@
 
 ## Summary
 
-Every number now carries its unit in its name, and the same quantity has
-the same name in Lisp, HTTP, the WebSocket, macroctl and Python. The
-HTTP API has one route tree and one error format. Old Lisp files keep
-loading. HTTP, WebSocket, macroctl and Python have no old names, so
-clients need the changes listed under Upgrading.
+macrocosim no longer embeds Lisp. A Python script declares the microgrids and animates them: `macrocosim plant.py` runs the script in a child process, runs it again on every save, and keeps the state of each component whose spec did not change. The engine builds microgrids from a JSON topology document that the script runner, `--topology`, the HTTP API and the Python client share.
+
+The Python client is rewritten around one async API. Every number carries its unit in its name, and the same quantity has the same name in the topology document, HTTP, the WebSocket, macroctl and Python. The HTTP API has one route tree and one error format. Lisp files from 0.1 are refused, and clients need the changes listed under Upgrading.
 
 ## Upgrading
 
+### Lisp is gone
+
+- macrocosim 0.2 reads no Lisp; support ended with 0.1. Before anything binds, the binary stops with a message naming the files when it is given a `.lisp` argument, or when its state directory holds `enterprise.lisp` or `microgrids/*.lisp`.
+- The state directory is the one `--state-dir` names, or the current directory without it. So a run started from a directory that keeps 0.1 site files is refused until you pass another `--state-dir` or move the files.
+- Port each site file to a Python script by hand; there is no converter. [`docs/python-scripts.md`](docs/python-scripts.md) is the porting guide: it maps every Lisp function to its replacement, and says what behaves differently. To stay on Lisp, pin `macrocosim<0.2` or keep the 0.1 binary.
+- Removed with the interpreter: the REPL panel and its eval routes (`/api/eval`, `/api/mg/{mg}/eval`, `/api/format`, `/api/symbols`); the Load script dialog and `/api/load`, `/api/load-as`, `/api/scripts` and `/api/mg/{mg}/adopt`; snapshots (the Snapshots dialog and `/api/mg/{mg}/snapshots`); scenarios (`define-scenario`, the Scenarios mode, `/api/scenarios`, `/api/scenarios/stop`, `/api/scenarios/{name}/start` and `/api/mg/{mg}/scenario...`); the managed microgrid files and their overrides; `/api/clock`; the `config_error` WebSocket event; and the `macrocosim-etags` binary with its `etags` Cargo feature.
+- The deterministic, serverless gate (`macroctl scenario run --stepped`) is gone, with the stepped clock. Scripts and tests run in real time; [`docs/e2e-testing.md`](docs/e2e-testing.md) has the CI recipes.
+- A scenario is now an async function in a script, run from its `run`. It records itself with `microgrid.record(...)` (see Recording, below) and checks with `expect`. Unlike a Lisp scenario, it does not put back the knobs it drove when it ends: restore them in a `finally`.
+- UI edits are no longer written to a file. An edit of a script's microgrid lasts until the script's next save replaces it, and a microgrid made in the UI lives in memory only. Export either with *Copy as Python* or *Save as .py*.
+- The server has no time zone (`set-timezone` is gone). The zone chip switches the UI between the browser's zone and UTC. gRPC and the HTTP API use UTC, as before.
+- The `--state-dir` directory now holds only the CSV files of recordings, under `recordings/`. The enterprise settings that `enterprise.lisp` held are command-line flags: `--enterprise-id`, `--assets-addr`, `--dispatch-addr`, `--request-lifetime` and `--augment-lifetime`.
+
+### Rust library
+
+- The `macrocosim` Rust library is not a supported API: it serves the binaries and their tests, and the crate is not published to crates.io. Its `lisp`, `sim::axis`, `sim::clock` and `sim::scenarios` modules are gone.
+
 ### HTTP routes
 
-- Everything about one microgrid is under `/api/mg/{mg}/`. The routes
-  without a microgrid (`/api/topology`, `/api/component`,
-  `/api/weather`, `/api/history`, `/api/setpoints`, `/api/microgrid/*`)
-  are gone. So are `/api/scenario`, `/api/scenario/events`,
-  `/api/scenario/report` and `/api/scenario/csv...`. They are now
-  `/api/mg/{mg}/scenario...`. `/api/scenarios`, `/api/scenarios/stop`
-  and `/api/scenarios/{name}/start` stay where they are.
-- `/api/mg/{mg}/microgrid/{status,latest,history,formulas}` is now
-  `/api/mg/{mg}/metrics/{status,latest,history,formulas}`.
-- A component's state, history and setpoints are at
-  `/api/mg/{mg}/component/{id}`, `.../history` and `.../setpoints`.
-- `POST /api/microgrids/create` is now `POST /api/microgrids`. Saving a
-  snapshot is `POST /api/mg/{mg}/snapshots`.
-- Every failure is JSON, `{"error": "..."}`. An unknown path answers
-  404 and a wrong method answers 405, both with that body. A success
-  that has nothing to return answers 204, and no body carries `ok`.
+- Everything about one microgrid is under `/api/mg/{mg}/`. The routes without a microgrid (`/api/topology`, `/api/component`, `/api/weather`, `/api/history`, `/api/setpoints`, `/api/microgrid/*`) are gone.
+- `/api/mg/{mg}/microgrid/{status,latest,history,formulas}` is now `/api/mg/{mg}/metrics/{status,latest,history,formulas}`.
+- A component's state, history and setpoints are at `/api/mg/{mg}/component/{id}`, `.../history` and `.../setpoints`.
+- `POST /api/microgrids/create` is now `POST /api/microgrids`. It takes a topology document, `{"schema_version": 1, "microgrids": [...]}`. 0.1's `name`, `id`, `grpc_port` and `tso` body answers 422, as does a document with no microgrids. The answer is 201 with `{"microgrids": [{"id", "grpc_port", "runtime"}, ...]}`, one entry per microgrid created. The microgrids live in memory.
+- `GET /api/defaults` answers one object keyed by component type (`meter`, `battery`, ...). Each holds the fields the engine fills into a spec, under their topology-document names. 0.1's `{"entries": [{"category", "var_name", "value"}]}` list of Lisp variables is gone.
+- Every failure is JSON, `{"error": "..."}`. An unknown path answers 404 and a wrong method answers 405, both with that body. A success that has nothing to return answers 204, and no body carries `ok`.
 
 ### HTTP fields
 
-Old field names are not accepted. A request body with an unknown field
-answers 422 with a JSON error that names the field. A query string with
-an unknown field answers 400.
+Old field names are not accepted. A request body with an unknown field answers 422 with a JSON error that names the field. A query string with an unknown field answers 400.
 
-- Component state: `setpoints[].remaining_ms` is `remaining_s`, in
-  seconds. `envelope.active` and `envelope.reactive` are
-  `envelope.active_w` and `envelope.reactive_var`.
-- Drive (`POST .../component/{id}/drive`): `reactive_var` is
-  `reactive_power_var`. `steam_demand_kg_h` is `steam_demand_kg_per_s`,
-  in kg/s.
-- Dispatches: `start_ms` is `start` in the request and the response.
-  `end_ms` is `end` in the response; the request has no `end`.
-  `create_ms` and `update_ms` are `created_at` and `updated_at` in the
-  response. All of them are RFC 3339 strings.
-- History and setpoints answer with `component_id`, not `id`. A
-  history `samples` pair is `[t_s, value]`, with `t_s` in epoch seconds.
+- Component state: `setpoints[].remaining_ms` is `remaining_s`, in seconds. `envelope.active` and `envelope.reactive` are `envelope.active_w` and `envelope.reactive_var`.
+- Component state: `knobs[]` entries no longer carry `expr`, the printed Lisp of a dynamic value.
+- `GET /api/microgrids` entries no longer carry `managed`; `source` and `unsaved` remain.
+- Drive (`POST .../component/{id}/drive`): `reactive_var` is `reactive_power_var`. `steam_demand_kg_h` is `steam_demand_kg_per_s`, in kg/s.
+- Dispatches: `start_ms` is `start` in the request and the response. `end_ms` is `end` in the response; the request has no `end`. `create_ms` and `update_ms` are `created_at` and `updated_at` in the response. All of them are RFC 3339 strings.
+- History and setpoints answer with `component_id`, not `id`. A history `samples` pair is `[t_s, value]`, with `t_s` in epoch seconds.
 - History (`GET .../component/{id}/history`) answers 404 for an unknown component. It answered 200 with no samples, the same as a component that has not been sampled yet.
 - `metrics/latest`: `ts_ms` of each stream is `ts`, an RFC 3339 string.
-- `metrics/history`: each entry is `{t_s, value}`, with `t_s` in epoch
-  seconds.
+- `metrics/history`: each entry is `{t_s, value}`, with `t_s` in epoch seconds.
 - Logs: `ts_ms` is `ts`, an RFC 3339 string.
-- Weather, request and response: `cloud_depth`, `cloud_duration` and
-  `cloud_ramp` are `cloud_depth_pct`, `cloud_duration_s` and
-  `cloud_ramp_s`. `cloud_rate_per_h` is `cloud_mean_gap_s`, the mean
-  seconds between clouds. In a request, `cloud_mean_gap_s: 0` turns
-  ambient clouds off. The response has `null` when there are none.
-  `pct` is `sunlight_pct`.
-- Status (`POST .../component/{id}/status`): `health` no longer takes
-  `ready`. Use `ok`.
+- Weather, request and response: `cloud_depth`, `cloud_duration` and `cloud_ramp` are `cloud_depth_pct`, `cloud_duration_s` and `cloud_ramp_s`. `cloud_rate_per_h` is `cloud_mean_gap_s`, the mean seconds between clouds. In a request, `cloud_mean_gap_s: 0` turns ambient clouds off. The response has `null` when there are none. `pct` is `sunlight_pct`.
+- Status (`POST .../component/{id}/status`): `health` no longer takes `ready`. Use `ok`.
+- Mode values are spelt in snake case, as in the topology document: `over_bound`, `error_empty`, `not_found`, `telemetry_only`, `control_only` and `control_and_telemetry`. This applies to `status` requests and the `topology` payload. The hyphenated forms (`over-bound`) are refused with 400.
 - Import (`POST /api/microgrids/import`): `mid` is `id`.
-- Snapshot load: `as_id` is `id`.
 - Formula query: `ids` is `component_ids`.
-- Scenarios: `timeline[].component` is `component_id`. The report's
-  `site_pf_at_peak_var` is `site_pf_at_reactive_peak`.
-- A generic `value` now has a `unit` beside it: knobs, setpoints and
-  scenario checks. The reactive unit is `"VAr"`.
-- The `unit` of a reactive stream in `history` and `metrics/latest` is
-  `"VAr"`. It was `"var"`.
-- The `boiler-demand` knob `value` in a component's `knobs[]` is in
-  kg/s. It was kg/h, so divide an old value by 3600.
+- A generic `value` now has a `unit` beside it: knobs and setpoints. The reactive unit is `"VAr"`.
+- The `unit` of a reactive stream in `history` and `metrics/latest` is `"VAr"`. It was `"var"`.
+- The `boiler-demand` knob `value` in a component's `knobs[]` is in kg/s. It was kg/h, so divide an old value by 3600.
 
 ### WebSocket
 
 - `mg_id` is `microgrid_id` on every event that belongs to a microgrid.
 - `id` is `component_id` on `sample`, `setpoint` and `knob_changed`.
-- `ts_ms` is `ts`, an RFC 3339 string, on every event that carries a
-  time.
+- `ts_ms` is `ts`, an RFC 3339 string, on every event that carries a time.
 - `sample`, `setpoint` and `knob_changed` carry a `unit`.
-- The `unit` of a reactive `microgrid_sample` is `"VAr"`. It was
-  `"var"`.
+- The `unit` of a reactive `microgrid_sample` is `"VAr"`. It was `"var"`.
 - The `boiler-demand` `knob_changed` `value` is in kg/s. It was kg/h.
-- `knob_changed` also reports the `operational-mode`, `grid-voltage` and `sample-lag` knobs. Its `component_id` is null for a knob of the whole microgrid (`grid-voltage`, `sample-lag`), and its `value` is a number, a string (`operational-mode`) or a list of three phase voltages (`grid-voltage`).
+- `knob_changed` no longer carries `expr`, the printed Lisp of a dynamic value. It also reports the `operational-mode`, `grid-voltage` and `sample-lag` knobs. Its `component_id` is null for a knob of the whole microgrid (`grid-voltage`, `sample-lag`), and its `value` is a number, a string (`operational-mode`) or a list of three phase voltages (`grid-voltage`).
 
 ### Endpoints file
 
-`--emit-endpoints` writes `microgrids[].grpc_addr`. It was
-`microgrids[].grpc`.
+`--emit-endpoints` writes `microgrids[].grpc_addr`. It was `microgrids[].grpc`. It also writes `version`, the binary's version in PEP 440 form, for example `0.2.0`. With a script, the file is written once the script has sent its microgrids, or has failed to load.
 
 ### Example world
 
-`examples/berlin-demo.lisp` is now `examples/starter-site.lisp`, and its
-microgrid is named "Starter site". Point a boot command or a `(load …)`
-call at the new path.
+The Lisp examples are gone. The starter site is now the script [`examples/starter_site.py`](examples/starter_site.py), with its microgrid named "Starter site" and its seven scenarios as async functions; [`examples/scenario_driving.py`](examples/scenario_driving.py) runs a recorded stress run against it.
 
 ### macroctl
 
+- The `scenario` and `snapshot` commands are removed, with every command that evaluated Lisp. The gRPC commands, `info`, `dispatch`, `pool` and `dashboard` stay.
 - `set-power --lifetime` is `--lifetime-s`, in whole seconds.
 - `set-power --reactive` is removed. Use the new `set-reactive-power`.
-- `augment-bounds --reactive` is removed. Use the new
-  `augment-reactive-bounds`, with `--lower-var` and `--upper-var`.
-- `augment-bounds --lower`, `--upper` and `--lifetime` are `--lower-w`,
-  `--upper-w` and `--lifetime-s`.
+- `augment-bounds --reactive` is removed. Use the new `augment-reactive-bounds`, with `--lower-var` and `--upper-var`.
+- `augment-bounds --lower`, `--upper` and `--lifetime` are `--lower-w`, `--upper-w` and `--lifetime-s`.
 - `dispatch create --duration` is `--duration-s`.
 - `dashboard --interval` is `--interval-s`.
-- `scenario run --step`, which took milliseconds, is `--step-s`, in
-  seconds. The default is 0.1 and the value must be above 0.
-- `scenario run --until` is `--until-s`. It accepts fractions.
-- `snapshot load --as-id` is `--id`.
 - `list --id` is `--component-id`.
-- `dispatch list`, `get`, `create`, `pause`, `resume` and `delete` no
-  longer take the microgrid id as an argument. Use the global
-  `--microgrid-id N`, for example `macroctl --microgrid-id 2 dispatch
-  list`. Without it, the lowest microgrid id is used.
-- `--addr` no longer defaults to `http://[::1]:8800`. Without it, the
-  gRPC commands ask the UI server (`--ui-addr`) for the address of the
-  microgrid's gRPC server. Pass `--addr` to name a server directly.
-- Printed tables still scale to kW and kWh. They print the unit of
-  electrical metrics, SoC and humidity; ratios (power factor, THD),
-  temperature, wind, pressure, irradiance and an unspecified metric
-  print none. A failed check in `report` prints the unit of its actual
-  value. `list` labels its columns `rated_lower_w` and `rated_upper_w`, and
-  `stream` has a unit column.
+- `dispatch list`, `get`, `create`, `pause`, `resume` and `delete` no longer take the microgrid id as an argument. Use the global `--microgrid-id N`, for example `macroctl --microgrid-id 2 dispatch list`. Without it, the lowest microgrid id is used.
+- `--addr` no longer defaults to `http://[::1]:8800`. Without it, the gRPC commands ask the UI server (`--ui-addr`) for the address of the microgrid's gRPC server. Pass `--addr` to name a server directly.
+- Printed tables still scale to kW and kWh. They print the unit of electrical metrics, SoC and humidity; ratios (power factor, THD), temperature, wind, pressure, irradiance and an unspecified metric print none. `list` labels its columns `rated_lower_w` and `rated_upper_w`, and `stream` has a unit column.
 
 ### Python
 
@@ -132,12 +96,12 @@ The Python client is rewritten. 0.1 code needs changes; the table under Old and 
 
 - The sync client (`Site`, `mc.launch` as a plain context manager) and the `macrocosim.aio` namespace: there is one async API at the top level.
 - The lowercase builders (`grid`, `meter`, `battery`, ...) that became live objects at launch, and `Microgrid(...)` as a builder.
-- The Python scenario API (`Scenario`, `Check`, `ScenarioRun`, `ScenarioReport`, `JournalEvent`, `run_scenario_stepped`) and the pytest plugin with its `macrocosim_scenario` marker.
-- EV chargers and steam boilers (`ev_charger`, `steam_boiler`, `plug_ev`, `unplug_ev`, `ev_info`, `EvIdle`, `EvPreset`).
+- The Python scenario API (`Scenario`, `Check`, `ScenarioRun`, `ScenarioReport`, `JournalEvent`, `run_scenario_stepped`) and the pytest plugin with its `macrocosim_scenario` marker. A recording (`Microgrid.record`) and `expect` take their place.
+- `plug_ev`, `unplug_ev`, `ev_info` and `EvPreset`. A live `EvCharger` has `plug(preset, ...)` and `unplug()`.
 - Lisp in the API: `raw(...)`, `RawLisp`, `**extra`, `to_lisp()`, `to_lisp_atom`, `LispRenderable`, `ConfigSource`, `LaunchConfig`, `from_lisp_file`, `eval`, and launching a `.lisp` file.
 - Commands from tests: `set_active_power`, `augment_*`, `command()`, `SetpointRejected`.
 - `CumulativeSignal`, `stored_energy`, `drive(...)`, `status(...)`, the `microgrid_id` parameters, and the gRPC dependency.
-- `connect` and `MicrogridEndpoint`, which attached to a simulator that was already running. There is no replacement: `launch` always starts a new simulator.
+- 0.1's `connect` and `MicrogridEndpoint`. The new `connect(url)` attaches to a running simulator and yields its microgrids by id.
 - Launching several microgrids at once. Each `launch` now starts one microgrid.
 - `ComponentHandle`, `Metric`, `MetricSpec` and `Schedule`.
 - `Signal.try_read`, `Site.read_until`, the `poll=` argument of `expect`, and `launch(bin=...)`. To use another binary, set `MACROCOSIM_BIN`.
@@ -146,18 +110,20 @@ The Python client is rewritten. 0.1 code needs changes; the table under Old and 
 #### Changed
 
 - Specs are inert and frozen, built by `make_*` constructors, and compared by identity; `launch` yields a `Microgrid`, and `microgrid[spec]` or `microgrid[id]` gives the live component. `id=` is optional; automatic ids may change between versions.
+- `launch` starts the simulator from the spec's topology document (`--topology`), and raises `LaunchError` naming both versions when the binary's version is not the client's.
 - All reads go over the simulator's HTTP API at 1 Hz: component reads from its own sampler, aggregates from its loopback. Component reads do not show telemetry faults; aggregates do.
 - `expect(matcher, timeout=, hold_for=)` waits for the first matching sample, then requires every sample for `hold_for` to match, judged on the simulator's timestamps; it returns `None`. `read(timeout=)` replaces `read(wait=)`. It returns the first sample with a value that is newer than the newest sample the simulator had when the call started.
 - `launch` takes `env=` (laid over the environment for the simulator only) and `state_dir=` (kept, with the log); without `state_dir` the temporary directory is always deleted.
 - The binary bundled in the wheel is found before one on `PATH`.
 - An aggregate whose category the topology lacks (no solar, say) reads 0 instead of having no data.
-- Errors: the client's own errors derive from `MacrocosimError`. `SpecError` is raised for a spec that breaks one of the client's rules (for example an id, a pairing or a fuse current), `UnknownComponent` for a lookup of a component the microgrid does not have, and `MicrogridClosed` for a microgrid used after its launch block. `LaunchError`, `ServerError` and `SimulatorExited` are raised for failures of the simulator or its HTTP API, `Rejected` when the simulator refuses a set or a fault, `NoSample` when a `read` or `expect` gets no usable sample, and `ExpectationFailed` when the samples disagree.
+- Errors: the client's own errors derive from `MacrocosimError`. `SpecError` is raised for a spec that breaks one of the client's rules (for example an id, a pairing or a fuse current), `UnknownComponent` for a lookup of a component the microgrid does not have, and `MicrogridClosed` for a microgrid used after its block (`launch`, `connect` or the script's `run`) has exited. `LaunchError`, `ServerError` and `SimulatorExited` are raised for failures of the simulator or its HTTP API, `Rejected` when the simulator refuses a set or a fault, `NoSample` when a `read` or `expect` gets no usable sample, and `ExpectationFailed` when the samples disagree.
 - A wrong argument type raises `TypeError`, and a wrong value `ValueError`. When a spec is built, a value that breaks one of the client's rules raises `SpecError`, a `ValueError` subclass. A NaN or infinite value, or an int too large for a float in a float field (`power_factor`, say), raises a plain `ValueError`.
 - Exception bases changed. `Rejected` is not a `ValueError`; the old `ControlRejected` and `EvalRejected` were. `launch` raises `LaunchError`; it raised `RuntimeError`, `TimeoutError` or `FileNotFoundError`. An `expect` that gets no sample raises `NoSample`, which is not an `AssertionError`; an `ExpectationFailed` is.
 - `DrivenSignal` and `SettingSignal` are replaced by `SettableSignal`, `ClearableSignal`, `Knob` and `ClearableKnob`.
 - `mc.Component` now names the live component class, not the base class of the builders.
 - A matcher is now any object with `matches()` and `describe()`. In 0.1 it was a dataclass with the fields `approx`, `tol`, `within`, `max` and `min`.
 - An energy `expect` now polls until its timeout, like a power `expect`. 0.1's `CumulativeSignal` checked the value once.
+- The values of `TelemetryMode`, `CommandMode` and `OperationalMode` members are snake case, as the simulator spells them: `TelemetryMode.ERROR_EMPTY` is `"error_empty"`, not `"error-empty"`. Code that compares a member with a string literal needs the new spelling.
 
 #### Compatibility
 
@@ -170,6 +136,7 @@ The Python client is rewritten. 0.1 code needs changes; the table under Old and 
 |---|---|
 | `mc.Microgrid(id=1, topology=mc.grid(id=1, successors=[...]))` | `mc.make_microgrid(id=1, topology=mc.make_grid_connection_point(id=1, successors=[...]))` |
 | `mc.meter(...)`, `mc.battery(...)`, `mc.battery_inverter(...)`, `mc.solar_inverter(...)`, `mc.chp(...)` | `mc.make_meter(...)`, `mc.make_battery(...)`, `mc.make_battery_inverter(...)`, `mc.make_solar_inverter(...)`, `mc.make_chp(...)` |
+| `mc.ev_charger(...)`, `mc.steam_boiler(...)` | `mc.make_ev_charger(...)`, `mc.make_steam_boiler(...)` |
 | `rated=(lo, hi)` on `grid`, `battery`, `battery_inverter` or `solar_inverter` | `rated_lower=lo, rated_upper=hi` on the matching `make_*` |
 | `async with mc.aio.launch(topology) as site:` | `async with mc.launch(spec, env=..., state_dir=...) as microgrid:` |
 | `site.grpc_url`, `site.grid_power` | `microgrid.grpc_url`, `microgrid.grid_power` |
@@ -177,229 +144,61 @@ The Python client is rewritten. 0.1 code needs changes; the table under Old and 
 | `expect(approx=x, tol=t)`, `max=`, `min=`, `within=` | `expect(mc.near(x, tol=t))`, `mc.at_most`, `mc.at_least`, `mc.between` |
 | `for_=` | `hold_for=` |
 | `read(wait=...)` | `read(timeout=...)` |
+| `plug_ev(...)`, `unplug_ev()` | `microgrid[charger].plug(preset, ...)`, `.unplug()` |
 | `ControlRejected`, `EvalRejected` | `Rejected`; eval is gone |
 | `DrivenSignal`, `SettingSignal` | `SettableSignal`, `ClearableSignal`, `Knob`, `ClearableKnob` |
-| `mc.raw(...)`, `**extra`, scenarios, EV, commands, the pytest plugin | removed |
-
-### Lisp
-
-Files written with the old keywords still load. macrocosim converts
-each old keyword to its new one and logs `:old is deprecated; use
-:new` once per name. The next time it saves a managed file, it writes
-the new names into that file's generated block. `enterprise.lisp` gets
-them the next time it is saved, which happens when an eval changes a
-`*-defaults` list or an enterprise setting. The hand-written script
-section of a file is never rewritten, so its old names warn on every
-boot. Edit your script sections by hand, and use the warnings as a
-checklist. Loading never writes a file. The full list is under "Old
-Lisp names" in [`docs/names-and-units.md`](docs/names-and-units.md).
-
-What to change in your own scripts:
-
-- Put the unit in the keyword: `:power-w`, `:capacity-wh`,
-  `:initial-soc-pct`, `:sunlight-pct`, `:ramp-rate-w-per-s`,
-  `:command-delay-s`, `:interval-s` and so on. Durations that were in
-  milliseconds are now in seconds.
-- `:cloud-rate` (clouds per hour) is `:cloud-mean-gap-s`, the mean
-  seconds between clouds. `0` means no ambient clouds.
-- `:demand` of a steam boiler was kg/h. `:demand-kg-per-s` is kg/s.
-- The lifetime of `set-active-power`, `set-reactive-power`,
-  `augment-active-bounds` and `augment-reactive-bounds` is the keyword
-  `:lifetime-s`, in seconds. `:clamp` is a keyword too. The old
-  positional `LIFETIME-MS [CLAMP]` still works in milliseconds and
-  warns.
-- Use `set-default-request-lifetime-s`, `set-default-augment-lifetime-s`,
-  `set-physics-tick-s` and `set-sample-lag-s`. The `-ms` names still
-  work in milliseconds and warn.
-- Use `(scenario-end-after-s SECONDS)`. `scenario-end-after` still takes
-  minutes and warns.
-- Use `(set-boiler-demand-kg-per-s ID KG-S)` and
-  `(drive-boiler-kg-per-s ID SOURCE)`. `set-boiler-demand` and
-  `drive-boiler` still take kg/h and warn.
-- In scenarios, `every :interval-s`, `define-controller :every-s`,
-  `random-outage :min-every-s :max-every-s :min-duration-s
-  :max-duration-s`, `hold :for-s` and `ramp :over-s` take seconds. The
-  old keywords still work and warn.
-- `check` and `scenario-expect` take `:component-id`. The drive helpers
-  carry `:component-id`.
-- `%plug-ev` takes the charger as `:component-id`. It was `:id`, which
-  is not in the rename table, so an old direct call to `%plug-ev`
-  fails. `plug-ev` is unchanged.
-- When one call gives the same keyword twice, the first one now counts,
-  as with `plist-get`. It was the last one. A `make-*` call's own
-  keywords still win over its `*-defaults` list, which now comes after
-  them.
-- `:health 'ready` is no longer accepted. Use `'ok`.
-- A wrong value for `:health`, `:telemetry-mode`, `:command-mode`,
-  `:operational-mode` or `:idle` gets a new error text, and so does
-  one passed to `set-component-health`,
-  `set-component-telemetry-mode`, `set-component-command-mode` or
-  `set-component-operational-mode`. The text names the type and lists
-  the accepted symbols, for example `unknown Health 'bogus'; expected
-  one of ok, error, standby`. A string in place of a symbol gets
-  `Expected a symbol for Health (one of ok, error, standby), got:
-  "error"`. Update code that matches the old text.
-- A dynamic value is now compiled once, when you give it. This covers
-  the expression or symbol given to `:power-w`, `:reactive-power-var`,
-  `:sunlight-pct` or `:demand-kg-per-s`, and to `set-meter-power`,
-  `set-meter-reactive-power`, `set-solar-sunlight`,
-  `set-boiler-demand` or `set-boiler-demand-kg-per-s`. A form that
-  does not compile, such as `'(car)`, is an error at that call. In a
-  config file it stops the file from loading.
-- A macro in such an expression is expanded at that call. Define it
-  before the call, earlier in the same file or in an earlier eval. A
-  macro defined later is not picked up, and neither is a later change
-  to a value the macro reads.
-- A function such an expression calls can be defined or redefined
-  later. The next refresh uses the new definition.
-- `(ev-info ID)`, `(ev-presets)` and `(weather-status)` read back the new
-  names with no old names: `:soc-pct`, `:target-soc-pct`,
-  `:capacity-wh` (Wh, not kWh), `clear-sky-pct` and `sunlight-pct`.
-  Update code that reads them.
-- macrocosim now uses tulisp 0.32, whose `format-seconds` follows
-  Emacs's rules: `(format-seconds "%m:%s" 3661)` is now `"61:1"`; it
-  was `"1:1"`. Check scripts that use it.
-- tulisp 0.32 changes, to match Emacs, what `time-add`,
-  `time-subtract`, `time-less-p` and `time-equal-p` give in some cases.
-  For example, `(time-add 1 2)` is now `3`; it was `(3 . 1)`.
-  `(time-add '(1500000000 . 1000000000) 1)` is now `(5 . 2)`; it was
-  `(2500000000 . 1000000000)`. `(time-less-p '(1 . 3) '(1 . 2))` is now
-  `t`; it was `nil`. Check scripts that use these functions.
+| `mc.raw(...)`, `**extra`, scenarios, commands, the pytest plugin | removed |
 
 ## New Features
 
-- `docs/names-and-units.md` lists the rules and the name of every
-  quantity in Lisp, HTTP, macroctl and Python.
-- A `*-defaults` list saved into `enterprise.lisp`, and a form the UI
-  formats, keep each keyword on one line with its value when the list
-  is too wide for one line. Each keyword and each value had a line of
-  its own.
+- Python scripts. `macrocosim plant.py` runs a script that defines `MICROGRIDS`, a list of `make_microgrid(...)` specs, and `async def run(microgrids)`, which animates them with the same `Microgrid` objects a test gets from `launch`.
+- The script runs as `__main__` in one child process (`python -P -m macrocosim._runner`). Its output goes to the log, each line led by the script's name. On Linux and macOS, a process the script starts is ended with the child, at every reload and when the simulator shuts down: SIGTERM, then SIGKILL after 1 s. A process that moves to a process group or session of its own (`setsid`, `setpgid`, `Popen(process_group=0)` or `start_new_session=True`) is not, and a process in the group cannot read from the terminal. Ctrl-C stops the child through the simulator, also while the script is still loading.
+- A script needs Python 3.11 or later with the `macrocosim` package of the binary's version. `--python PATH`, `$MACROCOSIM_PYTHON`, a `python` beside the binary (the wheel's layout) and `PATH` are tried in that order, and only the first match is checked.
+- Reloads. Each save of a `.py` file in the script's directory tree starts a new child, 300 ms after the last `.py` change; other files written in the tree do not delay it. The new child's microgrids are checked and built aside, the old child is stopped (its stdin closes; it is killed after 3 s), and the new microgrids are swapped in before `run` starts again.
+- A script that fails to import, sends wrong microgrids or sends nothing within 30 s fails to load, and the old child and the world stay as they were. A microgrid the script no longer lists is unloaded.
+- Carry. A rebuild, from a script reload, a UI edit or an undo, keeps a component's battery SoC, plugged car, boiler pressure, history and energy totals when the new spec has a component with the same id and an equal spec, defaults filled. Its name, health and modes don't count, so a rename keeps the state.
+- Carry follows component ids, and automatic ids are numbered from 1000 across the whole `MICROGRIDS` list. So give an explicit id to every component whose state should survive an edit of the topology.
+- On every rebuild, knobs start from the spec; weather, grid voltage and sample lag stay until changed or cleared. A rebuild ends the microgrid's gRPC telemetry streams, so a client has to open them again.
+- Component ids are unique across the engine. A script whose component claims an id another microgrid holds fails to load, naming both microgrids. UI-made components take the lowest free id of 5000 or more.
+- The topology document. `--topology PATH` boots the microgrids of a JSON topology document with no script. `GET /api/mg/{mg}/spec` returns a microgrid's spec, and `PUT` rebuilds the microgrid from a new one, with carry; a changed `grpc_port` moves its gRPC server.
+- `GET /api/defaults` serves the defaults the engine fills into a spec, which the Defaults panel shows read-only, and `GET /api/spec/schema` the document's JSON Schema. `mc.load_topology(path)` reads a document back into specs.
+- Unloading a microgrid. `DELETE /api/mg/{mg}` cancels its telemetry streams, stops its gRPC server (freeing the port), its physics and history tasks, its loopback and its recording, deletes its dispatches with a `Deleted` event each, frees its component ids and sends `microgrid_unloaded` on the WebSocket.
+- Recording. `async with microgrid.record(name, csv=False) as recording:` records the block's metrics: peak grid power, battery charge and discharge, PV energy, SoC statistics and 15-minute averages of the grid power. `recording.event(kind, payload)` adds a named event, and `recording.report()` returns a `RecordingReport` after the block.
+- With `csv=True`, every component's telemetry goes to CSV files under `recordings/<microgrid id>/<name>-<UTC time>/` in the state directory; a directory that exists already gets a `-2`, `-3`, ... suffix. The routes are `/api/mg/{mg}/recording`, `.../start`, `.../stop`, `.../event`, `.../events`, `.../report`, `.../csv` and `.../csv/{file}`, and the Report panel shows the recording while it runs.
+- A rebuild ends a recording and keeps its report, with `ended_by: "rebuild"`; the script logs a warning and goes on.
+- Exporting a microgrid as Python. `GET /api/mg/{mg}/spec.py` renders the stored spec as a Python module with its `make_*` calls, every id and a `MICROGRIDS` list, which a script or a test imports. The UI's microgrid bar has *Copy as Python* and *Save as .py*.
+- `mc.connect(url)` attaches to a running simulator, such as one running a script, and yields its microgrids by id, for one-off reads and writes from `python -m asyncio`.
+- Typed routes for every knob a script drives: `POST .../component/{id}/runtime` (the operational mode), `reactive_apparent_va` and `reactive_pf_limit` on `POST .../component/{id}/drive`, `POST`/`DELETE .../component/{id}/ev` (plug and unplug a car), `POST .../grid` (phase voltages), `POST .../sample-lag`, `POST .../streams/cancel`, `DELETE .../weather`, a `seed` for the weather, and `GET`/`POST /api/frequency` for the frequency all microgrids share.
+- The Python client drives each, except an inverter's reactive limits and a meter's power factor, which a script sets in the spec. EV chargers, steam boilers (with `Pressure` and `MassFlow`), wind turbines, power transformers and breakers have specs and live classes. A `Microgrid` has `set_weather`, `pass_cloud`, `clear_weather`, `set_voltage_per_phase`, `set_sample_lag`, `cancel_streams`, `frequency` and `set_frequency_model`.
+- `GET /api/runner` gives the script's state (`starting`, `running`, `finished` or `crashed`), the result of its last reload (`ok`, `failed_to_load` or `pending`) and its last lines of output; the `script_status` WebSocket event carries the same. The top bar's script chip shows it, with the output in a popover.
+- The UI edits a microgrid through its spec: every structural edit reads the spec, changes it and `PUT`s it, and undo and redo step through the stored specs. An *edited here* chip marks a script's microgrid edited in the UI, and an *in memory only* chip a microgrid made in the UI.
+- One simulator supports 1600 knob writes per second in total (measured with `tools/write-rate.py`); see python/README.md.
+- The grid connection point honours a rated band given on one side only. The given side applies and the other stays open.
+- [`docs/names-and-units.md`](docs/names-and-units.md) lists the rules and the name of every quantity in the topology document, HTTP, macroctl and Python.
 - macroctl has `set-reactive-power` and `augment-reactive-bounds`.
-- `GET /api/mg/{mg}/component/{id}/ev` reads the car plugged into a
-  charger: `plugged`, `presets`, and when plugged `preset`, `soc_pct`,
-  `target_soc_pct`, `phases`, `max_current_a`, `capacity_wh`,
-  `energy_wh`, `plugged_at` and `state`. It answers 404 for an unknown
-  component and 400 for one that is not a charger.
-- The error of a timer body that fails goes to the log, so the UI's log
-  shows it. It was printed to stderr only.
-- Every time the UI shows uses the zone the zone chip in the top bar
-  picks: the simulation's zone (set with `set-timezone`), or UTC. This
-  covers the charts, the log tail, the inspector's setpoints, the
-  weather chart and cloud list, the scenario report and the dispatches.
-  Before, charts
-  and logs used the browser's zone and the weather panel and report
-  used UTC. The weather panel's sunrise and sunset fields stay in UTC,
-  as `make-weather` takes them. Times in the HTTP and gRPC APIs stay
-  UTC.
-- Component counts in the UI include hidden components and say how many
-  are hidden, for example `12 components (1 hidden)`. The header left
-  them out while the microgrid card counted them. The header's
-  connection count includes the hidden components' connections too.
-  The loopback pill in the top bar shows `✓ connected` and no longer
-  a count.
-- Each `GET /api/microgrids` entry has `hidden_component_count`, the
-  number of its components that are hidden.
-- The UI has a light theme. By default it follows the OS setting. The
-  theme chip in the top bar picks auto, light or dark, and the
-  browser remembers the choice.
-- The UI is set in IBM Plex: IBM Plex Mono where it used a monospace
-  font, IBM Plex Sans for the rest. Chart axes show their numbers in
-  IBM Plex Mono. Numbers line up in columns.
-- The UI is compact by default, with 13px text. The density chip in
-  the top bar switches to comfortable, with larger text and more
-  space, and the browser remembers the choice. If you had turned
-  compact off with the old chip, the UI opens comfortable.
-- Buttons and fields share one look across the UI. A dispatch's Delete
-  button is red.
-- The zone, theme and density chips in the top bar can be reached
-  with Tab and used with Enter or Space. A control with keyboard focus
-  shows an outline.
-- An error message now stays on screen until you close it, and it shows
-  above an open dialog. The same message twice shows once, with a count.
-- When the UI cannot reach the server, a banner under the top bar says
-  so. It goes away by itself once the server answers again.
-- A failed load or save now shows next to the form it came from, which
-  stays open so you can fix the input and try again. This covers the
-  Load script and Snapshots dialogs and the Defaults panel. A refused
-  import no longer closes the import dialog and opens it again.
+- `GET /api/mg/{mg}/component/{id}/ev` reads the car plugged into a charger: `plugged`, `presets`, and when plugged `preset`, `soc_pct`, `target_soc_pct`, `phases`, `max_current_a`, `capacity_wh`, `energy_wh`, `plugged_at` and `state`. It answers 404 for an unknown component and 400 for one that is not a charger.
+- Every time the UI shows uses the zone the zone chip in the top bar picks: the browser's zone, or UTC. This covers the charts, the log tail, the inspector's setpoints, the weather chart and cloud list, the recording report and the dispatches.
+- The weather panel's sunrise and sunset fields stay in UTC, as the weather route takes them. Times in the HTTP and gRPC APIs stay UTC.
+- Component counts in the UI include hidden components and say how many are hidden, for example `12 components (1 hidden)`. The header left them out while the microgrid card counted them. The header's connection count includes the hidden components' connections too. The loopback pill in the top bar shows `✓ connected` and no longer a count.
+- Each `GET /api/microgrids` entry has `hidden_component_count`, the number of its components that are hidden.
+- The UI has a light theme. By default it follows the OS setting. The theme chip in the top bar picks auto, light or dark, and the browser remembers the choice.
+- The UI is set in IBM Plex: IBM Plex Mono where it used a monospace font, IBM Plex Sans for the rest. Chart axes show their numbers in IBM Plex Mono. Numbers line up in columns.
+- The UI is compact by default, with 13px text. The density chip in the top bar switches to comfortable, with larger text and more space, and the browser remembers the choice. If you had turned compact off with the old chip, the UI opens comfortable.
+- Buttons and fields share one look across the UI. A dispatch's Delete button is red.
+- The zone, theme and density chips in the top bar can be reached with Tab and used with Enter or Space. A control with keyboard focus shows an outline.
+- An error message now stays on screen until you close it, and it shows above an open dialog. The same message twice shows once, with a count.
+- When the UI cannot reach the server, a banner under the top bar says so. It goes away by itself once the server answers again.
+- A failed create or import now shows next to the form it came from, which stays open so you can fix the input and try again. A refused import no longer closes the import dialog and opens it again.
 - The UI's own errors appear in the logs panel too, starting with `ui:`.
-- The top of the UI has two bars. The top bar is for the whole site:
-  the modes, the system status, the REPL, Logs, Defaults, Report and
-  help buttons, and the theme, density and zone chips. The bar under it
-  is for the microgrid you opened: Topology and Dispatches, and the
-  Metrics, Formulas, Weather and Snapshots buttons. The REPL and Logs
-  buttons are on every view, the microgrid list and Scenarios included.
-- A panel opens docked unless you have floated it out of a strip: the
-  REPL and the logs along the bottom, the other panels down the right,
-  and the canvas narrows to make room. Float a docked panel with its ⤒
-  button and it opens floating from then on.
-- A floating panel's corner gripper resizes it sideways too. Like the
-  height, the width you set stays after a reload, and after you dock
-  the panel and float it again.
-- The UI works in a window down to 1024px wide. The bars wrap onto more
-  rows, and in a narrow window the panels docked on the right get
-  narrower, down to their smallest width, so the canvas keeps about
-  600px.
-- Every Lisp function macrocosim defines has a docstring, and its
-  parameters have names, so a function shows as
-  `(set-meter-power ID POWER-W)` and says what it does. The `make-*`
-  docstrings list every key they take.
-- The REPL completes the names the interpreter defines. It reads them
-  each time the input gets focus and after each eval, so a function an
-  eval defines completes at once.
-  The completion popup shows the selected name's signature and
-  docstring and opens at the word being completed. It grows to fit
-  its widest line, signature included, up to the width of the input.
-  While you type a call, a line under the input shows its signature,
-  with the current argument marked, and the first line of its
-  docstring.
-  When you type a `:` in a call that lists its keys, such as
-  `define-scenario`, the popup offers the keys that call can still take,
-  without the ones given before the cursor.
-  `make-microgrid`, `make-weather`, the component `make-*` functions and
-  `plug-ev` list their keys too.
-  A key shows in its own colour as you type it.
-  `set-active-power` and `set-reactive-power` take `:lifetime-s` and
-  `:clamp`, and the `augment-*-bounds` functions take `:lifetime-s`, but
-  none of them list their keys.
-- `GET /api/symbols` lists every defined name with its kind, signature
-  and docstring. A key parameter carries the keys it takes, when its
-  definition declares them. That covers the built-in functions that
-  declare their plist as a parameter, such as `define-scenario`. It also
-  covers the `make-*` component wrappers and `plug-ev`, which are Lisp
-  functions that pass their arguments on to one.
-- macrocosim now uses tulisp 0.32, which adds many Emacs Lisp
-  functions, among them `defconst`, `add-to-list`, `plist-put`,
-  `substring`, `string-replace`, `seq-sort` and `read-from-string`.
-  macrocosim keeps its own `floor`, `ceiling`, `sin`, `cos` and
-  `random`. `random` still takes only an optional integer limit, and
-  `set-random-seed` seeds it.
-- The REPL reads like a terminal. The prompt is the last line of the output and scrolls with it, and the input no longer sits in a box of its own. Ctrl+Enter (Cmd+Enter on a Mac) evals, as before; the Eval button is now a small *eval* button in the panel's head, beside the microgrid chip and the Emacs keys checkbox.
-- The REPL's completion popup opens below the prompt or above it, whichever has more room.
-- A floating REPL keeps the height you drag it to, even while its output is shorter.
-- The REPL keeps a history, like a shell. Up on the input's first row brings back the previous command, and Down on its last row the next one. The history is kept in the browser, across reloads and microgrids: the last 500 commands. A command over 16K characters runs but is not kept. Clicking a command in the REPL's output puts it back in the input.
-- The REPL's output colours commands and values the way the input does.
-- An *Emacs keys* checkbox turns on Emacs keys in the REPL (C-a, C-e, C-k, C-y, M-f, M-b, M-p, M-n and more). It is off by default, and the browser remembers it.
+- The top of the UI has two bars. The top bar is for the whole site: the microgrid list, the script chip, the system status, the Logs, Defaults, Report and help buttons, and the theme, density and zone chips.
+- The bar under it is for the microgrid you opened: Topology and Dispatches, the Metrics, Formulas and Weather buttons, and the Python export. The Logs button is on every view.
+- A panel opens docked unless you have floated it out of a strip: the logs along the bottom, the other panels down the right, and the canvas narrows to make room. Float a docked panel with its ⤒ button and it opens floating from then on.
+- A floating panel's corner gripper resizes it sideways too. Like the height, the width you set stays after a reload, and after you dock the panel and float it again.
+- The UI works in a window down to 1024px wide. The bars wrap onto more rows, and in a narrow window the panels docked on the right get narrower, down to their smallest width, so the canvas keeps about 600px.
 
 ## Bug Fixes
 
-- Lisp code that recursed deep, but still within tulisp's limit of 1000
-  nested calls in a release build, could overflow a thread's stack and
-  end the server. The Lisp code the server runs after boot (evals,
-  reloads, timers and dynamic values) now gets an 8 MiB stack, so such
-  code runs, and deeper code stops with a Lisp error.
-- The dispatch form read its start time in the browser's zone, while
-  the dispatch list shows it in the zone the zone chip picks. The form
-  now reads it in that zone too, and names the zone next to the field.
-- The UI did not start in a browser that blocks site storage. It now
-  starts and works; it just does not remember your settings.
-- Dragging the corner gripper down on a floating REPL or Logs card
-  that opened along the bottom made the card grow upward, even after
-  you had moved it. Its top edge moved, and the corner you held stayed
-  where it was. Now, while you drag, the corner you hold follows the
-  pointer and the card's top-left corner stays in place.
-
-  A card you resize past the right or bottom edge of the area the
-  panels float in stops at that edge when you let go. If it already
-  reached past that edge when you took hold of it, it can get smaller
-  there, but no bigger.
+- The dispatch form read its start time in the browser's zone, while the dispatch list shows it in the zone the zone chip picks. The form now reads it in that zone too, and names the zone next to the field.
+- The UI did not start in a browser that blocks site storage. It now starts and works; it just does not remember your settings.
+- Dragging the corner gripper down on a floating Logs card that opened along the bottom made the card grow upward, even after you had moved it. Its top edge moved, and the corner you held stayed where it was. Now, while you drag, the corner you hold follows the pointer and the card's top-left corner stays in place.
+- A card you resize past the right or bottom edge of the area the panels float in stops at that edge when you let go. If it already reached past that edge when you took hold of it, it can get smaller there, but no bigger.
