@@ -615,11 +615,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "plug-ev: component {id} is not an EV charger"
                 )));
             };
-            // Rejected BEFORE the snapshot below, not by `plug_ev`'s own
-            // guard afterwards: an `Ev` baseline holds a live clone of
-            // the car, so seeding one from a refused plug would make
-            // `(scenario-stop)` rewind that car's SoC and accumulated
-            // energy to the instant of a call that changed nothing.
+            // Checked before the car's arguments, so an occupied
+            // charger is the error a bad preset on it reports.
+            // `MicrogridSite::plug_ev` checks again before it writes.
             if port.ev_info().is_some() {
                 return Err(Error::invalid_argument(format!(
                     "plug-ev: component {id}: an EV is already plugged in"
@@ -669,13 +667,8 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
             // charger exactly as it was.
             let ev = ConnectedEv::new(p, &o, chrono::Utc::now())
                 .map_err(|e| Error::invalid_argument(format!("plug-ev: component {id}: {e}")))?;
-            let soc = ev.soc_pct;
-            w.scenario_snapshot_knob(id, KnobKind::Ev);
-            port.plug_ev(ev)
+            w.plug_ev(id, port, ev)
                 .map_err(|e| Error::invalid_argument(format!("plug-ev: component {id}: {e}")))?;
-            // `expr` is for printed Lisp source a write installed;
-            // the preset name is not that, so it stays out of it.
-            w.note_knob_changed(id, "ev", Some(soc), None, None);
             Ok(true)
         },
     );
@@ -702,20 +695,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
                     "unplug-ev: component {id} is not an EV charger"
                 )));
             };
-            // Only when there is a car to take away: this suppresses a
-            // teardown restore (and its `knob_changed`) on a charger the
-            // run never displaced. It does NOT protect a car an operator
-            // plugs mid-scenario — `plug-ev` snapshots `Ev(None)` itself,
-            // and teardown then unplugs it by design, per the transient-
-            // knob contract.
-            if port.ev_info().is_some() {
-                w.scenario_snapshot_knob(id as u64, KnobKind::Ev);
-            }
-            let had = port.unplug_ev();
-            if had {
-                w.note_knob_changed(id as u64, "ev", None, None, None);
-            }
-            Ok(had)
+            Ok(w.unplug_ev(id as u64, port))
         },
     );
 

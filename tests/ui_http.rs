@@ -1197,3 +1197,88 @@ async fn ws_events_name_ids_and_times_like_the_http_bodies() {
     assert_eq!(knob["value"], 1500.0);
     assert_eq!(knob["unit"], "W");
 }
+
+/// The typed routes for the component knobs Lisp used to own, over a
+/// real socket: reactive limits on `/drive`, the operational mode on
+/// `/runtime`, a car plugged and unplugged on `/ev`, the sample lag
+/// and a stream cancel. Each refuses an unknown field.
+#[tokio::test(flavor = "multi_thread")]
+async fn typed_knob_routes_reach_the_site() {
+    let s = TestServer::start(
+        "(%make-grid-connection-point :id 1) (%make-meter :id 2) \
+         (%make-ev-charger :id 6) (%make-solar-inverter :id 8) \
+         (connect 1 2) (connect 2 6) (connect 2 8)",
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let send = |method: reqwest::Method, path: &str, body: Option<Value>| {
+        let mut req = client.request(method, s.mg_url(path));
+        if let Some(body) = body {
+            req = req.json(&body);
+        }
+        async move { req.send().await.unwrap().status().as_u16() }
+    };
+    use reqwest::Method;
+    let post = Method::POST;
+
+    let drive = serde_json::json!({"reactive_apparent_va": 4000.0, "reactive_pf_limit": 0.4});
+    assert_eq!(
+        send(post.clone(), "component/8/drive", Some(drive)).await,
+        204
+    );
+    let caps = s
+        .site()
+        .get(8)
+        .unwrap()
+        .reactive_limits()
+        .unwrap()
+        .reactive_capability();
+    assert_eq!((caps.apparent_va, caps.pf_limit), (Some(4000.0), Some(0.4)));
+
+    let mode = serde_json::json!({"operational_mode": "telemetry_only"});
+    assert_eq!(
+        send(post.clone(), "component/2/runtime", Some(mode)).await,
+        204
+    );
+    assert_eq!(
+        s.site().operational_mode(2),
+        macrocosim::sim::component::OperationalMode::TelemetryOnly
+    );
+
+    let plug = serde_json::json!({"preset": "city", "soc_pct": 30});
+    assert_eq!(
+        send(post.clone(), "component/6/ev", Some(plug.clone())).await,
+        204
+    );
+    let ev = json(&client, s.mg_url("component/6/ev")).await;
+    assert_eq!(ev["plugged"], true, "{ev}");
+    assert_eq!(send(post.clone(), "component/6/ev", Some(plug)).await, 409);
+    assert_eq!(send(Method::DELETE, "component/6/ev", None).await, 204);
+    let ev = json(&client, s.mg_url("component/6/ev")).await;
+    assert_eq!(ev["plugged"], false, "{ev}");
+
+    let lag = serde_json::json!({"sample_lag_s": 0.25});
+    assert_eq!(send(post.clone(), "sample-lag", Some(lag)).await, 204);
+    assert_eq!(s.site().sample_lag_ms(), 250);
+    let negative = serde_json::json!({"sample_lag_s": -0.25});
+    assert_eq!(send(post.clone(), "sample-lag", Some(negative)).await, 400);
+
+    let epoch = s.site().stream_cancel_epoch();
+    assert_eq!(send(post.clone(), "streams/cancel", None).await, 204);
+    assert_ne!(s.site().stream_cancel_epoch(), epoch);
+
+    for (path, body) in [
+        ("component/8/drive", serde_json::json!({"reactive_va": 1})),
+        (
+            "component/2/runtime",
+            serde_json::json!({"mode": "inactive"}),
+        ),
+        (
+            "component/6/ev",
+            serde_json::json!({"preset": "city", "x": 1}),
+        ),
+        ("sample-lag", serde_json::json!({"sample_lag_s": 1, "x": 1})),
+    ] {
+        assert_eq!(send(post.clone(), path, Some(body)).await, 422, "{path}");
+    }
+}

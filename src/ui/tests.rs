@@ -282,6 +282,8 @@ async fn every_microgrid_route_shares_the_unregistered_404() {
         ("eval", "(+ 1 2)"),
         ("component/1/status", "{}"),
         ("component/1/drive", "{}"),
+        ("component/1/runtime", "{}"),
+        ("component/1/ev", "{}"),
         ("weather", "{}"),
         ("adopt", ""),
         ("undo", ""),
@@ -290,6 +292,8 @@ async fn every_microgrid_route_shares_the_unregistered_404() {
         ("snapshots/load", r#"{"name":"x"}"#),
         ("dispatches", "{}"),
         ("dispatches/1/active", "{}"),
+        ("sample-lag", "{}"),
+        ("streams/cancel", ""),
     ];
     for (suffix, body) in posts {
         let req = Request::builder()
@@ -306,13 +310,16 @@ async fn every_microgrid_route_shares_the_unregistered_404() {
             "POST {suffix}"
         );
     }
-    let (status, resp) = call(cfg.clone(), delete_req("/api/mg/9999/dispatches/1")).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "DELETE dispatches/1");
-    assert_eq!(
-        error_of(&resp),
-        "microgrid 9999 not registered",
-        "DELETE dispatches/1"
-    );
+    for suffix in ["dispatches/1", "component/1/ev"] {
+        let req = delete_req(&format!("/api/mg/9999/{suffix}"));
+        let (status, resp) = call(cfg.clone(), req).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "DELETE {suffix}");
+        assert_eq!(
+            error_of(&resp),
+            "microgrid 9999 not registered",
+            "DELETE {suffix}"
+        );
+    }
     let (status, body) = call(cfg, get("/api/mg/abc/topology")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error_of(&body), "invalid microgrid id: \"abc\"");
@@ -1533,6 +1540,251 @@ async fn control_drive_rejects_wrong_category() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(error_of(&body).contains("powr_w"), "{}", error_of(&body));
+}
+
+/// The drive route's reactive limits land on an inverter, 0 removes
+/// one, and a component without them is a 400.
+#[tokio::test]
+async fn drive_sets_and_removes_an_inverters_reactive_limits() {
+    let (cfg, _dir) = config_with(
+        "(%make-meter :id 7)
+         (%make-solar-inverter :id 8)",
+    )
+    .await;
+    let caps = |cfg: &Config| {
+        cfg.site()
+            .get(8)
+            .unwrap()
+            .reactive_limits()
+            .unwrap()
+            .reactive_capability()
+    };
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/component/8/drive",
+            r#"{"reactive_apparent_va": 5000.0, "reactive_pf_limit": 0.5}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(caps(&cfg).apparent_va, Some(5000.0));
+    assert_eq!(caps(&cfg).pf_limit, Some(0.5));
+
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/component/8/drive",
+            r#"{"reactive_apparent_va": 0, "reactive_pf_limit": -1}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(caps(&cfg).apparent_va, None);
+    assert_eq!(caps(&cfg).pf_limit, None);
+
+    let (status, body) = call(
+        cfg,
+        post_json(
+            "/api/mg/2200/component/7/drive",
+            r#"{"reactive_pf_limit": 0.5}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        error_of(&body).contains("reactive_pf_limit"),
+        "{}",
+        error_of(&body)
+    );
+}
+
+/// `POST .../runtime` sets the operational mode and re-derives the
+/// runtime modes; a mode it does not know is a 400 and an unknown
+/// field a 422.
+#[tokio::test]
+async fn runtime_route_sets_the_operational_mode() {
+    use crate::sim::component::OperationalMode;
+    use crate::sim::runtime::{CommandMode, TelemetryMode};
+    let (cfg, _dir) = config_with("(%make-meter :id 7)").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/component/7/runtime",
+            r#"{"operational_mode": "inactive"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let site = cfg.site();
+    assert_eq!(site.operational_mode(7), OperationalMode::Inactive);
+    assert_eq!(site.runtime_of(7).telemetry, TelemetryMode::Silent);
+    assert_eq!(site.runtime_of(7).command, CommandMode::Error);
+
+    let (status, body) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/component/7/runtime",
+            r#"{"operational_mode": "sleepy"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(error_of(&body).contains("operational_mode"));
+    assert_eq!(site.operational_mode(7), OperationalMode::Inactive);
+
+    let (status, body) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/component/7/runtime",
+            r#"{"operational_mode": "inactive", "health": "ok"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(error_of(&body).contains("health"));
+
+    let (status, _) = call(
+        cfg,
+        post_json(
+            "/api/mg/2200/component/99/runtime",
+            r#"{"operational_mode": "inactive"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// `POST .../ev` plugs a catalog car in with the values it gives, a
+/// second plug is a 409, and `DELETE` unplugs, also on an empty
+/// charger.
+#[tokio::test]
+async fn ev_route_plugs_and_unplugs_a_car() {
+    let (cfg, _dir) = config_with("(%make-ev-charger :id 6) (%make-meter :id 7)").await;
+    let info = |cfg: &Config| cfg.site().get(6).unwrap().ev_port().unwrap().ev_info();
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/mg/2200/component/6/ev",
+            r#"{"preset": "city", "soc_pct": 25, "phases": 1, "taper_floor_pct": 50}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let car = info(&cfg).expect("a car").ev;
+    assert_eq!(car.preset, "city");
+    assert_eq!(car.soc_pct, 25.0);
+    assert_eq!(car.phases, 1);
+    assert_eq!(car.taper_floor, 0.5);
+
+    let (status, body) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/component/6/ev", r#"{"preset": "city"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(error_of(&body).contains("already"), "{}", error_of(&body));
+
+    for _ in 0..2 {
+        let (status, _) = call(cfg.clone(), delete_req("/api/mg/2200/component/6/ev")).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(info(&cfg).is_none());
+    }
+
+    for (body, want) in [
+        (r#"{"preset": "tractor"}"#, StatusCode::BAD_REQUEST),
+        (
+            r#"{"preset": "city", "soc_pct": 150}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"preset": "city", "phases": 4}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"preset": "city", "taper_floor_pct": 120}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"preset": "city", "colour": "red"}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let (status, _) = call(cfg.clone(), post_json("/api/mg/2200/component/6/ev", body)).await;
+        assert_eq!(status, want, "{body}");
+        assert!(info(&cfg).is_none(), "{body} plugged a car in");
+    }
+
+    let (status, body) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/component/7/ev", r#"{"preset": "city"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(error_of(&body).contains("not an EV charger"));
+    let (status, _) = call(cfg, delete_req("/api/mg/2200/component/7/ev")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// A car plugged in over HTTP while a Lisp scenario runs is unplugged
+/// again by its stop, as one plugged in with `(plug-ev)` is.
+#[tokio::test]
+async fn an_ev_plugged_during_a_scenario_is_unplugged_at_stop() {
+    let (cfg, _dir) = config_with("(%make-ev-charger :id 6)").await;
+    let site = cfg.site();
+    let now = Utc::now();
+    site.scenario_start("plug".into(), now);
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/component/6/ev", r#"{"preset": "city"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let port = || site.get(6).unwrap().ev_port().unwrap().ev_info();
+    assert!(port().is_some());
+    site.scenario_stop(now, None);
+    assert!(port().is_none(), "the scenario's stop must unplug the car");
+}
+
+/// `POST .../sample-lag` sets the lag in seconds; a negative lag is a
+/// 400 and an unknown field a 422, and neither changes it.
+#[tokio::test]
+async fn sample_lag_route_takes_seconds_and_refuses_a_negative_lag() {
+    let (cfg, _dir) = config_with("").await;
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/sample-lag", r#"{"sample_lag_s": 1.5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(cfg.site().sample_lag_ms(), 1500);
+
+    let (status, body) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/sample-lag", r#"{"sample_lag_s": -1}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(error_of(&body).contains("sample_lag_s"));
+    let (status, _) = call(
+        cfg.clone(),
+        post_json("/api/mg/2200/sample-lag", r#"{"sample_lag_ms": 5}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(cfg.site().sample_lag_ms(), 1500);
+}
+
+/// `POST .../streams/cancel` moves the epoch every open stream
+/// watches, so each one ends.
+#[tokio::test]
+async fn streams_cancel_route_ends_the_open_streams() {
+    let (cfg, _dir) = config_with("").await;
+    let before = cfg.site().stream_cancel_epoch();
+    let (status, body) = call(cfg.clone(), post("/api/mg/2200/streams/cancel", "")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_empty());
+    assert_ne!(cfg.site().stream_cancel_epoch(), before);
 }
 
 /// Battery topology used by the formula tests:

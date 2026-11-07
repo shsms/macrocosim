@@ -59,10 +59,12 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
     use handlers::{
         assets::{asset, index, logs_backfill},
         component::component,
-        control::{component_drive, component_status},
+        control::{
+            component_drive, component_runtime, component_status, sample_lag, streams_cancel,
+        },
         defaults::defaults,
         dispatches::{dispatch_create, dispatch_delete, dispatch_set_active, dispatches},
-        ev::ev,
+        ev::{ev, ev_plug, ev_unplug},
         eval::{eval, eval_for_mg, format, symbols},
         formula::formula,
         history::{history, setpoints},
@@ -92,9 +94,15 @@ fn router(config: Config, runtimes: crate::runtime::MicrogridRuntimes) -> Router
         .route("/component/{id}", get(component))
         .route("/component/{id}/status", post(component_status))
         .route("/component/{id}/drive", post(component_drive))
+        .route("/component/{id}/runtime", post(component_runtime))
         .route("/component/{id}/history", get(history))
         .route("/component/{id}/setpoints", get(setpoints))
-        .route("/component/{id}/ev", get(ev))
+        .route(
+            "/component/{id}/ev",
+            get(ev).post(ev_plug).delete(ev_unplug),
+        )
+        .route("/sample-lag", post(sample_lag))
+        .route("/streams/cancel", post(streams_cancel))
         .route("/weather", get(weather_get).post(weather_post))
         .route("/metrics/status", get(metrics_status))
         .route("/metrics/latest", get(metrics_latest))

@@ -1,17 +1,21 @@
 //! Typed JSON control endpoints — component stimuli without Lisp.
 //!
-//! `POST /api/mg/{mg}/component/{id}/status` and
-//! `POST /api/mg/{mg}/component/{id}/drive` give programmatic clients
-//! a structured way to inject faults and drive the environment.
-//! Validation errors come back as HTTP 400 with a JSON error body,
-//! and an unknown component or microgrid is 404; success is 204 with
-//! no body. Eval remains the escape hatch for dynamic (lambda /
-//! symbol) drive sources and everything else Lisp.
+//! `POST /api/mg/{mg}/component/{id}/status`,
+//! `POST /api/mg/{mg}/component/{id}/drive` and
+//! `POST /api/mg/{mg}/component/{id}/runtime` give programmatic
+//! clients a structured way to inject faults and drive the
+//! environment; `POST /api/mg/{mg}/sample-lag` and
+//! `POST /api/mg/{mg}/streams/cancel` do the same for the
+//! microgrid's telemetry streams. Validation errors come back as HTTP
+//! 400 with a JSON error body, and an unknown component or microgrid
+//! is 404; success is 204 with no body. Eval remains the escape hatch
+//! for dynamic (lambda / symbol) drive sources and everything else
+//! Lisp.
 
 use axum::http::StatusCode;
 use serde::Deserialize;
 
-use crate::sim::component::KnobKind;
+use crate::sim::component::{KnobKind, OperationalMode};
 use crate::sim::microgrid_site::{MicrogridSite, SocRefusal};
 use crate::sim::runtime::{CommandMode, Health, TelemetryMode};
 use crate::ui::api::{ApiError, ComponentPath, Json, Mg, Path};
@@ -29,7 +33,7 @@ pub(in crate::ui) struct StatusRequest {
     telemetry_mode: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(in crate::ui) struct DriveRequest {
     /// Constant active-power override for a meter (watts), if driving.
@@ -69,6 +73,28 @@ pub(in crate::ui) struct DriveRequest {
     /// Plain bool for the same reason as `clear_power`.
     #[serde(default)]
     clear_sunlight: bool,
+    /// Cap an inverter's apparent power at this many VA:
+    /// `sqrt(P² + Q²) <= cap`. 0 or less removes the cap.
+    reactive_apparent_va: Option<f64>,
+    /// Limit an inverter's reactive power to this ratio of its active
+    /// power: `|Q| <= limit × |P|`. 0 or less removes the limit.
+    reactive_pf_limit: Option<f64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::ui) struct RuntimeRequest {
+    /// The component's operational mode (`unspecified` / `inactive` /
+    /// `telemetry_only` / `control_only` / `control_and_telemetry`).
+    operational_mode: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::ui) struct SampleLagRequest {
+    /// How far every telemetry sample's timestamp is shifted into the
+    /// past, in seconds; 0 turns the lag off.
+    sample_lag_s: f64,
 }
 
 fn apply_status(
@@ -263,6 +289,20 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> Result<Stat
                  mutually exclusive; send one or the other"
         )));
     }
+    // The reactive limits apply to the inverters, through the same
+    // `ReactiveLimits` methods `set-reactive-apparent-va` /
+    // `set-reactive-pf-limit` call in Lisp.
+    let limits = component.reactive_limits();
+    for (field, v) in [
+        ("reactive_apparent_va", req.reactive_apparent_va),
+        ("reactive_pf_limit", req.reactive_pf_limit),
+    ] {
+        if v.is_some() && limits.is_none() {
+            return Err(ApiError::bad_request(format!(
+                "component {id} does not take {field} (not an inverter)"
+            )));
+        }
+    }
     // Value sanity, same validate-first contract. The f64→f32 cast
     // turns any JSON number beyond f32 range into ±inf, and the meter
     // override installs whatever it's given — an inf/NaN would poison
@@ -275,6 +315,8 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> Result<Stat
         ("reactive_power_var", req.reactive_power_var),
         ("steam_demand_kg_per_s", req.steam_demand_kg_per_s),
         ("pressure_bar", req.pressure_bar),
+        ("reactive_apparent_va", req.reactive_apparent_va),
+        ("reactive_pf_limit", req.reactive_pf_limit),
     ] {
         if let Some(v) = v
             && !(v as f32).is_finite()
@@ -404,6 +446,41 @@ fn apply_drive(site: &MicrogridSite, id: u64, req: &DriveRequest) -> Result<Stat
         boiler.set_pressure_bar(bar as f32);
         site.note_knob_changed(id, "boiler-pressure", Some(bar as f32), None, None);
     }
+    // A value of 0 or less removes the limit, as in Lisp.
+    let positive = |v: f64| (v > 0.0).then_some(v as f32);
+    if let Some(va) = req.reactive_apparent_va
+        && let Some(l) = limits
+    {
+        let cap = positive(va);
+        l.set_reactive_apparent_va(cap);
+        site.note_knob_changed(id, "reactive-apparent-va", cap, None, None);
+    }
+    if let Some(k) = req.reactive_pf_limit
+        && let Some(l) = limits
+    {
+        let limit = positive(k);
+        l.set_reactive_pf_limit(limit);
+        site.note_knob_changed(id, "reactive-pf-limit", limit, None, None);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Set a component's operational mode. Like
+/// `(set-component-operational-mode)`, this re-derives its telemetry
+/// and command modes; it changes the live value only, never a stored
+/// spec.
+fn apply_runtime(
+    site: &MicrogridSite,
+    id: u64,
+    req: &RuntimeRequest,
+) -> Result<StatusCode, ApiError> {
+    if site.get(id).is_none() {
+        return Err(ApiError::no_component(id));
+    }
+    let mode: OperationalMode = parse_mode(&req.operational_mode, "operational_mode")?;
+    // The only refusal is a component removed since the check.
+    site.set_operational_mode(id, mode)
+        .map_err(ApiError::not_found)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -421,6 +498,40 @@ pub(in crate::ui) async fn component_drive(
     Json(req): Json<DriveRequest>,
 ) -> Result<StatusCode, ApiError> {
     apply_drive(&mg.site, id, &req)
+}
+
+pub(in crate::ui) async fn component_runtime(
+    mg: Mg,
+    Path(ComponentPath { id }): Path<ComponentPath>,
+    Json(req): Json<RuntimeRequest>,
+) -> Result<StatusCode, ApiError> {
+    apply_runtime(&mg.site, id, &req)
+}
+
+/// `POST /api/mg/{mg}/sample-lag`: shift the timestamps of every
+/// telemetry sample of the microgrid into the past.
+pub(in crate::ui) async fn sample_lag(
+    mg: Mg,
+    Json(req): Json<SampleLagRequest>,
+) -> Result<StatusCode, ApiError> {
+    let secs = req.sample_lag_s;
+    let lag = std::time::Duration::try_from_secs_f64(secs).map_err(|_| {
+        ApiError::bad_request(format!(
+            "sample_lag_s must be a non-negative number of seconds, got {secs}"
+        ))
+    })?;
+    // Rounded down to whole milliseconds, as `set-sample-lag-s` does.
+    let ms = u64::try_from(lag.as_millis()).unwrap_or(u64::MAX);
+    mg.site.set_sample_lag_ms(ms);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/mg/{mg}/streams/cancel`: end every open telemetry
+/// stream of the microgrid. Each ends at its next sample time with
+/// `CANCELLED`, and clients can connect again.
+pub(in crate::ui) async fn streams_cancel(mg: Mg) -> StatusCode {
+    mg.site.cancel_all_streams();
+    StatusCode::NO_CONTENT
 }
 
 #[cfg(test)]
@@ -445,16 +556,8 @@ mod tests {
 
         let req = DriveRequest {
             power_w: Some(5_000.0),
-            sunlight_pct: None,
             soc_pct: Some(50.0), // not a battery → the whole request rejects
-            reactive_power_var: None,
-            power_factor: None,
-            leading: None,
-            steam_demand_kg_per_s: None,
-            pressure_bar: None,
-            clear_power: false,
-            clear_reactive: false,
-            clear_sunlight: false,
+            ..Default::default()
         };
         assert!(apply_drive(&site, 5, &req).is_err());
 
@@ -479,17 +582,8 @@ mod tests {
         register_boiler(&site, 6);
 
         let req = DriveRequest {
-            power_w: None,
-            sunlight_pct: None,
-            soc_pct: None,
-            reactive_power_var: None,
-            power_factor: None,
-            leading: None,
             steam_demand_kg_per_s: Some(0.5),
-            pressure_bar: None,
-            clear_power: false,
-            clear_reactive: false,
-            clear_sunlight: false,
+            ..Default::default()
         };
         assert!(apply_drive(&site, 6, &req).is_ok());
 
@@ -508,17 +602,8 @@ mod tests {
         register_boiler(&site, 6);
 
         let req = DriveRequest {
-            power_w: None,
-            sunlight_pct: None,
-            soc_pct: None,
-            reactive_power_var: None,
-            power_factor: None,
-            leading: None,
-            steam_demand_kg_per_s: None,
             pressure_bar: Some(9.0),
-            clear_power: false,
-            clear_reactive: false,
-            clear_sunlight: false,
+            ..Default::default()
         };
         assert!(apply_drive(&site, 6, &req).is_ok());
 
@@ -545,32 +630,14 @@ mod tests {
         ));
 
         let req = DriveRequest {
-            power_w: None,
-            sunlight_pct: None,
-            soc_pct: None,
-            reactive_power_var: None,
-            power_factor: None,
-            leading: None,
             steam_demand_kg_per_s: Some(0.5),
-            pressure_bar: None,
-            clear_power: false,
-            clear_reactive: false,
-            clear_sunlight: false,
+            ..Default::default()
         };
         assert!(apply_drive(&site, 5, &req).is_err());
 
         let req = DriveRequest {
-            power_w: None,
-            sunlight_pct: None,
-            soc_pct: None,
-            reactive_power_var: None,
-            power_factor: None,
-            leading: None,
-            steam_demand_kg_per_s: None,
             pressure_bar: Some(9.0),
-            clear_power: false,
-            clear_reactive: false,
-            clear_sunlight: false,
+            ..Default::default()
         };
         assert!(apply_drive(&site, 5, &req).is_err());
     }

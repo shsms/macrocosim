@@ -30,8 +30,9 @@ use tokio::task::JoinHandle;
 use crate::sim::EnergyAccum;
 use crate::sim::component::OperationalMode;
 use crate::sim::component::{
-    ComponentHandle, FIRST_AUTO_ID, KnobKind, KnobSnapshot, SimulatedComponent,
+    ComponentHandle, EvPort, FIRST_AUTO_ID, KnobKind, KnobSnapshot, SimulatedComponent,
 };
+use crate::sim::ev_presets::ConnectedEv;
 use crate::sim::events::{EVENT_BUS_CAPACITY, SiteEvent};
 use crate::sim::gateway::{Gateway, MicrogridGateway};
 use crate::sim::history::ComponentHistory;
@@ -1060,6 +1061,44 @@ impl MicrogridSite {
             return Err(SocRefusal::NoStorage);
         }
         Ok(())
+    }
+
+    /// Plug `ev` into charger `id` through its `port`. A car already
+    /// plugged in refuses it before anything changes; otherwise the
+    /// `Ev` knob snapshot comes first, so a running scenario's
+    /// teardown unplugs the car again, and the write is broadcast.
+    pub(crate) fn plug_ev(
+        &self,
+        id: u64,
+        port: &dyn EvPort,
+        ev: ConnectedEv,
+    ) -> Result<(), String> {
+        // Refused before the snapshot: an `Ev` baseline holds a live
+        // clone of the car, so seeding one from a refused plug would
+        // make the scenario's stop rewind that car's SoC and energy.
+        if port.ev_info().is_some() {
+            return Err("an EV is already plugged in".to_string());
+        }
+        let soc = ev.soc_pct;
+        self.scenario_snapshot_knob(id, KnobKind::Ev);
+        port.plug_ev(ev)?;
+        self.note_knob_changed(id, "ev", Some(soc), None, None);
+        Ok(())
+    }
+
+    /// Unplug the car from charger `id` through its `port`; `false`
+    /// when it was empty. The `Ev` knob snapshot is taken only when
+    /// there is a car to take away, so a scenario's teardown leaves a
+    /// charger the run never displaced alone.
+    pub(crate) fn unplug_ev(&self, id: u64, port: &dyn EvPort) -> bool {
+        if port.ev_info().is_some() {
+            self.scenario_snapshot_knob(id, KnobKind::Ev);
+        }
+        let had = port.unplug_ev();
+        if had {
+            self.note_knob_changed(id, "ev", None, None, None);
+        }
+        had
     }
 
     // ─── Per-component runtime modes ─────────────────────────────────

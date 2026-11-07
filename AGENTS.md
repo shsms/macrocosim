@@ -391,6 +391,16 @@ UI").
   microgrid's spec undo stack and marks a microgrid with a source file
   `unsaved`.
   `GET /api/spec/schema` serves the topology document's JSON Schema.
+- The typed knob routes do what the Lisp setters do:
+  `POST /api/mg/{mg}/component/{id}/drive` (meter power and reactive
+  power, sunlight, SoC, steam demand and pressure, and an inverter's
+  `reactive_apparent_va` and `reactive_pf_limit`), `.../status`
+  (health, telemetry and command modes), `.../runtime`
+  (`operational_mode`), `POST` and `DELETE .../component/{id}/ev`
+  (plug a catalog car in, unplug it), `POST /api/mg/{mg}/sample-lag`
+  and `POST /api/mg/{mg}/streams/cancel`. Each changes the live value,
+  never a stored spec, and a write a Lisp scenario can displace takes
+  its `scenario_snapshot_knob` first.
 - Everything about one microgrid lives under `/api/mg/{mg}/`, served
   by one nested router; the `Mg` extractor resolves `{mg}` and
   answers 404 `microgrid {mg} not registered` itself.
