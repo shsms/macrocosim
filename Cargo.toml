@@ -48,7 +48,9 @@ parking_lot = "0.12"
 clap = { version = "4", features = ["derive"] }
 axum = { version = "0.8", features = ["ws"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: a number read back from `GET /spec` parses to the same
+# f64, so sending a spec back unchanged never breaks a rebuild's carry.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 # The JSON Schema of the topology document (`src/spec/schema.rs`), served at
 # run time. Pinned to one minor version: a schemars release may change the
 # schema it writes.

@@ -29,7 +29,7 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         move |parent: TulispObject, child: TulispObject| -> Result<bool, Error> {
             let parent = arg_to_component_id(&parent)?;
             let child = arg_to_component_id(&child)?;
-            let w = r.site();
+            let w = r.structural_site().map_err(Error::invalid_argument)?;
             // Reject unknown endpoints. A dangling edge would
             // "succeed", bump the structural version, get written
             // into the microgrid's managed file, and come back on
@@ -63,7 +63,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         ),
         move |id: TulispObject| -> Result<bool, Error> {
             let id = arg_to_component_id(&id)?;
-            Ok(r.site().remove_component(id))
+            Ok(r.structural_site()
+                .map_err(Error::invalid_argument)?
+                .remove_component(id))
         },
     );
     let r = router.clone();
@@ -79,7 +81,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         move |parent: TulispObject, child: TulispObject| -> Result<bool, Error> {
             let parent = arg_to_component_id(&parent)?;
             let child = arg_to_component_id(&child)?;
-            Ok(r.site().disconnect(parent, child))
+            Ok(r.structural_site()
+                .map_err(Error::invalid_argument)?
+                .disconnect(parent, child))
         },
     );
     let r = router;
@@ -95,7 +99,9 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
         ),
         move |id: TulispObject, name: String| -> Result<bool, Error> {
             let id = arg_to_component_id(&id)?;
-            r.site().rename(id, name);
+            r.structural_site()
+                .map_err(Error::invalid_argument)?
+                .rename(id, name);
             Ok(true)
         },
     );

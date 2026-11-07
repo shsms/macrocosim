@@ -5,6 +5,7 @@
 //! holds one and builds its interpreter around it.
 
 mod metadata;
+pub mod topology;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

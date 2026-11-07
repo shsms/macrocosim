@@ -566,6 +566,7 @@ mod tests {
                     source: None,
                     managed: false,
                     unsaved: false,
+                    spec: None,
                 },
             );
         }

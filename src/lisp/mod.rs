@@ -449,6 +449,9 @@ impl Config {
             .microgrids
             .lock()
             .values()
+            // A microgrid built from a spec came from a script or a
+            // topology file, never from Lisp.
+            .filter(|e| e.spec.is_none())
             .filter_map(|e| e.source.clone())
             .collect();
         let order = self.source_files.lock();

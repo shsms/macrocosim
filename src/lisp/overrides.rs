@@ -168,6 +168,10 @@ impl Config {
         let changed: Vec<(u64, bool, bool)> = {
             let reg = self.engine.microgrids.lock();
             reg.iter()
+                // Never a microgrid built from a spec: Lisp writes no
+                // file of it, and its spec, not Lisp, says when it is
+                // unsaved.
+                .filter(|(_, e)| e.spec.is_none())
                 .filter(|(id, e)| {
                     let was = before.iter().find(|(bid, _)| bid == *id).map(|(_, v)| *v);
                     // A microgrid registered by this eval has no

@@ -10,7 +10,15 @@ is wiring the topology + animating the environment.
 - `src/engine.rs` — `Engine`: the simulator state without an
   interpreter (registry, dispatch store, enterprise `Metadata` in
   `engine/metadata.rs`, grid frequency, clock, create lock); every
-  server and handler that runs no Lisp takes one
+  server and handler that runs no Lisp takes one. `engine/topology.rs`
+  is every structural change to a microgrid with a stored spec:
+  `create` builds and registers one, `rebuild` swaps in a new spec
+  with carry (a component carries when its defaults-filled spec is
+  unchanged under the same id), `check_ids` keeps component ids unique
+  across the engine. A registry entry's `spec` is that stored spec, or
+  `None` for a Lisp-loaded microgrid; Lisp leaves an entry with a spec
+  alone (reload, replay and save skip it, and a structural form on it
+  is refused, which the eval routes answer with 409)
 - `src/spec.rs` — the topology document (`TopologyDoc`,
   `MicrogridSpec`, `ComponentSpec`): one flat JSON document of
   microgrids, components and connections; `spec/defaults.rs` the
@@ -283,6 +291,9 @@ UI").
   over-bound fault injection, the setpoint journal, lifetime windows —
   stays in `server.rs`. Lock order: gateway → registry read guards →
   component locks; the gateway lock is never held across an `.await`.
+  Outside all of them, the engine's `create_lock` (a tokio mutex) is
+  the one structural lock: create, import, load-as and a spec `PUT`
+  hold it, then the runtimes' `start_lock`, then the order above.
 - **An axis is a `GatewayAxis` in the gateway plus a `DeviceAxis` in
   the component.** The chain is gateway delay → gateway ramp → device
   delay → output. Each step the gateway targets the armed command

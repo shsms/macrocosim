@@ -1027,7 +1027,7 @@ impl Config {
             .microgrids
             .lock()
             .values()
-            .filter(|e| e.source.as_deref() == Some(canonical))
+            .filter(|e| e.spec.is_none() && e.source.as_deref() == Some(canonical))
         {
             entry.site.reset();
         }
@@ -1106,8 +1106,13 @@ impl Config {
         // ends up empty (its runtimes keep running against the empty
         // site — they can't be torn down without a restart — but it
         // stops ticking stale components).
+        //
+        // A microgrid built from a spec is not Lisp's: it keeps its
+        // components.
         for entry in self.engine.microgrids.lock().values() {
-            entry.site.reset();
+            if entry.spec.is_none() {
+                entry.site.reset();
+            }
         }
         // Cancel every live timer centrally before the replay: each
         // replayed file re-registers its own `every` blocks, so this

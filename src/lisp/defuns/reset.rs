@@ -21,7 +21,10 @@ pub(super) fn register(ctx: &mut TulispContext, router: SharedSiteRouter) {
              Return t.",
         ),
         move || -> Result<bool, Error> {
-            router.site().reset();
+            router
+                .structural_site()
+                .map_err(Error::invalid_argument)?
+                .reset();
             Ok(true)
         },
     );

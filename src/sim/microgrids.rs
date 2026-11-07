@@ -69,7 +69,45 @@ pub struct MicrogridEntry {
     /// save failed, the microgrid's file is unmanaged (macrocosim
     /// never writes to it), or it was declared straight from the
     /// REPL. Cleared by the next successful save.
+    ///
+    /// For a microgrid with a stored spec: its live spec differs from
+    /// its source. A `PUT` of its spec sets it, and one made in the UI
+    /// (no source) always has it.
     pub unsaved: bool,
+    /// The spec the microgrid was last built from, with every id
+    /// filled in; `None` for a microgrid loaded from Lisp. Such a
+    /// microgrid is not `managed`, and Lisp leaves it alone: a reload,
+    /// a replay of source files and the save pass skip it, and a
+    /// structural Lisp form refuses it. Its `source` is the
+    /// `--topology` file it came from, or `None` when it was made in
+    /// the UI.
+    pub spec: Option<crate::spec::MicrogridSpec>,
+}
+
+/// The refusal a structural Lisp form gets on a microgrid built from
+/// a spec. The eval routes answer it with 409, spotting it by
+/// [`SPEC_BUILT`].
+pub fn spec_built_refusal(id: u64) -> String {
+    format!(
+        "microgrid {id} {SPEC_BUILT}; Lisp cannot change its structure (PUT /api/mg/{id}/spec \
+         does)"
+    )
+}
+
+/// The words every [`spec_built_refusal`] carries.
+pub const SPEC_BUILT: &str = "was built from a spec";
+
+/// Which registered microgrid holds component `id`: for a microgrid
+/// with a stored spec, its spec says; for one loaded from Lisp, its
+/// live site does.
+pub fn component_owner(entries: &BTreeMap<u64, MicrogridEntry>, id: u64) -> Option<u64> {
+    entries
+        .iter()
+        .find(|(_, e)| match &e.spec {
+            Some(spec) => spec.components.iter().any(|c| c.id() == Some(id)),
+            None => e.site.get(id).is_some(),
+        })
+        .map(|(mg, _)| *mg)
 }
 
 /// Whether a microgrid's gRPC port is held by its runtime (starting,
@@ -115,6 +153,9 @@ pub struct MicrogridView {
     pub source: Option<String>,
     /// Mirrors [`MicrogridEntry::unsaved`].
     pub unsaved: bool,
+    /// Whether the microgrid has a stored spec
+    /// ([`MicrogridEntry::spec`]).
+    pub has_spec: bool,
 }
 
 impl From<&MicrogridEntry> for MicrogridView {
@@ -129,6 +170,7 @@ impl From<&MicrogridEntry> for MicrogridView {
             managed: e.managed,
             source: e.source.as_ref().map(|p| p.display().to_string()),
             unsaved: e.unsaved,
+            has_spec: e.spec.is_some(),
         }
     }
 }
@@ -272,15 +314,33 @@ impl SiteRouter {
     /// of the underlying `MicrogridSite` (`Arc<MicrogridSiteInner>`
     /// inside).
     pub fn site(&self) -> MicrogridSite {
+        self.resolve().0
+    }
+
+    /// [`Self::site`] for a form that changes the structure: refused
+    /// with [`spec_built_refusal`] when the site belongs to a
+    /// microgrid built from a spec.
+    pub fn structural_site(&self) -> Result<MicrogridSite, String> {
+        match self.resolve() {
+            (_, Some(id)) => Err(spec_built_refusal(id)),
+            (site, None) => Ok(site),
+        }
+    }
+
+    /// The active site, and its microgrid's id when that microgrid has
+    /// a stored spec.
+    fn resolve(&self) -> (MicrogridSite, Option<u64>) {
+        let of = |id: u64, e: &MicrogridEntry| (e.site.clone(), e.spec.is_some().then_some(id));
+        let registry = self.registry.lock();
         if let Some(id) = *self.current.read()
-            && let Some(entry) = self.registry.lock().get(&id)
+            && let Some(entry) = registry.get(&id)
         {
-            return entry.site.clone();
+            return of(id, entry);
         }
-        if let Some(entry) = self.registry.lock().values().next() {
-            return entry.site.clone();
+        if let Some((id, entry)) = registry.iter().next() {
+            return of(*id, entry);
         }
-        self.bootstrap.clone()
+        (self.bootstrap.clone(), None)
     }
 
     /// The bootstrap site supplied at construction time, regardless
@@ -418,6 +478,7 @@ mod tests {
             source: None,
             managed: false,
             unsaved: false,
+            spec: None,
         }
     }
 

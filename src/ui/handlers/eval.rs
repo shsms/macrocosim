@@ -21,14 +21,15 @@ pub(in crate::ui) struct EvalResponse {
 /// `spawn_blocking` because tulisp's `SharedMut` is std-sync-RwLock-
 /// backed and grabbing the write lock from the executor thread would
 /// stall every other tokio task waiting on that worker. 400 on an
-/// evaluation error.
+/// evaluation error, 409 when a structural form meets a microgrid
+/// built from a spec.
 pub(in crate::ui) async fn eval(
     State(config): State<Config>,
     Text(body): Text,
 ) -> Result<Json<EvalResponse>, ApiError> {
     let value = super::blocking_with("eval task", move || config.eval(&body))
         .await?
-        .map_err(ApiError::bad_request)?;
+        .map_err(eval_error)?;
     Ok(Json(EvalResponse { value }))
 }
 
@@ -48,8 +49,18 @@ pub(in crate::ui) async fn eval_for_mg(
     })
     .await?
     .ok_or_else(|| ApiError::not_registered(mg_id))?
-    .map_err(ApiError::bad_request)?;
+    .map_err(eval_error)?;
     Ok(Json(EvalResponse { value }))
+}
+
+/// A failed eval: 409 when a structural form met a microgrid built
+/// from a spec, which Lisp leaves alone, else 400.
+fn eval_error(e: String) -> ApiError {
+    if e.contains(crate::sim::microgrids::SPEC_BUILT) {
+        ApiError::conflict(e)
+    } else {
+        ApiError::bad_request(e)
+    }
 }
 
 #[derive(Deserialize)]

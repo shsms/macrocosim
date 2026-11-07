@@ -324,7 +324,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             ),
         ),
         move |_ctx: &mut TulispContext, args: Plist<Renamed<GridArgs>>| {
-            let w = r.site();
+            let w = r.structural_site().map_err(Error::invalid_argument)?;
             let a = args.into_inner().0;
             let id = id_or_next(&r, &w, a.id)?;
             let rated_active_bounds = match (a.rated_lower, a.rated_upper) {
@@ -381,7 +381,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             primitive_doc("a meter", "%make-meter", "meter-defaults", ""),
         ),
         move |ctx: &mut TulispContext, args: Plist<Renamed<MeterArgs>>| {
-            let w = r.site();
+            let w = r.structural_site().map_err(Error::invalid_argument)?;
             let a = args.into_inner().0;
             let id = id_or_next(&r, &w, a.id)?;
             let interval = secs_to_duration(":interval-s", a.interval_s, Duration::from_secs(1))?;
@@ -428,7 +428,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             primitive_doc("a battery", "%make-battery", "battery-defaults", ""),
         ),
         move |_ctx: &mut TulispContext, args: Plist<Renamed<BatteryArgs>>| {
-            let w = r.site();
+            let w = r.structural_site().map_err(Error::invalid_argument)?;
             let a = args.into_inner().0;
             let id = id_or_next(&r, &w, a.id)?;
             let interval = secs_to_duration(":interval-s", a.interval_s, Duration::from_secs(1))?;
@@ -486,7 +486,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             ),
         ),
         move |_ctx: &mut TulispContext, args: Plist<Renamed<BatteryInverterArgs>>| {
-            let w = r.site();
+            let w = r.structural_site().map_err(Error::invalid_argument)?;
             let a = args.into_inner().0;
             let id = id_or_next(&r, &w, a.id)?;
             let interval = secs_to_duration(":interval-s", a.interval_s, Duration::from_secs(1))?;
@@ -545,7 +545,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             ),
         ),
         move |ctx: &mut TulispContext, args: Plist<Renamed<SolarInverterArgs>>| {
-            let w = r.site();
+            let w = r.structural_site().map_err(Error::invalid_argument)?;
             let a = args.into_inner().0;
             let id = id_or_next(&r, &w, a.id)?;
             let interval = secs_to_duration(":interval-s", a.interval_s, Duration::from_secs(1))?;
@@ -677,7 +677,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             ),
         ),
         move |_ctx: &mut TulispContext, args: Plist<Renamed<EvChargerArgs>>| {
-            let w = r.site();
+            let w = r.structural_site().map_err(Error::invalid_argument)?;
             let a = args.into_inner().0;
             let id = id_or_next(&r, &w, a.id)?;
             let interval = secs_to_duration(":interval-s", a.interval_s, Duration::from_secs(1))?;
@@ -764,7 +764,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
             ),
         ),
         move |ctx: &mut TulispContext, args: Plist<Renamed<SteamBoilerArgs>>| {
-            let w = r.site();
+            let w = r.structural_site().map_err(Error::invalid_argument)?;
             let a = args.into_inner().0;
             let id = id_or_next(&r, &w, a.id)?;
             let interval = secs_to_duration(":interval-s", a.interval_s, Duration::from_secs(1))?;
@@ -867,7 +867,7 @@ pub fn register(ctx: &mut TulispContext, router: crate::sim::microgrids::SharedS
         ctx.defun(
             (form, ["args"], doc),
             move |_ctx: &mut TulispContext, args: Plist<Renamed<MarkerArgs>>| {
-                let w = r.site();
+                let w = r.structural_site().map_err(Error::invalid_argument)?;
                 let a = args.into_inner().0;
                 let id = id_or_next(&r, &w, a.id)?;
                 let jitter = a.stream_jitter_pct.unwrap_or(0.0) as f32;
@@ -1038,8 +1038,9 @@ fn meter_reactive_source(
 /// Component ids are enterprise-unique, so an explicit `:id` is also
 /// checked against every OTHER registered microgrid — a duplicate
 /// across microgrids makes gRPC lookups and the cross-microgrid UI
-/// views ambiguous. The auto path needs no such check: every site
-/// draws from the one enterprise-wide allocator.
+/// views ambiguous. The auto path skips an id any microgrid holds:
+/// Lisp sites draw from one enterprise-wide allocator, but a
+/// microgrid built from a spec brings its own ids.
 fn id_or_next(
     router: &crate::sim::microgrids::SharedSiteRouter,
     site: &MicrogridSite,
@@ -1068,9 +1069,11 @@ fn id_or_next(
             site.reserve_id(id);
             Ok(id)
         }
+        // Skip an id any microgrid holds: a microgrid built from a
+        // spec takes its ids from the spec, not from this allocator.
         None => loop {
             let id = site.next_id();
-            if site.get(id).is_none() {
+            if site.get(id).is_none() && router.owner_of_component(id).is_none() {
                 return Ok(id);
             }
         },

@@ -142,6 +142,11 @@ pub(in crate::lisp) fn register(
                         "set-microgrid-name: no microgrid with id {id}"
                     ))
                 })?;
+                if entry.spec.is_some() {
+                    return Err(tulisp::Error::invalid_argument(
+                        crate::sim::microgrids::spec_built_refusal(id as u64),
+                    ));
+                }
                 entry.def.name = name;
                 entry.site.bump_structural_version();
                 Ok(true)
@@ -175,6 +180,11 @@ pub(in crate::lisp) fn register(
                         "set-microgrid-tso: no microgrid with id {id}"
                     ))
                 })?;
+                if entry.spec.is_some() {
+                    return Err(tulisp::Error::invalid_argument(
+                        crate::sim::microgrids::spec_built_refusal(id as u64),
+                    ));
+                }
                 entry.def.tso = tso;
                 entry.site.bump_structural_version();
                 Ok(true)
@@ -276,6 +286,13 @@ pub(in crate::lisp) fn register(
                     }
                     _ => next_free_id_in(&reg),
                 };
+                // A microgrid built from a spec is never Lisp's to
+                // re-declare.
+                if reg.get(&id).is_some_and(|e| e.spec.is_some()) {
+                    return Err(tulisp::Error::invalid_argument(
+                        crate::sim::microgrids::spec_built_refusal(id),
+                    ));
+                }
                 let existing = reg
                     .get(&id)
                     .map(|e| (e.def.grpc_port, e.site.clone(), e.source.clone()));
@@ -366,6 +383,7 @@ pub(in crate::lisp) fn register(
                         // A file just (re)declared the microgrid, so
                         // disk and memory agree by construction.
                         unsaved: false,
+                        spec: None,
                     },
                 );
                 (id, reused)
@@ -1001,5 +1019,101 @@ mod tests {
         let a = g.get(&(first as u64)).unwrap();
         let b = g.get(&(second as u64)).unwrap();
         assert_ne!(a.def.grpc_port, b.def.grpc_port);
+    }
+
+    /// Build microgrid 77 from a spec beside the Lisp ones.
+    fn with_spec_microgrid(cfg: &crate::lisp::Config) {
+        let doc = r#"{"schema_version": 1, "microgrids": [{"id": 77, "components": [
+            {"type": "grid_connection_point", "id": 500},
+            {"type": "meter", "id": 501}
+        ], "connections": [[500, 501]]}]}"#;
+        let spec = crate::spec::TopologyDoc::from_json(doc)
+            .unwrap()
+            .microgrids
+            .remove(0);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(crate::engine::topology::create(
+            cfg.engine(),
+            &crate::runtime::MicrogridRuntimes::inert(),
+            spec,
+            None,
+        ))
+        .unwrap();
+    }
+
+    /// Lisp leaves a microgrid built from a spec alone: its structural
+    /// forms are refused, its make-microgrid cannot claim the id, and a
+    /// reload keeps its components.
+    #[test]
+    fn lisp_leaves_a_spec_microgrid_alone() {
+        let (cfg, _dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        with_spec_microgrid(&cfg);
+        for form in [
+            "(%make-meter :id 600)",
+            "(connect 500 501)",
+            "(remove-component 501)",
+            "(disconnect 500 501)",
+            "(rename-component 501 \"x\")",
+            "(reset-microgrid)",
+        ] {
+            let err = cfg.eval_in_mg(77, form).expect_err(form);
+            assert!(
+                err.contains(crate::sim::microgrids::SPEC_BUILT),
+                "{form}: {err}"
+            );
+        }
+        for form in [
+            "(set-microgrid-name 77 \"x\")",
+            "(set-microgrid-tso 77 \"x\")",
+            "(make-microgrid :id 77 :topology (lambda () nil))",
+        ] {
+            let err = cfg.eval(form).expect_err(form);
+            assert!(
+                err.contains(crate::sim::microgrids::SPEC_BUILT),
+                "{form}: {err}"
+            );
+        }
+        cfg.reload().unwrap();
+        let reg = cfg.microgrids();
+        let r = reg.lock();
+        assert_eq!(r[&77].site.component_count(), 2, "the reload kept it");
+        assert_eq!(r[&77].def.name, "default");
+        assert!(r[&77].spec.is_some());
+    }
+
+    /// An automatic Lisp id skips the ids a spec holds.
+    #[test]
+    fn lisp_auto_ids_skip_spec_ids() {
+        let (cfg, _dir) =
+            config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))");
+        let doc = format!(
+            r#"{{"schema_version": 1, "microgrids": [{{"id": 77, "components": [
+                {{"type": "meter", "id": {}}}]}}]}}"#,
+            crate::sim::component::FIRST_AUTO_ID
+        );
+        let spec = crate::spec::TopologyDoc::from_json(&doc)
+            .unwrap()
+            .microgrids
+            .remove(0);
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(crate::engine::topology::create(
+                cfg.engine(),
+                &crate::runtime::MicrogridRuntimes::inert(),
+                spec,
+                None,
+            ))
+            .unwrap();
+        cfg.reload().unwrap();
+        let id: u64 = cfg
+            .eval_in_mg(9, "(component-id (%make-meter))")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_ne!(id, crate::sim::component::FIRST_AUTO_ID);
     }
 }

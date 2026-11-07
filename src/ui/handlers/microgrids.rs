@@ -531,6 +531,11 @@ fn adopt_body(config: &Config, mg_id: u64) -> Result<Vec<String>, ApiError> {
         let e = r
             .get(&mg_id)
             .ok_or_else(|| ApiError::not_registered(mg_id))?;
+        if e.spec.is_some() {
+            return Err(ApiError::conflict(
+                crate::sim::microgrids::spec_built_refusal(mg_id),
+            ));
+        }
         (e.def.clone(), e.site.clone(), e.source.clone(), e.managed)
     };
     if managed {
