@@ -50,7 +50,7 @@ pub fn loaded_from_lisp(id: u64) -> TopologyError {
 }
 
 /// A microgrid [`create`] made.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct Created {
     pub id: u64,
     pub grpc_port: u16,
@@ -174,6 +174,36 @@ pub async fn create(
         grpc_port,
         runtime: runtimes.status(id),
     })
+}
+
+/// Create every microgrid of `doc`, each with `source` as its file
+/// (`None` for microgrids made in the UI). The component ids are
+/// checked across the document and the registry first, and a later
+/// refusal unloads the microgrids created before it, so a refused
+/// document leaves nothing behind.
+pub async fn create_doc(
+    engine: &Engine,
+    runtimes: &MicrogridRuntimes,
+    doc: TopologyDoc,
+    source: Option<PathBuf>,
+) -> Result<Vec<Created>, TopologyError> {
+    let refs: Vec<&MicrogridSpec> = doc.microgrids.iter().collect();
+    check_ids(engine, &refs, &[])?;
+    let mut created: Vec<Created> = Vec::new();
+    for spec in doc.microgrids {
+        match create(engine, runtimes, spec, source.clone()).await {
+            Ok(c) => created.push(c),
+            Err(e) => {
+                for c in &created {
+                    if let Err(e) = unload(engine, runtimes, c.id).await {
+                        log::error!("Microgrid #{}: {e}", c.id);
+                    }
+                }
+                return Err(e);
+            }
+        }
+    }
+    Ok(created)
 }
 
 /// Rebuild microgrid `id` from `spec`, carrying the state of every

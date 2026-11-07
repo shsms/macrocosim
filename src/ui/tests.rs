@@ -119,6 +119,38 @@ fn error_of(body: &[u8]) -> String {
         .to_string()
 }
 
+/// A topology document holding the one microgrid `mg` (JSON).
+fn mg_doc(mg: &str) -> String {
+    format!(r#"{{"schema_version": 1, "microgrids": [{mg}]}}"#)
+}
+
+/// The first microgrid of a `POST /api/microgrids` answer.
+fn first_created(body: &[u8]) -> serde_json::Value {
+    let v: serde_json::Value = serde_json::from_slice(body)
+        .unwrap_or_else(|_| panic!("not JSON: {}", String::from_utf8_lossy(body)));
+    v["microgrids"][0].clone()
+}
+
+/// Write and load a managed Lisp microgrid file with an empty
+/// topology, as `POST /api/microgrids` did before it created
+/// microgrids from a topology document: the tests of the Lisp file
+/// features (eval persistence, undo, snapshots) need one until Lisp
+/// goes.
+fn managed_lisp_microgrid(config: &Config, id: u64, name: &str, grpc_port: u16) {
+    use crate::lisp::microgrid_file as file;
+    let def = crate::sim::microgrids::MicrogridDef {
+        id,
+        name: name.to_string(),
+        grpc_port,
+        tso: None,
+    };
+    let path = config.microgrids_dir().join(format!("{id}.lisp"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = file::compose(&file::render_empty_block(&def), file::FRESH_SCRIPT_HEADER);
+    std::fs::write(&path, &text).unwrap();
+    config.load_file(&path).unwrap();
+}
+
 #[tokio::test]
 async fn index_serves_embedded_shell() {
     let (cfg, _dir) = config_with("").await;
@@ -422,13 +454,20 @@ async fn success_bodies_are_plain() {
     assert_eq!(error_of(&body), "metrics client not connected");
 }
 
-/// Creating a microgrid is a POST to the collection, answering 201.
+/// Creating microgrids is a POST of a topology document to the
+/// collection, answering 201 with each one's id, port and runtime.
+/// They live in memory only, with a stored spec, and are unsaved.
 #[tokio::test]
 async fn creating_a_microgrid_answers_201() {
-    let (cfg, _dir) = config_with("").await;
+    let (cfg, dir) = config_with("").await;
     let (status, body) = call(
-        cfg,
-        post_json("/api/microgrids", r#"{"name":"b","id":2301}"#),
+        cfg.clone(),
+        post_json(
+            "/api/microgrids",
+            r#"{"schema_version": 1, "microgrids": [
+                {"name": "b", "id": 2301, "components": [{"type": "meter", "id": 5000}]},
+                {"name": "c", "components": []}]}"#,
+        ),
     )
     .await;
     assert_eq!(
@@ -438,7 +477,72 @@ async fn creating_a_microgrid_answers_201() {
         String::from_utf8_lossy(&body)
     );
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["id"], 2301);
+    let created = v["microgrids"].as_array().unwrap();
+    assert_eq!(created.len(), 2);
+    assert_eq!(created[0]["id"], 2301);
+    assert!(created[0]["grpc_port"].as_u64().is_some(), "{v}");
+    assert!(created[0]["runtime"].is_null(), "inert runtimes: {v}");
+    assert_eq!(created[1]["id"], 2201, "the lowest free id");
+    let registry = cfg.engine().microgrids();
+    let registry = registry.lock();
+    let entry = &registry[&2301];
+    assert!(entry.spec.is_some() && entry.unsaved && entry.source.is_none());
+    assert!(entry.site.get(5000).is_some());
+    assert!(!dir.join("microgrids").exists(), "nothing is written");
+}
+
+/// A create refuses a component without an id (422), and a document
+/// whose second microgrid is refused leaves nothing behind.
+#[tokio::test]
+async fn a_refused_create_creates_nothing() {
+    let (cfg, _dir) = config_with("(%make-meter :id 7)").await;
+    let (status, body) = call(
+        cfg.clone(),
+        post_json(
+            "/api/microgrids",
+            &mg_doc(r#"{"name": "b", "components": [{"type": "meter"}]}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(error_of(&body).contains("has no id"), "{}", error_of(&body));
+    let (status, body) = call(
+        cfg.clone(),
+        post_json(
+            "/api/microgrids",
+            r#"{"schema_version": 1, "microgrids": [
+                {"id": 50, "components": [{"type": "meter", "id": 5000}]},
+                {"id": 2200, "components": []}]}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(error_of(&body).contains("2200"), "{}", error_of(&body));
+    let (status, body) = call(
+        cfg.clone(),
+        post_json(
+            "/api/microgrids",
+            &mg_doc(r#"{"id": 51, "components": [{"type": "meter", "id": 7}]}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        error_of(&body).contains("component id 7 is already in microgrid 2200"),
+        "{}",
+        error_of(&body)
+    );
+    let (status, _) = call(
+        cfg.clone(),
+        post_json(
+            "/api/microgrids",
+            r#"{"schema_version": 2, "microgrids": []}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let ids: Vec<u64> = cfg.engine().microgrids().lock().keys().copied().collect();
+    assert_eq!(ids, [2200]);
 }
 
 /// The whole-site eval can create a microgrid.
@@ -1993,7 +2097,7 @@ async fn formula_endpoint_404s_unknown_microgrid() {
 }
 
 #[tokio::test]
-async fn microgrids_import_creates_entry_and_managed_file() {
+async fn microgrids_import_creates_a_spec_microgrid() {
     let (cfg, _dir) = config_with("(%make-grid-connection-point :id 1)").await;
     let body = r#"{
       "name": "imported site",
@@ -2021,20 +2125,37 @@ async fn microgrids_import_creates_entry_and_managed_file() {
     assert_eq!(parsed["connections"], 3);
     let id = parsed["id"].as_u64().unwrap();
 
-    // The import populates the new site through the per-mg eval
-    // path, so the components exist right away…
+    // The components exist right away…
     let (status, topo) = call(cfg.clone(), get(&format!("/api/mg/{id}/topology"))).await;
     assert_eq!(status, StatusCode::OK);
     let topo: serde_json::Value = serde_json::from_slice(&topo).unwrap();
     assert_eq!(topo["components"].as_array().unwrap().len(), 4);
     assert_eq!(topo["connections"].as_array().unwrap().len(), 3);
-    // …and the eval regenerated the managed file, with the export's
-    // physical parameters, so the next boot loads them back.
-    let saved = std::fs::read_to_string(cfg.microgrids_dir().join(format!("{id}.lisp"))).unwrap();
-    assert!(saved.contains(":rated-fuse-current-a 125"), "{saved}");
-    assert!(saved.contains("(%make-battery :id 13"), "{saved}");
-    assert!(saved.contains(":capacity-wh 40000.0"), "{saved}");
-    assert!(saved.contains("(connect 12 13)"), "{saved}");
+    // …and the stored spec keeps the export's ids and physical
+    // parameters. Nothing is written to disk.
+    let (status, spec) = call(cfg.clone(), get(&format!("/api/mg/{id}/spec"))).await;
+    assert_eq!(status, StatusCode::OK);
+    let spec: serde_json::Value = serde_json::from_slice(&spec).unwrap();
+    let by_id = |cid: u64| {
+        spec["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == cid)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(by_id(10)["rated_fuse_current_a"], 125);
+    assert_eq!(by_id(13)["type"], "battery");
+    assert_eq!(by_id(13)["capacity_wh"], 40000.0);
+    assert!(
+        spec["connections"]
+            .as_array()
+            .unwrap()
+            .contains(&json!([12, 13])),
+        "{spec}"
+    );
+    assert!(!cfg.microgrids_dir().join(format!("{id}.lisp")).exists());
 
     // The registry lists it.
     let (_, list) = call(cfg, get("/api/microgrids")).await;
@@ -2060,15 +2181,9 @@ async fn microgrids_import_creates_entry_and_managed_file() {
 async fn ui_created_microgrid_survives_a_restart() {
     let (config, dir) =
         config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
-    // Create via the endpoint, add components via scoped eval.
-    let (st, body) = call(
-        config.clone(),
-        post_json("/api/microgrids", r#"{"name":"persist me"}"#),
-    )
-    .await;
-    assert_eq!(st, StatusCode::CREATED);
-    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let id = created["id"].as_u64().unwrap();
+    // A managed file, then components via scoped eval.
+    let id = 20;
+    managed_lisp_microgrid(&config, id, "persist me", 8820);
     let (st, _) = call(
         config.clone(),
         post(
@@ -2129,7 +2244,11 @@ async fn microgrids_import_rejects_id_collisions_atomically() {
     }"#;
     let (status, resp) = call(cfg.clone(), post_json("/api/microgrids/import", body)).await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(error_of(&resp).contains("enterprise-unique"));
+    assert!(
+        error_of(&resp).contains("component id 1 is already in microgrid 2200"),
+        "{}",
+        error_of(&resp)
+    );
     // Nothing was created.
     let (_, list) = call(cfg, get("/api/microgrids")).await;
     let list: serde_json::Value = serde_json::from_slice(&list).unwrap();
@@ -2364,11 +2483,7 @@ async fn load_as_waits_for_a_create_in_flight() {
 async fn snapshot_load_as_waits_for_a_create_in_flight() {
     let (config, _dir) =
         config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
-    call(
-        config.clone(),
-        post_json("/api/microgrids", r#"{"name":"s","id":46}"#),
-    )
-    .await;
+    managed_lisp_microgrid(&config, 46, "s", 8846);
     let (st, _) = call(
         config.clone(),
         post_json("/api/mg/46/snapshots", r#"{"name":"one"}"#),
@@ -2435,17 +2550,7 @@ async fn a_repeated_load_as_is_an_error_not_a_fabricated_warning() {
 async fn undo_reverts_the_last_structural_edit() {
     let (config, _dir) =
         config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
-    let (st, body) = call(
-        config.clone(),
-        post_json("/api/microgrids", r#"{"name":"u","id":30}"#),
-    )
-    .await;
-    assert_eq!(
-        st,
-        StatusCode::CREATED,
-        "{}",
-        String::from_utf8_lossy(&body)
-    );
+    managed_lisp_microgrid(&config, 30, "u", 8830);
     call(
         config.clone(),
         post("/api/mg/30/eval", "(%make-meter :id 500)"),
@@ -2490,11 +2595,7 @@ async fn undo_reverts_the_last_structural_edit() {
 async fn snapshots_are_per_microgrid() {
     let (config, dir) =
         config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
-    call(
-        config.clone(),
-        post_json("/api/microgrids", r#"{"name":"s","id":31}"#),
-    )
-    .await;
+    managed_lisp_microgrid(&config, 31, "s", 8831);
     call(
         config.clone(),
         post("/api/mg/31/eval", "(%make-meter :id 600)"),
@@ -2602,11 +2703,17 @@ async fn concurrent_creates_get_distinct_microgrids() {
     let (a, b) = tokio::join!(
         call(
             config.clone(),
-            post_json("/api/microgrids", r#"{"name":"a"}"#)
+            post_json(
+                "/api/microgrids",
+                &mg_doc(r#"{"name":"a","components":[]}"#)
+            )
         ),
         call(
             config.clone(),
-            post_json("/api/microgrids", r#"{"name":"b"}"#)
+            post_json(
+                "/api/microgrids",
+                &mg_doc(r#"{"name":"b","components":[]}"#)
+            )
         ),
     );
     assert_eq!(
@@ -2621,11 +2728,7 @@ async fn concurrent_creates_get_distinct_microgrids() {
         "{}",
         String::from_utf8_lossy(&b.1)
     );
-    let id_of = |body: &[u8]| {
-        serde_json::from_slice::<serde_json::Value>(body).unwrap()["id"]
-            .as_u64()
-            .unwrap()
-    };
+    let id_of = |body: &[u8]| first_created(body)["id"].as_u64().unwrap();
     assert_ne!(id_of(&a.1), id_of(&b.1), "each create gets its own id");
     assert_eq!(config.engine().microgrids().lock().len(), 3);
 }
@@ -2645,7 +2748,7 @@ async fn create_refuses_a_reserved_port() {
             config.clone(),
             post_json(
                 "/api/microgrids",
-                &format!(r#"{{"name":"r","grpc_port":{port}}}"#),
+                &mg_doc(&format!(r#"{{"name":"r","grpc_port":{port}}}"#)),
             ),
         )
         .await;
@@ -2666,7 +2769,7 @@ async fn create_refuses_a_taken_id_or_port() {
         config.clone(),
         post_json(
             "/api/microgrids",
-            r#"{"name":"pinned","id":40,"grpc_port":8899}"#,
+            &mg_doc(r#"{"name":"pinned","id":40,"grpc_port":8899}"#),
         ),
     )
     .await;
@@ -2676,20 +2779,22 @@ async fn create_refuses_a_taken_id_or_port() {
         "{}",
         String::from_utf8_lossy(&body)
     );
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let v = first_created(&body);
     assert_eq!(v["id"], 40);
     assert_eq!(v["grpc_port"], 8899);
-    assert_eq!(v["managed"], true);
 
     let (st, _) = call(
         config.clone(),
-        post_json("/api/microgrids", r#"{"name":"again","id":40}"#),
+        post_json("/api/microgrids", &mg_doc(r#"{"name":"again","id":40}"#)),
     )
     .await;
     assert_eq!(st, StatusCode::CONFLICT, "id 40 is taken");
     let (st, _) = call(
         config.clone(),
-        post_json("/api/microgrids", r#"{"name":"again","grpc_port":8899}"#),
+        post_json(
+            "/api/microgrids",
+            &mg_doc(r#"{"name":"again","grpc_port":8899}"#),
+        ),
     )
     .await;
     assert_eq!(st, StatusCode::CONFLICT, "port 8899 is taken");
@@ -2758,7 +2863,7 @@ async fn create_reports_the_bound_address() {
     let (st, body) = call_with(
         config.clone(),
         runtimes.clone(),
-        post_json("/api/microgrids", r#"{"name":"r","id":61}"#),
+        post_json("/api/microgrids", &mg_doc(r#"{"name":"r","id":61}"#)),
     )
     .await;
     assert_eq!(
@@ -2767,7 +2872,7 @@ async fn create_reports_the_bound_address() {
         "{}",
         String::from_utf8_lossy(&body)
     );
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let v = first_created(&body);
     assert_eq!(v["runtime"]["status"], "running");
     let addr = v["runtime"]["grpc_addr"].as_str().unwrap().to_string();
     assert!(
@@ -2791,7 +2896,7 @@ async fn create_on_a_held_port_reports_a_failed_runtime() {
         runtimes.clone(),
         post_json(
             "/api/microgrids",
-            &format!(r#"{{"name":"h","id":62,"grpc_port":{port}}}"#),
+            &mg_doc(&format!(r#"{{"name":"h","id":62,"grpc_port":{port}}}"#)),
         ),
     )
     .await;
@@ -2801,7 +2906,7 @@ async fn create_on_a_held_port_reports_a_failed_runtime() {
         "{}",
         String::from_utf8_lossy(&body)
     );
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let v = first_created(&body);
     assert_eq!(v["runtime"]["status"], "failed");
     let entry = listed(config, runtimes, 62).await;
     assert_eq!(entry["runtime"]["status"], "failed");
@@ -2833,11 +2938,7 @@ async fn adopt_refuses_a_file_declaring_two_microgrids() {
 async fn undo_depths_track_edits() {
     let (config, _dir) =
         config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
-    call(
-        config.clone(),
-        post_json("/api/microgrids", r#"{"name":"d","id":32}"#),
-    )
-    .await;
+    managed_lisp_microgrid(&config, 32, "d", 8832);
     let (st, body) = call(config.clone(), get("/api/mg/32/undo")).await;
     assert_eq!(st, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -3107,11 +3208,7 @@ async fn setpoints_resolve_per_microgrid() {
     // Two microgrids: 9 and 31.
     let (config, _dir) =
         config_with("(make-microgrid :id 9 :grpc-port 8800 :topology (lambda () nil))").await;
-    call(
-        config.clone(),
-        post_json("/api/microgrids", r#"{"name":"s","id":31}"#),
-    )
-    .await;
+    managed_lisp_microgrid(&config, 31, "s", 8831);
     // Plant one event per microgrid, each under its own component id,
     // so the assertions can tell WHICH site each endpoint answered
     // from — an existence check alone would pass even if every route

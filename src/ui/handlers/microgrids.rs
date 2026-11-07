@@ -1,20 +1,18 @@
-//! Microgrids as files: list them, create one, import one from a
-//! site export, load one from a file on disk (`/api/load`, plus
-//! `/api/load-as` for a second copy under a free id), and adopt a
-//! hand-written file so macrocosim may rewrite its structure.
-//!
-//! Create and import both mint a managed file and load it — the file
-//! is the microgrid's declaration, so the registry entry always comes
-//! from a load. `make-microgrid` announces the new microgrid during
-//! the load, and the runtime listener starts it; create, import and
-//! load-as then wait for that runtime and report it.
+//! The microgrid collection: list them, create them from a topology
+//! document, import one from a site export (both in memory only, with
+//! a stored spec), and the Lisp side until it goes: load one from a
+//! file on disk (`/api/load`, plus `/api/load-as` for a second copy
+//! under a free id), and adopt a hand-written file so macrocosim may
+//! rewrite its structure. Load-as waits for the new microgrid's
+//! runtime and reports it.
 
 use axum::{extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
-use crate::engine::Engine;
+use crate::engine::{Engine, topology};
 use crate::lisp::Config;
 use crate::runtime::{MicrogridRuntimes, RuntimeView};
+use crate::spec::TopologyDoc;
 use crate::ui::api::{ApiError, Json, Mg};
 
 /// One `/api/microgrids` entry: the registry's view of the microgrid
@@ -56,177 +54,33 @@ pub(in crate::ui) async fn start_and_report(
     runtimes.status(id)
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::ui) struct CreateMicrogridBody {
-    name: String,
-    /// Microgrid id to claim. Omit to take the lowest free one.
-    #[serde(default)]
-    id: Option<u64>,
-    /// gRPC port to bind. Omit to take the next free one.
-    #[serde(default)]
-    grpc_port: Option<u16>,
-    #[serde(default)]
-    tso: Option<String>,
-}
-
-#[derive(Serialize)]
-pub(in crate::ui) struct CreateMicrogridResp {
-    id: u64,
-    name: String,
-    grpc_port: u16,
-    tso: Option<String>,
-    /// Always true — create writes a macrocosim-generated file, so
-    /// the new microgrid's structure is macrocosim's to rewrite.
-    managed: bool,
-    /// The new microgrid's runtime; `null` when none was started.
-    runtime: Option<RuntimeView>,
-}
-
-/// POST /api/microgrids — auto-allocates id + grpc_port,
-/// writes and loads a managed microgrid file with an empty topology,
-/// then starts its runtime — physics + history + Microgrid gRPC
-/// server + loopback client — through [`MicrogridRuntimes`] and
-/// reports it. The runtime listener starts it too, on the load's
-/// announcement; `start` is serialized and returns early for a
-/// running runtime, so neither can double-boot it. A runtime that
-/// fails to start is reported in the 201: the microgrid exists either
-/// way.
-///
-/// Empty-name requests are rejected. `(make-microgrid …)` builds the
-/// new site on the shared enterprise id allocator, so its
-/// auto-allocated component ids stay globally unique.
+/// POST /api/microgrids — create the microgrids of a topology
+/// document, in memory only. A microgrid without an id or a
+/// `grpc_port` takes the lowest free one; every component needs an id
+/// (422 without). Each microgrid's runtime is started and reported in
+/// the 201, `null` when none was started: the microgrid exists either
+/// way. 409 when a microgrid id, a component id or a port is taken;
+/// nothing is created then.
 pub(in crate::ui) async fn microgrids_create(
-    State(config): State<Config>,
+    State(engine): State<Engine>,
     axum::Extension(runtimes): axum::Extension<MicrogridRuntimes>,
-    Json(body): Json<CreateMicrogridBody>,
-) -> Result<(StatusCode, Json<CreateMicrogridResp>), ApiError> {
-    let mut created = create_serialized(
-        &config,
-        &body.name,
-        body.id,
-        body.grpc_port,
-        body.tso.as_deref(),
-    )
-    .await?;
-    // The load registered the entry, so `start` finds it. Inert
-    // runtimes (unit tests) start nothing and report `null`.
-    created.runtime = start_and_report(&runtimes, created.id).await;
-    Ok((StatusCode::CREATED, Json(created)))
-}
-
-/// [`create_core`] under the create lock, on the blocking pool.
-///
-/// The lock is what makes the id + port validation inside
-/// `create_core` mean anything: the check reads the registry, but the
-/// insert only happens later, when the freshly written file is
-/// loaded, and no lock can span both (the load evaluates lisp). One
-/// create at a time closes that window, so two concurrent creates
-/// cannot pick the same id and collapse into one microgrid — the
-/// second one sees the first in the registry and gets a 409.
-///
-/// The whole body is blocking work (file writes plus a lisp eval),
-/// so it runs on the blocking pool with the lock's guard.
-async fn create_serialized(
-    config: &Config,
-    name: &str,
-    id: Option<u64>,
-    grpc_port: Option<u16>,
-    tso: Option<&str>,
-) -> Result<CreateMicrogridResp, ApiError> {
-    let (name, tso) = (name.to_string(), tso.map(str::to_string));
-    super::blocking_under_create_lock(config, move |cfg| {
-        create_core(cfg, &name, id, grpc_port, tso.as_deref())
-    })
-    .await?
-}
-
-/// The shared create path: claims id + port, writes the managed
-/// microgrid file, and loads it. The registry entry, its source and
-/// its managed flag all come from the load — the file is the
-/// microgrid's declaration, and nothing else may insert one. Leaves
-/// `runtime` unset; the handler starts the runtime and fills it.
-///
-/// Callers must hold the create lock: [`create_serialized`] takes
-/// it, and the import holds it already.
-fn create_core(
-    config: &Config,
-    name: &str,
-    want_id: Option<u64>,
-    want_port: Option<u16>,
-    tso: Option<&str>,
-) -> Result<CreateMicrogridResp, ApiError> {
-    use crate::lisp::microgrid_file as file;
-    use crate::sim::microgrids::{MicrogridDef, next_free_id_in, next_free_port_in};
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err(ApiError::bad_request("name must be non-empty"));
+    Json(body): Json<serde_json::Value>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let doc = TopologyDoc::from_value(body)
+        .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+    if doc.microgrids.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the document has no microgrids",
+        ));
     }
-    // Id + port from one look at the registry: a requested one has to
-    // be free, an omitted one is allocated. Both are still valid when
-    // the load below inserts the entry, because the create lock keeps
-    // any other create out in between.
-    let reserved = config.reserved_ports();
-    let registry = config.microgrids();
-    let def = {
-        let r = registry.lock();
-        let id = match want_id {
-            Some(id) if r.contains_key(&id) => {
-                return Err(ApiError::conflict(format!(
-                    "microgrid {id} is already registered"
-                )));
-            }
-            Some(id) => id,
-            None => next_free_id_in(&r),
-        };
-        let grpc_port = match want_port {
-            Some(0) => {
-                return Err(ApiError::bad_request("grpc_port must be 1..=65535"));
-            }
-            Some(p) => {
-                crate::sim::microgrids::check_port(&r, &reserved, id, p)
-                    .map_err(|c| ApiError::conflict(format!("gRPC port {p} {c}")))?;
-                p
-            }
-            None => next_free_port_in(&r, &reserved),
-        };
-        MicrogridDef {
-            id,
-            name: name.clone(),
-            grpc_port,
-            tso: tso.map(str::to_string),
-        }
-    };
-    let path = config.microgrids_dir().join(format!("{}.lisp", def.id));
-    if path.exists() {
-        return Err(ApiError::conflict(format!(
-            "{} already exists; refusing to clobber",
-            path.display()
-        )));
-    }
-    let text = file::compose(&file::render_empty_block(&def), file::FRESH_SCRIPT_HEADER);
-    file::write_atomic(&path, &text)
-        .map_err(|e| ApiError::internal(format!("write {}: {e}", path.display())))?;
-    config.record_self_write(&path, &text);
-    // A file that fails to load leaves no live microgrid, so the copy
-    // on disk would be an orphan the next reload trips over — drop it
-    // and report the error.
-    if let Err(e) = config.load_file(&path) {
-        let _ = std::fs::remove_file(&path);
-        let status = match e {
-            crate::lisp::LoadError::Collision { .. } => StatusCode::CONFLICT,
-            crate::lisp::LoadError::Other(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        return Err(ApiError::new(status, e.to_string()));
-    }
-    Ok(CreateMicrogridResp {
-        id: def.id,
-        name: def.name,
-        grpc_port: def.grpc_port,
-        tso: def.tso,
-        managed: true,
-        runtime: None,
-    })
+    let create_lock = engine.create_lock();
+    let _structural = create_lock.lock().await;
+    let created = topology::create_doc(&engine, &runtimes, doc, None).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "microgrids": created })),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -259,124 +113,49 @@ pub(in crate::ui) struct ImportMicrogridResp {
     runtime: Option<RuntimeView>,
 }
 
-/// POST /api/microgrids/import — creates a REAL microgrid from a
-/// site export: same allocate + file + boot path as create, then the
-/// export's components rendered as one `(progn (make-* …) …
-/// (connect …) …)` form evaluated against the new microgrid — the
-/// same path a UI edit takes, so the eval regenerates the managed
-/// file with the imported topology in it and every later boot loads
-/// it back. Capacity, SoC bounds, rated power bounds and the grid's
-/// rated fuse current all survive into the simulation.
+/// POST /api/microgrids/import — create a microgrid from a site
+/// export, in memory only, as `POST /api/microgrids` does: the export
+/// becomes a spec that keeps its component ids, and capacity, SoC
+/// bounds, rated power bounds and the grid's rated fuse current all
+/// survive into the simulation.
 ///
-/// Imported component ids are kept verbatim. Component ids are
-/// enterprise-unique in macrocosim, so an id that any registered
-/// microgrid already carries fails the whole import atomically —
-/// nothing is created. The enterprise id allocator jumps past the
-/// import's highest id so later auto-assigned ids can't collide.
-///
-/// The MICROGRID's own id is a separate matter: `id` claims one
-/// (the import dialog asks for it, pre-filled with the lowest free
-/// one), and omitting it auto-allocates exactly as before. An `id`
-/// some other microgrid already holds is refused with create's own
-/// 409, since claiming an id is create's job either way.
+/// Component ids are unique across the engine, so an id another
+/// microgrid holds refuses the whole import with a 409 and nothing is
+/// created. The MICROGRID's own id is a separate matter: `id` claims
+/// one (the import dialog asks for it, pre-filled with the lowest
+/// free one), and omitting it takes the lowest free one; a taken one
+/// is a 409 too.
 pub(in crate::ui) async fn microgrids_import(
-    State(config): State<Config>,
+    State(engine): State<Engine>,
     axum::Extension(runtimes): axum::Extension<MicrogridRuntimes>,
     Json(body): Json<ImportMicrogridBody>,
 ) -> Result<Json<ImportMicrogridResp>, ApiError> {
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("name must be non-empty"));
+    }
     let import = crate::sim::site_import::parse(body.components, body.connections)
         .map_err(ApiError::bad_request)?;
-    // The create lock, from here to the eval that registers the
-    // components. The collision check below is authoritative only
-    // while no other structural change can add components between the
-    // scan and this import's own eval — the make-* re-check at replay
-    // is per site and cannot see a cross-site collision. Parsing stays
-    // outside the lock; it touches no shared state.
-    let serialized = config.create_lock().lock_owned().await;
-    // Collision check against every registered site, plus the
-    // bootstrap site legacy single-site configs run on.
-    // `import.components` comes from a dedup-validated
-    // parse, so the collected list is already sorted and unique.
-    {
-        // The TRUE bootstrap site: once a microgrid is registered,
-        // site() returns the first registry entry, which would leave
-        // components living on the bootstrap site (legacy single-site
-        // configs) out of the collision scan.
-        let bootstrap = config.bootstrap_site();
-        // Snapshot the site handles under the lock, then scan with
-        // the lock RELEASED: a big export means thousands of per-id
-        // lookups, and holding the registry mutex through them
-        // would stall every other registry user (create, listing,
-        // the WS pump, the typed control endpoints).
-        let sites: Vec<crate::sim::MicrogridSite> = {
-            let registry = config.microgrids();
-            let r = registry.lock();
-            std::iter::once(bootstrap)
-                .chain(r.values().map(|e| e.site.clone()))
-                .collect()
-        };
-        let taken: Vec<u64> = import
-            .components
-            .iter()
-            .map(|c| c.id)
-            .filter(|id| sites.iter().any(|s| s.get(*id).is_some()))
-            .collect();
-        if !taken.is_empty() {
-            return Err(ApiError::conflict(format!(
-                "component ids already exist in other microgrids: {taken:?} \
-                     (component ids are enterprise-unique)"
-            )));
-        }
-    }
-    // The requested microgrid id (or None for the lowest free one)
-    // goes through the create path's own claim: one place decides
-    // whether an id is free. `create_core` directly, not
-    // `create_serialized`: this task already holds the create lock,
-    // and a tokio mutex cannot be taken twice by one task.
-    let created = {
-        let cfg = config.clone();
-        let (name, tso) = (body.name.clone(), body.tso.clone());
-        let id = body.id;
-        super::blocking(move || create_core(&cfg, &name, id, None, tso.as_deref())).await??
-    };
-    // Move the shared allocator past the imported ids before any
-    // component is built, so nothing auto-allocates into that range.
-    // Saturating: an export carrying id u64::MAX must not overflow
-    // the bump (the allocator then sits at the ceiling, which only
-    // affects auto-assigned ids, not the explicit imported ones).
-    config.enterprise_id_allocator().fetch_max(
-        import.max_id().saturating_add(1),
-        std::sync::atomic::Ordering::SeqCst,
-    );
-    // Populate the (empty) new microgrid through the per-mg eval
-    // path. eval_in_mg holds the interpreter lock across scope-set +
-    // eval + overrides append, and the progn is one form, so the
-    // whole topology lands atomically — and persists for later
-    // boots. spawn_blocking because tulisp's lock is std-sync.
-    let forms = import.forms();
-    let cfg = config.clone();
-    let id = created.id;
-    let evaled = super::blocking(move || cfg.eval_in_mg(id, &forms)).await?;
-    if let Err(e) = evaled {
-        // The microgrid is already registered, so this cannot roll
-        // back cleanly; the parse + collision checks above make this
-        // a should-not-happen. Name the leftover so the user can act.
-        return Err(ApiError::internal(format!(
-            "import failed while building components: {e} \
-                 (microgrid {id} was created but is incomplete)"
-        )));
-    }
-    // Starting the runtime binds a port and can be slow; the next
-    // import need not wait for it.
-    drop(serialized);
+    let mut spec = import.spec().map_err(ApiError::bad_request)?;
+    spec.id = body.id;
+    spec.name = Some(name.clone());
+    spec.tso = body.tso;
+    let create_lock = engine.create_lock();
+    let _structural = create_lock.lock().await;
+    let created = topology::create(&engine, &runtimes, spec, None).await?;
+    let tso = engine
+        .microgrids()
+        .lock()
+        .get(&created.id)
+        .and_then(|e| e.def.tso.clone());
     Ok(Json(ImportMicrogridResp {
         id: created.id,
-        name: created.name,
+        name,
         grpc_port: created.grpc_port,
-        tso: created.tso,
+        tso,
         components: import.components.len(),
         connections: import.connections.len(),
-        runtime: start_and_report(&runtimes, created.id).await,
+        runtime: created.runtime,
     }))
 }
 

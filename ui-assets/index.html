@@ -321,9 +321,8 @@
           <button type="submit" class="btn btn-primary">Create</button>
         </form>
         <p class="hint">
-          Writes <code>microgrids/&lt;id&gt;.lisp</code> — a managed
-          file macrocosim owns and rewrites as you edit the topology
-          — and loads it. Leave the port blank for the next free one.
+          The new microgrid lives in memory only: export it as Python
+          to keep it. Leave the port blank for the next free one.
         </p>
       </div>
     </dialog>
@@ -350,7 +349,8 @@
         <p class="hint">
           The export's component ids are kept verbatim; this id names
           the microgrid itself, and has to be one no other microgrid
-          holds. Leave it blank for the next free one.
+          holds. Leave it blank for the next free one. The microgrid
+          lives in memory only: export it as Python to keep it.
         </p>
       </div>
     </dialog>

@@ -111,8 +111,9 @@ is wiring the topology + animating the environment.
   - `marker.rs` — no-physics categories (chp, wind turbine, power
     transformer, breaker); they classify the meters around them and
     pass their children's power up to the meter above
-  - `site_import.rs` — microgrid API site-export JSON → `(make-* …)` /
-    `(connect …)` forms for `/api/microgrids/import`
+  - `site_import.rs` — microgrid API site-export JSON → the
+    `MicrogridSpec` `/api/microgrids/import` creates, keeping the
+    export's component ids
   - `graph_adapter.rs` — lifts a site into
     `frequenz-microgrid-component-graph` nodes/edges (validation +
     the formula endpoint behind the formula explorer panel)
@@ -416,6 +417,10 @@ UI").
   scripts, scenarios).
   `POST /api/eval` evaluates with no microgrid in scope.
   `GET /api/defaults` serves the spec `Defaults` table, read-only.
+  `POST /api/microgrids` creates the microgrids of a topology document
+  (201 `{"microgrids": [{id, grpc_port, runtime}]}`), and
+  `POST /api/microgrids/import` a microgrid from a site export; both
+  live in memory only, with a stored spec, and are `unsaved`.
 - `GET /api/mg/{mg}/spec` answers a microgrid's stored spec, and
   `PUT` of a `MicrogridSpec` rebuilds it with carry (200 with the stored
   spec; 409 for a component id or a gRPC port another microgrid

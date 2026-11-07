@@ -148,66 +148,63 @@ async fn scenario_endpoints_round_trip_via_eval() {
     );
 }
 
-/// A microgrid created over HTTP gets a managed file, and every
-/// structural eval against it rewrites that file — the whole
-/// save-on-edit path through the live server.
+/// A microgrid created over HTTP from a topology document lives in
+/// memory with a stored spec: nothing is written, a structural eval on
+/// it is refused, and a `PUT` of its spec is how its structure changes.
 #[tokio::test(flavor = "multi_thread")]
-async fn structural_evals_rewrite_the_managed_microgrid_file() {
+async fn a_created_microgrid_is_edited_through_its_spec() {
     let s = TestServer::start(TINY_TOPOLOGY).await;
     let client = reqwest::Client::new();
 
-    let created: Value = client
+    let resp = client
         .post(format!("{}/api/microgrids", s.ui_url))
-        .json(&serde_json::json!({"name": "saved"}))
+        .json(&serde_json::json!({
+            "schema_version": 1,
+            "microgrids": [{"name": "saved", "components": [
+                {"type": "grid_connection_point", "id": 5000}]}]
+        }))
         .send()
         .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
         .unwrap();
-    let id = created["id"].as_u64().unwrap();
-    let path = s.engine.state_dir().join(format!("microgrids/{id}.lisp"));
-    assert!(path.exists(), "create writes {}", path.display());
-
-    for body in [
-        "(%make-grid-connection-point :id 4001)",
-        "(rename-component 4001 \"main\")",
-    ] {
-        client
-            .post(format!("{}/api/mg/{id}/eval", s.ui_url))
-            .body(body)
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap();
-    }
-
-    let saved = std::fs::read_to_string(&path).unwrap();
-    assert!(
-        saved.contains("(%make-grid-connection-point :id 4001"),
-        "{saved}"
+    assert_eq!(resp.status(), reqwest::StatusCode::CREATED);
+    let created: Value = resp.json().await.unwrap();
+    let id = created["microgrids"][0]["id"].as_u64().unwrap();
+    assert_eq!(
+        created["microgrids"][0]["runtime"]["status"], "running",
+        "{created}"
     );
-    assert!(saved.contains(":name \"main\""), "{saved}");
-    // A poke is not structure: it leaves the file alone.
-    let before = std::fs::read_to_string(&path).unwrap();
-    client
+    assert!(!s.engine.state_dir().join("microgrids").exists());
+
+    let refused = client
         .post(format!("{}/api/mg/{id}/eval", s.ui_url))
-        .body("(set-component-health 4001 'error)")
+        .body("(%make-meter :id 5001)")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), reqwest::StatusCode::CONFLICT);
+
+    let mut spec = json(&client, format!("{}/api/mg/{id}/spec", s.ui_url)).await;
+    spec["components"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"type": "meter", "id": 5001, "name": "main"}));
+    spec["connections"] = serde_json::json!([[5000, 5001]]);
+    client
+        .put(format!("{}/api/mg/{id}/spec", s.ui_url))
+        .json(&spec)
         .send()
         .await
         .unwrap()
         .error_for_status()
         .unwrap();
-    assert_eq!(before, std::fs::read_to_string(&path).unwrap());
+    let topo = json(&client, format!("{}/api/mg/{id}/topology", s.ui_url)).await;
+    assert_eq!(topo["components"].as_array().unwrap().len(), 2, "{topo}");
 }
 
-/// The whole imported-site flow over HTTP: import a site export,
-/// then ask the new microgrid for its battery formula. The import
-/// populates the site through the per-mg eval path, so the formula
-/// engine sees the imported topology immediately.
+/// The whole imported-site flow over HTTP: import a site export, then
+/// ask the new microgrid for its battery formula. The import builds
+/// the site from its spec, so the formula engine sees the imported
+/// topology immediately.
 #[tokio::test(flavor = "multi_thread")]
 async fn site_import_creates_microgrid_with_working_formulas() {
     let s = TestServer::start(TINY_TOPOLOGY).await;
@@ -270,12 +267,11 @@ async fn site_import_creates_microgrid_with_working_formulas() {
     assert!(formula["formula"].as_str().unwrap().contains("#9103"));
     assert!(formula.get("explanation").is_none());
 
-    // The microgrid's file carries the export's physical
-    // parameters, so they come back at every boot.
-    let saved = std::fs::read_to_string(s.engine.state_dir().join(format!("microgrids/{id}.lisp")))
-        .unwrap();
-    assert!(saved.contains(":capacity-wh 40000.0"), "{saved}");
-    assert!(saved.contains(":rated-fuse-current-a 125"), "{saved}");
+    // The stored spec carries the export's physical parameters.
+    let spec = json(&client, format!("{}/api/mg/{id}/spec", s.ui_url)).await;
+    let text = spec.to_string();
+    assert!(text.contains(r#""capacity_wh":40000.0"#), "{text}");
+    assert!(text.contains(r#""rated_fuse_current_a":125"#), "{text}");
 }
 
 /// A one-component site export — the smallest thing the importer
@@ -330,8 +326,7 @@ async fn site_import_claims_the_requested_microgrid_id() {
 }
 
 /// A requested id that is already taken is refused, and the refusal
-/// names the id so the UI can put it in a toast. Nothing is created:
-/// the collision is caught before the file is written.
+/// names the id so the UI can put it in a toast. Nothing is created.
 #[tokio::test(flavor = "multi_thread")]
 async fn site_import_refuses_a_taken_microgrid_id() {
     let s = TestServer::start(TINY_TOPOLOGY).await;
@@ -365,9 +360,9 @@ async fn site_import_refuses_a_taken_microgrid_id() {
         "the refusal must name the id: {error}"
     );
 
-    // The refused import left nothing behind — no second microgrid,
-    // and the file for the id it asked for is still the FIRST
-    // import's, untouched (the refusal happens before any write).
+    // The refused import left nothing behind: no second microgrid,
+    // and the microgrid under the id it asked for is still the first
+    // import's, untouched.
     let mgs = json(&client, format!("{}/api/microgrids", s.ui_url)).await;
     assert_eq!(
         mgs.as_array()
@@ -378,25 +373,14 @@ async fn site_import_refuses_a_taken_microgrid_id() {
         1,
         "{mgs}"
     );
-    let path = s
-        .engine
-        .state_dir()
-        .join(format!("microgrids/{wanted}.lisp"));
-    let saved = std::fs::read_to_string(&path).unwrap();
+    let spec = json(&client, format!("{}/api/mg/{wanted}/spec", s.ui_url))
+        .await
+        .to_string();
     assert!(
-        saved.contains("9301") && !saved.contains("9302"),
-        "the refused import must not have touched {}: {saved}",
-        path.display()
+        spec.contains("9301") && !spec.contains("9302"),
+        "the refused import must not have touched microgrid {wanted}: {spec}"
     );
-
-    // And no file was written under any OTHER id on the way out —
-    // the refusal is not a silent fallback to the next free one.
-    let mut files: Vec<String> = std::fs::read_dir(s.engine.state_dir().join("microgrids"))
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    files.sort();
-    assert_eq!(files, vec![format!("{wanted}.lisp")], "stray file written");
+    assert_eq!(mgs.as_array().unwrap().len(), 2, "{mgs}");
 }
 
 /// SP1's final review deferred the formula-convergence E2E to SP3

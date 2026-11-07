@@ -50,11 +50,12 @@ export const microgridsPanel = (() => {
       card.dataset.id = m.id;
       const tso = m.tso ? `<span class="mg-tso">${escapeHtml(m.tso)}</span>` : "";
       // Two file-state chips: `unmanaged` means macrocosim may not
-      // rewrite this file's structure (Adopt first), `unsaved` means
-      // an edit ran live that the file could not be given.
+      // rewrite this Lisp file's structure (Adopt first), `unsaved`
+      // means an edit ran live that the file could not be given. A
+      // microgrid with a spec has no Lisp file to manage.
       const runtime = m.runtime;
       const chips = [
-        m.managed
+        m.managed || m.has_spec
           ? ""
           : `<span class="mg-chip unmanaged" title="${escapeHtml(UNMANAGED_HINT)}">unmanaged</span>`,
         m.unsaved
@@ -348,16 +349,19 @@ export const microgridsPanel = (() => {
         clearFormError(err);
         const name = document.getElementById("create-mg-name").value.trim();
         if (!name) return;
-        const body = { name };
+        // A new microgrid is a topology document with one empty
+        // microgrid in it, kept in memory only.
+        const mg = { name, components: [], connections: [] };
         // A blank number field means "let the server allocate" — an
         // explicit 0 would be a claim on a real (and invalid) id.
         const id = document.getElementById("create-mg-id").value.trim();
-        if (id !== "") body.id = Number(id);
+        if (id !== "") mg.id = Number(id);
         const port = document.getElementById("create-mg-port").value.trim();
-        if (port !== "") body.grpc_port = Number(port);
+        if (port !== "") mg.grpc_port = Number(port);
         let created;
         try {
-          created = await (await mutate("POST", "/api/microgrids", body)).json();
+          const body = { schema_version: 1, microgrids: [mg] };
+          created = (await (await mutate("POST", "/api/microgrids", body)).json()).microgrids[0];
         } catch (ex) {
           // A taken id or port comes back 409 with the server's own
           // wording — shown in the dialog, which stays open so the
@@ -556,12 +560,13 @@ export const microgridsPanel = (() => {
 
   // The selected microgrid's file state in its header: the same two
   // chips the cards carry, plus the Adopt button — the way out of
-  // read-only, so it only shows while there is something to adopt.
+  // read-only, so it only shows while there is something to adopt (a
+  // microgrid with a spec has none).
   function renderHeaderState(entry) {
     const chips = document.getElementById("mg-file-chips");
     const adopt = document.getElementById("mg-adopt-btn");
     if (!chips || !adopt) return;
-    const unmanaged = Boolean(entry) && !entry.managed;
+    const unmanaged = Boolean(entry) && !entry.managed && !entry.has_spec;
     chips.innerHTML = [
       unmanaged
         ? `<span class="mg-chip unmanaged" title="${escapeHtml(UNMANAGED_HINT)}">unmanaged</span>`

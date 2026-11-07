@@ -138,18 +138,16 @@ async fn boot_topology(
         std::process::exit(1);
     };
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| fail(e.to_string()));
-    let mut doc =
+    let doc =
         macrocosim::spec::TopologyDoc::from_json(&text).unwrap_or_else(|e| fail(e.to_string()));
     let source = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let lock = engine.create_lock();
     let _structural = lock.lock().await;
-    let specs: Vec<&macrocosim::spec::MicrogridSpec> = doc.microgrids.iter().collect();
-    topology::check_ids(engine, &specs, &[]).unwrap_or_else(|e| fail(e.to_string()));
-    for spec in doc.microgrids.drain(..) {
-        let created = topology::create(engine, runtimes, spec, Some(source.clone()))
-            .await
-            .unwrap_or_else(|e| fail(e.to_string()));
-        log::info!("Microgrid #{} built from {}", created.id, path.display());
+    let created = topology::create_doc(engine, runtimes, doc, Some(source))
+        .await
+        .unwrap_or_else(|e| fail(e.to_string()));
+    for c in created {
+        log::info!("Microgrid #{} built from {}", c.id, path.display());
     }
 }
 

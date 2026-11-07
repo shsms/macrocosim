@@ -588,6 +588,39 @@ check(
   JSON.stringify(escapedImport),
 );
 
+// The create dialog posts a topology document with one empty
+// microgrid, which lands in memory with a spec and is selected.
+const CREATE_ID = 9701;
+await backToMgList();
+await page.click("#mglist-new-btn");
+await page.fill("#create-mg-name", "smoke create");
+await page.fill("#create-mg-id", String(CREATE_ID));
+const createPost = page.waitForRequest((r) => r.url().endsWith("/api/microgrids") && r.method() === "POST");
+await page.click("#create-mg-form button[type=submit]");
+const createBody = JSON.parse((await createPost).postData());
+const createdEntry = await waitFor(
+  () =>
+    page.evaluate(
+      async (id) => (await (await fetch("/api/microgrids")).json()).find((m) => m.id === id) ?? null,
+      CREATE_ID,
+    ),
+  15000,
+).catch(() => null);
+check(
+  "e2e: the create dialog posts a topology document",
+  createBody.schema_version === 1 && createBody.microgrids?.[0]?.id === CREATE_ID && createBody.microgrids[0].name === "smoke create",
+  JSON.stringify(createBody),
+);
+check(
+  "e2e: a created microgrid has a spec and is unsaved",
+  createdEntry?.has_spec === true && createdEntry?.unsaved === true,
+  JSON.stringify(createdEntry),
+);
+check(
+  "e2e: the create dialog selects the microgrid it made",
+  await waitFor(() => page.evaluate((id) => location.hash.includes(String(id)) || null, CREATE_ID), 8000).catch(() => false),
+);
+
 // Back to the list: the sections below start by clicking a card.
 await backToMgList();
 await waitFor(async () => (await page.locator('.mglist-card:has-text("Starter site")').count()) > 0, 8000);

@@ -5,12 +5,11 @@
 //! use — rated power bounds, battery capacity, SoC bounds, and the
 //! grid's rated fuse current — instead of discarding them.
 //!
-//! The import does not build components directly. It emits one
-//! `(progn (make-* …) … (connect …) …)` form that the import
-//! handler evals against the new microgrid — the exact same path a
-//! UI edit takes, so the persist pass regenerates the microgrid's
-//! managed file from the site the form just built. That rewritten
-//! file is what makes the import durable.
+//! The import does not build components directly. It produces a
+//! `MicrogridSpec` that keeps the export's component ids
+//! ([`SiteImport::spec`]), which the import handler creates as the UI
+//! creates any microgrid. (`SiteImport::forms` renders the same
+//! components as Lisp, for the Lisp tests until Lisp goes.)
 //!
 //! Field sources, per the `frequenz-api-common` protos vendored in
 //! `submodules/`:
@@ -151,14 +150,64 @@ struct ApiConnection {
 }
 
 /// One component lifted out of the export: the make function that
-/// builds its simulated twin plus the kwargs the export pins.
+/// builds its simulated twin plus the fields the export pins.
 #[derive(Debug)]
 pub struct ImportedComponent {
     pub id: u64,
     make_fn: &'static str,
-    /// Rendered kwarg pairs, e.g. `(":capacity-wh", "40000")`. Values
-    /// are already Lisp-syntax; names come from a fixed set.
-    kwargs: Vec<(&'static str, String)>,
+    /// The pinned fields, by their spec field name, e.g.
+    /// `("capacity_wh", Float(40000.0))`. Names come from a fixed
+    /// set.
+    kwargs: Vec<(&'static str, Value)>,
+}
+
+/// One pinned field's value.
+#[derive(Debug, Clone, PartialEq)]
+enum Value {
+    Float(f64),
+    Int(u64),
+    Text(String),
+    Mode(crate::sim::OperationalMode),
+}
+
+impl Value {
+    /// The value as Lisp reads it.
+    fn lisp(&self) -> String {
+        match self {
+            Value::Float(f) => lisp_float(*f),
+            Value::Int(i) => i.to_string(),
+            Value::Text(t) => format!("\"{}\"", esc(t)),
+            Value::Mode(m) => format!("'{m}"),
+        }
+    }
+
+    /// The value as the topology document carries it.
+    fn json(&self) -> serde_json::Value {
+        match self {
+            Value::Float(f) => serde_json::json!(f),
+            Value::Int(i) => serde_json::json!(i),
+            Value::Text(t) => serde_json::json!(t),
+            Value::Mode(m) => serde_json::to_value(m).expect("a mode serializes"),
+        }
+    }
+}
+
+impl ImportedComponent {
+    /// The component's spec: its type, its id and its pinned fields.
+    fn spec(&self) -> Result<crate::spec::ComponentSpec, String> {
+        let mut json = serde_json::Map::new();
+        let kind = self
+            .make_fn
+            .strip_prefix("make-")
+            .expect("every make fn starts with make-")
+            .replace('-', "_");
+        json.insert("type".into(), kind.into());
+        json.insert("id".into(), self.id.into());
+        for (k, v) in &self.kwargs {
+            json.insert((*k).into(), v.json());
+        }
+        serde_json::from_value(json.into()).map_err(|e| format!("component {}: {e}", self.id))
+    }
 }
 
 /// A parsed site export, ready to render as overrides-file forms.
@@ -197,15 +246,15 @@ fn bounds_for<'a>(c: &'a ApiComponent, suffix: &str) -> Option<&'a Bounds> {
 /// `metrics` the export configures bounds for. AC components pass
 /// only `AC_POWER_ACTIVE`; a battery prefers `DC_POWER` (its rated
 /// range is a DC quantity) with the AC bounds as fallback.
-fn rated_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>, metrics: &[&str]) {
+fn rated_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>, metrics: &[&str]) {
     let Some(b) = metrics.iter().find_map(|m| bounds_for(c, m)) else {
         return;
     };
     if let Some(l) = b.lower {
-        out.push((":rated-lower-w", lisp_float(l)));
+        out.push(("rated_lower_w", Value::Float(l)));
     }
     if let Some(u) = b.upper {
-        out.push((":rated-upper-w", lisp_float(u)));
+        out.push(("rated_upper_w", Value::Float(u)));
     }
 }
 
@@ -214,7 +263,7 @@ fn rated_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>, metrics
 /// runtime knobs from it — the import never sets those directly.
 /// UNSPECIFIED is the default and is omitted. Unknown tokens are an
 /// error, not a silent default.
-fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>) -> Result<(), String> {
+fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>) -> Result<(), String> {
     let Some(mode) = c.operational_mode.as_deref() else {
         return Ok(());
     };
@@ -234,22 +283,22 @@ fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>) -> Resul
     if mode == crate::sim::OperationalMode::Unspecified {
         return Ok(());
     }
-    out.push((":operational-mode", format!("'{mode}")));
+    out.push(("operational_mode", Value::Mode(mode)));
     Ok(())
 }
 
 /// Battery-shaped storage kwargs: capacity (Wh) and the SoC range.
 /// Batteries and EV chargers both take them.
-fn storage_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, String)>) {
+fn storage_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>) {
     if let Some(cap) = bounds_for(c, "BATTERY_CAPACITY").and_then(|b| b.upper.or(b.lower)) {
-        out.push((":capacity-wh", lisp_float(cap)));
+        out.push(("capacity_wh", Value::Float(cap)));
     }
     if let Some(b) = bounds_for(c, "BATTERY_SOC_PCT") {
         if let Some(l) = b.lower {
-            out.push((":soc-lower-pct", lisp_float(l)));
+            out.push(("soc_lower_pct", Value::Float(l)));
         }
         if let Some(u) = b.upper {
-            out.push((":soc-upper-pct", lisp_float(u)));
+            out.push(("soc_upper_pct", Value::Float(u)));
         }
     }
 }
@@ -264,9 +313,9 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
         &c.category,
         &["ELECTRICAL_COMPONENT_CATEGORY_", "COMPONENT_CATEGORY_"],
     );
-    let mut kwargs: Vec<(&'static str, String)> = Vec::new();
+    let mut kwargs: Vec<(&'static str, Value)> = Vec::new();
     if let Some(name) = c.name.as_deref().filter(|n| !n.is_empty()) {
-        kwargs.push((":name", format!("\"{}\"", esc(name))));
+        kwargs.push(("name", Value::Text(name.to_string())));
     }
     let make_fn = match suffix {
         "GRID_CONNECTION_POINT" | "GRID" => {
@@ -276,7 +325,7 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
                 .and_then(|i| i.grid_connection_point.as_ref())
                 .and_then(|g| g.rated_fuse_current)
             {
-                kwargs.push((":rated-fuse-current-a", fuse.to_string()));
+                kwargs.push(("rated_fuse_current_a", Value::Int(fuse.into())));
             }
             rated_kwargs(c, &mut kwargs, &["AC_POWER_ACTIVE"]);
             "make-grid-connection-point"
@@ -425,6 +474,24 @@ impl SiteImport {
         )
     }
 
+    /// The import as a microgrid spec with the export's component
+    /// ids, children before parents. The microgrid's own id, name and
+    /// port are the caller's to fill in.
+    pub fn spec(&self) -> Result<crate::spec::MicrogridSpec, String> {
+        let (ordered_ids, _calls) = self.ordered_ids_counting();
+        let by_id: HashMap<u64, &ImportedComponent> =
+            self.components.iter().map(|c| (c.id, c)).collect();
+        let components = ordered_ids
+            .iter()
+            .map(|id| by_id[id].spec())
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(crate::spec::MicrogridSpec {
+            components,
+            connections: self.connections.clone(),
+            ..Default::default()
+        })
+    }
+
     /// Renders one atomic form: `(progn (make-* …) … (connect …) …)`.
     /// Evaluated against the new microgrid through the same eval path
     /// UI edits take, so the persist pass regenerates that
@@ -444,7 +511,7 @@ impl SiteImport {
                 .expect("edge endpoints exist: parse rejects dangling edges");
             out.push_str(&format!("  ({} :id {}", c.make_fn, c.id));
             for (k, v) in &c.kwargs {
-                out.push_str(&format!(" {k} {v}"));
+                out.push_str(&format!(" :{} {}", k.replace('_', "-"), v.lisp()));
             }
             out.push_str(")\n");
         }
@@ -500,6 +567,37 @@ mod tests {
             }"#,
         )
         .unwrap()
+    }
+
+    /// The spec keeps the export's ids and pinned fields, children
+    /// before parents, and its connections.
+    #[test]
+    fn spec_keeps_the_ids_and_the_pinned_fields() {
+        let import = parse(generic_components(), Some(generic_connections())).unwrap();
+        let spec = serde_json::to_value(import.spec().unwrap()).unwrap();
+        let ids: Vec<u64> = spec["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ids, [4, 3, 5, 2, 1]);
+        assert_eq!(
+            spec["components"][0],
+            serde_json::json!({"type": "battery", "id": 4, "name": "battery A",
+                "capacity_wh": 40000.0, "soc_lower_pct": 5.0, "soc_upper_pct": 95.0})
+        );
+        assert_eq!(
+            spec["components"][4],
+            serde_json::json!({"type": "grid_connection_point", "id": 1, "name": "grid",
+                "rated_fuse_current_a": 100})
+        );
+        assert_eq!(spec["components"][2]["type"], "solar_inverter");
+        assert_eq!(
+            spec["connections"],
+            serde_json::json!([[1, 2], [2, 3], [3, 4], [2, 5]])
+        );
+        assert!(spec.get("id").is_none(), "{spec}");
     }
 
     #[test]

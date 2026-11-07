@@ -705,7 +705,8 @@ async fn a_script_may_not_claim_a_microgrid_made_elsewhere() {
     let r = e
         .client
         .post(format!("{}/api/microgrids", e.ui))
-        .json(&json!({"name": "made in the UI", "id": 70}))
+        .json(&json!({"schema_version": 1, "microgrids": [
+            {"name": "made in the UI", "id": 70, "components": []}]}))
         .send()
         .await
         .unwrap();
