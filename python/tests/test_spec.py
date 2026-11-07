@@ -153,14 +153,14 @@ def test_a_non_finite_number_raises_value_error() -> None:
 @pytest.mark.parametrize("bad", [0, -3])
 def test_an_id_of_zero_or_less_raises(bad: int) -> None:
     with pytest.raises(
-        SpecError, match=f"id must be between 1 and 2\\*\\*63 - 1, not {bad}$"
+        SpecError, match=f"id must be between 1 and 2\\*\\*64 - 1, not {bad}$"
     ):
         s.make_meter(id=bad)
 
 
 @pytest.mark.parametrize("bad", [0, -1])
 def test_a_microgrid_id_of_zero_or_less_raises(bad: int) -> None:
-    with pytest.raises(SpecError, match="id must be between 1 and 2\\*\\*63 - 1"):
+    with pytest.raises(SpecError, match="id must be between 1 and 2\\*\\*64 - 1"):
         s.make_microgrid(id=bad, topology=s.make_grid_connection_point())
 
 
@@ -237,22 +237,20 @@ def test_json_key_suffix_matches_type(cls: type, name: str, hint: Any) -> None:
 
 
 def test_ids_must_fit_in_64_bits() -> None:
-    s.make_meter(id=2**63 - 1)
-    with pytest.raises(SpecError, match=", not 9223372036854775808$"):
-        s.make_meter(id=2**63)
+    s.make_meter(id=2**64 - 1)
     with pytest.raises(SpecError, match=", not 18446744073709551616$"):
         s.make_meter(id=2**64)
-    with pytest.raises(SpecError, match="between 1 and 2\\*\\*63 - 1$"):
+    with pytest.raises(SpecError, match="between 1 and 2\\*\\*64 - 1$"):
         s.make_meter(id=10**5000)  # too long for repr
     with pytest.raises(SpecError, match="between 1 and"):
-        s.make_microgrid(id=2**63, topology=s.make_grid_connection_point())
+        s.make_microgrid(id=2**64, topology=s.make_grid_connection_point())
     with pytest.raises(SpecError, match="between 1 and"):
         s.make_microgrid(id=10**5000, topology=s.make_grid_connection_point())
 
 
 def test_an_automatic_id_past_the_largest_raises() -> None:
     top = s.make_grid_connection_point(
-        successors=[s.make_meter(id=2**63 - 1), s.make_meter()]
+        successors=[s.make_meter(id=2**64 - 1), s.make_meter()]
     )
     with pytest.raises(SpecError, match="the next automatic id would pass 2"):
         s.make_microgrid(topology=top)
@@ -261,9 +259,9 @@ def test_an_automatic_id_past_the_largest_raises() -> None:
 def test_the_largest_id_can_be_automatic() -> None:
     last = s.make_meter()
     top = s.make_grid_connection_point(
-        id=1, successors=[s.make_meter(id=2**63 - 2), last]
+        id=1, successors=[s.make_meter(id=2**64 - 2), last]
     )
-    assert s.make_microgrid(topology=top)._ids[last] == 2**63 - 1
+    assert s.make_microgrid(topology=top)._ids[last] == 2**64 - 1
 
 
 def test_an_int_no_float_can_hold_raises_where_the_spec_is_built() -> None:
@@ -357,3 +355,69 @@ def test_an_ev_charger_is_wired_on_one_or_three_phases() -> None:
         s.make_ev_charger(phases=2)
     with pytest.raises(TypeError, match="pressure|target must be Pressure"):
         s.make_steam_boiler(target=8.0)  # type: ignore[arg-type]
+
+
+def _two_microgrids() -> tuple[s.MicrogridSpec, s.MicrogridSpec, s.BatterySpec]:
+    added = s.make_battery()
+    first = s.make_microgrid(
+        id=1,
+        topology=s.make_grid_connection_point(
+            successors=[s.make_battery_inverter(id=1001, successors=[added])]
+        ),
+    )
+    second = s.make_microgrid(
+        id=2, topology=s.make_grid_connection_point(successors=[s.make_meter()])
+    )
+    return first, second, added
+
+
+def test_number_microgrids_numbers_automatic_ids_across_the_list() -> None:
+    first, second, added = _two_microgrids()
+    # Built alone, both trees number from 1000.
+    assert second._ids[second.topology] == 1001
+    s.number_microgrids([first, second])
+    # The first tree skips its explicit 1001; the second continues after it and
+    # skips nothing it does not have to.
+    assert first._ids[added] == 1000
+    assert first._ids[first.topology] == 1002
+    meter = s.children(second.topology)[0]
+    assert second._ids[meter] == 1003
+    assert second._ids[second.topology] == 1004
+    assert set(first._ids.values()).isdisjoint(second._ids.values())
+
+
+def test_number_microgrids_skips_explicit_ids_of_later_microgrids() -> None:
+    first = s.make_microgrid(
+        id=1, topology=s.make_grid_connection_point(successors=[s.make_meter()])
+    )
+    second = s.make_microgrid(id=2, topology=s.make_grid_connection_point(id=1000))
+    s.number_microgrids([first, second])
+    assert sorted(first._ids.values()) == [1001, 1002]
+
+
+def test_a_renumbered_spec_still_finds_its_component() -> None:
+    from macrocosim._microgrid import Microgrid
+    from macrocosim._process import Endpoints
+    from macrocosim._session import _Session
+
+    first, second, added = _two_microgrids()
+    s.number_microgrids([first, second])
+    session = _Session("http://x", 1, exit_probe=lambda: None)
+    endpoints = Endpoints(ui="x:1", microgrid_id=1, grpc_addr="x:2")
+    mg = Microgrid._create(session, first, endpoints)
+    assert mg[added].id == 1000
+    assert added in mg
+
+
+def test_number_microgrids_refuses_an_id_in_two_microgrids() -> None:
+    first = s.make_microgrid(id=1, topology=s.make_grid_connection_point(id=5))
+    second = s.make_microgrid(id=2, topology=s.make_grid_connection_point(id=5))
+    with pytest.raises(SpecError, match="id 5 is in MicrogridSpec"):
+        s.number_microgrids([first, second])
+
+
+def test_number_microgrids_takes_a_list_of_microgrid_specs() -> None:
+    with pytest.raises(TypeError, match="specs must be list"):
+        s.number_microgrids((s.make_microgrid(topology=s.make_grid_connection_point()),))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="specs item must be MicrogridSpec"):
+        s.number_microgrids([s.make_meter()])  # type: ignore[list-item]

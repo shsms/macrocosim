@@ -67,8 +67,8 @@ FIRST_AUTO_ID = 1000
 """Where automatic component ids start. An implementation detail: the docs
 promise no particular number."""
 
-MAX_ID = 2**63 - 1
-"""The largest id the simulator reads (its ids are 64-bit signed)."""
+MAX_ID = 2**64 - 1
+"""The largest id the simulator reads (its ids are unsigned 64-bit)."""
 
 _NOT_WIRE = frozenset({"id", "successors"})
 """Fields `render` writes itself rather than through `spec_wire_fields`."""
@@ -143,7 +143,7 @@ def _check_id(spec: object, value: object) -> None:
     if not 0 < number <= MAX_ID:
         shown = f", not {text}" if (text := repr_or_none(number)) else ""
         raise SpecError(
-            f"{type(spec).__name__}: id must be between 1 and 2**63 - 1{shown}"
+            f"{type(spec).__name__}: id must be between 1 and 2**64 - 1{shown}"
         )
 
 
@@ -398,7 +398,7 @@ class MicrogridSpec:
                 "topology must be a GridConnectionPointSpec (make_grid_connection_point),"
                 f" not {type(self.topology).__name__}"
             )
-        order, ids = _assign_ids(self.topology)
+        order, ids, _ = _assign_ids(self.topology)
         object.__setattr__(self, "_order", order)
         object.__setattr__(self, "_ids", ids)
 
@@ -421,12 +421,17 @@ make_breaker = BreakerSpec
 
 def _assign_ids(
     root: GridConnectionPointSpec,
-) -> tuple[tuple[ComponentSpec[Any], ...], dict[ComponentSpec[Any], int]]:
+    start: int = FIRST_AUTO_ID,
+    skip: frozenset[int] = frozenset(),
+) -> tuple[tuple[ComponentSpec[Any], ...], dict[ComponentSpec[Any], int], int]:
     """Order the tree children-first and map every spec to its id: its own `id`,
-    or a new one for a spec without.
+    or a new one for a spec without. Also returns where the next tree's
+    automatic ids continue.
 
-    An automatic id never equals an explicit one in the same tree, and a spec
-    shared by two parents is visited, and numbered, once.
+    Automatic ids count up from `start`, and from past each explicit id met
+    before them. An automatic id never equals an explicit one in the same tree
+    or one in `skip`, and a spec shared by two parents is visited, and numbered,
+    once.
     """
     order: list[ComponentSpec[Any]] = []
     seen: set[int] = set()
@@ -450,24 +455,57 @@ def _assign_ids(
             raise SpecError(f"{other!r} and {spec!r} both have id {number}")
 
     ids: dict[ComponentSpec[Any], int] = {}
-    next_id = FIRST_AUTO_ID
+    next_id = start
     for spec in order:
         if spec.id is not None:
             ids[spec] = int(spec.id)
             next_id = max(next_id, int(spec.id) + 1)
         else:
-            while next_id in explicit:
+            while next_id in explicit or next_id in skip:
                 next_id += 1
             if next_id > MAX_ID:
                 raise SpecError(
-                    f"{spec!r}: the next automatic id would pass 2**63 - 1 (automatic "
+                    f"{spec!r}: the next automatic id would pass 2**64 - 1 (automatic "
                     "ids count up from the largest explicit id numbered before this "
                     "spec, children before parents and siblings in order, and skip "
                     "every explicit id); give this spec an id"
                 )
             ids[spec] = next_id
             next_id += 1
-    return tuple(order), ids
+    return tuple(order), ids, next_id
+
+
+def number_microgrids(specs: list[MicrogridSpec]) -> None:
+    """Number the automatic component ids of `specs` across the whole list, so
+    no two microgrids share an id.
+
+    The explicit ids of every microgrid are collected first; two microgrids
+    giving the same one raise `SpecError`. Then each microgrid's automatic ids
+    are numbered in list order, continuing from where the previous microgrid's
+    numbering ended and skipping every explicit id. The specs are renumbered in
+    place, so they stay the keys that find their components.
+    """
+    check_type("specs", specs, list)
+    for mg in specs:
+        check_type("specs item", mg, MicrogridSpec)
+    owner: dict[int, MicrogridSpec] = {}
+    for mg in specs:
+        for spec in mg._order:
+            if spec.id is None:
+                continue
+            number = int(spec.id)
+            other = owner.setdefault(number, mg)
+            if other is not mg:
+                raise SpecError(
+                    f"{spec!r}: id {number} is in {other!r} and in {mg!r}; component "
+                    "ids are unique across the microgrids"
+                )
+    skip = frozenset(owner)
+    start = FIRST_AUTO_ID
+    for mg in specs:
+        order, ids, start = _assign_ids(mg.topology, start, skip)
+        object.__setattr__(mg, "_order", order)
+        object.__setattr__(mg, "_ids", ids)
 
 
 def _strip_none(hint: Any) -> type | tuple[type, ...]:
