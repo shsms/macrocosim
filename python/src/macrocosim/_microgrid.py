@@ -1,7 +1,7 @@
 """The live microgrid that `launch` yields.
 
-Internal; imports `_components`, `_signals`, `_spec`, `_errors`, `_units`, and
-`_session` and `_process` for typing only.
+Internal; imports `_components`, `_signals`, `_spec`, `_errors`, `_units`,
+`_recording`, and `_session` and `_process` for typing only.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from frequenz.quantities import Energy, Frequency, Percentage, Power, Voltage
 
 from ._components import LIVE_CLASS, Component
 from ._errors import UnknownComponent, fmt_ids
+from ._recording import Recording
 from ._signals import (
     AGGREGATES,
     FREQUENCY_PATH,
@@ -99,6 +100,7 @@ class Microgrid:
     _live: dict[int, Component]
     _aggregates: dict[str, Signal[Any]]
     _frequency: ClearableKnob[Frequency]
+    _recording: Recording | None
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError(
@@ -125,6 +127,7 @@ class Microgrid:
         self._frequency = ClearableKnob(
             _FrequencyWriter(session, self._label("frequency"))
         )
+        self._recording = None
         return self
 
     def _label(self, attribute: str) -> str:
@@ -325,6 +328,20 @@ class Microgrid:
             self._session.microgrid_path("weather"),
             call=f"{self._label('clear_weather')}()",
         )
+
+    def record(self, name: str, *, csv: bool = False) -> Recording:
+        """A recording of this microgrid named `name`, to use as
+        ``async with microgrid.record(name):``; the block is recorded, and
+        `Recording.report` gives what it measured afterwards.
+
+        With `csv`, every component's telemetry, and the setpoints and bounds of
+        those that take setpoints, go to CSV files in
+        ``recordings/<microgrid id>/<name>-<UTC time>/`` under the simulator's
+        state directory. Raises `RuntimeError` while this microgrid has a
+        recording open; the simulator refuses a start (`Rejected`) while
+        another client records it.
+        """
+        return Recording(self._session, self, name, csv)
 
     def _key_id(self, key: object) -> int | None:
         if isinstance(key, ComponentSpec):

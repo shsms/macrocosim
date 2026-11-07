@@ -37,6 +37,7 @@ from ._errors import (
 from ._launch import launch
 from ._matchers import Matcher, at_least, at_most, between, near
 from ._microgrid import Microgrid
+from ._recording import Recording, RecordingReport
 from ._signals import ClearableKnob, ClearableSignal, Knob, SettableSignal, Signal
 from ._spec import (
     BatteryInverterSpec,
@@ -68,7 +69,7 @@ from ._spec import (
 from ._units import MassFlow, Pressure
 
 __all__ = [
-    "launch", "Microgrid",
+    "launch", "Microgrid", "Recording", "RecordingReport",
     "Component", "GridConnectionPoint", "Meter", "Battery",
     "BatteryInverter", "SolarInverter", "Chp", "EvCharger", "SteamBoiler",
     "WindTurbine", "PowerTransformer", "Breaker",

@@ -25,6 +25,7 @@ ORDER = [
     "_sampling",
     "_signals",
     "_components",
+    "_recording",
     "_microgrid",
     "_launch",
     "__init__",

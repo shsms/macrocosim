@@ -9,7 +9,7 @@ import macrocosim
 pytestmark = pytest.mark.filterwarnings("error")
 
 EXPECTED = [
-    "launch", "Microgrid",
+    "launch", "Microgrid", "Recording", "RecordingReport",
     "Component", "GridConnectionPoint", "Meter", "Battery",
     "BatteryInverter", "SolarInverter", "Chp", "EvCharger", "SteamBoiler",
     "WindTurbine", "PowerTransformer", "Breaker",
