@@ -2969,18 +2969,29 @@ async function openDemoTopology(pg = page) {
 }
 await page.evaluate(() => localStorage.removeItem("macrocosim-density"));
 await openDemoTopology();
-const densityState = () =>
-  page.evaluate(() => ({
-    density: document.documentElement.dataset.density,
-    chip: document.getElementById("density-toggle").textContent,
-    text: getComputedStyle(document.body).fontSize,
-    bar: document.querySelector("body > header").getBoundingClientRect().height,
-  }));
-const compactState = await densityState();
-await page.click("#density-toggle");
-const comfortableState = await densityState();
-await page.click("#density-toggle");
-const compactAgain = await densityState();
+// Reads the density state (the setting, the chip's label, the text size and the
+// top bar's height), then clicks the density chip `clicks` times, reading again
+// after each click, and returns the `clicks + 1` readings. The readings
+// and clicks run in one browser task, so nothing the page loads in the meantime
+// (the status text, the pulse pills, the script chip) can change the top bar's
+// height between them.
+const densityAfterClicks = (clicks) =>
+  page.evaluate((clicks) => {
+    const chip = document.getElementById("density-toggle");
+    const state = () => ({
+      density: document.documentElement.dataset.density,
+      chip: chip.textContent,
+      text: getComputedStyle(document.body).fontSize,
+      bar: document.querySelector("body > header").getBoundingClientRect().height,
+    });
+    const states = [state()];
+    for (let i = 0; i < clicks; i++) {
+      chip.click();
+      states.push(state());
+    }
+    return states;
+  }, clicks);
+const [compactState, comfortableState, compactAgain] = await densityAfterClicks(2);
 check(
   "e2e: compact is the default density",
   compactState.density === "compact" && compactState.chip === "compact" && compactState.text === "13px",
@@ -2995,7 +3006,7 @@ check("e2e: the density chip switches back", compactAgain.density === "compact" 
 // A reload, not openDemoTopology: a goto to the same hash reloads nothing.
 await page.evaluate(() => localStorage.setItem("macrocosim-density", "normal"));
 await page.reload({ waitUntil: "networkidle" });
-const fromNormal = await densityState();
+const [fromNormal] = await densityAfterClicks(0);
 check("e2e: the old stored 'normal' reads as comfortable", fromNormal.density === "comfortable", JSON.stringify(fromNormal));
 await page.evaluate(() => localStorage.removeItem("macrocosim-density"));
 await page.reload({ waitUntil: "networkidle" });
