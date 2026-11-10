@@ -3813,7 +3813,14 @@ await page.evaluate(async () => {
 });
 const inspectorAfterHover = await page.evaluate(() => document.getElementById("inspector").classList.contains("open"));
 check("e2e: a formula hover on Dispatches leaves the inspector closed", !inspectorAfterHover);
-await page.evaluate(async () => (await import("/assets/routing.js")).jumpToTopology(1000));
+// The hook is read in the jump's own task, so nothing runs between reveal()
+// and the read.
+const revealArmedAfterJump = await page.evaluate(async () => {
+  const [{ jumpToTopology }, { topology }] = await Promise.all([import("/assets/routing.js"), import("/assets/topology.js")]);
+  jumpToTopology(1000);
+  return topology.debugRevealArmed();
+});
+check("e2e: a #N jump arms a reveal", revealArmedAfterJump === true, JSON.stringify({ revealArmedAfterJump }));
 const afterJump = await page.evaluate(() => ({
   subview: document.body.dataset.subview,
   formulas: document.getElementById("panel-formula-btn")?.classList.contains("open") === true,
@@ -3823,6 +3830,9 @@ check(
   afterJump.subview === "topology" && afterJump.formulas,
   JSON.stringify(afterJump),
 );
+// The jump to node 1000 armed a reveal, which for a second makes fit() and a
+// resize center that node instead; let it run out before the checks that follow.
+await waitFor(async () => page.evaluate(async () => !(await import("/assets/topology.js")).topology.debugRevealArmed()), 3000);
 await page.click("#formula-btn");
 const mgBarHeight = () => page.evaluate(() => document.getElementById("mg-header").getBoundingClientRect().height);
 await page.click("#mg-back");

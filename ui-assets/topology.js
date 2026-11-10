@@ -1619,6 +1619,14 @@ export function createGraphCanvas(containerId, adapter = {}) {
       network.moveTo({ scale, animation: false });
       syncLod();
     },
+    /// Smoke-test hook: whether a reveal is still armed. It is for a
+    /// second after reveal(), or less when the node turns out not to be
+    /// in the graph. While it is armed, fit() and the first draw's fit
+    /// center the revealed node at the current zoom instead of fitting
+    /// the graph, and so does a resize of the shown canvas.
+    debugRevealArmed() {
+      return pendingReveal != null && Date.now() <= pendingReveal.until;
+    },
     /// Smoke-test hook: one repaint, so a test can count what the
     /// pills actually paint at the current tier.
     debugRedraw() {
