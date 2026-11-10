@@ -566,14 +566,30 @@ mod tests {
         assert_eq!(view(RuntimeStatus::Failed).serving_addr(), None);
     }
 
-    /// A port nobody holds right now, for tests that need a fixed
-    /// one.
+    /// A port on `[::1]` that nobody holds right now, for tests that
+    /// need a fixed one. Within one test process each call gives a
+    /// different port. All of them are below the default range the OS
+    /// takes ephemeral ports from (32768 and up on Linux, 49152 and
+    /// up on macOS and Windows), so a test that binds port 0 is not
+    /// handed one before the test that asked for it binds it.
     fn free_v6_port() -> u16 {
-        std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        use std::sync::atomic::{AtomicU16, Ordering};
+        const FIRST_PORT: u16 = 20_000;
+        const PORT_CAP: u16 = 32_768;
+        static NEXT: AtomicU16 = AtomicU16::new(FIRST_PORT);
+        let mut last_err = String::from("none");
+        loop {
+            let port = NEXT.fetch_add(1, Ordering::Relaxed);
+            assert!(
+                port < PORT_CAP,
+                "no test port left in {FIRST_PORT}..{PORT_CAP} \
+                 (last bind error in this call: {last_err})"
+            );
+            match std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)) {
+                Ok(_) => return port,
+                Err(e) => last_err = e.to_string(),
+            }
+        }
     }
 
     /// Microgrid `id` on `port`: a grid connection point
