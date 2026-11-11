@@ -203,10 +203,9 @@ async fn run_supervisor(
     }
 }
 
-/// After seeing the first TopologyChanged, swallow any further events
-/// that arrive within `DEBOUNCE` so a burst of changes (a script's
-/// hello rebuilding several microgrids, an undo walked quickly) only
-/// triggers one rebuild.
+/// After seeing the first TopologyChanged, swallow any further events that
+/// arrive within `DEBOUNCE` so a burst of changes (a declaration rebuilding
+/// several microgrids, an undo walked quickly) only triggers one rebuild.
 async fn debounce_topology_burst(events: &mut tokio::sync::broadcast::Receiver<SiteEvent>) {
     const DEBOUNCE: Duration = Duration::from_millis(300);
     let deadline = tokio::time::Instant::now() + DEBOUNCE;

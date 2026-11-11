@@ -437,13 +437,12 @@ impl microgrid_server::Microgrid for MicrogridServer {
                 reason: s.message().to_string(),
             },
         };
-        // Only log for registered components — log_setpoint mints a
-        // per-id ring, so logging a not-found rejection would let a
-        // client with random ids grow the map without bound (and show
-        // phantom components in the UI). Matches the augment path's
-        // `known` guard. Checked again after the apply: a component
-        // registered while the command was in flight (a rebuild, a
-        // script's hello) must still get its audit record.
+        // Only log for registered components — log_setpoint mints a per-id
+        // ring, so logging a not-found rejection would let a client with random
+        // ids grow the map without bound (and show phantom components in the
+        // UI). Matches the augment path's `known` guard. Checked again after
+        // the apply: a component registered while the command was in flight (a
+        // rebuild, a declaration) must still get its audit record.
         if known || site.get(id).is_some() {
             site.log_setpoint(
                 id,

@@ -26,7 +26,7 @@ use macrocosim::proto::common::metrics::{Bounds, Metric};
 use macrocosim::proto::microgrid::{
     ReceiveElectricalComponentTelemetryStreamRequest, microgrid_client::MicrogridClient,
 };
-use macrocosim::runner::python::Interpreter;
+use macrocosim::python::Interpreter;
 use macrocosim::runtime::MicrogridRuntimes;
 use macrocosim::sim::sim_clock::NowSource;
 use macrocosim::spec::TopologyDoc;
@@ -132,8 +132,7 @@ impl TestServer {
         let python = Arc::new(Interpreter::default());
         let ui_python = python.clone();
         handles.push(tokio::spawn(async move {
-            let _ =
-                ui::serve_with_listener(ui_listener, ui_engine, ui_runtimes, ui_python, None).await;
+            let _ = ui::serve_with_listener(ui_listener, ui_engine, ui_runtimes, ui_python).await;
         }));
 
         // PlatformAssets has its own port, as in the binary.

@@ -52,12 +52,11 @@ pub struct Engine {
     /// hand-advanced clock in a headless one. See
     /// [`crate::sim::sim_clock`].
     pub(crate) now: NowSource,
-    /// The one structural lock. Every change in [`topology`] (create,
-    /// import, rebuild, undo, a script's hello, unload) takes a
-    /// [`Structural`] guard on it, so one claim of a microgrid id and
-    /// a port at a time is what keeps each route's validation
-    /// authoritative. A tokio mutex, so a route waits for it without
-    /// blocking the runtime.
+    /// The one structural lock. Every change in [`topology`] (create, import,
+    /// rebuild, undo, a declaration, unload) takes a [`Structural`] guard on
+    /// it, so one claim of a microgrid id and a port at a time is what keeps
+    /// each route's validation authoritative. A tokio mutex, so a route waits
+    /// for it without blocking the runtime.
     structural: Arc<tokio::sync::Mutex<()>>,
     /// Enterprise-wide notification fired when a microgrid lands in
     /// `microgrids`. The WS event pump subscribes so it can spawn a

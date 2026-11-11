@@ -2955,7 +2955,7 @@ await openDemoTopology();
 // top bar's height), then clicks the density chip `clicks` times, reading again
 // after each click, and returns the `clicks + 1` readings. The readings
 // and clicks run in one browser task, so nothing the page loads in the meantime
-// (the status text, the pulse pills, the script chip) can change the top bar's
+// (the status text, the pulse pills) can change the top bar's
 // height between them.
 const densityAfterClicks = (clicks) =>
   page.evaluate((clicks) => {

@@ -47,12 +47,12 @@ pub struct MicrogridDef {
 pub struct MicrogridEntry {
     pub def: MicrogridDef,
     pub site: MicrogridSite,
-    /// The file the microgrid came from, canonicalized: the script or
-    /// the `--topology` document. `None` when it was made in the UI.
+    /// The file the microgrid came from, canonicalized: the `--topology`
+    /// document. `None` when it was made in the UI or declared.
     pub source: Option<PathBuf>,
-    /// Its live spec differs from its source: a `PUT` of its spec or
-    /// an undo set it, and one made in the UI (no source) always has
-    /// it. The script's next hello clears it.
+    /// Its live spec differs from its source: a `PUT` of its spec, an undo or a
+    /// declaration that rebuilt it set it, and one with no source always has
+    /// it.
     pub unsaved: bool,
     /// The spec the microgrid was last built from, with every id
     /// filled in.

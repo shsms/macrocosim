@@ -77,7 +77,7 @@ async fn call_full(
     runtimes: crate::runtime::MicrogridRuntimes,
     req: Request<Body>,
 ) -> (StatusCode, HeaderMap, Vec<u8>) {
-    let resp = router(engine, runtimes, std::sync::Arc::default(), None)
+    let resp = router(engine, runtimes, std::sync::Arc::default())
         .oneshot(req)
         .await
         .unwrap();
@@ -288,23 +288,6 @@ async fn every_microgrid_route_shares_the_unregistered_404() {
     let (status, body) = call(engine, get("/api/mg/abc/topology")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error_of(&body), "invalid microgrid id: \"abc\"");
-}
-
-/// An engine that runs no script refuses every hello with 403.
-#[tokio::test]
-async fn a_hello_without_a_script_is_refused() {
-    let (engine, _dir) = engine_with("{}").await;
-    let (status, body) = call(
-        engine.clone(),
-        post_json(
-            "/api/runner/hello",
-            r#"{"token": "t", "client_version": "0.0.0", "topology": {"schema_version": 1, "microgrids": []}}"#,
-        ),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error_of(&body), "this engine runs no script");
-    assert_eq!(engine.microgrids.lock().len(), 1, "nothing changed");
 }
 
 /// Per-microgrid routes outside `/api/mg/{mg}`, and the routes the

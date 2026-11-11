@@ -1,22 +1,20 @@
 //! Embedded web UI server.
 //!
-//! Runs alongside the gRPC server on the same tokio runtime, separate
-//! port (default 8801). The SPA shell + vendored assets are bundled
-//! via rust-embed.
+//! Runs alongside the gRPC server on the same tokio runtime, separate port
+//! (default 8801). The SPA shell + vendored assets are bundled via rust-embed.
 //!
 //! The fanout is:
 //!
-//! - `state` — types shared between the loopback supervisor, the WS
-//!   pump, and the HTTP handlers.
+//! - `state` — types shared between the loopback supervisor, the WS pump, and
+//!   the HTTP handlers.
 //! - `loopback` — gRPC loopback supervisor.
 //! - `events_ws` — WebSocket push channel.
-//! - `handlers` — one submodule per HTTP topic (topology, spec,
-//!   history, recording, microgrids, …).
-//! - `api` — the error type every handler fails with, and the
-//!   extractors and fallbacks that answer axum's own failures with
-//!   it.
-//! - `app_state` — the router's state: the `Engine`, the runtimes,
-//!   the export's interpreter and the script's supervisor.
+//! - `handlers` — one submodule per HTTP topic (topology, spec, history,
+//!   recording, microgrids, …).
+//! - `api` — the error type every handler fails with, and the extractors and
+//!   fallbacks that answer axum's own failures with it.
+//! - `app_state` — the router's state: the `Engine`, the runtimes and the
+//!   export's interpreter.
 
 mod api;
 mod app_state;
@@ -44,21 +42,17 @@ use events_ws::events_ws;
 
 /// Run the UI HTTP server on an already-bound listener.
 ///
-/// `runtimes` starts and reports each microgrid's runtime, and holds
-/// the per-microgrid loopback slots the `/api/mg/{mg}/metrics/*`
-/// routes read.
+/// `runtimes` starts and reports each microgrid's runtime, and holds the
+/// per-microgrid loopback slots the `/api/mg/{mg}/metrics/*` routes read.
 ///
-/// `python` is the interpreter the `.py` export runs on, and `runner`
-/// the supervisor of the engine's script, which the `/api/runner`
-/// routes answer for; `None` without a script.
+/// `python` is the interpreter the `.py` export runs on.
 pub async fn serve_with_listener(
     listener: tokio::net::TcpListener,
     engine: Engine,
     runtimes: crate::runtime::MicrogridRuntimes,
-    python: Arc<crate::runner::python::Interpreter>,
-    runner: Option<Arc<crate::runner::ScriptSupervisor>>,
+    python: Arc<crate::python::Interpreter>,
 ) -> std::io::Result<()> {
-    axum::serve(listener, router(engine, runtimes, python, runner))
+    axum::serve(listener, router(engine, runtimes, python))
         .await
         .map_err(std::io::Error::other)
 }
@@ -66,8 +60,7 @@ pub async fn serve_with_listener(
 fn router(
     engine: Engine,
     runtimes: crate::runtime::MicrogridRuntimes,
-    python: Arc<crate::runner::python::Interpreter>,
-    runner: Option<Arc<crate::runner::ScriptSupervisor>>,
+    python: Arc<crate::python::Interpreter>,
 ) -> Router {
     use handlers::{
         assets::{asset, index, logs_backfill},
@@ -88,7 +81,6 @@ fn router(
             recording_csv_file, recording_csv_list, recording_event, recording_events,
             recording_report, recording_start, recording_status, recording_stop,
         },
-        runner::{runner_hello, runner_status},
         spec::{microgrid_delete, spec_get, spec_put, spec_py, spec_schema},
         topology::topology,
         undo::{redo, undo, undo_depths},
@@ -144,8 +136,6 @@ fn router(
         .route("/api/spec/schema", get(spec_schema))
         .route("/api/frequency", get(frequency_get).post(frequency_post))
         .route("/api/logs", get(logs_backfill))
-        .route("/api/runner", get(runner_status))
-        .route("/api/runner/hello", post(runner_hello))
         .route(
             "/api/microgrids",
             get(microgrids_list).post(microgrids_create),
@@ -161,7 +151,7 @@ fn router(
         .fallback(api::no_route)
         .method_not_allowed_fallback(api::method_not_allowed)
         .layer(axum::middleware::from_fn(origin_guard))
-        .with_state(AppState::new(engine, runtimes, python, runner))
+        .with_state(AppState::new(engine, runtimes, python))
 }
 
 /// Same-origin guard for the browser-facing surface.

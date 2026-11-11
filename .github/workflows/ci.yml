@@ -39,7 +39,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # The script runner and export tests run the Python package from
+      # The export tests run the Python package from
       # python/.venv. `uv sync` installs the project too (the maturin
       # build), so `import macrocosim` reports the version the engine
       # checks. MACROCOSIM_REQUIRE_PYTHON=1 below fails those tests
@@ -50,7 +50,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: python/uv.lock
 
-      - name: Python venv for the runner tests
+      - name: Python venv for the export tests
         working-directory: python
         run: uv sync
 

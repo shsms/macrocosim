@@ -49,8 +49,8 @@ src = [".", "src", "../examples"]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ty.environment]
-# The repository's example scripts import each other, as the script runner
-# lets them: it puts a script's own directory on the import path.
+# The repository's example scripts import each other: Python puts a script's
+# own directory on the import path.
 extra-paths = ["../examples"]
 
 [tool.pytest.ini_options]

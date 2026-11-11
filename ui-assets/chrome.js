@@ -1,8 +1,6 @@
 // Chrome around the SPA's main views: the configurable-zone clock,
-// the script chip and the system pulse in the top bar.
+// the theme chip and the system pulse in the top bar.
 
-import { escapeHtml } from "./html.js";
-import { getJson } from "./http.js";
 import { mgFetch, setupDensityToggle } from "./routing.js";
 import * as theme from "./theme.js";
 import * as zone from "./zone.js";
@@ -27,79 +25,6 @@ export function setupZoneChip() {
 function renderClock() {
   const el = document.getElementById("pulse-clock");
   if (el) el.textContent = zone.fmtTime(Date.now());
-}
-
-// ─── Script chip ───────────────────────────────────────────────────────────
-//
-// The engine's script (`macrocosim plant.py`): its child's state on the
-// chip, and the last reload and the child's recent output in a popover
-// the chip opens. Hidden when the engine runs no script. Filled from
-// GET /api/runner at boot and on every open of the events socket (which
-// sends only changes), then from every `script_status` event.
-const SCRIPT_BAD = new Set(["crashed"]);
-
-// Every `script_status` event and every GET of the status takes the next
-// number. A GET answer paints only if nothing numbered after its read has
-// painted.
-let scriptSeq = 0;
-// The number of the last event or GET answer painted.
-let paintedSeq = 0;
-
-// Handle a `script_status` event from the events socket: paint it.
-export function onScriptStatusEvent(status) {
-  paintedSeq = ++scriptSeq;
-  paintScriptStatus(status);
-}
-
-function paintScriptStatus(status) {
-  const chip = document.getElementById("script-chip");
-  const pop = document.getElementById("script-popover");
-  if (!chip || !pop) return;
-  chip.hidden = status.script == null;
-  if (chip.hidden) return;
-  const state = status.child?.state ?? "stopped";
-  const failed = status.last_reload?.result === "failed_to_load";
-  chip.textContent = `script ${state}${failed ? " · reload failed" : ""}`;
-  chip.dataset.state = state;
-  chip.classList.toggle("bad", SCRIPT_BAD.has(state) || failed);
-  chip.title = `${status.script}: ${state}${failed ? ", the last reload failed to load" : ""}`;
-  const exit = status.child?.exit_code != null ? ` (exit ${status.child.exit_code})` : "";
-  const reload = status.last_reload
-    ? `<p>last reload: ${escapeHtml(status.last_reload.result.replaceAll("_", " "))} ${zone.timeHtml(status.last_reload.updated_at, "hms")}</p>${
-        failed ? `<pre class="script-output">${escapeHtml(status.last_reload.output.join("\n"))}</pre>` : ""
-      }`
-    : "";
-  pop.innerHTML = `
-    <h3>${escapeHtml(status.script)}</h3>
-    <p>${escapeHtml(state)}${escapeHtml(exit)}</p>
-    ${reload}
-    <h4>output</h4>
-    <pre class="script-output">${status.output.length ? escapeHtml(status.output.join("\n")) : "(none yet)"}</pre>`;
-}
-
-export async function setupScriptChip() {
-  const chip = document.getElementById("script-chip");
-  // The popover opens under the chip, wherever the top bar put it.
-  document.getElementById("script-popover")?.addEventListener("beforetoggle", (e) => {
-    if (e.newState === "open" && chip) e.target.style.top = `${chip.getBoundingClientRect().bottom + 4}px`;
-  });
-  await refreshScriptStatus();
-}
-
-// Read the script's status and paint the chip with it, unless a
-// `script_status` event painted since the read started, or a newer read
-// painted first.
-export async function refreshScriptStatus() {
-  const mine = ++scriptSeq;
-  try {
-    const status = await getJson("/api/runner");
-    if (mine > paintedSeq) {
-      paintedSeq = mine;
-      paintScriptStatus(status);
-    }
-  } catch (_) {
-    // The events socket's next open, or its next change, reads it again.
-  }
 }
 
 // ─── Theme chip ────────────────────────────────────────────────────────────

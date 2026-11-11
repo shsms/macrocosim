@@ -8,6 +8,7 @@ import { bgFetch, errorText } from "./http.js";
 import { countText } from "./live.js";
 import { clearFormError, notify, showFormError } from "./notices.js";
 import { publishMgList, readSelectedMg, reconcileSelection } from "./routing.js";
+import { unsavedChip } from "./unsaved-chip.js";
 
 // Lowest id `POST /api/microgrids` allocates when none is asked
 // for (`DEFAULT_MICROGRID_ID` server-side). The create dialog
@@ -15,19 +16,6 @@ import { publishMgList, readSelectedMg, reconcileSelection } from "./routing.js"
 // list the panel already holds, so the field shows a real id rather
 // than a blank the user has to guess at.
 const FIRST_MICROGRID_ID = 2200;
-
-// The `unsaved` chip: a microgrid whose live structure its source does
-// not have. On a script's microgrid the UI edited, saving the script
-// replaces the edits; a microgrid made in the UI has no source at all.
-function unsavedChip(m) {
-  if (!m.unsaved) return "";
-  if (m.source) {
-    const file = m.source.split(/[\\/]/).pop();
-    const title = `edited here: saving ${file} replaces these edits; export to keep them`;
-    return `<span class="mg-chip edited" title="${escapeHtml(title)}">edited here</span>`;
-  }
-  return `<span class="mg-chip unsaved" title="in memory only: export to keep it">in memory only</span>`;
-}
 
 export const microgridsPanel = (() => {
   let cached = []; // last /api/microgrids snapshot

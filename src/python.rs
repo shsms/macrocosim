@@ -1,4 +1,4 @@
-//! Finding the Python interpreter that runs a script and the export,
+//! Finding the Python interpreter the `.py` export runs on,
 //! and checking it: Python 3.11 or later, with the `macrocosim`
 //! package of the binary's own version. A passed check is kept for
 //! the life of the engine; a failed one runs again on the next use,
@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use crate::version::VERSION;
 
-/// The oldest Python a script may run on.
+/// The oldest Python the export may run on.
 pub const MIN_PYTHON: (u32, u32) = (3, 11);
 
 /// How long the check may take before it counts as failed.
@@ -73,8 +73,8 @@ impl Interpreter {
     }
 }
 
-/// The message a script run exits with and an export answers when
-/// there is no usable interpreter.
+/// The message an export answers with when there is no usable
+/// interpreter.
 pub fn message(found: &str, what: &str) -> String {
     format!(
         "macrocosim needs Python {}.{} or later with the macrocosim package, version {}. \

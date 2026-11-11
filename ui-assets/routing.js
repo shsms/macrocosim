@@ -334,8 +334,8 @@ export function jumpToTopology(id) {
 
 // The selection must name a microgrid the server has. The list panel
 // calls this with every list fresh from the server; a remembered id
-// the server no longer knows — a fresh state dir, a microgrid the
-// script dropped — is dropped for the list view, saying why. A
+// the server no longer knows — a fresh state dir, a microgrid that
+// was unloaded — is dropped for the list view, saying why. A
 // correction rather than a navigation (replaceState, not push), so
 // Back does not walk into the dead route. Applies the route only:
 // the caller holds the fresh list and renders it itself.
@@ -418,7 +418,7 @@ export async function refreshTopology() {
     topology.apply(data);
     // The system pulse's health counters + graph pill read from the
     // same topology fetch — one round-trip carries both
-    // signals + a script reload's WS topology_changed nudge
+    // signals + a rebuild's WS topology_changed nudge
     // already drives a refresh.
     pulseBar.applyTopology(data.components || [], data.graph_status);
   } catch (err) {

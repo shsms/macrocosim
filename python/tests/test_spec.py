@@ -357,67 +357,9 @@ def test_an_ev_charger_is_wired_on_one_or_three_phases() -> None:
         s.make_steam_boiler(target=8.0)  # type: ignore[arg-type]
 
 
-def _two_microgrids() -> tuple[s.MicrogridSpec, s.MicrogridSpec, s.BatterySpec]:
-    added = s.make_battery()
-    first = s.make_microgrid(
-        id=1,
-        topology=s.make_grid_connection_point(
-            successors=[s.make_battery_inverter(id=1001, successors=[added])]
-        ),
-    )
-    second = s.make_microgrid(
-        id=2, topology=s.make_grid_connection_point(successors=[s.make_meter()])
-    )
-    return first, second, added
-
-
-def test_number_microgrids_numbers_automatic_ids_across_the_list() -> None:
-    first, second, added = _two_microgrids()
-    # Built alone, both trees number from 1000.
-    assert second._ids[second.topology] == 1001
-    s.number_microgrids([first, second])
-    # The first tree skips its explicit 1001; the second continues after it and
-    # skips nothing it does not have to.
-    assert first._ids[added] == 1000
-    assert first._ids[first.topology] == 1002
-    meter = s.children(second.topology)[0]
-    assert second._ids[meter] == 1003
-    assert second._ids[second.topology] == 1004
-    assert set(first._ids.values()).isdisjoint(second._ids.values())
-
-
-def test_number_microgrids_skips_explicit_ids_of_later_microgrids() -> None:
-    first = s.make_microgrid(
-        id=1, topology=s.make_grid_connection_point(successors=[s.make_meter()])
-    )
-    second = s.make_microgrid(id=2, topology=s.make_grid_connection_point(id=1000))
-    s.number_microgrids([first, second])
-    assert sorted(first._ids.values()) == [1001, 1002]
-
-
-def test_a_renumbered_spec_still_finds_its_component() -> None:
-    from macrocosim._microgrid import Microgrid
-    from macrocosim._process import Endpoints
-    from macrocosim._session import _Session
-
-    first, second, added = _two_microgrids()
-    s.number_microgrids([first, second])
-    session = _Session("http://x", 1, exit_probe=lambda: None)
-    endpoints = Endpoints(ui="x:1", microgrid_id=1, grpc_addr="x:2")
-    mg = Microgrid._create(session, first, endpoints)
-    assert mg[added].id == 1000
-    assert added in mg
-
-
-def test_number_microgrids_refuses_an_id_in_two_microgrids() -> None:
+def test_an_explicit_id_in_two_microgrids_is_refused() -> None:
     first = s.make_microgrid(id=1, topology=s.make_grid_connection_point(id=5))
     second = s.make_microgrid(id=2, topology=s.make_grid_connection_point(id=5))
     with pytest.raises(SpecError, match="id 5 is in MicrogridSpec"):
-        s.number_microgrids([first, second])
-
-
-def test_number_microgrids_takes_a_list_of_microgrid_specs() -> None:
-    with pytest.raises(TypeError, match="specs must be list"):
-        s.number_microgrids((s.make_microgrid(topology=s.make_grid_connection_point()),))  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="specs item must be MicrogridSpec"):
-        s.number_microgrids([s.make_meter()])  # type: ignore[list-item]
+        s._check_explicit_ids([first, second])
+    assert s._check_explicit_ids([first]) == frozenset({5})

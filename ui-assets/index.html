@@ -59,9 +59,6 @@
         </span>
       </section>
       <span class="spacer"></span>
-      <button type="button" class="pulse-chip script-chip" id="script-chip"
-              popovertarget="script-popover" hidden>script</button>
-      <div id="script-popover" class="script-popover" popover></div>
       <button type="button" id="logs-btn" class="btn" title="The server's log tail">Logs</button>
       <button type="button" id="defaults-btn" class="btn">Defaults</button>
       <button type="button" id="report-btn" class="btn"
@@ -416,7 +413,7 @@
       <div id="help-dialog-content">
         <h4>Microgrids</h4>
         <ul class="help-list">
-          <li>The <em>Microgrids</em> button in the top bar, or <kbd>1</kbd>, opens a card grid of every registered microgrid: the script's, plus any added via the <em>+ New microgrid</em> card or <code>POST /api/microgrids</code>. The last-selected microgrid persists in <code>localStorage</code>; a refresh restores it.</li>
+          <li>The <em>Microgrids</em> button in the top bar, or <kbd>1</kbd>, opens a card grid of every registered microgrid: the ones scripts declared, plus any added via the <em>+ New microgrid</em> card or <code>POST /api/microgrids</code>. The last-selected microgrid persists in <code>localStorage</code>; a refresh restores it.</li>
           <li>The <em>⇪ Import site…</em> card creates a microgrid from a microgrid API site export: pick <code>components.json</code> and <code>connections.json</code> together (connections optional). Rated power bounds, battery capacity, SoC range and the grid's rated fuse current all carry over into the simulation.</li>
           <li>Clicking a card drills into that microgrid's Topology + Dispatches sub-tabs. The <em>← Microgrids</em> button in the header returns to the list.</li>
           <li>Each microgrid runs its own Microgrid gRPC server on <code>[::1]:&lt;port&gt;</code> (default 8800, 8810, 8820, …). PlatformAssets runs on a single shared port (default 9900).</li>
@@ -438,7 +435,7 @@
           <li><strong>Layout picker</strong> (top-right of the canvas) — lanes (default), columns, top-down, radial. Dragging a node by hand keeps your arrangement; picking a layout resets it. The <em>snap</em> toggle makes dragged nodes snap to a grid; hold <kbd>Alt</kbd> while dragging to move along one axis only.</li>
           <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>C</kbd> — copy selection. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>V</kbd> — paste. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>X</kbd> — cut. Each paste re-uses the last copy; clipboard captures structure only (types + internal edges), so clones take the type's defaults and the lowest free ids from 5000.</li>
           <li><kbd>Del</kbd> / <kbd>Backspace</kbd> — delete selection. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>A</kbd> — select all visible. <kbd>Esc</kbd> — deselect.</li>
-          <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> — undo the last canvas edit. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Y</kbd>) — redo. The history lives on the server, one step per structural edit of the microgrid, so it survives page reloads and is shared by every open tab. It is lost on a restart, and a script save clears it for the script's microgrids.</li>
+          <li><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Z</kbd> — undo the last canvas edit. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Y</kbd>) — redo. The history lives on the server, one step per structural edit of the microgrid, so it survives page reloads and is shared by every open tab. It is lost on a restart; a script's declaration that rebuilds a microgrid adds a step too.</li>
           <li>The <em>Metrics</em>, <em>Formulas</em> and <em>Weather</em> buttons in the microgrid bar open that microgrid's panels. <em>Formulas</em> opens the formula explorer: pick a metric, hover a part of the formula to highlight its components on the canvas (subtracted parts show red), click a <code>#N</code> to jump to that component. The <em>Engine options</em> card changes how the formula is generated; all options are view-local. <em>Metrics</em> opens the site metrics panel: foldable Power / Reactive power / Frequency cards, each a live chart over the derived aggregate streams, with chips that read out the latest value and toggle their series off the chart.</li>
         </ul>
         <h4>Inspector + chrome</h4>
@@ -448,10 +445,9 @@
           <li><strong>Add component</strong> — the <em>+ Add</em> button at the top-left of the Topology canvas opens a palette: click a button and a component appears under the lowest free id from 5000, with a color dot matching its node's category colour. <em>hidden meter</em> adds a meter the gRPC topology leaves out (its node draws dashed). Wire it via <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+drag.</li>
           <li><strong>Values</strong> — nodes show current power (and reactive power or SoC); the grid node shows the grid frequency, amber from 0.1 Hz away from 50 Hz and red from 0.2 Hz. Edges take the colour of the direction power actually flows (blue import, green export) and thicken with its magnitude. The <em>values</em> pill (top right) toggles the numbers; off, nodes show name and id only. Hovering a node on Topology opens a detail card.</li>
           <li><strong>Defaults</strong> — the values the engine fills into each component type's spec, read-only, in its own panel.</li>
-          <li><strong>Editing</strong> — every structural edit changes the microgrid's spec and rebuilds it. A component whose spec did not change, or changed only in its name or modes, keeps its SoC, plugged car, boiler pressure, history and energy; its health, modes and driven knobs go back to the spec, so a mode or health set in the inspector or the <em>Mode:</em> menu lasts until the next structural edit. An <em>edited here</em> chip marks a script's microgrid edited in the UI: saving the script replaces those edits, so export them to keep them. An <em>in memory only</em> chip marks a microgrid made here. <em>Copy as Python</em> and <em>Save as .py</em> in the microgrid bar export it as a Python module.</li>
+          <li><strong>Editing</strong> — every structural edit changes the microgrid's spec and rebuilds it. A component whose spec did not change, or changed only in its name or modes, keeps its SoC, plugged car, boiler pressure, history and energy; its health, modes and driven knobs go back to the spec, so a mode or health set in the inspector or the <em>Mode:</em> menu lasts until the next structural edit. An <em>edited here</em> chip marks a microgrid booted from a topology file and changed since: the file does not have the changes, so export them to keep them. An <em>in memory only</em> chip marks a microgrid made here or created by a script's declaration. <em>Copy as Python</em> and <em>Save as .py</em> in the microgrid bar export it as a Python module.</li>
           <li><strong>Logs</strong> — the <em>Logs</em> button in the top bar opens the server's log tail. Its <em>show</em> dropdown sets a minimum level (lines below it stay hidden) and <em>clear</em> empties the tail.</li>
           <li><strong>Report</strong> — the <em>Report</em> button in the top bar opens the recording of the selected microgrid, or of the lowest-numbered one while none is selected: whether it runs, its totals and peaks, its recent events and the CSV files it wrote. A script records with <code>Microgrid.record()</code>.</li>
-          <li><strong>Script chip</strong> — in the top bar while the engine runs a script: its state, and on a click the last reload and the script's recent output.</li>
         </ul>
       </div>
     </dialog>

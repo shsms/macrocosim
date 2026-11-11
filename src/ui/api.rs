@@ -74,17 +74,6 @@ impl From<crate::engine::topology::TopologyError> for ApiError {
     }
 }
 
-impl From<crate::runner::hello::HelloError> for ApiError {
-    fn from(e: crate::runner::hello::HelloError) -> Self {
-        use crate::runner::hello::HelloError;
-        match e {
-            HelloError::Token => Self::new(StatusCode::FORBIDDEN, e.to_string()),
-            HelloError::Version { .. } => Self::bad_request(e.to_string()),
-            HelloError::Topology(e) => e.into(),
-        }
-    }
-}
-
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let mut body = self.extra;

@@ -617,7 +617,7 @@ function renderInspect(d, parentIds, childIds) {
             : ""}
           ${simKnobsHtml}
         </dl>
-        <p class="hint">Mode, health, telemetry and commands set here are live values: the next structural edit, undo or script save puts them back to the spec.</p>
+        <p class="hint">Mode, health, telemetry and commands set here are live values: the next structural edit, undo, or declaration of a changed spec puts them back to the spec.</p>
         <p class="hint" id="knob-readback-hint" hidden></p>
       </div>
     </div>

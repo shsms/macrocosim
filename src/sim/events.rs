@@ -123,9 +123,6 @@ pub enum SiteEvent {
     /// the engine's `microgrid_unloaded` broadcast; the SPA drops its
     /// card and leaves a view of it.
     MicrogridUnloaded,
-    /// The script runner's status changed; the body is that of
-    /// `GET /api/runner`. Sent with no `microgrid_id`.
-    ScriptStatus(Box<crate::runner::ScriptStatus>),
     /// A runtime knob changed through the typed control API, from a
     /// script, a terminal or the web UI; the control handlers emit
     /// this. The inspector refreshes its edit-in-place inputs from
@@ -247,11 +244,6 @@ mod tests {
         assert_eq!(
             json(&SiteEvent::MicrogridUnloaded),
             serde_json::json!({"kind": "microgrid_unloaded"})
-        );
-        assert_eq!(
-            json(&SiteEvent::ScriptStatus(Box::default())),
-            serde_json::json!({"kind": "script_status", "script": null, "child": null,
-                               "last_reload": null, "output": [], "microgrids": []})
         );
     }
 }

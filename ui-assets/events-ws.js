@@ -3,7 +3,7 @@
 // the log panel, the Logs panel's head, and its load-time backfill.
 
 import { dispatchesPanel, setStatus } from "./app.js";
-import { onScriptStatusEvent, pulseBar } from "./chrome.js";
+import { pulseBar } from "./chrome.js";
 import { onReachedAgain } from "./connection.js";
 import { getJson } from "./http.js";
 import { inspectorLive, liveCharts } from "./inspect.js";
@@ -62,9 +62,7 @@ export function setupLogsPanel() {
 // refreshTopology before opening the WS.
 //
 // `onMicrogridUnloaded(id)` runs when the server unloaded microgrid `id`.
-// `onOpen()` runs on every open, the first included, to read again what
-// the socket sends only as changes (the script's status).
-export function openWebSocket(onTopologyChanged, onMicrogridUnloaded, onOpen = () => {}) {
+export function openWebSocket(onTopologyChanged, onMicrogridUnloaded) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${proto}//${location.host}/ws/events`;
   const MIN_DELAY = 1000;
@@ -86,7 +84,6 @@ export function openWebSocket(onTopologyChanged, onMicrogridUnloaded, onOpen = (
     const ws = new WebSocket(url);
     ws.onopen = () => {
       delay = MIN_DELAY;
-      onOpen();
       if (dropped) {
         dropped = false;
         setStatus("", "");
@@ -153,8 +150,6 @@ export function openWebSocket(onTopologyChanged, onMicrogridUnloaded, onOpen = (
         topology.applyKnob(ev);
       } else if (ev.kind === "log") {
         appendLog(ev);
-      } else if (ev.kind === "script_status") {
-        onScriptStatusEvent(ev);
       } else if (ev.kind === "microgrid_unloaded") {
         onMicrogridUnloaded(ev.microgrid_id);
       } else if (ev.kind === "dispatch_changed") {

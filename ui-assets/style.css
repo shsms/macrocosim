@@ -538,34 +538,6 @@ dialog header h3 {
   user-select: none;
 }
 .pulse-chip:hover { color: var(--fg); border-color: var(--fg); }
-.script-chip[data-state="running"] { color: var(--good); border-color: var(--good); }
-.script-chip[data-state="starting"] { color: var(--warn-strong); border-color: var(--warn-strong); }
-.script-chip.bad { color: var(--bad); border-color: var(--bad); }
-.script-popover {
-  margin: 0;
-  inset: auto;
-  /* top: under the chip, set by chrome.js as it opens */
-  right: var(--space-3);
-  width: min(560px, calc(100vw - 2 * var(--space-3)));
-  max-height: 60vh;
-  overflow: auto;
-  padding: var(--space-3);
-  background: var(--bg-elev);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-2);
-}
-.script-popover h3 { margin: 0 0 var(--space-1); font-family: var(--font-mono); font-size: var(--text-md); word-break: break-all; }
-.script-popover h4 { margin: var(--space-2) 0 var(--space-1); }
-.script-popover p { margin: 0 0 var(--space-1); }
-.script-output {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
 .pulse-chip.active {
   color: var(--accent);
   border-color: var(--accent);

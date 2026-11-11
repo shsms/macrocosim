@@ -493,27 +493,6 @@ def _check_explicit_ids(specs: Sequence[MicrogridSpec]) -> frozenset[int]:
     return frozenset(owner)
 
 
-def number_microgrids(specs: list[MicrogridSpec]) -> None:
-    """Number the automatic component ids of `specs` across the whole list, so
-    no two microgrids share an id.
-
-    The explicit ids of every microgrid are collected first; two microgrids
-    giving the same one raise `SpecError`. Then each microgrid's automatic ids
-    are numbered in list order, continuing from where the previous microgrid's
-    numbering ended and skipping every explicit id. The specs are renumbered in
-    place, so they stay the keys that find their components.
-    """
-    check_type("specs", specs, list)
-    for mg in specs:
-        check_type("specs item", mg, MicrogridSpec)
-    skip = _check_explicit_ids(specs)
-    start = FIRST_AUTO_ID
-    for mg in specs:
-        order, ids, start = _assign_ids(mg.topology, start, skip)
-        object.__setattr__(mg, "_order", order)
-        object.__setattr__(mg, "_ids", ids)
-
-
 def _strip_none(hint: Any) -> type | tuple[type, ...]:
     args = [a for a in typing.get_args(hint) if a is not type(None)]
     if not args:

@@ -1,4 +1,4 @@
-"""The live microgrid that `launch`, `connect` and a script's `run` get.
+"""The live microgrid that `launch` and `connect` give.
 
 Internal; imports `_components`, `_signals`, `_spec`, `_errors`, `_units`,
 `_recording`, and `_session` and `_process` for typing only.
@@ -93,9 +93,8 @@ def _pair(label: str, value: object, kind: type) -> list[Any] | None:
 class Microgrid:
     """A live microgrid: its components, aggregates and addresses.
 
-    Built by `launch`, `connect` or the script runner; never constructed
-    directly. Look components up with `microgrid[spec]` (the object put in the
-    tree) or `microgrid[id]`.
+    Built by `launch` or `connect`; never constructed directly. Look components
+    up with `microgrid[spec]` (the object put in the tree) or `microgrid[id]`.
     """
 
     _session: _Session
@@ -109,8 +108,8 @@ class Microgrid:
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise TypeError(
-            "Microgrid is built by macrocosim.launch, macrocosim.connect or the "
-            "script runner; describe a microgrid with make_microgrid"
+            "Microgrid is built by macrocosim.launch or macrocosim.connect; "
+            "describe a microgrid with make_microgrid"
         )
 
     @classmethod

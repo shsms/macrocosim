@@ -11,11 +11,10 @@ tonic-prost = "0.14"
 tonic = "0.14.0"
 prost = "0.14.0"
 prost-types = "0.14.0"
-# `process`, `signal` and `io-util` run the script runner's child process
-# and the export (src/runner).
-tokio = { version = "1.43.1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "process", "signal", "io-util"] }
+# `process` and `io-util` run the `.py` export's Python (src/python.rs,
+# src/ui/handlers/spec.rs).
+tokio = { version = "1.43.1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "process", "io-util"] }
 tokio-stream = "0.1.15"
-notify = "6.1.1"
 # DAG validation + formula generation for the Dashboard's aggregated
 # tiles. Macrocosim implements Node + Edge on its own component /
 # connection types in src/sim/graph_adapter.rs.
@@ -50,10 +49,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # tower's `util` also serves the axum oneshot tests.
 tower = { version = "0.5", features = ["util"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
-
-[target.'cfg(unix)'.dependencies]
-# killpg, to end the process group of a script child (`runner/child.rs`).
-libc = "0.2"
 
 [build-dependencies]
 tonic-prost-build = { version = "0.14", features = ["cleanup-markdown"] }

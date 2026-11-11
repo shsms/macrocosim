@@ -5,7 +5,7 @@
 // through the typed routes, so anything done in the UI is also
 // scriptable from outside.
 
-import { pulseBar, refreshScriptStatus, setupScriptChip, setupThemeChip, setupZoneChip } from "./chrome.js";
+import { pulseBar, setupThemeChip, setupZoneChip } from "./chrome.js";
 import { setupDefaultsToggle, setupHelpButton, setupReportToggle } from "./dialogs.js";
 import { dispatchForm } from "./dispatch-form.js";
 import {
@@ -411,9 +411,6 @@ async function init() {
     if (inEditable && !escOnCheckbox) return;
     // A modal owns the keyboard while it is up — its own Esc closes it.
     if (document.querySelector("dialog[open]")) return;
-    // Esc on the open script popover closes the popover, not a panel
-    // as well.
-    if (e.key === "Escape" && isScriptPopoverOpen()) return;
     // The editing shortcuts drive the Topology canvas's selection.
     // Anywhere else they must stay inert — Delete pressed on the
     // Dispatches sub-tab or the microgrid list must not remove whatever
@@ -488,7 +485,6 @@ async function init() {
   setupThemeChip();
   zone.init();
   setupZoneChip();
-  setupScriptChip();
   pulseBar.setup();
   await refreshTopology();
   // WS push: refresh the topology (so the canvas reflects the
@@ -539,8 +535,8 @@ async function init() {
       }
     }, 800);
   };
-  // A burst of edits (multi-step undo, scripted import, a script
-  // reload) fires one topology_changed per accepted change, and every refresh
+  // A burst of edits (multi-step undo, scripted import, a
+  // declaration) fires one topology_changed per accepted change, and every refresh
   // is a topology fetch (a server-side graph build) plus a canvas
   // repaint. Leading-edge throttle with trailing catch-up: the first
   // event refreshes immediately, the rest of the burst collapses into
@@ -563,18 +559,7 @@ async function init() {
       }, 300);
     },
     (id) => microgridsPanel.removed(id),
-    refreshScriptStatus,
   );
 }
 
 init();
-
-// Whether the script chip's popover is open; false where the browser
-// has no popovers.
-function isScriptPopoverOpen() {
-  try {
-    return document.getElementById("script-popover")?.matches(":popover-open") ?? false;
-  } catch (_) {
-    return false;
-  }
-}

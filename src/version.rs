@@ -1,6 +1,6 @@
 //! The engine's version in PEP 440 form, the form the Python package carries:
-//! the endpoints file, a client's declaration, the script runner's hello and
-//! the interpreter check all compare this string.
+//! the endpoints file, a client's declaration and the interpreter check all
+//! compare this string.
 
 /// The crate version in PEP 440 form.
 pub static VERSION: std::sync::LazyLock<String> =

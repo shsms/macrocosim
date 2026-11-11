@@ -8,7 +8,6 @@
 //! `microgrid_unloaded` for it.
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
 
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket};
@@ -16,11 +15,9 @@ use axum::response::IntoResponse;
 use serde::Serialize;
 
 use crate::engine::Engine;
-use crate::runner::ScriptSupervisor;
 use crate::sim::MicrogridSite;
 use crate::sim::events::SiteEvent;
 use crate::ui::api::WsUpgrade;
-use crate::ui::app_state::Runner;
 
 /// WebSocket event push. Subscribers receive SiteEvent JSON for every
 /// TopologyChanged + Sample broadcast. Client-sent frames are drained
@@ -29,9 +26,8 @@ use crate::ui::app_state::Runner;
 pub(super) async fn events_ws(
     WsUpgrade(ws): WsUpgrade,
     State(engine): State<Engine>,
-    State(Runner(runner)): State<Runner>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| event_pump(socket, engine, runner))
+    ws.on_upgrade(move |socket| event_pump(socket, engine))
 }
 
 /// Wrap a SiteEvent with the originating microgrid id so the SPA
@@ -180,7 +176,7 @@ async fn on_registry_notice(
     }
 }
 
-async fn event_pump(mut socket: WebSocket, engine: Engine, runner: Option<Arc<ScriptSupervisor>>) {
+async fn event_pump(mut socket: WebSocket, engine: Engine) {
     use tokio::sync::broadcast::error::RecvError as BroadcastRecv;
     let mut log_rx = crate::ui_log::LOG_TAP.get().map(|t| t.subscribe());
     // Enterprise-wide dispatch lifecycle changes. Wrapped in Option
@@ -188,9 +184,6 @@ async fn event_pump(mut socket: WebSocket, engine: Engine, runner: Option<Arc<Sc
     // Engine) parks the branch instead of busy-looping, mirroring
     // `log_rx`.
     let mut dispatch_rx = Some(engine.dispatches().subscribe());
-    // The script runner's status, re-emitted as a ScriptStatus event
-    // with no microgrid; parked without a script.
-    let mut script_rx = runner.as_ref().map(|r| r.subscribe());
     // Subscribe to every microgrid's per-site event bus + the
     // enterprise-wide `microgrid_registered` and `microgrid_unloaded`
     // channels. The initial snapshot covers every entry present at
@@ -277,32 +270,17 @@ async fn event_pump(mut socket: WebSocket, engine: Engine, runner: Option<Arc<Sc
                 Err(BroadcastRecv::Lagged(_)) => continue,
                 Err(BroadcastRecv::Closed) => dispatch_rx = None,
             },
-            status = async {
-                match script_rx.as_mut() {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => match status {
-                Ok(status) => {
-                    if !send_wire(&mut socket, None, &SiteEvent::ScriptStatus(Box::new(status))).await {
-                        break;
-                    }
-                }
-                Err(BroadcastRecv::Lagged(_)) => continue,
-                Err(BroadcastRecv::Closed) => script_rx = None,
-            },
             msg = socket.recv() => match msg {
                 Some(Ok(_)) => {}
                 Some(Err(_)) | None => break,
             },
-            // A microgrid landed in the registry (POST
-            // /api/microgrids, an import or a script's hello), or was
-            // registered again. Follow its site so this WS session
-            // receives its sample / topology_changed events.
-            // Subscribers can lag if registrations burst past the
-            // channel capacity: re-snapshot the registry then. Closed
-            // never fires since the Engine keeps the Sender alive for
-            // the process lifetime.
+            // A microgrid landed in the registry (POST /api/microgrids, an
+            // import or a declaration), or was registered again. Follow its
+            // site so this WS session receives its sample / topology_changed
+            // events. Subscribers can lag if registrations burst past the
+            // channel capacity: re-snapshot the registry then. Closed never
+            // fires since the Engine keeps the Sender alive for the process
+            // lifetime.
             new_id = async {
                 match registered_rx.as_mut() {
                     Some(rx) => rx.recv().await,

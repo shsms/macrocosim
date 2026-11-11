@@ -1,14 +1,14 @@
-//! Headless macrocosim simulator: run a Python script or boot the
-//! microgrids of a topology document (`--topology`), spawn the
-//! physics tick, serve the Microgrid gRPC API and the UI.
+//! Headless macrocosim simulator: boot the microgrids of a topology document
+//! (`--topology`), or none, spawn the physics tick, serve the Microgrid gRPC
+//! API and the UI. Scripts run as their own programs and declare their
+//! microgrids over the HTTP API.
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use macrocosim::runner::python::Interpreter;
+use macrocosim::python::Interpreter;
 use macrocosim::{
     assets_server::AssetsServer,
     dispatch_server::DispatchServer,
@@ -29,17 +29,17 @@ use tokio_stream::wrappers::TcpListenerStream;
 /// Headless macrocosim microgrid simulator.
 #[derive(Parser)]
 struct Args {
-    /// The Python script (`plant.py`) to run, in a child process that
-    /// is started again whenever a `.py` file in its directory tree
-    /// changes. With none, the engine boots with an empty registry;
-    /// create microgrids from the Microgrids tab.
-    #[arg(value_name = "SCRIPT")]
-    scripts: Vec<PathBuf>,
+    /// No positional argument is taken: the binary exits naming the `.lisp`
+    /// files given or found in the state directory, else the first argument (a
+    /// script runs as its own program; 0.1's `.lisp` files are not read).
+    #[arg(value_name = "FILE", hide = true)]
+    positional: Vec<PathBuf>,
 
-    /// Boot the microgrids of this topology document (JSON), each
-    /// built from its spec with the file as its source. Not with a
-    /// script.
-    #[arg(long, value_name = "PATH", conflicts_with = "scripts")]
+    /// Boot the microgrids of this topology document (JSON), each built from
+    /// its spec with the file as its source. Without it, the engine boots with
+    /// no microgrids: a script declares them, or the Microgrids tab creates
+    /// them.
+    #[arg(long, value_name = "PATH")]
     topology: Option<PathBuf>,
 
     /// The enterprise id every microgrid reports.
@@ -71,10 +71,9 @@ struct Args {
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,
 
-    /// The Python interpreter that runs the script and exports a
-    /// microgrid as a `.py` module. Without it, `$MACROCOSIM_PYTHON`,
-    /// then a `python` next to this binary, then `python3` or
-    /// `python` on `PATH`.
+    /// The Python interpreter that exports a microgrid as a `.py` module.
+    /// Without it, `$MACROCOSIM_PYTHON`, then a `python` next to this binary,
+    /// then `python3` or `python` on `PATH`.
     #[arg(long, value_name = "PATH")]
     python: Option<PathBuf>,
 
@@ -88,10 +87,10 @@ struct Args {
     #[arg(long)]
     ephemeral_ports: bool,
 
-    /// Once every listener is bound, write the resolved endpoints as
-    /// one JSON line — to `--emit-endpoints=PATH`, or stdout if the
-    /// flag is given bare. Requires `=` so it can't swallow the
-    /// script positional. The machine-readable readiness signal.
+    /// Once every listener is bound, write the resolved endpoints as one JSON
+    /// line — to `--emit-endpoints=PATH`, or stdout if the flag is given bare.
+    /// Requires `=`, so it never takes the next argument as its path. The
+    /// machine-readable readiness signal.
     #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true, default_missing_value = "-")]
     emit_endpoints: Option<String>,
 }
@@ -167,9 +166,9 @@ impl LispInputs {
 /// The Lisp files of macrocosim 0.1 a run was given or finds: every
 /// `.lisp` argument, and the state directory's `enterprise.lisp` and
 /// `microgrids/*.lisp`.
-fn lisp_inputs(scripts: &[PathBuf], state_dir: &Path) -> LispInputs {
+fn lisp_inputs(paths: &[PathBuf], state_dir: &Path) -> LispInputs {
     let is_lisp = |p: &Path| p.extension().is_some_and(|e| e == "lisp");
-    let args = scripts.iter().filter(|p| is_lisp(p)).cloned().collect();
+    let args = paths.iter().filter(|p| is_lisp(p)).cloned().collect();
     let mut in_state_dir = Vec::new();
     let enterprise = state_dir.join("enterprise.lisp");
     if enterprise.exists() {
@@ -211,24 +210,16 @@ async fn boot_topology(
     log::info!("--topology {}: microgrids {ids:?} built", path.display());
 }
 
-/// The one Python script among the positional arguments, if any;
-/// refuses a second script and a file that is not a `.py`.
-fn script_arg(paths: &[PathBuf]) -> Result<Option<PathBuf>, String> {
-    match paths {
-        [] => Ok(None),
-        [script] if script.extension().is_some_and(|e| e == "py") => Ok(Some(script.clone())),
-        [other] => Err(format!(
-            "a script is a Python file (.py); got {}",
-            other.display()
+/// Refuse a positional argument, naming the first one: a `.py` file is a
+/// script, which runs as its own program against the simulator.
+fn refuse_positional(paths: &[PathBuf]) -> Result<(), String> {
+    match paths.first() {
+        None => Ok(()),
+        Some(script) if script.extension().is_some_and(|e| e == "py") => Err(format!(
+            "macrocosim no longer runs scripts: start macrocosim, then run python {}",
+            script.display()
         )),
-        _ => Err(format!(
-            "one Python script per engine; got {}",
-            paths
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
+        Some(other) => Err(format!("unexpected argument {}", other.display())),
     }
 }
 
@@ -302,47 +293,28 @@ async fn serve() {
     // 0.1's Lisp inputs, given or left in the state directory, stop
     // the run before anything binds.
     let state_dir = args.state_dir.clone().unwrap_or_else(|| PathBuf::from("."));
-    let found = lisp_inputs(&args.scripts, &state_dir);
+    let found = lisp_inputs(&args.positional, &state_dir);
     if !found.is_empty() {
         log::error!("{}", found.refusal());
         std::process::exit(1);
     }
-    let python_script = script_arg(&args.scripts).unwrap_or_else(|e| {
+    if let Err(e) = refuse_positional(&args.positional) {
         log::error!("{e}");
         std::process::exit(1);
-    });
-    let python_script = python_script.map(|p| {
-        p.canonicalize().unwrap_or_else(|e| {
-            log::error!("Script {}: {e}", p.display());
-            std::process::exit(1);
-        })
-    });
-    match &python_script {
-        Some(script) => log::info!("Running script {}", script.display()),
-        None if args.topology.is_none() => {
-            log::info!("No script given — starting with no microgrids")
-        }
-        None => {}
+    }
+    if args.topology.is_none() {
+        log::info!("No --topology given — starting with no microgrids");
     }
     if let Err(e) = std::fs::create_dir_all(&state_dir) {
         log::error!("state dir {} cannot be created: {e}", state_dir.display());
         std::process::exit(1);
     }
     let engine = Engine::new(state_dir, metadata_of(&args), NowSource::wall());
-    // The interpreter the script and the `.py` export run on.
+    // The interpreter the `.py` export runs on, checked on first use.
     let interpreter = Arc::new(Interpreter::default());
     if let Some(python) = &args.python {
         interpreter.set_override(python.clone());
     }
-    // A script needs a usable interpreter; without one, say how to
-    // get one before anything binds.
-    let python = match &python_script {
-        Some(_) => Some(interpreter.resolve().await.unwrap_or_else(|e| {
-            log::error!("{e}");
-            std::process::exit(1);
-        })),
-        None => None,
-    };
 
     // Every microgrid runtime, boot-time and later, starts through
     // MicrogridRuntimes: each structural create starts its own.
@@ -403,18 +375,6 @@ async fn serve() {
     }
     let (dispatch_listener, dispatch_addr) = bind_or_exit(dispatch_addr, "MicrogridDispatch").await;
 
-    // The script's supervisor exists before the UI serves, which
-    // answers its child's hello; the child starts once it does.
-    let supervisor = python_script.zip(python).map(|(script, python)| {
-        macrocosim::runner::ScriptSupervisor::new(
-            engine.clone(),
-            runtimes.clone(),
-            script,
-            python,
-            ui_addr,
-        )
-    });
-
     // Critical long-running tasks (UI, PlatformAssets and dispatch
     // servers) go into one JoinSet: any of them exiting means the
     // process is limping with a dead surface, so main notices the
@@ -425,11 +385,10 @@ async fn serve() {
     log::info!("Macrocosim UI listening on http://{ui_addr}");
     let ui_engine = engine.clone();
     let ui_runtimes = runtimes.clone();
-    let ui_runner = supervisor.clone();
     let ui_python = interpreter.clone();
     tasks.spawn(async move {
         if let Err(e) =
-            ui::serve_with_listener(ui_listener, ui_engine, ui_runtimes, ui_python, ui_runner).await
+            ui::serve_with_listener(ui_listener, ui_engine, ui_runtimes, ui_python).await
         {
             log::error!("UI server exited: {e}");
         }
@@ -469,37 +428,10 @@ async fn serve() {
         }
         "MicrogridDispatch gRPC server"
     });
-    // With a script, Ctrl-C stops its child (stdin closed, then
-    // killed after a grace period, and its process group ended)
-    // before the process exits. The listener is registered here,
-    // before the first child starts, so a Ctrl-C while it loads stops
-    // it the same way; on Unix the child leads its own process group,
-    // which the terminal's SIGINT does not reach, and elsewhere it
-    // ignores SIGINT.
-    let mut script = supervisor
-        .as_ref()
-        .map(|supervisor| (supervisor, ctrl_c_listener()));
-    // Run the script once the UI serves: its child's hello needs it.
-    if let Some((supervisor, _)) = &script {
-        supervisor.start().await;
-    }
-
     // Emit the resolved endpoints once everything is bound — the
-    // machine-readable readiness signal. Boot-time microgrids only;
-    // runtime-created ones (POST /api/microgrids) aren't listed. With
-    // a script, once its first child's hello was answered or it
-    // failed to load: the microgrids registered then.
+    // machine-readable readiness signal. Boot-time microgrids only; ones
+    // created or declared later (POST /api/microgrids) aren't listed.
     if let Some(target) = &args.emit_endpoints {
-        let boot_ids = match script.as_mut() {
-            Some((supervisor, ctrl_c)) => {
-                tokio::select! {
-                    () = supervisor.first_load() => {}
-                    () = ctrl_c => stop_script_and_exit(supervisor).await,
-                }
-                engine.microgrids().lock().keys().copied().collect()
-            }
-            None => boot_ids.clone(),
-        };
         let json = serde_json::json!({
             "ui": ui_addr.to_string(),
             "microgrids": boot_ids
@@ -536,103 +468,48 @@ async fn serve() {
     // First exit wins: a critical surface died (its own error was
     // already logged), so stop the whole process rather than limping
     // on with the remaining listeners.
-    let interrupted = async {
-        match script.as_mut() {
-            Some((supervisor, ctrl_c)) => {
-                ctrl_c.await;
-                *supervisor
-            }
-            None => std::future::pending().await,
-        }
-    };
-    tokio::select! {
-        res = tasks.join_next() => {
-            match res {
-                Some(Ok(label)) => log::error!("{label} exited; shutting down"),
-                Some(Err(e)) => log::error!("critical task panicked: {e}; shutting down"),
-                None => log::error!("no server task is running; shutting down"),
-            }
-            if let Some(supervisor) = &supervisor {
-                supervisor.shutdown().await;
-            }
-            std::process::exit(1);
-        }
-        supervisor = interrupted => stop_script_and_exit(supervisor).await,
+    match tasks.join_next().await {
+        Some(Ok(label)) => log::error!("{label} exited; shutting down"),
+        Some(Err(e)) => log::error!("critical task panicked: {e}; shutting down"),
+        None => log::error!("no server task is running; shutting down"),
     }
-}
-
-/// A future that resolves on the first Ctrl-C. The signal handler is
-/// registered before this returns. A failed registration is logged
-/// and the future never resolves, so the process keeps running.
-fn ctrl_c_listener() -> Pin<Box<dyn Future<Output = ()> + Send>> {
-    #[cfg(unix)]
-    let listener = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
-    #[cfg(not(unix))]
-    let listener = tokio::signal::windows::ctrl_c();
-    let listener = listener
-        .inspect_err(|e| log::error!("cannot listen for Ctrl-C: {e}"))
-        .ok();
-    Box::pin(async move {
-        if let Some(mut listener) = listener
-            && listener.recv().await.is_some()
-        {
-            return;
-        }
-        std::future::pending().await
-    })
-}
-
-/// Stop the script after a Ctrl-C, then exit.
-async fn stop_script_and_exit(supervisor: &macrocosim::runner::ScriptSupervisor) -> ! {
-    log::info!("Interrupted; stopping the script");
-    supervisor.shutdown().await;
-    std::process::exit(0);
+    std::process::exit(1);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A bare `macrocosim plant.py` invocation keeps the documented
-    /// defaults: UI on 8801, no state dir, the script positional.
-    /// CI always boots with --ephemeral-ports and --state-dir, so
-    /// nothing else exercises these defaults.
+    /// A bare `macrocosim` invocation keeps the documented defaults: UI on
+    /// 8801, no state dir, no positional. CI always boots with
+    /// --ephemeral-ports and --state-dir, so nothing else exercises these
+    /// defaults.
     #[test]
     fn bare_invocation_keeps_the_documented_defaults() {
-        let a = Args::parse_from(["macrocosim", "plant.py"]);
+        let a = Args::parse_from(["macrocosim"]);
         assert_eq!(a.ui_port, 8801);
         assert!(a.state_dir.is_none());
         assert!(!a.ephemeral_ports);
-        assert_eq!(a.scripts, vec![std::path::PathBuf::from("plant.py")]);
+        assert!(a.positional.is_empty());
         assert!(a.topology.is_none() && a.enterprise_id.is_none());
-    }
-
-    #[test]
-    fn a_topology_takes_no_script() {
-        let a = Args::parse_from(["macrocosim", "--topology", "t.json"]);
-        assert_eq!(a.topology, Some(PathBuf::from("t.json")));
-        assert!(Args::try_parse_from(["macrocosim", "--topology", "t.json", "x.py"]).is_err());
-    }
-
-    #[test]
-    fn one_python_script_runs_alone() {
-        let paths = |ps: &[&str]| ps.iter().map(PathBuf::from).collect::<Vec<_>>();
-        assert_eq!(script_arg(&[]).unwrap(), None);
-        assert_eq!(
-            script_arg(&paths(&["plant.py"])).unwrap(),
-            Some(PathBuf::from("plant.py"))
-        );
-        assert_eq!(
-            script_arg(&paths(&["a.py", "b.py"])).unwrap_err(),
-            "one Python script per engine; got a.py, b.py"
-        );
-        assert_eq!(
-            script_arg(&paths(&["topology.json"])).unwrap_err(),
-            "a script is a Python file (.py); got topology.json"
-        );
-        assert!(Args::try_parse_from(["macrocosim", "--topology", "t.json", "a.py"]).is_err());
-        let a = Args::parse_from(["macrocosim", "--python", "/opt/py/bin/python", "a.py"]);
+        let a = Args::parse_from(["macrocosim", "--python", "/opt/py/bin/python"]);
         assert_eq!(a.python, Some(PathBuf::from("/opt/py/bin/python")));
+    }
+
+    /// A script is refused with how to run it now; any other positional is
+    /// refused as unexpected.
+    #[test]
+    fn a_positional_argument_is_refused() {
+        let paths = |ps: &[&str]| ps.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(refuse_positional(&[]), Ok(()));
+        assert_eq!(
+            refuse_positional(&paths(&["plant.py"])).unwrap_err(),
+            "macrocosim no longer runs scripts: start macrocosim, then run python plant.py"
+        );
+        assert_eq!(
+            refuse_positional(&paths(&["topology.json"])).unwrap_err(),
+            "unexpected argument topology.json"
+        );
     }
 
     #[test]

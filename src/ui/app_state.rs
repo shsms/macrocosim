@@ -1,16 +1,14 @@
-//! The router's state: the [`Engine`] every handler reads the
-//! simulation through, the microgrid runtimes and their loopback
-//! slots, the `.py` export's interpreter, and the script's
-//! [`ScriptSupervisor`]. Each handler extracts the part it uses, such
-//! as `State<Engine>` or `State<Runner>`.
+//! The router's state: the [`Engine`] every handler reads the simulation
+//! through, the microgrid runtimes and their loopback slots, and the `.py`
+//! export's interpreter. Each handler extracts the part it uses, such as
+//! `State<Engine>`.
 
 use std::sync::Arc;
 
 use axum::extract::FromRef;
 
 use crate::engine::Engine;
-use crate::runner::ScriptSupervisor;
-use crate::runner::python::Interpreter;
+use crate::python::Interpreter;
 use crate::runtime::MicrogridRuntimes;
 use crate::ui::MicrogridLoopbacks;
 
@@ -18,16 +16,11 @@ use crate::ui::MicrogridLoopbacks;
 pub(in crate::ui) struct AppState {
     pub engine: Engine,
     pub runtimes: MicrogridRuntimes,
-    pub runner: Runner,
     pub export: Export,
 }
 
-/// The supervisor of the engine's script; `None` without a script.
-#[derive(Clone)]
-pub(in crate::ui) struct Runner(pub Option<Arc<ScriptSupervisor>>);
-
-/// What the `.py` export runs on: the interpreter, shared with the
-/// script runner, and the one permit an export holds while it runs.
+/// What the `.py` export runs on: the interpreter, and the one permit an export
+/// holds while it runs.
 #[derive(Clone)]
 pub(in crate::ui) struct Export {
     pub python: Arc<Interpreter>,
@@ -35,29 +28,16 @@ pub(in crate::ui) struct Export {
 }
 
 impl AppState {
-    /// The state for `engine`, its `runtimes`, the interpreter
-    /// `python` and the script's supervisor.
-    pub fn new(
-        engine: Engine,
-        runtimes: MicrogridRuntimes,
-        python: Arc<Interpreter>,
-        runner: Option<Arc<ScriptSupervisor>>,
-    ) -> Self {
+    /// The state for `engine`, its `runtimes` and the interpreter `python`.
+    pub fn new(engine: Engine, runtimes: MicrogridRuntimes, python: Arc<Interpreter>) -> Self {
         Self {
             engine,
             runtimes,
-            runner: Runner(runner),
             export: Export {
                 python,
                 permits: Arc::new(tokio::sync::Semaphore::new(1)),
             },
         }
-    }
-}
-
-impl FromRef<AppState> for Runner {
-    fn from_ref(state: &AppState) -> Self {
-        state.runner.clone()
     }
 }
 
