@@ -19,7 +19,9 @@ use crate::sim::microgrids::{
 use crate::spec::{BuiltTopology, Defaults, MicrogridSpec, TopologyDoc, build_topology};
 use crate::undo::{Direction, UndoDepths};
 
-/// Why a structural change was refused. Nothing changed.
+/// Why a structural change was refused. Nothing changed, except after
+/// `Internal`: [`declare`] returns it when one of its steps fails, and the
+/// microgrids applied before that step stay applied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TopologyError {
     /// The spec is invalid (HTTP 422).
@@ -28,12 +30,14 @@ pub enum TopologyError {
     Conflict(String),
     /// No microgrid has the id (HTTP 404).
     NotRegistered(u64),
+    /// A step the checks should have made safe failed (HTTP 500).
+    Internal(String),
 }
 
 impl fmt::Display for TopologyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Invalid(e) | Self::Conflict(e) => f.write_str(e),
+            Self::Invalid(e) | Self::Conflict(e) | Self::Internal(e) => f.write_str(e),
             Self::NotRegistered(id) => write!(f, "microgrid {id} not registered"),
         }
     }
@@ -48,6 +52,29 @@ pub struct Created {
     pub grpc_port: u16,
     /// Its runtime; `None` when none was started.
     pub runtime: Option<RuntimeView>,
+}
+
+/// What [`declare`] did with one microgrid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeclareOutcome {
+    /// It was not loaded, and was created.
+    Created,
+    /// Its spec changed, and it was rebuilt with carry.
+    Rebuilt,
+    /// Its spec was the stored one, so it was not rebuilt; a runtime that
+    /// failed to start is started again.
+    Unchanged,
+}
+
+/// One microgrid of a [`declare`].
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Declared {
+    pub id: u64,
+    pub grpc_port: u16,
+    /// Its runtime once the declaration is applied; `None` when it has none.
+    pub runtime: Option<RuntimeView>,
+    pub outcome: DeclareOutcome,
 }
 
 /// Give `spec` the lowest free microgrid id from
@@ -86,7 +113,9 @@ fn check_ids(
             && !replacing.contains(&owner)
         {
             return Err(TopologyError::Conflict(format!(
-                "component id {id} is already in microgrid {owner}{}",
+                "component id {id} is already in microgrid {owner}{}. Give the \
+                 component another id, or unload microgrid {owner} (DELETE \
+                 /api/mg/{owner}) if it is stale.",
                 match mg {
                     Some(mg) => format!(", so microgrid {mg} cannot take it"),
                     None => String::new(),
@@ -259,8 +288,14 @@ pub async fn edit(
     id: u64,
     spec: MicrogridSpec,
 ) -> Result<(), TopologyError> {
-    let engine = structural.engine();
     let replaced = rebuild(structural, runtimes, id, spec).await?;
+    record_edit(structural.engine(), id, replaced);
+    Ok(())
+}
+
+/// Stack `replaced`, the spec an edit of microgrid `id` replaced, on its undo
+/// stack, and mark a microgrid that came from a file unsaved.
+fn record_edit(engine: &Engine, id: u64, replaced: MicrogridSpec) {
     engine
         .spec_undo
         .lock()
@@ -268,7 +303,6 @@ pub async fn edit(
         .or_default()
         .push_edit(replaced);
     mark_unsaved(engine, id);
-    Ok(())
 }
 
 /// [`rebuild`], with `build` checking the ids of the spec and
@@ -619,6 +653,218 @@ where
         undo.remove(id);
     }
     Ok(ids)
+}
+
+/// Apply a script's declaration of its microgrids: create each
+/// listed microgrid that is not loaded, rebuild with carry each loaded
+/// one whose spec changed, and leave alone each one whose spec is
+/// the stored one once both have their defaults filled in. Nothing is
+/// unloaded. Returns one entry per microgrid, in the document's order.
+///
+/// Every check runs before anything changes: every microgrid has an id, used
+/// once in the document; every spec builds; no gRPC port is an enterprise
+/// server's; no gRPC port and no component id is in two listed microgrids or
+/// held by a microgrid the document does not list (ids may move between listed
+/// ones); and no loaded microgrid moves to a port another listed one still
+/// holds. A new microgrid without a port is given a free one. A rebuild stacks
+/// the replaced spec for undo and marks a microgrid that came from a file
+/// unsaved, as [`edit`] does; a new one has no source. Then the runtime of
+/// every listed microgrid that was loaded is started, which retries one whose
+/// start failed and leaves a running one alone.
+pub async fn declare(
+    structural: &Structural,
+    runtimes: &MicrogridRuntimes,
+    doc: TopologyDoc,
+) -> Result<Vec<Declared>, TopologyError> {
+    let started = std::time::Instant::now();
+    let engine = structural.engine();
+    let mut specs = doc.microgrids;
+    if specs.is_empty() {
+        return Err(TopologyError::Invalid(
+            "the document has no microgrids".to_string(),
+        ));
+    }
+    let mut ids = Vec::with_capacity(specs.len());
+    for (i, spec) in specs.iter().enumerate() {
+        let Some(id) = spec.id else {
+            return Err(TopologyError::Invalid(format!(
+                "microgrid {i} of the document (counting from 0) has no id"
+            )));
+        };
+        if ids.contains(&id) {
+            return Err(TopologyError::Invalid(format!(
+                "microgrid {id} is in the document twice"
+            )));
+        }
+        ids.push(id);
+    }
+    let defaults = Defaults::default();
+    let mut builds = Vec::with_capacity(specs.len());
+    for spec in &specs {
+        let id = spec.id.expect("checked above");
+        builds.push(build_topology(spec, &defaults).map_err(|e| invalid(id, e.message()))?);
+    }
+    let reserved = engine.reserved_ports();
+    let replacing: Vec<u64> = {
+        let registry = engine.microgrids.lock();
+        let replacing: Vec<u64> = ids
+            .iter()
+            .copied()
+            .filter(|id| registry.contains_key(id))
+            .collect();
+        // The ports in use once the declaration is applied: every registered
+        // microgrid's, each listed one moving to its own.
+        let mut taken: BTreeMap<u16, u64> = BTreeMap::new();
+        for spec in &specs {
+            let id = spec.id.expect("checked above");
+            let port = match spec.grpc_port {
+                Some(p) => p,
+                None => match registry.get(&id) {
+                    Some(entry) => entry.def.grpc_port,
+                    None => continue,
+                },
+            };
+            if reserved.contains(&port) {
+                return Err(TopologyError::Conflict(format!(
+                    "gRPC port {port} of microgrid {id} is an enterprise server's"
+                )));
+            }
+            if let Some(other) = taken.insert(port, id) {
+                return Err(TopologyError::Conflict(format!(
+                    "gRPC port {port} is in microgrid {other} and in microgrid {id}"
+                )));
+            }
+        }
+        for (&other, entry) in registry.iter() {
+            if ids.contains(&other) {
+                continue;
+            }
+            if let Some(&id) = taken.get(&entry.def.grpc_port) {
+                return Err(TopologyError::Conflict(format!(
+                    "gRPC port {} is already microgrid {other}'s, so microgrid {id} \
+                     cannot take it. Give microgrid {id} another grpc_port, or unload \
+                     microgrid {other} (DELETE /api/mg/{other}) if it is stale.",
+                    entry.def.grpc_port
+                )));
+            }
+        }
+        // A microgrid that moves takes a port its old holder still has while
+        // the declaration is applied, one microgrid at a time.
+        for spec in &specs {
+            let id = spec.id.expect("checked above");
+            if let (Some(p), Some(entry)) = (spec.grpc_port, registry.get(&id))
+                && p != entry.def.grpc_port
+                && let Some((holder, _)) = registry
+                    .iter()
+                    .find(|(h, e)| **h != id && e.def.grpc_port == p)
+            {
+                return Err(TopologyError::Conflict(format!(
+                    "gRPC port {p} is still microgrid {holder}'s; move microgrid {id} to it \
+                     in a later declaration"
+                )));
+            }
+        }
+        // New microgrids without a port take free ones now, so no
+        // later step can find its port taken.
+        let mut used: Vec<u16> = reserved.clone();
+        used.extend(taken.keys().copied());
+        let new = specs
+            .iter_mut()
+            .filter(|s| s.id.is_some_and(|id| !registry.contains_key(&id)));
+        fill_ports(&registry, &mut used, new);
+        replacing
+    };
+    let refs: Vec<&MicrogridSpec> = specs.iter().collect();
+    check_ids(engine, &refs, &replacing)?;
+
+    let mut outcomes: BTreeMap<u64, DeclareOutcome> = BTreeMap::new();
+    // Every rebuild before any create: a new microgrid may take a
+    // port a listed one is leaving, and a rebuild never needs one a
+    // new microgrid takes.
+    let (rebuilt, created): (Vec<_>, Vec<_>) = specs
+        .into_iter()
+        .zip(builds)
+        .partition(|(spec, _)| replacing.contains(&spec.id.expect("checked above")));
+    for (spec, built) in rebuilt {
+        let id = spec.id.expect("checked above");
+        let (stored, port) = {
+            let registry = engine.microgrids.lock();
+            let entry = &registry[&id];
+            (entry.spec.clone(), entry.def.grpc_port)
+        };
+        if unchanged(&stored, &spec, port) {
+            outcomes.insert(id, DeclareOutcome::Unchanged);
+            continue;
+        }
+        let replaced = rebuild_with(engine, runtimes, id, spec, |_| Ok(built))
+            .await
+            .map_err(|e| internal(id, "rebuild", e))?;
+        record_edit(engine, id, replaced);
+        outcomes.insert(id, DeclareOutcome::Rebuilt);
+    }
+    for (spec, built) in created {
+        let id = spec.id.expect("checked above");
+        create_built(engine, runtimes, spec, built, None)
+            .await
+            .map_err(|e| internal(id, "create", e))?;
+        outcomes.insert(id, DeclareOutcome::Created);
+    }
+    // A created microgrid's runtime was started by its create.
+    for &id in ids
+        .iter()
+        .filter(|id| outcomes[id] != DeclareOutcome::Created)
+    {
+        if let Err(e) = runtimes.start(id).await {
+            log::error!("Microgrid #{id}: the declaration did not start its runtime: {e}");
+        }
+    }
+    let of = |o: DeclareOutcome| -> Vec<u64> {
+        ids.iter().copied().filter(|id| outcomes[id] == o).collect()
+    };
+    log::info!(
+        "declaration: created {:?}, rebuilt {:?}, unchanged {:?} ({} ms)",
+        of(DeclareOutcome::Created),
+        of(DeclareOutcome::Rebuilt),
+        of(DeclareOutcome::Unchanged),
+        started.elapsed().as_millis()
+    );
+    let registry = engine.microgrids.lock();
+    Ok(ids
+        .iter()
+        .map(|&id| Declared {
+            id,
+            grpc_port: registry[&id].def.grpc_port,
+            runtime: runtimes.status(id),
+            outcome: outcomes[&id],
+        })
+        .collect())
+}
+
+/// A step of a declaration that its checks should have made safe failed; the
+/// microgrids applied before it stay applied.
+fn internal(id: u64, step: &str, e: TopologyError) -> TopologyError {
+    log::error!("Microgrid #{id}: the declaration's {step} failed: {e}");
+    TopologyError::Internal(format!("microgrid {id}: the {step} failed: {e}"))
+}
+
+/// Whether `new` is the spec `stored` with nothing changed, so a declaration of
+/// it need not rebuild: equal once both have their defaults filled in, with
+/// `loaded_port` as the new spec's port when it names none, compared component
+/// by component (every field, the name, health and modes too) and with the
+/// connections as a set.
+fn unchanged(stored: &MicrogridSpec, new: &MicrogridSpec, loaded_port: u16) -> bool {
+    let defaults = Defaults::default();
+    let tick = crate::spec::build::DEFAULT_PHYSICS_TICK_MS as f64 / 1000.0;
+    let normal = |spec: &MicrogridSpec, port: u16| {
+        let mut filled = crate::spec::defaults::fill(spec, &defaults);
+        filled.grpc_port.get_or_insert(port);
+        filled.physics_tick_s.get_or_insert(tick);
+        let components: BTreeMap<Option<u64>, crate::spec::ComponentSpec> =
+            filled.components.drain(..).map(|c| (c.id(), c)).collect();
+        let connections: BTreeSet<(u64, u64)> = filled.connections.drain(..).collect();
+        (filled, components, connections)
+    };
+    normal(stored, loaded_port) == normal(new, loaded_port)
 }
 
 /// Give each of `specs` that names no gRPC port a free one, around
@@ -1288,6 +1534,255 @@ mod tests {
         .unwrap_err();
         assert_eq!(err, TopologyError::Conflict("the script exited".into()));
         assert!(engine.microgrids.lock().is_empty());
+    }
+
+    async fn declare_inert(
+        engine: &Engine,
+        doc: TopologyDoc,
+    ) -> Result<Vec<Declared>, TopologyError> {
+        declare(&engine.structural().await, &MicrogridRuntimes::inert(), doc).await
+    }
+
+    fn outcomes(declared: &[Declared]) -> Vec<(u64, DeclareOutcome)> {
+        declared.iter().map(|d| (d.id, d.outcome)).collect()
+    }
+
+    /// A declaration creates a microgrid with no source; the same spec again,
+    /// even with its components in another order, leaves it as it is: the same
+    /// components, no undo step.
+    #[tokio::test]
+    async fn a_declaration_creates_then_leaves_an_unchanged_spec_alone() {
+        let engine = engine();
+        let declared = declare_inert(&engine, hello(NORTH)).await.unwrap();
+        assert_eq!(outcomes(&declared), vec![(61, DeclareOutcome::Created)]);
+        {
+            let registry = engine.microgrids.lock();
+            assert_eq!(registry[&61].source, None);
+            assert!(registry[&61].unsaved, "in memory only");
+            assert_eq!(declared[0].grpc_port, registry[&61].def.grpc_port);
+        }
+        let battery = site(&engine, 61).get(12).unwrap();
+
+        let declared = declare_inert(&engine, hello(NORTH)).await.unwrap();
+        assert_eq!(outcomes(&declared), vec![(61, DeclareOutcome::Unchanged)]);
+        let reordered = r#"{"id": 61, "components": [
+            {"type": "battery", "id": 12, "initial_soc_pct": 50},
+            {"type": "battery_inverter", "id": 11},
+            {"type": "grid_connection_point", "id": 1000}
+        ], "connections": [[11, 12], [1000, 11]]}"#;
+        let declared = declare_inert(&engine, hello(reordered)).await.unwrap();
+        assert_eq!(outcomes(&declared), vec![(61, DeclareOutcome::Unchanged)]);
+        assert!(
+            Arc::ptr_eq(&battery, &site(&engine, 61).get(12).unwrap()),
+            "not rebuilt"
+        );
+        assert_eq!(engine.spec_undo_depths(61).undo, 0);
+    }
+
+    /// A field written out at its default value is no change; a component's new
+    /// name or health is, and the rebuild applies it.
+    #[tokio::test]
+    async fn a_declaration_compares_specs_with_their_defaults_filled_in() {
+        let engine = engine();
+        declare_inert(&engine, doc(NORTH)).await.unwrap();
+        let spelled_out = NORTH.replace(
+            r#"{"type": "battery_inverter", "id": 11}"#,
+            r#"{"type": "battery_inverter", "id": 11, "ramp_rate_w_per_s": 5000}"#,
+        );
+        let declared = declare_inert(&engine, doc(&spelled_out)).await.unwrap();
+        assert_eq!(outcomes(&declared), vec![(61, DeclareOutcome::Unchanged)]);
+
+        let renamed = NORTH.replace(r#""id": 12,"#, r#""id": 12, "name": "pack","#);
+        let declared = declare_inert(&engine, doc(&renamed)).await.unwrap();
+        assert_eq!(outcomes(&declared), vec![(61, DeclareOutcome::Rebuilt)]);
+        assert_eq!(site(&engine, 61).display_name(12).as_deref(), Some("pack"));
+
+        let failed = renamed.replace(r#""id": 12,"#, r#""id": 12, "health": "error","#);
+        let declared = declare_inert(&engine, doc(&failed)).await.unwrap();
+        assert_eq!(outcomes(&declared), vec![(61, DeclareOutcome::Rebuilt)]);
+        assert_eq!(site(&engine, 61).runtime_of(12).health, Health::Error);
+    }
+
+    /// A changed spec is rebuilt with carry, and its undo stack and a
+    /// file-backed microgrid's unsaved mark change as after an edit.
+    #[tokio::test]
+    async fn a_declaration_rebuilds_a_changed_spec_with_carry() {
+        let engine = engine();
+        create(
+            &engine.structural().await,
+            &MicrogridRuntimes::inert(),
+            spec(NORTH),
+            Some(PathBuf::from("/tmp/topology.json")),
+        )
+        .await
+        .unwrap();
+        let north = site(&engine, 61);
+        let battery = north.get(12).unwrap();
+        north.set_soc_pct(battery.as_ref(), 80.0).unwrap();
+        let changed = NORTH
+            .replace(
+                r#"{"type": "grid_connection_point", "id": 1000}"#,
+                r#"{"type": "grid_connection_point", "id": 1000},
+                {"type": "meter", "id": 13}"#,
+            )
+            .replace("[[1000, 11]", "[[1000, 13], [1000, 11]");
+        let declared = declare_inert(&engine, hello(&changed)).await.unwrap();
+        assert_eq!(outcomes(&declared), vec![(61, DeclareOutcome::Rebuilt)]);
+        assert_eq!(soc(&north, 12), 80.0, "the battery carried");
+        assert!(north.get(13).is_some());
+        assert_eq!(engine.spec_undo_depths(61).undo, 1);
+        let registry = engine.microgrids.lock();
+        assert!(registry[&61].unsaved, "differs from its file");
+        assert_eq!(
+            registry[&61].source.as_deref(),
+            Some(Path::new("/tmp/topology.json"))
+        );
+    }
+
+    /// The answer follows the document's order, though rebuilds run before
+    /// creates.
+    #[tokio::test]
+    async fn a_declaration_answers_in_the_documents_order() {
+        let engine = engine();
+        declare_inert(&engine, hello(NORTH)).await.unwrap();
+        let north2 = NORTH.replace(r#""initial_soc_pct": 50"#, r#""initial_soc_pct": 60"#);
+        let declared = declare_inert(&engine, hello(&format!("{SOUTH}, {north2}")))
+            .await
+            .unwrap();
+        assert_eq!(
+            outcomes(&declared),
+            vec![(62, DeclareOutcome::Created), (61, DeclareOutcome::Rebuilt)]
+        );
+    }
+
+    /// A declaration may move component ids between the microgrids it lists.
+    #[tokio::test]
+    async fn a_declaration_moves_ids_between_its_microgrids() {
+        let engine = engine();
+        declare_inert(&engine, hello(&format!("{NORTH}, {SOUTH}")))
+            .await
+            .unwrap();
+        let north2 = NORTH
+            .replace(
+                r#"{"type": "grid_connection_point", "id": 1000}"#,
+                r#"{"type": "grid_connection_point", "id": 1000},
+                {"type": "meter", "id": 1001}"#,
+            )
+            .replace("[[1000, 11]", "[[1000, 1001], [1000, 11]");
+        let south2 = SOUTH.replace("1001", "1002");
+        declare_inert(&engine, hello(&format!("{north2}, {south2}")))
+            .await
+            .unwrap();
+        assert!(site(&engine, 61).get(1001).is_some());
+        assert!(site(&engine, 62).get(1002).is_some());
+    }
+
+    /// An empty document, a microgrid without an id and an id listed twice are
+    /// refused, and so is a bad spec; nothing changes.
+    #[tokio::test]
+    async fn a_declaration_refuses_a_bad_document_and_changes_nothing() {
+        let engine = engine();
+        declare_inert(&engine, hello(NORTH)).await.unwrap();
+        let no_id = SOUTH.replace(r#""id": 62, "#, "");
+        let bad = SOUTH.replace(
+            r#""components""#,
+            r#""connections": [[1001, 99]], "components""#,
+        );
+        for (doc, want) in [
+            (hello(""), "no microgrids"),
+            (hello(&no_id), "has no id"),
+            (hello(&format!("{SOUTH}, {SOUTH}")), "twice"),
+            (hello(&format!("{SOUTH}, {bad}")), "microgrid 62"),
+        ] {
+            let err = declare_inert(&engine, doc).await.unwrap_err();
+            assert!(
+                matches!(&err, TopologyError::Invalid(m) if m.contains(want)),
+                "{want}: {err:?}"
+            );
+        }
+        let bad_north = NORTH.replace("[[1000, 11]", "[[1000, 99], [1000, 11]");
+        let err = declare_inert(&engine, hello(&format!("{SOUTH}, {bad_north}")))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TopologyError::Invalid(_)), "{err:?}");
+        let registry = engine.microgrids.lock();
+        assert_eq!(registry.keys().copied().collect::<Vec<_>>(), vec![61]);
+        assert_eq!(registry[&61].spec.components.len(), 3);
+    }
+
+    /// A component id or a port held by a microgrid the declaration does not
+    /// list is refused with a message that names it and how to unload it: what
+    /// a renamed microgrid runs into.
+    #[tokio::test]
+    async fn a_declaration_names_the_unlisted_holder_of_an_id_or_a_port() {
+        let engine = engine();
+        declare_inert(&engine, hello(NORTH)).await.unwrap();
+        let renamed = NORTH.replace(r#""id": 61,"#, r#""id": 71,"#);
+        let err = declare_inert(&engine, hello(&renamed)).await.unwrap_err();
+        assert!(
+            matches!(&err, TopologyError::Conflict(m)
+                if m.contains("already in microgrid 61") && m.contains("DELETE /api/mg/61")),
+            "{err:?}"
+        );
+
+        let engine2 = super::tests::engine();
+        let pinned = NORTH.replace(r#""id": 61,"#, r#""id": 61, "grpc_port": 9100,"#);
+        declare_inert(&engine2, hello(&pinned)).await.unwrap();
+        let renamed = pinned.replace(r#""id": 61,"#, r#""id": 71,"#);
+        let err = declare_inert(&engine2, hello(&renamed)).await.unwrap_err();
+        assert!(
+            matches!(&err, TopologyError::Conflict(m)
+                if m.contains("microgrid 61's") && m.contains("Give microgrid 71 another grpc_port")
+                    && m.contains("DELETE /api/mg/61")),
+            "{err:?}"
+        );
+    }
+
+    /// A microgrid whose runtime failed to start (its port was taken) is
+    /// started again by the next declaration, though its spec is unchanged.
+    /// Real runtimes, on a wall clock.
+    #[tokio::test]
+    async fn a_declaration_restarts_a_runtime_that_failed_to_start() {
+        use std::net::{IpAddr, Ipv6Addr};
+
+        use crate::runtime::{RuntimeOptions, RuntimeStatus};
+        let port = crate::runtime::tests::free_v6_port();
+        let holder = std::net::TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
+        let engine = Engine::new(std::env::temp_dir(), Metadata::default(), NowSource::wall());
+        let runtimes = MicrogridRuntimes::new(
+            engine.clone(),
+            RuntimeOptions {
+                ephemeral_ports: false,
+                bind_host: IpAddr::V6(Ipv6Addr::LOCALHOST),
+            },
+        )
+        .unwrap();
+        let pinned = NORTH.replace(
+            r#""id": 61,"#,
+            &format!(r#""id": 61, "grpc_port": {port},"#),
+        );
+        let status = |d: &[Declared]| d[0].runtime.as_ref().unwrap().status;
+        let first = declare(&engine.structural().await, &runtimes, hello(&pinned))
+            .await
+            .unwrap();
+        assert_eq!(status(&first), RuntimeStatus::Failed);
+        drop(holder);
+        // A child process another test starts can hold a copy of the holder's
+        // socket for a moment after the drop; declare again until the port is
+        // free.
+        let mut again = Vec::new();
+        for _ in 0..50 {
+            again = declare(&engine.structural().await, &runtimes, hello(&pinned))
+                .await
+                .unwrap();
+            if status(&again) == RuntimeStatus::Running {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(outcomes(&again), vec![(61, DeclareOutcome::Unchanged)]);
+        assert_eq!(status(&again), RuntimeStatus::Running);
+        runtimes.stop(61).await;
     }
 
     #[tokio::test]

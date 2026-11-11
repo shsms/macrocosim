@@ -26,7 +26,7 @@ use crate::sim::{
 };
 
 /// The physics tick of a microgrid whose spec sets none.
-const DEFAULT_PHYSICS_TICK_MS: u64 = 100;
+pub(crate) const DEFAULT_PHYSICS_TICK_MS: u64 = 100;
 
 /// What a site applies to a component after it installs it.
 #[derive(Clone, Debug, Default, PartialEq)]

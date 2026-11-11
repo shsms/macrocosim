@@ -540,7 +540,7 @@ fn end_reason(ended: Result<Result<(), tonic::transport::Error>, JoinError>) -> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::engine::{Metadata, topology};
     use crate::sim::sim_clock::NowSource;
@@ -572,7 +572,7 @@ mod tests {
     /// takes ephemeral ports from (32768 and up on Linux, 49152 and
     /// up on macOS and Windows), so a test that binds port 0 is not
     /// handed one before the test that asked for it binds it.
-    fn free_v6_port() -> u16 {
+    pub(crate) fn free_v6_port() -> u16 {
         use std::sync::atomic::{AtomicU16, Ordering};
         const FIRST_PORT: u16 = 20_000;
         const PORT_CAP: u16 = 32_768;
@@ -631,7 +631,7 @@ mod tests {
         watch_server(Arc::downgrade(inner), id, generation, ended, stopping).await;
     }
 
-    fn opts(ephemeral: bool) -> RuntimeOptions {
+    pub(crate) fn opts(ephemeral: bool) -> RuntimeOptions {
         RuntimeOptions {
             ephemeral_ports: ephemeral,
             bind_host: V6,

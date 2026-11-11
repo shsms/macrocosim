@@ -69,6 +69,7 @@ impl From<crate::engine::topology::TopologyError> for ApiError {
             TopologyError::Invalid(msg) => Self::new(StatusCode::UNPROCESSABLE_ENTITY, msg),
             TopologyError::Conflict(msg) => Self::conflict(msg),
             TopologyError::NotRegistered(id) => Self::not_registered(id),
+            TopologyError::Internal(msg) => Self::new(StatusCode::INTERNAL_SERVER_ERROR, msg),
         }
     }
 }
