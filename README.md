@@ -34,26 +34,26 @@ The simulator exposes three surfaces:
 
 ```sh
 cargo build
-cd python && uv sync && cd ..       # the client the script child imports
-cargo run --bin macrocosim -- --python python/.venv/bin/python \
-    examples/starter_site.py
+cd python && uv sync && cd ..       # the Python client scripts import
+cargo run --bin macrocosim -- --python python/.venv/bin/python
+python/.venv/bin/python examples/starter_site.py      # in another terminal
 ```
 
-The binary takes one Python script and runs it in a child process.
-`examples/starter_site.py` declares a demo microgrid, animates its
-environment, and defines seven starter scenarios; saving the file
-reloads the script without restarting the binary. With no script the
-engine boots bare: UI up, no microgrids, and microgrids are made in
-the UI. `--topology topology.json` boots microgrids from a topology
-document instead, with no script; that is how the Python client's
-`launch` starts a simulator for a test.
+The binary boots bare: UI up, no microgrids. A script is a separate Python
+program that connects to it and declares its microgrids:
+`examples/starter_site.py` declares a demo microgrid, animates its environment,
+and defines seven starter scenarios. Run it again after an edit; the microgrid
+stays loaded between runs, and an unchanged spec leaves it as it is. Microgrids
+can also be made in the UI. `--topology topology.json` boots microgrids from a
+topology document; that is how the Python client's `launch` starts a simulator
+for a test.
 
-Recordings are written under `--state-dir`, which defaults to the
-directory the server was started from. A `.lisp` argument, or a state
-directory that still holds 0.1's `enterprise.lisp` or
-`microgrids/*.lisp`, stops the binary with a message naming the files:
-port them to a Python script, or pass another `--state-dir`.
-`GET /api/defaults` lists the per-category defaults a spec's missing
+Recordings are written under `--state-dir`, which defaults to the directory the
+server was started from. A `.lisp` argument, or a state directory that still
+holds 0.1's `enterprise.lisp` or `microgrids/*.lisp`, stops the binary with a
+message naming the files: port them to a Python script, or pass another
+`--state-dir`. A `.py` argument stops it too: run the script with `python`
+instead. `GET /api/defaults` lists the per-category defaults a spec's missing
 fields take.
 
 The proto roots ([frequenz-api-microgrid](https://github.com/frequenz-floss/frequenz-api-microgrid),
@@ -64,23 +64,29 @@ proto root for downstream packagers with a private mirror.
 
 ## Scripting
 
-A script defines `MICROGRIDS`, a list of microgrid specs, and an
-`async def run(microgrids)` that animates them:
+A script is a plain program: it connects to the simulator, declares its
+microgrids, and animates them:
 
 ```python
+import asyncio
+
 import macrocosim as mc
 from frequenz.quantities import Power
 
 load = mc.make_meter(id=2)
-MICROGRIDS = [
-    mc.make_microgrid(id=7, topology=mc.make_grid_connection_point(id=1, successors=[load])),
-]
+MICROGRID = mc.make_microgrid(id=7, topology=mc.make_grid_connection_point(id=1, successors=[load]))
 
 
-async def run(microgrids: dict[int, mc.Microgrid]) -> None:
-    async with microgrids[7].record("first load", csv=True):
-        await microgrids[7][load].power.set(Power.from_kilowatts(20))
-        ...
+async def main() -> None:
+    async with mc.connect() as sim:
+        plant = await sim.declare(MICROGRID)
+        async with plant.record("first load", csv=True):
+            await plant[load].power.set(Power.from_kilowatts(20))
+            ...
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 A scenario is an async function: stress events (load spikes, cloud
@@ -89,9 +95,9 @@ measures peak grid power, battery charge and discharge, SoC statistics
 and 15-minute averages. [`examples/scenario_driving.py`](examples/scenario_driving.py)
 is a 30-minute sample.
 
-[`docs/python-scripts.md`](docs/python-scripts.md) covers the script
-shape, what a reload keeps, recording, attaching a terminal with
-`macrocosim.connect`, and porting a Lisp site file.
+[`docs/python-scripts.md`](docs/python-scripts.md) covers the script shape, what
+a re-run keeps, recording, attaching a terminal with `macrocosim.connect`, and
+porting a Lisp site file.
 
 ## macroctl
 
@@ -155,7 +161,7 @@ gateway intersects bounds for setpoint validation.
 
 - [`docs/e2e-testing.md`](docs/e2e-testing.md) — drive macrocosim from a
   downstream app's CI for end-to-end integration tests.
-- [`docs/python-scripts.md`](docs/python-scripts.md) — scripts, reloads,
+- [`docs/python-scripts.md`](docs/python-scripts.md) — scripts, re-runs,
   recording, and porting from Lisp.
 - [`docs/names-and-units.md`](docs/names-and-units.md) — the unit and the
   name of every quantity in the topology document, HTTP, macroctl and

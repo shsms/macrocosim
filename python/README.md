@@ -10,8 +10,8 @@ waits for what the simulator measures.
 The app under test commands the inverters; the test only changes the world
 around it and observes.
 
-The same client runs site scripts: `macrocosim plant.py` starts a simulator on
-a script's microgrids and runs its `run` function with these objects (see
+The same client runs site scripts: plain programs that connect to a running
+simulator, declare their microgrids and animate them with these objects (see
 [Scripts](#scripts)).
 
 ## Install
@@ -291,7 +291,8 @@ under 10 Hz per knob.
 | `UnknownComponent` (a `LookupError`) | no such component in this microgrid |
 | `NoSample` | no usable sample: none in time, a stall, a gap or a null |
 | `ExpectationFailed` (an `AssertionError`) | samples arrived and disagreed |
-| `MicrogridClosed` | the microgrid was used after its launch block exited |
+| `MicrogridClosed` | the microgrid was used after its `launch` or `connect` block exited |
+| `ConnectionClosed` | the `Connection` was used after its `connect` block exited |
 
 All derive from `MacrocosimError`. When a spec is built, the client checks
 types, finite values, ids and a few other rules. A wrong type raises
@@ -304,9 +305,9 @@ values when it starts, for example a negative interval or a power factor outside
 
 ## Scripts
 
-A script declares microgrids in `MICROGRIDS` and animates them in
-`async def run(microgrids)`; `macrocosim plant.py` runs it and runs it again on
-every save:
+A script is a plain program. Start the simulator (`macrocosim`), then run the
+script (`python plant.py`): it connects, declares its microgrids and animates
+them.
 
 ```python
 import asyncio
@@ -316,52 +317,63 @@ from frequenz.quantities import Power
 import macrocosim as mc
 
 LOAD = mc.make_meter(id=2)
-MICROGRIDS = [
-    mc.make_microgrid(id=7, topology=mc.make_grid_connection_point(id=1, successors=[LOAD]))
-]
+MICROGRID = mc.make_microgrid(id=7, topology=mc.make_grid_connection_point(id=1, successors=[LOAD]))
 
 
-async def run(microgrids: dict[int, mc.Microgrid]) -> None:
-    plant = microgrids[7]
-    for kw in range(0, 21, 2):
-        await plant[LOAD].power.set(Power.from_kilowatts(kw))
-        await asyncio.sleep(1)
+async def main() -> None:
+    async with mc.connect() as sim:
+        plant = await sim.declare(MICROGRID)
+        for kw in range(0, 21, 2):
+            await plant[LOAD].power.set(Power.from_kilowatts(kw))
+            await asyncio.sleep(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-`run` gets the same `Microgrid` objects a test gets from `launch`. Each microgrid
-needs an explicit `id`, and a component whose state (state of charge, a plugged
-car, boiler pressure) should survive an edit of the topology needs one too. The
+`mc.connect(url=None)` yields a `Connection`; without a URL it uses
+`$MACROCOSIM_URL`, else `http://127.0.0.1:8801`. `await sim.declare(spec)`
+creates the microgrid, or updates it when its id is loaded: an unchanged spec
+leaves it as it is, and a changed one rebuilds it, keeping the state of every
+component that did not change. It returns the same `Microgrid` a test gets from
+`launch`; `declare(a, b, ...)` returns a tuple. `await sim.unload(id)` unloads
+one, and `await sim.microgrids()` lists what is loaded, by id. Declared
+microgrids stay loaded after the script ends.
+
+Each microgrid needs an explicit `id`, and a component whose state (state of
+charge, a plugged car, boiler pressure) should survive an edit of the topology
+needs one too. The
 [guide](https://github.com/shsms/macrocosim/blob/main/docs/python-scripts.md)
-covers reloads, recording and porting from Lisp.
+covers re-runs, recording and porting from Lisp.
 
 **Recording.** `async with microgrid.record(name, csv=False) as recording:`
 records the block's metrics; `recording.event(kind, payload)` adds a named
 event, and `recording.report()` returns a `RecordingReport` after the block.
 
-**Specs in tests.** A test imports a script's specs and launches one:
-`from plant import MICROGRIDS`, then `mc.launch(MICROGRIDS[0])`. `run` does not
-run under pytest. `mc.load_topology(path)` reads a topology document (a
+**Specs in tests.** A test imports a script's specs and launches one: `from
+plant import MICROGRID`, then `mc.launch(MICROGRID)`. Importing the script does
+not run its `main`. `mc.load_topology(path)` reads a topology document (a
 `--topology` file) back into `MicrogridSpec` objects.
 
 ## Interactive use
 
 `python -m asyncio` gives a REPL where `await` works at the top level.
-`mc.connect(url)` attaches to a simulator that is already running, such as one
-running a script, and yields its microgrids by id:
+`mc.connect()` attaches to a simulator that is already running:
 
 ```python
 >>> import macrocosim as mc
 >>> from frequenz.quantities import Power
->>> async with mc.connect("http://127.0.0.1:8801") as microgrids:
+>>> async with mc.connect() as sim:
+...     microgrids = await sim.microgrids()
 ...     await microgrids[7][2].power.set(Power.from_kilowatts(20))
 ```
 
-Its microgrids are built from the simulator's copy of their specs, so look
-components up by id. Leaving the block leaves the simulator running. This is
-for one-off reads and writes: a write to a knob the script animates is
-overwritten by the animation a moment later, so scenarios belong in the
-script's `run`. To start a
-private simulator from the REPL instead:
+`microgrids()` builds each microgrid from the simulator's copy of its spec, so
+look components up by id. Leaving the block leaves the simulator running. This
+is for one-off reads and writes: a write to a knob a script animates is
+overwritten by the animation a moment later, so scenarios belong in the script.
+To start a private simulator from the REPL instead:
 
 ```python
 >>> cm = mc.launch(spec); microgrid = await cm.__aenter__()

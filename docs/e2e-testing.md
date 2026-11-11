@@ -42,59 +42,58 @@ test's `tmp_path`.
 
 ### 2. From a script
 
-`macrocosim plant.py` runs a [script](python-scripts.md): its `MICROGRIDS`
-are the topology, and its `run` drives the environment and asserts with
-`expect`. The script's state is the verdict: `finished` when `run` returned,
-`crashed` when it raised, for example on a failed `expect`.
+A [script](python-scripts.md) is a plain program: its `main` connects to a
+running simulator, declares the topology, drives the environment and asserts
+with `expect`. Its exit status is the verdict: 0 when `main` returned, not 0
+when it raised, for example on a failed `expect`.
 
 ```sh
 # 1. boot the simulator; ephemeral ports keep parallel CI jobs from clashing,
-#    and the endpoints file is the readiness signal. With a script, it is
-#    written once the script has sent its microgrids, or failed to load.
-macrocosim plant.py --ephemeral-ports --emit-endpoints=endpoints.json &
+#    and the endpoints file is the readiness signal.
+macrocosim --ephemeral-ports --emit-endpoints=endpoints.json &
 SIM=$!
 # wait until bound; bail out if the simulator died at boot instead
 # of hanging the job until CI's global timeout.
 until [ -s endpoints.json ]; do kill -0 $SIM 2>/dev/null || exit 1; sleep 0.1; done
-
-GRPC=$(jq -r '.microgrids[0].grpc_addr' endpoints.json)   # e.g. [::1]:41979
 UI=$(jq -r '.ui' endpoints.json)                          # e.g. 127.0.0.1:33565
 
-# 2. boot YOUR app against the simulator's gRPC address.
+# 2. run the script against it, and wait until it declared microgrid 9.
+MACROCOSIM_URL="http://$UI" python plant.py &
+SCRIPT=$!
+until GRPC=$(curl -s "http://$UI/api/microgrids" \
+    | jq -er '.[] | select(.id == 9 and .runtime.status == "running")
+              | .runtime.grpc_addr'); do
+  kill -0 $SCRIPT 2>/dev/null || exit 1; sleep 0.1
+done                                                      # e.g. [::1]:41979
+
+# 3. boot YOUR app against the microgrid's gRPC address.
 my-control-app --microgrid "grpc://$GRPC" &
 APP=$!
 
-# 3. wait for the script's run to end, and gate on how it ended.
-while :; do
-  STATE=$(curl -s "http://$UI/api/runner" | jq -r '.child.state // "none"')
-  case $STATE in
-    finished) RC=0; break ;;
-    crashed|none) RC=1; break ;;
-  esac
-  sleep 1
-done
-curl -s "http://$UI/api/runner" | jq -r '.output[]'   # the script's last lines
-
+# 4. the script's exit status is the verdict.
+wait $SCRIPT; RC=$?
 kill $APP $SIM
 exit $RC
 ```
 
-`run` starts as soon as the simulator has the microgrids, so a script that
-needs your app connected first waits for it, for example by expecting the
-app's effect on a reading. A script that records with `csv=True` writes its
-CSV files under `recordings/` in the state directory (`--state-dir`, default
-the current directory); upload them, and your app's logs, as CI artifacts on
-failure.
+The script starts driving as soon as its microgrids are declared, so a script
+that needs your app connected first waits for it, for example by expecting the
+app's effect on a reading. A script that records with `csv=True` writes its CSV
+files under `recordings/` in the state directory (`--state-dir`, default the
+current directory); upload them, the script's output and your app's logs as CI
+artifacts on failure.
 
-`--emit-endpoints` prints one JSON line of the resolved addresses, to a file
-(as above) or to stdout if given no path:
+`--emit-endpoints` prints one JSON line of the resolved addresses, to a file (as
+above) or to stdout if given no path. It lists the microgrids the simulator
+booted with (`--topology`, below); ones declared later are in `GET
+/api/microgrids`. A file from a `--topology` boot:
 
 ```json
 {"ui":"127.0.0.1:33565","microgrids":[{"id":9,"name":"demo","grpc_addr":"[::1]:41979"}],"assets":"[::1]:33881","dispatch":"[::1]:43253","version":"0.2.0"}
 ```
 
-`--topology graph.json` boots the microgrids of a topology document instead,
-with no script, for an app test that needs only a static site.
+`--topology graph.json` boots the microgrids of a topology document, for an app
+test that needs only a static site; they are in the endpoints file.
 
 ## Structuring fixtures
 
@@ -104,7 +103,7 @@ fixtures in *your* repo: macrocosim is a generic engine that runs them.
 - **One module per graph.** Define the topology once as `make_*` specs, and
   every scenario that exercises it as an async function that takes the
   microgrid. Tests import the specs and the scenarios; a script imports them
-  too, and runs one from `run`.
+  too, and runs one from its `main`.
 
 - **Parallelise at the test or CI-job level.** Each `mc.launch`, and each
   `macrocosim` run with `--ephemeral-ports`, is an isolated simulator on its
@@ -126,12 +125,12 @@ random (`random.Random(seed)`, the weather's `seed=`).
 
 ## Reference
 
-- `macrocosim [plant.py]`: `--topology PATH` · `--ui-port N` ·
-  `--ephemeral-ports` · `--emit-endpoints[=PATH]` · `--state-dir DIR` ·
-  `--python PATH`; `macrocosim --help` lists the rest.
-- `GET /api/runner`: the script's state (`child.state`), the result of its
-  last reload (`last_reload.result`) and its last lines of output.
+- `macrocosim`: `--topology PATH` · `--ui-port N` · `--ephemeral-ports` ·
+  `--emit-endpoints[=PATH]` · `--state-dir DIR` · `--python PATH`; `macrocosim
+  --help` lists the rest.
+- `GET /api/microgrids`: every loaded microgrid, with its runtime's `status` and
+  `grpc_addr`; the address serves while `status` is `running`.
 - `macroctl --ui-addr … [--microgrid-id N]`: the readouts (`list`,
   `stream`, `pool`, `dashboard`) and commands (`set-power`,
   `augment-bounds`, `dispatch`), for a look at the running simulator.
-- [`python-scripts.md`](python-scripts.md): scripts, reloads and recording.
+- [`python-scripts.md`](python-scripts.md): scripts, re-runs and recording.

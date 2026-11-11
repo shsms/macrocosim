@@ -647,8 +647,9 @@ The crate is GPL-3.0-only because tulisp is, and was linked in (D5).
 - State "TODO"       from              [2026-11-07 Sa 23:57]
 :END:
 
-A car stays plugged in across a reload, so a script's =plug()= on the
-next start is refused. Add a client call that plugs only an empty
+A car stays plugged in across a re-run of a script (an unchanged
+microgrid keeps it, and a rebuild carries it), so the script's =plug()=
+on the next run is refused. Add a client call that plugs only an empty
 charger, or one that reads the charger's car state
 (=GET .../component/{id}/ev=).
 
@@ -660,13 +661,14 @@ charger, or one that reads the charger's car state
 The smoke's only check that a floating card keeps a dragged height
 went with the REPL panel in 0.2.
 
-** TODO Delete watch::Mode::Files, MicrogridSite::reset() and gateway::Mode::Clamp? :cleanup:
+** TODO Delete MicrogridSite::reset() and gateway::Mode::Clamp? :cleanup:
 :LOGBOOK:
 - State "TODO"       from              [2026-11-07 Sa 23:57]
 :END:
 
-None has a production caller after the Lisp removal; only tests use
-them. Decide whether to delete them.
+Neither has a production caller after the Lisp removal; only tests use
+them. Decide whether to delete them. (=watch::Mode::Files= went with
+the script runner.)
 
 ** TODO A recordings view in the main pane, if wanted                    :ui:
 :LOGBOOK:
@@ -3029,3 +3031,43 @@ shrank can stay where a refit would have moved it.
 A gripper press already records a skipped refit
 (=p.resizeFrom.refitDue=) and runs it at its release
 (=settleResize=). The head drag could do the same.
+
+** TODO A generation number that fails an older script run's writes :python:api:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-11 Mi 15:57]
+:END:
+
+Two copies of a script (a second terminal, a watcher that does not
+restart it) both write to the same microgrid, and nothing reports it.
+A per-microgrid generation, bumped by each declaration and carried on
+each client write, would let the older run fail with "superseded".
+
+** TODO A display label and "declared at" time on the microgrid card :ui:python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-11 Mi 15:57]
+:END:
+
+Which script last declared a microgrid, and when. Optional field on
+the declaration; its default (the script's file name) has the same
+guessing problem in the REPL, pytest and Jupyter that the dropped
+owner had.
+
+** TODO launch() yielding a Connection :python:testing:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-11 Mi 15:57]
+:END:
+
+An overload beside launch(spec), for tests that declare several
+microgrids or re-declare one to check carry.
+
+** TODO Microgrid.unload(), if sim.unload(id) proves awkward :python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-11 Mi 15:57]
+:END:
+
+** TODO Load or run a script from the UI :ui:python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-11 Mi 15:57]
+:END:
+
+Removed with the script runner; a separate design if wanted.

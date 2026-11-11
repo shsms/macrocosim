@@ -1,30 +1,32 @@
 # macrocosim
 
 A Rust microgrid simulator for testing downstream control apps. Component
-physics lives in Rust; a Python script declares the topology (a JSON topology
-document the engine builds) and animates the environment over the HTTP API.
-Reimplementation of microsim.
+physics lives in Rust; a Python script, a program of its own, declares the
+topology (a JSON topology document the engine builds) and animates the
+environment over the HTTP API. Reimplementation of microsim.
 
 ## Layout
 
 - `src/lib.rs` — module roots
-- `src/engine.rs` — `Engine`: the simulator state every server and
-  handler shares (registry, dispatch store, enterprise `Metadata` in
-  `engine/metadata.rs`, grid frequency, the source of "now", the
-  structural lock, the spec undo stacks). `engine/topology.rs` is every
-  structural change to a microgrid, each taking a `Structural` guard on
-  that lock (`Engine::structural`): `create` builds and registers one,
-  `rebuild` swaps in a new spec with carry (a component carries when its
-  defaults-filled spec is unchanged under the same id, its name,
-  health and modes aside) and moves the gRPC server when `grpc_port` changes,
-  `edit` is a rebuild that also stacks the replaced spec for undo and
-  marks a file-backed microgrid unsaved, `unload` removes
-  one (registry entry first, then its runtime, recording and CSV sinks,
-  dispatches and undo stacks, then the `microgrid_unloaded`
-  broadcast), and `apply_hello` applies a script child's microgrids (a registered id
-  must have the script as its `source`). Every change keeps component
-  ids unique across the engine. A registry entry's `spec` is
-  the spec the microgrid was last built from, with every id filled in
+- `src/engine.rs` — `Engine`: the simulator state every server and handler
+  shares (registry, dispatch store, enterprise `Metadata` in
+  `engine/metadata.rs`, grid frequency, the source of "now", the structural
+  lock, the spec undo stacks). `engine/topology.rs` is every structural change
+  to a microgrid, each taking a `Structural` guard on that lock
+  (`Engine::structural`): `create` builds and registers one, `rebuild` swaps in
+  a new spec with carry (a component carries when its defaults-filled spec is
+  unchanged under the same id, its name, health and modes aside) and moves the
+  gRPC server when `grpc_port` changes, `edit` is a rebuild that also stacks the
+  replaced spec for undo and marks a file-backed microgrid unsaved, `unload`
+  removes one (registry entry first, then its runtime, recording and CSV sinks,
+  dispatches and undo stacks, then the `microgrid_unloaded` broadcast), and
+  `declare` applies a client's declaration: it creates each listed microgrid
+  that is not loaded, rebuilds with carry each loaded one whose spec changed (an
+  edit: undo step, unsaved mark), leaves one whose spec is unchanged, unloads
+  nothing and checks no source, then starts the runtime of each loaded one it
+  lists. Every change keeps component ids unique across the engine. A registry
+  entry's `spec` is the spec the microgrid was last built from, with every id
+  filled in
 - `src/spec.rs` — the topology document (`TopologyDoc`,
   `MicrogridSpec`, `ComponentSpec`): one flat JSON document of
   microgrids, components and connections; `spec/defaults.rs` the
@@ -37,31 +39,12 @@ Reimplementation of microsim.
   (`0.2.0-alpha.0` is `0.2.0a0`), the form the Python package carries
 - `src/undo.rs` — `UndoHistory<T>`, the per-microgrid undo / redo
   stack (capped at 20 steps), generic over what one step stores
-- `src/runner.rs` — the script runner: `macrocosim plant.py` runs the
-  script in one child, `python -P -m macrocosim._runner plant.py`, which
-  sends the script's `MICROGRIDS` in a hello (`POST /api/runner/hello`)
-  and then runs `run`. `runner/supervisor.rs` starts a new child on
-  every `.py` save in the script's tree (`runner/script_watch.rs`), applies its
-  hello with `engine::topology::apply_hello` (build and check aside,
-  stop the old child, then unload, rebuild and create), and keeps the
-  status `GET /api/runner` answers and the `script_status` event
-  carries; `runner/child.rs` is one child (stdin held, closing it is
-  the stop signal; output logged under `script:<name>`, each line led
-  by the script's name; on Unix the leader of its own process group,
-  which is ended once the child has ended);
-  `runner/hello.rs` the hello and its error codes.
-  `runner/python.rs` finds the Python interpreter (`--python`,
-  `$MACROCOSIM_PYTHON`, beside the binary, `PATH`) and checks it: 3.11
-  or later with the `macrocosim` package of the binary's version. A
-  passed check is kept for the engine's life; a failed one runs again
-  on the next export (a script start checks once, and a failure exits).
-  The `.py` export (`GET /api/mg/{mg}/spec.py`) pipes
-  the stored spec into `python -P -m macrocosim.export`, one export at
-  a time
-- `src/watch.rs` — the debounced file watcher: `Files` watches a named
-  set of files and re-arms them after an atomic save; `Tree` watches
-  every directory under a root that passes a filter, adding new ones
-  (the script runner's)
+- `src/python.rs` — finds the Python interpreter the `.py` export runs on
+  (`--python`, `$MACROCOSIM_PYTHON`, beside the binary, `PATH`) and checks it:
+  3.11 or later with the `macrocosim` package of the binary's version. A passed
+  check is kept for the engine's life; a failed one runs again on the next
+  export. The `.py` export (`GET /api/mg/{mg}/spec.py`) pipes the stored spec
+  into `python -P -m macrocosim.export`, one export at a time
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback), its
   started / failed status, and the handles of the tasks it started:
@@ -140,63 +123,52 @@ Reimplementation of microsim.
     unloaded notice, so a microgrid created again under an
     unloaded id is followed)
   - `app_state.rs` — `AppState`, the router's state: the `Engine`, the
-    `MicrogridRuntimes` and their loopback slots, the `.py` export's
-    interpreter (`Export`) and the script's supervisor (`Runner`); a
-    handler takes the part it uses, such as `State<Engine>`
-- `ui-assets/` — the SPA as hand-rolled ES modules (`app.js` is the
-  entry; `topology.js`, `live.js`, `metrics-store.js`,
-  `metrics-panel.js`, `inspect.js`, `routing.js`,
-  `events-ws.js` (the events socket's pump, the Logs panel's head and
-  its backfill), `chrome.js` (the top bar: the zone and theme chips,
-  the script chip with its status popover, the system pulse),
-  `dialogs.js`, `editor.js`, … own one concern each;
-  `http.js` the failed-response reader (`errorText`, `getJson`) and
-  `bgFetch`; `html.js` `escapeHtml`, with no DOM so the node tests can
-  import it (`app.js` re-exports it);
-  `notices.js` toasts, form errors and the UI's log lines;
-  `connection.js` whether the server can be reached, and its banner;
-  `logs.js` the logs panel's rows; `storage.js` guarded localStorage;
-  `zone.js` the display zone (the browser's local zone or UTC, from the
-  top bar's zone chip) every shown time goes through: the formatters,
-  `<time>` elements it re-formats on a switch, uPlot's `tzDate`, and the
-  wall-time conversion for `datetime-local` fields; imported as
-  `* as zone`, so call sites read `zone.fmtTime`, `zone.tzDate`;
-  `theme.js` the colour theme (auto follows the OS, or light or dark
-  from the top bar's theme chip), set as `data-theme` on `<html>`;
-  code that draws with colours read from the tokens (the canvas, the
-  charts) re-reads them in a `theme.onChange` listener;
-  `spec-edit.js` the editor's structural edits (read the selected
-  microgrid's spec, change it, `PUT` it, retrying once on a 409);
-  `ids.js` the ids new components take (the lowest free ones from
-  5000); `paste-forms.js` the DOM-free splice of a copied subgraph
-  into a spec under fresh ids, children before parents;
-  `metrics-store.js` holds the derived-stream rings + the PF helpers
-  and `metrics-panel.js` the floating charts panel that reads them;
-  `chart-lib.js` the uPlot gate every chart builder asks first
-  (a note in the slot when the vendored global did not load);
-  `live.js` owns the live-overlay pure helpers: label
-  text, number formatting, the dead band and edge flow; `pill.js`
-  owns the node model and canvas renderer both graph canvases draw
-  with, and the zoom tiers (full / hero / marker); `hovercard.js`
-  the node hover card (pure model + DOM widget); `side-panel.js` the
-  card shell every panel (inspector, formulas, metrics, weather, logs,
-  Defaults, Report) opens in — static-markup cards are listed in
-  its `STATIC_PANELS` with their scroll band, which a card's measured
-  floor (`floorOf`) holds at its min-height; per-panel width, spawn
-  corner and first dock edge in `PANEL_DEFAULTS`; a card docks into the
-  bottom or right strip (`#dock-bottom`, `#dock-right`) the first time it
-  opens (the logs at the bottom, the rest on the right) and
-  keeps the user's own dock or float choice after that
-  (`STRIPS` holds each strip's ids, axis, sizes and the room it leaves
-  the rest of main; `dockPanel(name, edge)` / `floatPanel` /
+    `MicrogridRuntimes` and their loopback slots, the `.py` export's interpreter
+    (`Export`); a handler takes the part it uses, such as `State<Engine>`
+- `ui-assets/` — the SPA as hand-rolled ES modules (`app.js` is the entry;
+  `topology.js`, `live.js`, `metrics-store.js`, `metrics-panel.js`,
+  `inspect.js`, `routing.js`, `events-ws.js` (the events socket's pump, the Logs
+  panel's head and its backfill), `chrome.js` (the top bar: the zone and theme
+  chips, the system pulse), `unsaved-chip.js` (a microgrid's unsaved chip, with
+  no DOM), `dialogs.js`, `editor.js`, … own one concern each; `http.js` the
+  failed-response reader (`errorText`, `getJson`) and `bgFetch`; `html.js`
+  `escapeHtml`, with no DOM so the node tests can import it (`app.js` re-exports
+  it); `notices.js` toasts, form errors and the UI's log lines; `connection.js`
+  whether the server can be reached, and its banner; `logs.js` the logs panel's
+  rows; `storage.js` guarded localStorage; `zone.js` the display zone (the
+  browser's local zone or UTC, from the top bar's zone chip) every shown time
+  goes through: the formatters, `<time>` elements it re-formats on a switch,
+  uPlot's `tzDate`, and the wall-time conversion for `datetime-local` fields;
+  imported as `* as zone`, so call sites read `zone.fmtTime`, `zone.tzDate`;
+  `theme.js` the colour theme (auto follows the OS, or light or dark from the
+  top bar's theme chip), set as `data-theme` on `<html>`; code that draws with
+  colours read from the tokens (the canvas, the charts) re-reads them in a
+  `theme.onChange` listener; `spec-edit.js` the editor's structural edits (read
+  the selected microgrid's spec, change it, `PUT` it, retrying once on a 409);
+  `ids.js` the ids new components take (the lowest free ones from 5000);
+  `paste-forms.js` the DOM-free splice of a copied subgraph into a spec under
+  fresh ids, children before parents; `metrics-store.js` holds the
+  derived-stream rings + the PF helpers and `metrics-panel.js` the floating
+  charts panel that reads them; `chart-lib.js` the uPlot gate every chart
+  builder asks first (a note in the slot when the vendored global did not load);
+  `live.js` owns the live-overlay pure helpers: label text, number formatting,
+  the dead band and edge flow; `pill.js` owns the node model and canvas renderer
+  both graph canvases draw with, and the zoom tiers (full / hero / marker);
+  `hovercard.js` the node hover card (pure model + DOM widget); `side-panel.js`
+  the card shell every panel (inspector, formulas, metrics, weather, logs,
+  Defaults, Report) opens in — static-markup cards are listed in its
+  `STATIC_PANELS` with their scroll band, which a card's measured floor
+  (`floorOf`) holds at its min-height; per-panel width, spawn corner and first
+  dock edge in `PANEL_DEFAULTS`; a card docks into the bottom or right strip
+  (`#dock-bottom`, `#dock-right`) the first time it opens (the logs at the
+  bottom, the rest on the right) and keeps the user's own dock or float choice
+  after that (`STRIPS` holds each strip's ids, axis, sizes and the room it
+  leaves the rest of main; `dockPanel(name, edge)` / `floatPanel` /
   `layoutStrip(edge)`; persisted under `mc-panel-dock-<name>` and
-  `mc-strip-<edge>`);
-  `splitter.js` the drag-to-resize
-  handshake the dock strips use; `strip-model.js` their DOM-free
-  arithmetic (shares, order, size clamp); `panel-geometry.js` the
-  floating cards' DOM-free placement arithmetic (cascade slot pick);
-  `vendor/fonts/` the
-  vendored IBM Plex faces (OFL))
+  `mc-strip-<edge>`); `splitter.js` the drag-to-resize handshake the dock strips
+  use; `strip-model.js` their DOM-free arithmetic (shares, order, size clamp);
+  `panel-geometry.js` the floating cards' DOM-free placement arithmetic (cascade
+  slot pick); `vendor/fonts/` the vendored IBM Plex faces (OFL))
   - Reactive power reads at parity with active power across the SPA:
     the hover card draws a Q envelope bar under the P one (same
     `hovercard.js` `envelopeBar`, labelled in VAr); the metrics
@@ -212,9 +184,9 @@ Reimplementation of microsim.
   points it at a server you already run). The e2e half drives the Starter site
   (microgrid 2200) from a scratch state dir, and sends gRPC setpoints through
   the `macroctl` binary named by `MACROCTL`. `make ui-e2e` builds both binaries,
-  boots one server and runs it, and the `ui-e2e` job in
-  `.github/workflows/ci.yml` does the same on pushes to main and PRs targeting
-  main.
+  boots one server, runs the starter site against it and runs the smoke, and the
+  `ui-e2e` job in `.github/workflows/ci.yml` does the same on pushes to main and
+  PRs targeting main.
 - `src/server.rs` — `Microgrid` gRPC service
 - `src/assets_server.rs` — `PlatformAssets` gRPC service (shared port)
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
@@ -225,24 +197,24 @@ Reimplementation of microsim.
   clock, owned by the gateway and expired on the physics tick
 - `src/bin/macrocosim.rs` — headless server
 - `src/bin/macroctl.rs` — clap-based client CLI
-- `examples/starter_site.py` — the demo world as a Python script
-  (`macrocosim examples/starter_site.py`): `MICROGRIDS`, the animation
-  in `run`, and the seven scenarios as async functions;
-  `examples/scenario_driving.py` imports it for a 30-minute recorded
-  stress run. `python/pyproject.toml` puts `examples/` on ty's
-  and ruff's first-party paths, since the scripts import each other
-- `python/` — the `macrocosim` Python package: the spec dataclasses
-  (`_spec.py`, where each `make_*` constructor is its dataclass), the knob handles (`_components.py`,
-  `_signals.py`), recording, `launch` and `connect`, the script runner
-  (`_runner.py`) and the exporter (`export.py`)
+- `examples/starter_site.py` — the demo world as a Python script (`python
+  examples/starter_site.py` against a running server): `MICROGRID`, the
+  animation, a `main` that declares and animates it, and the seven scenarios as
+  async functions; `examples/scenario_driving.py` imports it for a 30-minute
+  recorded stress run. `python/pyproject.toml` puts `examples/` on ty's and
+  ruff's first-party paths, since the scripts import each other
+- `python/` — the `macrocosim` Python package: the spec dataclasses (`_spec.py`,
+  where each `make_*` constructor is its dataclass), the knob handles
+  (`_components.py`, `_signals.py`), recording, `launch`, `connect` and its
+  `Connection` (`declare`, `unload`, `microgrids`), and the exporter
+  (`export.py`)
 
 ## Architectural rules
 
-- **A script declares the topology and animates the environment, Rust
-  does physics.** Every component's tick / ramp / SoC is in Rust. A
-  script's only verbs are its `MICROGRIDS` (a topology document the
-  engine builds) and knob writes over the HTTP API, driven from
-  ordinary asyncio loops.
+- **A script declares the topology and animates the environment, Rust does
+  physics.** Every component's tick / ramp / SoC is in Rust. A script declares
+  its microgrids through `connect` (or `launch`), as a topology document the
+  engine builds, and writes knobs over the HTTP API from ordinary asyncio loops.
 - **Module style.** Rust 2018: a new module with children is `foo.rs`
   beside a `foo/` directory, never `foo/mod.rs`. `sim/`,
   `sim/inverter/`, `sim/microgrid_site/`, `ui/` and `ui/handlers/`
@@ -258,20 +230,18 @@ Reimplementation of microsim.
   The protocol layer — fault gates, over-bound fault injection, the
   setpoint journal, lifetime windows — stays in `server.rs`.
 - **Lock order.** Outermost first:
-  1. the script supervisor's own `ops` lock (a reload replacing the
-     pending child, a hello);
-  2. the engine's structural lock, a `tokio::sync::Mutex`: create,
-     import, a spec `PUT`, undo, an unload and a script's hello hold
-     it, and every `topology` function takes its `Structural` guard. An
-     unload inside a hello runs under that hello's guard. The HTTP
-     routes run each change in its own task (`handlers::detached`), so
-     a client that hangs up cannot leave one half applied;
-  3. the runtimes' `start_lock` (a `tokio::sync::Mutex`, which `start`,
-     `stop` and `restart_grpc` take);
-  4. the gateway lock;
-  5. the registry (`parking_lot::Mutex`), taken briefly and never held
-     across an `.await`, then the runtimes' map;
-  6. component locks.
+  1. the engine's structural lock, a `tokio::sync::Mutex`: create,
+     import, a declaration, a spec `PUT`, undo and an unload hold it,
+     and every `topology` function takes its `Structural` guard. The
+     HTTP routes run each change in its own task
+     (`handlers::detached`), so a client that hangs up cannot leave one
+     half applied;
+  2. the runtimes' `start_lock` (a `tokio::sync::Mutex`, which `start`, `stop`
+     and `restart_grpc` take);
+  3. the gateway lock;
+  4. the registry (`parking_lot::Mutex`), taken briefly and never held across an
+     `.await`, then the runtimes' map;
+  5. component locks.
 
   Knob writes take no structural lock: a write that finds its
   component id gone answers 404. The gateway lock is never held across
@@ -339,13 +309,19 @@ Reimplementation of microsim.
 
 ## HTTP API
 
-- Whole-site routes live under `/api/` (microgrids, import, defaults,
-  spec schema, logs, frequency, runner).
-  `GET /api/defaults` serves the spec `Defaults` table, read-only.
-  `POST /api/microgrids` creates the microgrids of a topology document
-  (201 `{"microgrids": [{id, grpc_port, runtime}]}`), and
-  `POST /api/microgrids/import` a microgrid from a site export; both
-  live in memory only, and are `unsaved`.
+- Whole-site routes live under `/api/` (microgrids, import, defaults, spec
+  schema, logs, frequency). `GET /api/defaults` serves the spec `Defaults`
+  table, read-only. `POST /api/microgrids` creates the microgrids of a topology
+  document (201 `{"microgrids": [{id, grpc_port, runtime}]}`), and `POST
+  /api/microgrids/import` a microgrid from a site export; both live in memory
+  only, and are `unsaved`. `POST
+  /api/microgrids?existing=rebuild&client_version=V` is a declaration
+  (`topology::declare`): 200 `{"microgrids": [{id, grpc_port, runtime,
+  outcome}]}`, `outcome` being `created`, `rebuilt` or `unchanged`; every
+  microgrid needs an id. A `client_version` that is not the binary's is a 400,
+  checked before the rest of the query and the body are read. These two are the
+  one place a query parameter changes what a route does rather than filtering or
+  tuning its reply.
 - `GET /api/mg/{mg}/spec` answers a microgrid's stored spec, and
   `PUT` of a `MicrogridSpec` rebuilds it with carry (200 with the stored
   spec; 409 for a component id or a gRPC port another microgrid
@@ -413,36 +389,37 @@ Reimplementation of microsim.
 cargo build
 cargo test
 cd python && uv sync && cd ..
-cargo run --bin macrocosim -- --state-dir /tmp/mc --python python/.venv/bin/python examples/starter_site.py
+cargo run --bin macrocosim -- --state-dir /tmp/mc --python python/.venv/bin/python
+python/.venv/bin/python examples/starter_site.py   # in another terminal
 cargo run --bin macroctl -- info
 cargo run --bin macroctl -- tree
 cargo run --bin macroctl -- stream 1001 --samples 5
 cargo run --bin macroctl -- set-power 1001 5000
 ```
 
-The state directory (`--state-dir`, the current directory by default)
-must not hold 0.1's `enterprise.lisp` or `microgrids/*.lisp`, and a
-`.lisp` argument is refused too: the binary exits naming the files.
+The state directory (`--state-dir`, the current directory by default) must not
+hold 0.1's `enterprise.lisp` or `microgrids/*.lisp`, and a `.lisp` argument is
+refused too: the binary exits naming the files. A `.py` argument is refused with
+a pointer to running the script with `python`; the binary takes no positional
+argument.
 
-The Rust tests that run a Python child use `python/.venv/bin/python`
-(run `uv sync` in `python/` first); they are skipped with a note when
-it is missing, and fail instead under `MACROCOSIM_REQUIRE_PYTHON=1`,
-which CI sets. In `python/`, `MACROCOSIM_BIN=../target/debug/macrocosim
-MACROCOSIM_REQUIRE_LIVE=1 uv run pytest` runs the client's live tests
-against this checkout's binary.
+The Rust tests that need the venv use `python/.venv/bin/python` (run `uv sync`
+in `python/` first); they are skipped with a note when it is missing, and fail
+instead under `MACROCOSIM_REQUIRE_PYTHON=1`, which CI sets. In `python/`,
+`MACROCOSIM_BIN=../target/debug/macrocosim MACROCOSIM_REQUIRE_LIVE=1 uv run
+pytest` runs the client's live tests against this checkout's binary.
 
-`ui-assets/` changes: `make ui-test` runs biome over `ui-assets`
-(config in `biome.json`; `check` also runs the organizeImports assist,
-so an unsorted import or export specifier list fails as an error, and
-`noDescendingSpecificity` is off for `style.css` in the `overrides`
-block until its rules are reordered with a browser to check), then
-every `tools/*-test.mjs` plus `boot-smoke.mjs`,
-which imports app.js under a DOM shim and catches TDZ / cycle /
-bad-export breakage a curl-200 can't see. `make ui-e2e` runs the
-Playwright smoke in `tools/ui-smoke/` against a scratch server on
-OS-chosen ports that runs `examples/starter_site.py` (it needs
-`uv sync` in `python/` first), the way CI does; `make ui-e2e-deps` installs its one
-dependency, Playwright with a matching Chromium, into the gitignored
+`ui-assets/` changes: `make ui-test` runs biome over `ui-assets` (config in
+`biome.json`; `check` also runs the organizeImports assist, so an unsorted
+import or export specifier list fails as an error, and `noDescendingSpecificity`
+is off for `style.css` in the `overrides` block until its rules are reordered
+with a browser to check), then every `tools/*-test.mjs` plus `boot-smoke.mjs`,
+which imports app.js under a DOM shim and catches TDZ / cycle / bad-export
+breakage a curl-200 can't see. `make ui-e2e` runs the Playwright smoke in
+`tools/ui-smoke/` against a scratch server on OS-chosen ports, with
+`examples/starter_site.py` running against it as a separate process (it needs
+`uv sync` in `python/` first), the way CI does; `make ui-e2e-deps` installs its
+one dependency, Playwright with a matching Chromium, into the gitignored
 `node_modules`.
 
 UI input convention: a numeric field that commits on Enter (inspector
@@ -529,12 +506,11 @@ as one JSON line once bound (the readiness signal); the line carries
 `version`, the binary's version in PEP 440 form, so a client can tell
 a mismatched binary.
 
-`macrocosim --topology topology.json` boots the microgrids of a
-topology document instead of a script (the two cannot be combined):
-each is built from its spec with the file as its source, and a bad
+`macrocosim --topology topology.json` boots the microgrids of a topology
+document: each is built from its spec with the file as its source, and a bad
 document exits the binary. `--enterprise-id`, `--assets-addr`,
-`--dispatch-addr`, `--request-lifetime SECONDS` and
-`--augment-lifetime SECONDS` set the enterprise settings.
+`--dispatch-addr`, `--request-lifetime SECONDS` and `--augment-lifetime SECONDS`
+set the enterprise settings.
 
 `PlatformAssets` and `MicrogridDispatchService` each bind a single
 shared listener (they're enterprise-wide, keyed by `microgrid_id` per
@@ -614,15 +590,14 @@ nothing with no command standing; `full` offers the full rating). It
 has no pack of its own, and the site import drops the battery bounds
 from an export's charger.
 
-The car is runtime state: `POST /api/mg/{mg}/component/{id}/ev` plugs a
-catalog car in (`preset`, with `soc_pct`, `target_soc_pct`, `phases`,
-`max_current_a`, `capacity_wh`, `taper_start_pct`, `taper_floor_pct`
-overrides), `DELETE` unplugs it, `GET` reads it and the catalog. A
-`soc_pct` drive on a charger moves the plugged car's SoC and is refused
-when nothing is plugged in. Being runtime state, the plugged car is
-never part of the charger's spec; a script that should start with a car
-plugged in plugs it from `run`. A rebuild that keeps the charger keeps
-its car (`PhysicsState`).
+The car is runtime state: `POST /api/mg/{mg}/component/{id}/ev` plugs a catalog
+car in (`preset`, with `soc_pct`, `target_soc_pct`, `phases`, `max_current_a`,
+`capacity_wh`, `taper_start_pct`, `taper_floor_pct` overrides), `DELETE` unplugs
+it, `GET` reads it and the catalog. A `soc_pct` drive on a charger moves the
+plugged car's SoC and is refused when nothing is plugged in. Being runtime
+state, the plugged car is never part of the charger's spec; a script that should
+start with a car plugged in plugs it from its `main`. A rebuild that keeps the
+charger keeps its car (`PhysicsState`).
 
 ## Testing an external bounds-driving app
 
