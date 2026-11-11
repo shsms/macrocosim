@@ -1771,16 +1771,16 @@ await page.evaluate(async () => {
   topology.select([]);
 });
 
-// ── e2e: the edited-here chip, the export and the script chip ─────
-// The edits above make the script's microgrid differ from its script.
-const editedChip = await waitFor(
-  () => page.evaluate(() => document.querySelector("#mg-file-chips .mg-chip.edited")?.title ?? null),
+// ── e2e: the in-memory chip and the export ────────────────────────
+// The script declared 2200, so no file holds it: the export keeps it.
+const memoryChip = await waitFor(
+  () => page.evaluate(() => document.querySelector("#mg-file-chips .mg-chip.unsaved")?.title ?? null),
   10000,
 ).catch(() => null);
 check(
-  "e2e: an edited script microgrid carries the edited-here chip",
-  /saving starter_site\.py replaces these edits; export to keep them/.test(editedChip ?? ""),
-  String(editedChip),
+  "e2e: a declared microgrid carries the in-memory-only chip",
+  /in memory only: export to keep it/.test(memoryChip ?? ""),
+  String(memoryChip),
 );
 check(
   "e2e: the microgrid bar offers Copy as Python and Save as .py",
@@ -1796,7 +1796,9 @@ const savedText = saved ? await (async () => {
 })() : "";
 check(
   "e2e: Save as .py downloads the microgrid as a Python module",
-  saved?.suggestedFilename() === "microgrid_2200.py" && /make_microgrid\(/.test(savedText) && /MICROGRIDS = \[/.test(savedText),
+  saved?.suggestedFilename() === "microgrid_2200.py" &&
+    /MICROGRID = mc\.make_microgrid\(/.test(savedText) &&
+    /async def main\(\)/.test(savedText),
   JSON.stringify({ name: saved?.suggestedFilename(), head: savedText.slice(0, 200) }),
 );
 await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: BASE });
@@ -1809,26 +1811,6 @@ const copied = await waitFor(
   20000,
 ).catch(() => null);
 check("e2e: Copy as Python puts the module on the clipboard", copied !== null && copied === savedText, String(copied?.slice(0, 200)));
-const scriptChip = await page.evaluate(() => {
-  const c = document.getElementById("script-chip");
-  return { hidden: c.hidden, text: c.textContent, state: c.dataset.state };
-});
-check(
-  "e2e: the script chip reads running",
-  !scriptChip.hidden && scriptChip.state === "running" && /running/.test(scriptChip.text),
-  JSON.stringify(scriptChip),
-);
-await page.click("#script-chip");
-const scriptPop = await page.evaluate(() => {
-  const p = document.getElementById("script-popover");
-  return { open: p.matches(":popover-open"), text: p.textContent };
-});
-await page.evaluate(() => document.getElementById("script-popover").hidePopover());
-check(
-  "e2e: the script chip opens the script's status and output",
-  scriptPop.open && /starter_site\.py/.test(scriptPop.text) && /output/.test(scriptPop.text),
-  JSON.stringify(scriptPop).slice(0, 400),
-);
 
 // ── e2e: live toggle ──────────────────────────────────────────────
 // Geometry as vis applied it, not just the models: a custom shape

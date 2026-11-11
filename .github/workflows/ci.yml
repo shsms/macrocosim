@@ -192,8 +192,8 @@ jobs:
       - name: pytest examples/pytest_demo
         run: uv run --no-sync pytest -q examples/pytest_demo
 
-  # Live browser smokes: boots the binary running the starter site's
-  # Python script (`make ui-e2e`, the same target AGENTS.md gives for
+  # Live browser smokes: boots the binary and runs the starter site's
+  # Python script against it (`make ui-e2e`, the same target AGENTS.md gives for
   # running the tools/ui-smoke/ scripts by hand) and drives the
   # real SPA with Playwright/Chromium — inspector knobs, dialogs, the
   # metrics panel, hover cards and the steam-boiler round trip end to
@@ -227,8 +227,8 @@ jobs:
         with:
           node-version: 22
 
-      # The smoke's server runs examples/starter_site.py on
-      # python/.venv, which `uv sync` makes with the package in it.
+      # examples/starter_site.py runs on python/.venv, which `uv sync`
+      # makes with the package in it; the server's .py export uses it too.
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
