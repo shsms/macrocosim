@@ -1,43 +1,8 @@
 //! The endpoints file `--emit-endpoints` writes once everything is bound.
 
-use std::process::{Child, Command};
-use std::time::{Duration, Instant};
+mod common;
 
-struct KillOnDrop(Child);
-
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-/// Run the binary with `args`, wait for its endpoints file, and read
-/// it. The child is killed when the returned guard drops.
-fn endpoints_of(
-    dir: &std::path::Path,
-    args: &[&std::ffi::OsStr],
-) -> (KillOnDrop, serde_json::Value) {
-    let endpoints = dir.join("endpoints.json");
-    let child = KillOnDrop(
-        Command::new(env!("CARGO_BIN_EXE_macrocosim"))
-            .args(["--ephemeral-ports", "--state-dir"])
-            .arg(dir)
-            .arg(format!("--emit-endpoints={}", endpoints.display()))
-            .args(args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !endpoints.exists() {
-        assert!(Instant::now() < deadline, "no endpoints file after 20 s");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let v = serde_json::from_str(&std::fs::read_to_string(&endpoints).unwrap()).unwrap();
-    (child, v)
-}
+use common::endpoints_of;
 
 /// `--topology` boots the document's microgrids, and the assets and
 /// dispatch address flags move those servers.

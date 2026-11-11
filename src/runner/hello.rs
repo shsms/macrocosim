@@ -69,12 +69,7 @@ impl std::fmt::Display for HelloError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Token => f.write_str("the token is not the current script child's"),
-            Self::Version { client } => write!(
-                f,
-                "the script's macrocosim package is version {client}, and this engine is \
-                 version {}; install the package of the same version",
-                *crate::version::VERSION
-            ),
+            Self::Version { client } => f.write_str(&crate::version::mismatch_message(client)),
             Self::Topology(e) => e.fmt(f),
         }
     }

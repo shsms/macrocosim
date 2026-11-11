@@ -1,10 +1,20 @@
-//! The engine's version in PEP 440 form, the form the Python package
-//! carries: the endpoints file, the script runner's hello and the
-//! interpreter check all compare this string.
+//! The engine's version in PEP 440 form, the form the Python package carries:
+//! the endpoints file, a client's declaration, the script runner's hello and
+//! the interpreter check all compare this string.
 
 /// The crate version in PEP 440 form.
 pub static VERSION: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| pep440(env!("CARGO_PKG_VERSION")));
+
+/// Why a client of version `client` (PEP 440) is refused: its version is not
+/// [`VERSION`].
+pub fn mismatch_message(client: &str) -> String {
+    format!(
+        "the client's macrocosim package is version {client}, and this engine is version \
+         {}; install the package of the same version",
+        *VERSION
+    )
+}
 
 /// A semver version in PEP 440 form, with maturin's rules: a
 /// pre-release `-alpha.N` becomes `aN`, `-beta.N` `bN` and `-rc.N`

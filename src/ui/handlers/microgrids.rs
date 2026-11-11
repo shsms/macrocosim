@@ -1,7 +1,10 @@
 //! The microgrid collection: list them, create them from a topology
 //! document, and import one from a site export (both in memory only).
 
-use axum::{extract::State, http::StatusCode};
+use std::collections::HashMap;
+
+use axum::extract::{FromRequest, Request, State};
+use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::engine::{Engine, topology};
@@ -33,18 +36,58 @@ pub(in crate::ui) async fn microgrids_list(
     )
 }
 
-/// POST /api/microgrids — create the microgrids of a topology
-/// document, in memory only. A microgrid without an id or a
-/// `grpc_port` takes the lowest free one; every component needs an id
-/// (422 without). Each microgrid's runtime is started and reported in
-/// the 201, `null` when none was started: the microgrid exists either
-/// way. 409 when a microgrid id, a component id or a port is taken;
-/// nothing is created then.
+/// What `POST /api/microgrids` does with a microgrid id that is already loaded.
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(in crate::ui) enum Existing {
+    /// Refuse the document (409), as a create does.
+    #[default]
+    Refuse,
+    /// Rebuild it with carry, or leave it when its spec is unchanged: a
+    /// declaration ([`topology::declare`]).
+    Rebuild,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::ui) struct CreateQuery {
+    #[serde(default)]
+    existing: Existing,
+    /// The client's package version in PEP 440 form, compared before this query
+    /// is parsed; listed so it is not an unknown field.
+    #[serde(default, rename = "client_version")]
+    _client_version: Option<String>,
+}
+
+/// POST /api/microgrids — create the microgrids of a topology document, in
+/// memory only. A microgrid without an id or a `grpc_port` takes the lowest
+/// free one; every component needs an id (422 without). Each microgrid's
+/// runtime is started and reported in the 201, `null` when none was started:
+/// the microgrid exists either way. 409 when a microgrid id, a component id or
+/// a port is taken; nothing is created then.
+///
+/// With `?existing=rebuild`, the document is a declaration instead: 200 with
+/// one entry per microgrid and its `outcome` (`created`, `rebuilt` or
+/// `unchanged`). A `client_version` that is not this engine's is a 400, checked
+/// before the rest of the query and the body are read, so a newer client is
+/// told why.
 pub(in crate::ui) async fn microgrids_create(
     State(engine): State<Engine>,
     State(runtimes): State<MicrogridRuntimes>,
-    Json(body): Json<serde_json::Value>,
+    request: Request,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let uri = request.uri().clone();
+    let loose = axum::extract::Query::<HashMap<String, String>>::try_from_uri(&uri)
+        .map_err(|e| ApiError::new(e.status(), e.body_text()))?;
+    if let Some(client) = loose.get("client_version")
+        && client != crate::version::VERSION.as_str()
+    {
+        let message = crate::version::mismatch_message(client);
+        return Err(ApiError::bad_request(message));
+    }
+    let axum::extract::Query(query) = axum::extract::Query::<CreateQuery>::try_from_uri(&uri)
+        .map_err(|e| ApiError::new(e.status(), e.body_text()))?;
+    let Json(body) = Json::<serde_json::Value>::from_request(request, &()).await?;
     let doc = TopologyDoc::from_value(body)
         .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
     if doc.microgrids.is_empty() {
@@ -54,10 +97,19 @@ pub(in crate::ui) async fn microgrids_create(
         ));
     }
     super::structural_change(engine, move |structural| async move {
-        let created = topology::create_doc(&structural, &runtimes, doc, None).await?;
+        let (status, microgrids) = match query.existing {
+            Existing::Refuse => {
+                let created = topology::create_doc(&structural, &runtimes, doc, None).await?;
+                (StatusCode::CREATED, serde_json::json!(created))
+            }
+            Existing::Rebuild => {
+                let declared = topology::declare(&structural, &runtimes, doc).await?;
+                (StatusCode::OK, serde_json::json!(declared))
+            }
+        };
         Ok((
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "microgrids": created })),
+            status,
+            Json(serde_json::json!({ "microgrids": microgrids })),
         ))
     })
     .await

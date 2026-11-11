@@ -13,6 +13,9 @@
 //! - LOG_TAP and other process-level globals stay un-initialised in
 //!   tests, so the `/api/logs` endpoint just returns empty —
 //!   acceptable for a fixture.
+//!
+//! `endpoints_of` runs the binary itself as a child process instead, for tests
+//! of what only the binary does; `KillOnDrop` ends that child.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -491,4 +494,47 @@ pub fn normalized(mut microgrid: serde_json::Value) -> serde_json::Value {
         connections.sort_by_key(|c| (c[0].as_u64(), c[1].as_u64()));
     }
     microgrid
+}
+
+/// A child process killed and reaped when this drops.
+#[allow(dead_code)]
+pub struct KillOnDrop(pub std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Run the macrocosim binary on ephemeral ports with `dir` as its state dir and
+/// `args`, wait for its endpoints file, and read it. The child is killed when
+/// the returned guard drops.
+#[allow(dead_code)]
+pub fn endpoints_of(
+    dir: &std::path::Path,
+    args: &[&std::ffi::OsStr],
+) -> (KillOnDrop, serde_json::Value) {
+    let endpoints = dir.join("endpoints.json");
+    let child = KillOnDrop(
+        std::process::Command::new(env!("CARGO_BIN_EXE_macrocosim"))
+            .args(["--ephemeral-ports", "--state-dir"])
+            .arg(dir)
+            .arg(format!("--emit-endpoints={}", endpoints.display()))
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !endpoints.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no endpoints file after 20 s"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let v = serde_json::from_str(&std::fs::read_to_string(&endpoints).unwrap()).unwrap();
+    (child, v)
 }
