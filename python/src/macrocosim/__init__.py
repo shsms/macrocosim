@@ -21,9 +21,10 @@ from ._components import (
     SteamBoiler,
     WindTurbine,
 )
-from ._connect import connect
+from ._connect import Connection, connect
 from ._enums import CommandMode, EvIdle, Health, OperationalMode, TelemetryMode
 from ._errors import (
+    ConnectionClosed,
     ExpectationFailed,
     LaunchError,
     MacrocosimError,
@@ -71,7 +72,8 @@ from ._topology import load_topology
 from ._units import MassFlow, Pressure
 
 __all__ = [
-    "launch", "connect", "load_topology", "Microgrid", "Recording", "RecordingReport",
+    "launch", "connect", "Connection", "load_topology", "Microgrid", "Recording",
+    "RecordingReport",
     "Component", "GridConnectionPoint", "Meter", "Battery",
     "BatteryInverter", "SolarInverter", "Chp", "EvCharger", "SteamBoiler",
     "WindTurbine", "PowerTransformer", "Breaker",
@@ -89,5 +91,5 @@ __all__ = [
     "Pressure", "MassFlow",
     "MacrocosimError", "SpecError", "LaunchError", "ServerError",
     "SimulatorExited", "Rejected", "UnknownComponent", "NoSample",
-    "MicrogridClosed", "ExpectationFailed",
+    "MicrogridClosed", "ConnectionClosed", "ExpectationFailed",
 ]  # fmt: skip

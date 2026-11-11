@@ -132,6 +132,11 @@ class MicrogridClosed(MacrocosimError):
         self.microgrid_id = microgrid_id
 
 
+class ConnectionClosed(MacrocosimError):
+    """The `Connection` was used after its `connect` block exited. A `Microgrid`
+    from it raises `MicrogridClosed` instead."""
+
+
 def fmt_duration(value: timedelta | float) -> str:
     """Seconds, at most one decimal, trailing ``.0`` dropped: ``60 s``, ``2.5
     s``."""

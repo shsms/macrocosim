@@ -9,7 +9,8 @@ import macrocosim
 pytestmark = pytest.mark.filterwarnings("error")
 
 EXPECTED = [
-    "launch", "connect", "load_topology", "Microgrid", "Recording", "RecordingReport",
+    "launch", "connect", "Connection", "load_topology", "Microgrid", "Recording",
+    "RecordingReport",
     "Component", "GridConnectionPoint", "Meter", "Battery",
     "BatteryInverter", "SolarInverter", "Chp", "EvCharger", "SteamBoiler",
     "WindTurbine", "PowerTransformer", "Breaker",
@@ -27,7 +28,7 @@ EXPECTED = [
     "Pressure", "MassFlow",
     "MacrocosimError", "SpecError", "LaunchError", "ServerError",
     "SimulatorExited", "Rejected", "UnknownComponent", "NoSample",
-    "MicrogridClosed", "ExpectationFailed",
+    "MicrogridClosed", "ConnectionClosed", "ExpectationFailed",
 ]  # fmt: skip
 
 

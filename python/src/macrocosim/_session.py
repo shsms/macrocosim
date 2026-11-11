@@ -1,9 +1,9 @@
 """The HTTP session to one simulator, and how its answers become errors.
 
 Internal; imports `_errors`. Every request goes through `_Session`, which
-refuses to run once the microgrid is closed, and maps each failure to the error
-tree: a refused write (400/409 from a ``POST`` or ``DELETE`` made for a user's
-call) is `Rejected`, any other non-2xx answer or transport failure is
+refuses to run once the block that owns it has exited, and maps each failure to
+the error tree: a refused write (400/409 from a ``POST`` or ``DELETE`` made for
+a user's call) is `Rejected`, any other non-2xx answer or transport failure is
 `ServerError`, or `SimulatorExited` when the process is gone.
 """
 
@@ -17,6 +17,7 @@ import httpx
 
 from ._errors import (
     WRONG_SHAPE,
+    MacrocosimError,
     MicrogridClosed,
     Rejected,
     ServerError,
@@ -24,6 +25,9 @@ from ._errors import (
     fmt_log,
     fmt_tail,
 )
+
+CLOSED = "is closed: its block has exited"
+"""What a call on a closed session reports happened to it."""
 
 ExitProbe = Callable[[], "tuple[int, str] | None"]
 """``None`` while the simulator runs; else its return code and log tail."""
@@ -86,8 +90,13 @@ class _Session:
         transport: httpx.AsyncBaseTransport | None = None,
         exit_probe: ExitProbe,
         log_path: Path | None = None,
+        closed_error: Callable[[str], MacrocosimError] | None = None,
     ) -> None:
         self.microgrid_id = microgrid_id
+        self._closed_error = closed_error or self._microgrid_closed_error
+        """Builds the error a call on the closed session raises, from what
+        happened to it (`CLOSED`, or that it was closed during the request);
+        `MicrogridClosed` unless `closed_error` is given."""
         self.log_path = log_path
         """The kept simulator log, named in messages; ``None`` without a
         ``state_dir``."""
@@ -105,8 +114,8 @@ class _Session:
         return f"/api/mg/{self.microgrid_id}/{rel}"
 
     def mark_closed(self) -> None:
-        """From now on, every call raises `MicrogridClosed` without any I/O, and
-        so does a request already running that loses its connection."""
+        """From now on, every call raises the session's closed error without any
+        I/O, and so does a request already running that loses its connection."""
         self._closed = True
 
     async def close(self) -> None:
@@ -134,16 +143,21 @@ class _Session:
         return await self.get_parsed(path, _require_json_object)
 
     async def post_json(
-        self, path: str, body: Mapping[str, Any] | None, *, call: str
+        self,
+        path: str,
+        body: Mapping[str, Any] | None,
+        *,
+        call: str,
+        params: Mapping[str, str] | None = None,
     ) -> Any:
-        """POST `body` (nothing for ``None``) to `path`; the decoded body, or
-        ``None`` for 204.
+        """POST `body` (nothing for ``None``) to `path`, with the query
+        `params`; the decoded body, or ``None`` for 204.
 
         `call` describes the user's call (``"Meter 104 power.set(30 kW)"``). A
         400 or 409 answer means the simulator refused it, and raises `Rejected`
         with that description.
         """
-        return await self._request("POST", path, json=body, call=call)
+        return await self._request("POST", path, params=params, json=body, call=call)
 
     async def post_parsed(
         self,
@@ -152,10 +166,11 @@ class _Session:
         parse: Callable[[Any], T],
         *,
         call: str,
+        params: Mapping[str, str] | None = None,
     ) -> T:
         """`post_json`, returning `parse` of the decoded answer; an answer
         that `parse` cannot read raises `ServerError`."""
-        answer = await self.post_json(path, body, call=call)
+        answer = await self.post_json(path, body, call=call, params=params)
         return _parse_answer("POST", path, answer, parse)
 
     async def delete(self, path: str, *, call: str) -> Any:
@@ -173,7 +188,7 @@ class _Session:
         call: str | None = None,
     ) -> Any:
         if self._closed:
-            raise self._closed_error("is closed: its block has exited")
+            raise self._closed_error(CLOSED)
         try:
             response = await self._client.request(method, path, params=params, json=json)
         except httpx.TransportError as exc:
@@ -209,7 +224,8 @@ class _Session:
             status=status,
         )
 
-    def _closed_error(self, what: str) -> MicrogridClosed:
+    def _microgrid_closed_error(self, what: str) -> MacrocosimError:
+        """The default closed error: `MicrogridClosed`, naming the microgrid."""
         return MicrogridClosed(
             f"microgrid {self.microgrid_id} {what}", microgrid_id=self.microgrid_id
         )

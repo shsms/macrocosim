@@ -475,6 +475,24 @@ def _assign_ids(
     return tuple(order), ids, next_id
 
 
+def _check_explicit_ids(specs: Sequence[MicrogridSpec]) -> frozenset[int]:
+    """The explicit component ids of `specs`; one given in two of them raises
+    `SpecError`, since component ids are unique across the microgrids."""
+    owner: dict[int, MicrogridSpec] = {}
+    for mg in specs:
+        for spec in mg._order:
+            if spec.id is None:
+                continue
+            number = int(spec.id)
+            other = owner.setdefault(number, mg)
+            if other is not mg:
+                raise SpecError(
+                    f"{spec!r}: id {number} is in {other!r} and in {mg!r}; component "
+                    "ids are unique across the microgrids"
+                )
+    return frozenset(owner)
+
+
 def number_microgrids(specs: list[MicrogridSpec]) -> None:
     """Number the automatic component ids of `specs` across the whole list, so
     no two microgrids share an id.
@@ -488,19 +506,7 @@ def number_microgrids(specs: list[MicrogridSpec]) -> None:
     check_type("specs", specs, list)
     for mg in specs:
         check_type("specs item", mg, MicrogridSpec)
-    owner: dict[int, MicrogridSpec] = {}
-    for mg in specs:
-        for spec in mg._order:
-            if spec.id is None:
-                continue
-            number = int(spec.id)
-            other = owner.setdefault(number, mg)
-            if other is not mg:
-                raise SpecError(
-                    f"{spec!r}: id {number} is in {other!r} and in {mg!r}; component "
-                    "ids are unique across the microgrids"
-                )
-    skip = frozenset(owner)
+    skip = _check_explicit_ids(specs)
     start = FIRST_AUTO_ID
     for mg in specs:
         order, ids, start = _assign_ids(mg.topology, start, skip)
