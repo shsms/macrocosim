@@ -18,8 +18,11 @@ enterprise.lisp
 
 # brainstorming / SDD scratch (ledgers, briefs, mockups)
 /.superpowers/
-/node_modules
 .worktrees/
+
+# A node_modules from before Playwright moved out of the checkout
+# (Makefile PLAYWRIGHT_DIR); delete it.
+/node_modules
 
 # Bytecode of the example scripts, their tests and the smoke's site.
 /examples/**/__pycache__/

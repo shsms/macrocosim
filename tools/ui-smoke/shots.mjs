@@ -1,7 +1,7 @@
 // Screenshots of the main views in both themes, for looking at, not asserting.
-// Run: MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/shots.mjs
-// OUT_DIR
-import { chromium } from "playwright";
+// Run: PLAYWRIGHT_DIR=$(make -s playwright-dir) \
+//        MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/shots.mjs OUT_DIR
+import { chromium } from "./playwright.mjs";
 
 const BASE = process.env.MACROCOSIM_UI;
 const out = process.argv[2];

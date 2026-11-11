@@ -1,9 +1,10 @@
 // Live-topology smoke: in-browser unit tests for ui-assets/live.js
 // plus e2e assertions against a running macrocosim.
-// Run: MACROCOSIM_UI=http://127.0.0.1:PORT MACROCTL=target/debug/macroctl \
+// Run: PLAYWRIGHT_DIR=$(make -s playwright-dir) \
+//        MACROCOSIM_UI=http://127.0.0.1:PORT MACROCTL=target/debug/macroctl \
 //        node tools/ui-smoke/live-topology.mjs
 import { execFile } from "node:child_process";
-import { chromium } from "playwright";
+import { chromium } from "./playwright.mjs";
 
 const BASE = process.env.MACROCOSIM_UI;
 if (!BASE) throw new Error("set MACROCOSIM_UI to a running macrocosim UI, e.g. http://127.0.0.1:8801");

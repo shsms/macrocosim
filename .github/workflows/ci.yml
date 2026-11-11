@@ -235,30 +235,34 @@ jobs:
           enable-cache: true
           cache-dependency-glob: python/uv.lock
 
-      - name: Python venv for the starter site
+      - name: Python venv for the smoke site
         working-directory: python
         run: uv sync
 
-      # Cache the downloaded Chromium build, keyed on the Makefile that
-      # pins the Playwright version: a bumped pin misses the exact key
-      # and restores the previous build, which the reinstall supersedes.
-      - name: Cache Playwright browsers
+      # Where the Makefile installs Playwright, and the version it pins.
+      - name: Playwright dir and version
+        id: playwright
+        run: |
+          echo "dir=$(make -s playwright-dir)" >> "$GITHUB_OUTPUT"
+          echo "version=$(make -s playwright-version)" >> "$GITHUB_OUTPUT"
+
+      # Cache the Playwright package and its Chromium build, keyed on the
+      # pinned version alone: a bumped pin starts a fresh cache, so old
+      # installs are not carried along.
+      - name: Cache Playwright
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('Makefile') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
+          path: |
+            ~/.cache/ms-playwright
+            ${{ steps.playwright.outputs.dir }}
+          key: ${{ runner.os }}-playwright-${{ steps.playwright.outputs.version }}
 
       # No package.json in this repo — tools/ui-smoke's only dependency
-      # is the playwright package itself, installed loose into the
-      # gitignored node_modules at the version the Makefile pins. The
-      # runner also needs Chromium's OS libraries, which the Makefile
-      # leaves to the OS.
+      # is the playwright package itself, installed outside the checkout
+      # (the Makefile's PLAYWRIGHT_DIR) at the version the Makefile pins,
+      # with Chromium and the OS libraries Chromium needs.
       - name: Install Playwright + Chromium
-        run: |
-          make ui-e2e-deps
-          npx playwright install-deps chromium
+        run: make ui-e2e-os-deps
 
       # Builds the binaries, boots a scratch server on OS-chosen ports,
       # runs the smoke, prints the server log on failure, and kills
