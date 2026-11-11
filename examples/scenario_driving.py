@@ -1,10 +1,14 @@
 """A 30-minute recorded stress run on the starter site (``starter_site.py``,
 imported from this directory).
 
-Run it in place of the starter site, from the repository root::
+Start the simulator, then run this file against it in place of the starter site,
+from the repository root::
 
-    cargo run --bin macrocosim -- --python python/.venv/bin/python \\
-        examples/scenario_driving.py
+    cargo run --bin macrocosim -- --python python/.venv/bin/python
+    python/.venv/bin/python examples/scenario_driving.py
+
+It declares the starter site's microgrid 2200 itself. When the starter site
+script ran before, 2200 is unchanged and keeps its state.
 
 It plugs the car in and starts the starter site's animation, then records 30
 minutes under the name ``example-30min`` while it:
@@ -25,8 +29,7 @@ panel, or read the recording's routes::
     curl -s http://127.0.0.1:8801/api/mg/2200/recording/report   # metrics
 
 At the end it puts back every knob it changed, prints the report, and leaves the
-starter site's animation running. Saving this file, or ``starter_site.py``,
-starts the run again.
+starter site's animation running until the script is stopped.
 """
 
 from __future__ import annotations
@@ -39,10 +42,7 @@ import time
 from frequenz.quantities import Percentage, Power
 
 import macrocosim as mc
-import starter_site
-from starter_site import BATTERY, CONSUMER, SOLAR, animate, holding, plug_car
-
-MICROGRIDS = starter_site.MICROGRIDS
+from starter_site import BATTERY, CONSUMER, MICROGRID, SOLAR, animate, holding, plug_car
 
 kW = Power.from_kilowatts
 pct = Percentage.from_percent
@@ -121,16 +121,21 @@ async def stress_run(microgrid: mc.Microgrid) -> mc.RecordingReport:
     return recording.report()
 
 
-async def run(microgrids: dict[int, mc.Microgrid]) -> None:
-    plant = microgrids[2200]
-    await plug_car(plant)
-    async with asyncio.TaskGroup() as tasks:
-        tasks.create_task(animate(plant))
-        report = await stress_run(plant)
-        print(
-            f"{report.name}: {report.elapsed_s:.0f} s, ended by {report.ended_by}; "
-            f"peak grid {report.peak_grid_w / 1000:.1f} kW, battery charged "
-            f"{report.total_battery_charged_wh / 1000:.1f} kWh and discharged "
-            f"{report.total_battery_discharged_wh / 1000:.1f} kWh, PV "
-            f"{report.total_pv_produced_wh / 1000:.1f} kWh"
-        )
+async def main() -> None:
+    async with mc.connect() as sim:
+        plant = await sim.declare(MICROGRID)
+        await plug_car(plant)
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(animate(plant))
+            report = await stress_run(plant)
+            print(
+                f"{report.name}: {report.elapsed_s:.0f} s, ended by {report.ended_by}; "
+                f"peak grid {report.peak_grid_w / 1000:.1f} kW, battery charged "
+                f"{report.total_battery_charged_wh / 1000:.1f} kWh and discharged "
+                f"{report.total_battery_discharged_wh / 1000:.1f} kWh, PV "
+                f"{report.total_pv_produced_wh / 1000:.1f} kWh"
+            )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

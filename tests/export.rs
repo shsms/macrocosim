@@ -36,15 +36,16 @@ const EVERY_CATEGORY: &str = r#"{"schema_version": 1, "microgrids": [{
                     [1, 9], [1, 10], [1, 11], [11, 12], [1, 13], [13, 14]]
 }]}"#;
 
-/// Import the exported module at `path` with the venv's Python and
-/// render its `MICROGRIDS` back into topology JSON.
+/// Import the exported module at `path` with the venv's Python and render its
+/// `MICROGRID` back into topology JSON. Importing it does not run its `main`,
+/// so nothing is declared.
 fn import_exported(python: &Path, path: &Path) -> serde_json::Value {
     const PROGRAM: &str = "import importlib.util, json, sys\n\
         from macrocosim._render import render\n\
         spec = importlib.util.spec_from_file_location('exported', sys.argv[1])\n\
         module = importlib.util.module_from_spec(spec)\n\
         spec.loader.exec_module(module)\n\
-        print(json.dumps([render(m)['microgrids'][0] for m in module.MICROGRIDS]))\n";
+        print(json.dumps(render(module.MICROGRID)['microgrids'][0]))\n";
     let out = std::process::Command::new(python)
         .arg("-c")
         .arg(PROGRAM)
@@ -75,17 +76,15 @@ async fn an_exported_microgrid_imports_and_gives_its_spec_back() {
     assert_eq!(r.status(), StatusCode::OK);
     assert_eq!(r.headers()["content-type"], "text/x-python; charset=utf-8");
     let text = r.text().await.unwrap();
-    assert!(text.contains("MICROGRIDS = ["), "{text}");
+    assert!(text.contains("MICROGRID = mc.make_microgrid("), "{text}");
+    assert!(text.contains("async def main() -> None:"), "{text}");
+    assert!(text.contains("if __name__ == \"__main__\":"), "{text}");
     assert!(text.contains(r#"name='it\'s "north"'"#), "{text}");
     let path = s.dir().join("exported.py");
     std::fs::write(&path, &text).unwrap();
     let rendered = import_exported(&python, &path);
     let (_, stored) = common::get_spec(&client, &s, s.mg_id).await;
-    assert_eq!(
-        normalized(rendered[0].clone()),
-        normalized(stored),
-        "{text}"
-    );
+    assert_eq!(normalized(rendered), normalized(stored), "{text}");
 }
 
 #[tokio::test]

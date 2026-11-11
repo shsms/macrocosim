@@ -2,20 +2,22 @@
 a CHP and a hidden consumer load, the environment that animates it, and seven
 scenarios that drive it.
 
-Run it from the repository root, with the venv that ``uv sync`` makes in
-``python/``::
+Start the simulator, then run this file against it, from the repository root
+with the venv that ``uv sync`` makes in ``python/``::
 
     cargo run --bin macrocosim -- --enterprise-id 1 \\
-        --python python/.venv/bin/python examples/starter_site.py
+        --python python/.venv/bin/python
+    python/.venv/bin/python examples/starter_site.py
 
-Saving this file restarts ``run``. Every component has an explicit id, so the
-battery keeps its state of charge and the charger its car across the restart
-(see docs/python-scripts.md).
+Microgrid 2200 stays loaded when the script stops. Running it again leaves 2200
+as it is when ``MICROGRID`` is unchanged, and rebuilds it otherwise; every
+component has an explicit id, so the battery keeps its state of charge and the
+charger its car either way (see docs/python-scripts.md).
 
 Each scenario is an async function that takes the microgrid, records itself and
 returns the recording's report. Scenarios run inside the script, where they can
-pause the animation: to run one, await it in ``run`` beside the animation and
-save.
+pause the animation: to run one, await it in ``main`` beside the animation and
+run the script again.
 """
 
 from __future__ import annotations
@@ -75,11 +77,9 @@ GRID = mc.make_grid_connection_point(
     id=1, rated_lower=kW(-90), rated_upper=kW(100), successors=[MAIN_METER]
 )
 
-MICROGRIDS = [
-    mc.make_microgrid(
-        id=2200, name="Starter site", tso="TN", grpc_port=8800, topology=GRID
-    ),
-]
+MICROGRID = mc.make_microgrid(
+    id=2200, name="Starter site", tso="TN", grpc_port=8800, topology=GRID
+)
 
 
 # -----------------------------------------------------------------------------
@@ -159,17 +159,19 @@ async def plug_car(microgrid: mc.Microgrid) -> None:
     try:
         await microgrid[EV_CHARGER].plug("sedan", soc=pct(35))
     except mc.Rejected as exc:
-        # After a reload the charger carries its car over, and refuses another.
+        # Any refusal is printed and the script goes on: on a re-run, the
+        # charger still has its car and refuses another.
         print(f"plug('sedan') refused: {exc.text}")
 
 
-async def run(microgrids: dict[int, mc.Microgrid]) -> None:
-    plant = microgrids[2200]
-    await plug_car(plant)
-    async with asyncio.TaskGroup() as tasks:
-        tasks.create_task(animate(plant))
-        # To run a scenario with the script, await it here and save, e.g.:
-        # print(await pv_dropout(plant))
+async def main() -> None:
+    async with mc.connect() as sim:
+        plant = await sim.declare(MICROGRID)
+        await plug_car(plant)
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(animate(plant))
+            # To run a scenario with the script, await it here, e.g.:
+            # print(await pv_dropout(plant))
 
 
 # -----------------------------------------------------------------------------
@@ -311,3 +313,7 @@ async def off_grid_island(microgrid: mc.Microgrid) -> mc.RecordingReport:
     finally:
         await grid.health.set(mc.Health.OK)
     return recording.report()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

@@ -1,14 +1,15 @@
 """Write microgrid specs as a Python module: ``python -m macrocosim.export``.
 
-Reads a topology document on stdin and writes, on stdout, a module that builds
-the same microgrids with the ``make_*`` constructors and lists them in
-``MICROGRIDS``, as a script for ``macrocosim plant.py`` does. The simulator runs
+Reads a topology document of one microgrid on stdin and writes, on stdout, a
+module that builds the same microgrid with the ``make_*`` constructors as
+``MICROGRID``, and declares it on a running simulator when run as a program
+(``python site.py``). Importing the module declares nothing. The simulator runs
 this for its "Save as .py" export.
 
 Every component's id is written, so a script built from the export keeps the ids
 the simulator showed. Every string is written with `repr`, so a name cannot
 break out of its literal. A component under two parents is written once, as a
-variable, before the microgrids.
+variable, before the microgrid.
 
 Imports `_topology`, `_spec`, `_units` and `_errors`.
 """
@@ -32,19 +33,18 @@ INDENT = "    "
 class _Writer:
     """The module's text, and the imports it needs."""
 
-    def __init__(self, specs: list[MicrogridSpec]) -> None:
+    def __init__(self, mg: MicrogridSpec) -> None:
         self.quantities: set[str] = set()
         self.timedelta = False
         self.shared: dict[ComponentSpec[Any], str] = {}
-        for mg in specs:
-            parents: dict[ComponentSpec[Any], int] = {}
-            for spec in mg._order:
-                for child in children(spec):
-                    parents[child] = parents.get(child, 0) + 1
-            for spec in mg._order:
-                if parents.get(spec, 0) > 1:
-                    self.shared[spec] = f"{spec._type}_{mg._ids[spec]}"
-        self.specs = specs
+        parents: dict[ComponentSpec[Any], int] = {}
+        for spec in mg._order:
+            for child in children(spec):
+                parents[child] = parents.get(child, 0) + 1
+        for spec in mg._order:
+            if parents.get(spec, 0) > 1:
+                self.shared[spec] = f"{spec._type}_{mg._ids[spec]}"
+        self.mg = mg
 
     def value(self, value: object) -> str:
         """A field value as a Python expression."""
@@ -94,38 +94,41 @@ class _Writer:
         return self.shared.get(spec) or self.component(mg, spec, depth)
 
     def microgrid(self, mg: MicrogridSpec) -> str:
-        pad = INDENT * 2
-        lines = [f"{INDENT}mc.make_microgrid("]
+        lines = ["MICROGRID = mc.make_microgrid("]
         if mg.id is not None:
-            lines.append(f"{pad}id={int(mg.id)!r},")
+            lines.append(f"{INDENT}id={int(mg.id)!r},")
         for name in ("name", "tso"):
             value = getattr(mg, name)
             if value is not None:
-                lines.append(f"{pad}{name}={value!r},")
+                lines.append(f"{INDENT}{name}={value!r},")
         if mg.grpc_port is not None:
-            lines.append(f"{pad}grpc_port={int(mg.grpc_port)!r},")
+            lines.append(f"{INDENT}grpc_port={int(mg.grpc_port)!r},")
         if mg.physics_tick is not None:
-            lines.append(f"{pad}physics_tick={self.value(mg.physics_tick)},")
-        topology = self.reference(mg, mg.topology, 2)
-        lines.append(f"{pad}topology={topology},")
-        lines.append(f"{INDENT}),")
+            lines.append(f"{INDENT}physics_tick={self.value(mg.physics_tick)},")
+        topology = self.reference(mg, mg.topology, 1)
+        lines.append(f"{INDENT}topology={topology},")
+        lines.append(")")
         return "\n".join(lines)
 
     def module(self) -> str:
+        mg = self.mg
         variables = []
-        for mg in self.specs:
-            for spec in mg._order:
-                name = self.shared.get(spec)
-                if name is not None:
-                    variables.append(f"{name} = {self.component(mg, spec, 0)}")
-        body = ["MICROGRIDS = ["]
-        body += [self.microgrid(mg) for mg in self.specs]
-        body.append("]")
+        for spec in mg._order:
+            name = self.shared.get(spec)
+            if name is not None:
+                variables.append(f"{name} = {self.component(mg, spec, 0)}")
+        body = self.microgrid(mg)
         # Written after the body, whose values name the imports.
-        head = ['"""Microgrids exported from macrocosim."""', ""]
+        head = [
+            '"""A microgrid exported from macrocosim: import ``MICROGRID``, or run',
+            "this file to declare it on the simulator at ``$MACROCOSIM_URL``",
+            '(``http://127.0.0.1:8801`` when unset)."""',
+            "",
+            "import asyncio",
+        ]
         if self.timedelta:
             head.append("from datetime import timedelta")
-            head.append("")
+        head.append("")
         if self.quantities:
             head.append(
                 f"from frequenz.quantities import {', '.join(sorted(self.quantities))}"
@@ -135,13 +138,30 @@ class _Writer:
         parts = ["\n".join(head)]
         if variables:
             parts.append("\n\n".join(variables))
-        parts.append("\n".join(body))
-        return "\n\n".join(parts) + "\n"
+        parts.append(body)
+        return "\n\n".join(parts) + "\n" + MAIN_BLOCK
+
+
+MAIN_BLOCK = """
+
+async def main() -> None:
+    async with mc.connect() as sim:
+        await sim.declare(MICROGRID)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+"""
+"""The end of every exported module: declare ``MICROGRID`` when run."""
 
 
 def to_python(specs: list[MicrogridSpec]) -> str:
-    """The text of a module whose ``MICROGRIDS`` builds `specs`."""
-    return _Writer(specs).module()
+    """The text of a module whose ``MICROGRID`` builds the one microgrid of
+    `specs`, and whose ``main`` declares it. More or fewer than one raises
+    `SpecError`: the export writes one microgrid per file."""
+    if len(specs) != 1:
+        raise SpecError(f"the export writes one microgrid per file, not {len(specs)}")
+    return _Writer(specs[0]).module()
 
 
 def main() -> int:

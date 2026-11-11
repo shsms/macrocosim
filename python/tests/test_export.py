@@ -22,7 +22,6 @@ from frequenz.quantities import (
 
 import macrocosim as mc
 from macrocosim._render import render
-from macrocosim._spec import number_microgrids
 from macrocosim._topology import specs_from_doc
 from macrocosim.export import to_python
 
@@ -77,7 +76,6 @@ def _every_category() -> list[mc.MicrogridSpec]:
             successors=[mc.make_meter(operational_mode=mc.OperationalMode.INACTIVE)]
         ),
     )
-    number_microgrids([first, second])
     return [first, second]
 
 
@@ -85,20 +83,48 @@ def _doc(specs: list[mc.MicrogridSpec]) -> dict[str, Any]:
     return render(*specs)
 
 
-def _run(text: str) -> list[mc.MicrogridSpec]:
-    namespace: dict[str, Any] = {}
+def _run(text: str) -> mc.MicrogridSpec:
+    """The ``MICROGRID`` of the module `text`, imported (not run)."""
+    namespace: dict[str, Any] = {"__name__": "exported"}
     exec(compile(text, "<export>", "exec"), namespace)
-    return namespace["MICROGRIDS"]
+    return namespace["MICROGRID"]
 
 
 def test_every_category_writes_and_reads_back() -> None:
-    doc = _doc(_every_category())
-    text = to_python(specs_from_doc(doc))
-    assert _doc(_run(text)) == doc
+    texts = []
+    for spec in _every_category():
+        doc = _doc([spec])
+        text = to_python(specs_from_doc(doc))
+        assert _doc([_run(text)]) == doc
+        texts.append(text)
     # Strings are written with repr, so none breaks out of its literal.
     for name in ("it's \"plant\"\n'''", "'); import os #"):
-        assert f"name={name!r}" in text
-    assert "import os\n" not in text
+        assert f"name={name!r}" in texts[0]
+    assert "import os\n" not in texts[0]
+
+
+def test_the_module_declares_its_microgrid_only_when_run() -> None:
+    [first, _] = _every_category()
+    text = to_python([first])
+    assert text.startswith('"""A microgrid exported from macrocosim')
+    assert "\nimport asyncio\n" in text
+    assert text.endswith(
+        "async def main() -> None:\n"
+        "    async with mc.connect() as sim:\n"
+        "        await sim.declare(MICROGRID)\n"
+        "\n\n"
+        'if __name__ == "__main__":\n'
+        "    asyncio.run(main())\n"
+    )
+    # Importing it builds MICROGRID and defines main, and connects nowhere.
+    namespace: dict[str, Any] = {"__name__": "exported"}
+    exec(compile(text, "<export>", "exec"), namespace)
+    assert callable(namespace["main"])
+
+
+def test_the_export_writes_one_microgrid() -> None:
+    with pytest.raises(mc.SpecError, match="one microgrid per file, not 2"):
+        to_python(_every_category())
 
 
 def test_a_component_under_two_parents_is_one_variable() -> None:
@@ -107,7 +133,7 @@ def test_a_component_under_two_parents_is_one_variable() -> None:
     battery_id = next(i for s, i in first._ids.items() if s._type == "battery")
     assert text.count(f"battery_{battery_id} = mc.make_battery(") == 1
     assert text.count(f"battery_{battery_id},") == 2
-    [back] = _run(text)
+    back = _run(text)
     left, right = (
         c for c in back.topology.successors or () if c._type == "battery_inverter"
     )
@@ -122,7 +148,8 @@ def test_every_id_is_written() -> None:
 
 
 def test_the_module_runs_from_stdin_to_stdout() -> None:
-    doc = _doc(_every_category())
+    [first, _] = _every_category()
+    doc = _doc([first])
     out = subprocess.run(
         [sys.executable, "-P", "-m", "macrocosim.export"],
         input=json.dumps(doc),
@@ -130,7 +157,7 @@ def test_the_module_runs_from_stdin_to_stdout() -> None:
         text=True,
         check=True,
     )
-    assert _doc(_run(out.stdout)) == doc
+    assert _doc([_run(out.stdout)]) == doc
 
 
 def test_the_module_reads_and_writes_utf8_whatever_the_locale() -> None:
