@@ -38,7 +38,7 @@ $(PLAYWRIGHT_STAMP):
 	@touch $@
 
 # The browser smokes against a scratch server on OS-chosen ports, with
-# examples/starter_site.py running against it on the venv `uv sync`
+# tools/ui-smoke/site.py running against it on the venv `uv sync`
 # makes in python/. The server's and the script's logs are printed when
 # the boot or a smoke fails; the scratch state dir goes with the server.
 ui-e2e: ui-e2e-deps
@@ -53,14 +53,14 @@ ui-e2e: ui-e2e-deps
 	  for _ in $$(seq 1 30); do [ -s "$$sd/endpoints.json" ] && break; sleep 1; done; \
 	  [ -s "$$sd/endpoints.json" ] || { echo "server failed to boot:"; logs; exit 1; }; \
 	  ui=$$(sed -n 's/.*"ui":"\([^"]*\)".*/\1/p' "$$sd/endpoints.json"); \
-	  MACROCOSIM_URL="http://$$ui" python/.venv/bin/python -u examples/starter_site.py \
+	  MACROCOSIM_URL="http://$$ui" python/.venv/bin/python -u tools/ui-smoke/site.py \
 	      > "$$sd/script.log" 2>&1 & script=$$!; \
 	  declared=; \
 	  for _ in $$(seq 1 30); do \
 	    curl -s "http://$$ui/api/microgrids" | grep -q '"id":2200' && { declared=1; break; }; \
-	    kill -0 $$script 2>/dev/null || { echo "the starter site exited:"; logs; exit 1; }; \
+	    kill -0 $$script 2>/dev/null || { echo "the smoke site exited:"; logs; exit 1; }; \
 	    sleep 1; \
 	  done; \
-	  [ -n "$$declared" ] || { echo "the starter site did not declare 2200:"; logs; exit 1; }; \
+	  [ -n "$$declared" ] || { echo "the smoke site did not declare 2200:"; logs; exit 1; }; \
 	  MACROCOSIM_UI="http://$$ui" MACROCTL=$(TARGET_DIR)/debug/macroctl node tools/ui-smoke/live-topology.mjs \
 	    || { logs; exit 1; }

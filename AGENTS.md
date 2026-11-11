@@ -181,12 +181,12 @@ environment over the HTTP API. Reimplementation of microsim.
     reactive power or power factor (with a `leading` checkbox).
 - `tools/ui-smoke/` — Playwright smoke scripts against a live server
   (`MACROCOSIM_UI=http://127.0.0.1:PORT node tools/ui-smoke/live-topology.mjs`
-  points it at a server you already run). The e2e half drives the Starter site
-  (microgrid 2200) from a scratch state dir, and sends gRPC setpoints through
-  the `macroctl` binary named by `MACROCTL`. `make ui-e2e` builds both binaries,
-  boots one server, runs the starter site against it and runs the smoke, and the
-  `ui-e2e` job in `.github/workflows/ci.yml` does the same on pushes to main and
-  PRs targeting main.
+  points it at a server you already run). The e2e half drives the smoke's own
+  site (`tools/ui-smoke/site.py`, microgrid 2200) from a scratch state dir, and
+  sends gRPC setpoints through the `macroctl` binary named by `MACROCTL`. `make
+  ui-e2e` builds both binaries, boots one server, runs that site against it and
+  runs the smoke, and the `ui-e2e` job in `.github/workflows/ci.yml` does the
+  same on pushes to main and PRs targeting main.
 - `src/server.rs` — `Microgrid` gRPC service
 - `src/assets_server.rs` — `PlatformAssets` gRPC service (shared port)
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
@@ -417,7 +417,7 @@ with a browser to check), then every `tools/*-test.mjs` plus `boot-smoke.mjs`,
 which imports app.js under a DOM shim and catches TDZ / cycle / bad-export
 breakage a curl-200 can't see. `make ui-e2e` runs the Playwright smoke in
 `tools/ui-smoke/` against a scratch server on OS-chosen ports, with
-`examples/starter_site.py` running against it as a separate process (it needs
+`tools/ui-smoke/site.py` running against it as a separate process (it needs
 `uv sync` in `python/` first), the way CI does; `make ui-e2e-deps` installs its
 one dependency, Playwright with a matching Chromium, into the gitignored
 `node_modules`.

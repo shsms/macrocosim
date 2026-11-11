@@ -749,7 +749,7 @@ const edges = await waitFor(async () => {
 });
 const liveEdges = edges.filter(isLive);
 check("e2e: some edge carries live flow", liveEdges.length > 0, JSON.stringify(edges));
-// starter site: the hidden consumer meter (id 100, under meter-2)
+// smoke site: the hidden consumer meter (id 100, under meter-2)
 // always consumes, so its edge takes the import colour regardless
 // of PV sunlight.
 const consumer = await waitFor(async () => (await getEdges()).find((e) => e.id === "2-100" && isLive(e)));
@@ -775,7 +775,7 @@ check("e2e: the values pill's tooltip describes the flow colours", await page.ev
 // not animate) to 0 W takes its edge under the dead band: the next
 // flush must paint it back to the rest look, not leave the last
 // colour and width standing. The block puts the 2 kW back.
-// A typed write of the starter site's: `drive(id, body)` POSTs the
+// A typed write of the smoke site's: `drive(id, body)` POSTs the
 // component's drive route, `postMg(suffix, body)` any route of 2200.
 const postMg = (suffix, body, method = "POST") =>
   page.evaluate(
@@ -889,7 +889,7 @@ check("e2e: full tier paints name and id on every pill", paintFull.lod === "full
 await page.evaluate(async () => { const { topology } = await import("/assets/topology.js"); topology.fit(); });
 
 // ── e2e: hover card ──────────────────────────────────────────────
-// The starter site's battery inverter idles at 0 W, and a card with
+// The smoke site's battery inverter idles at 0 W, and a card with
 // no power through it has no power factor to show. Command it (the
 // setpoint expires on its own, so re-runs start from the same
 // state) and wait for the ramp to reach the live overlay.
@@ -1046,7 +1046,7 @@ const reactiveSummary = await waitFor(async () => {
 }, 15000);
 check("e2e: the folded reactive card's fold-summary paints a VAr value", /VAr/.test(reactiveSummary ?? ""), reactiveSummary);
 // The Frequency card is folded by default too (grid_frequency), and
-// the starter site's grid connection point streams it every second.
+// the smoke site's grid connection point streams it every second.
 const frequencySummary = await waitFor(async () => {
   const t = await page.evaluate(() => document.querySelector('[data-summary="frequency"]')?.textContent);
   return t && /Hz/.test(t) ? t : null;
@@ -1223,7 +1223,7 @@ const stripToggles = await page.evaluate(() => [...document.querySelectorAll("#t
 check("e2e: the canvas strip holds no panel button", stripToggles.length === 0, JSON.stringify(stripToggles));
 
 // ── e2e: the GCP inspector slims to Charts + Connections ───────────
-// The grid connection point (id 1 in the starter site) takes no knobs,
+// The grid connection point (id 1 in the smoke site) takes no knobs,
 // no setpoints, and publishes no per-component telemetry — its
 // inspector renders only a Charts card (the site frequency stream,
 // open by default) and Connections, not Component/Power/Setpoints.
@@ -1443,7 +1443,7 @@ check(
 );
 // The demo's hidden consumer meter (id 100, one of this meter's
 // children) carries ±500 W of random jitter plus a slow 15-min sine,
-// set every second by examples/starter_site.py, and the other
+// set every second by tools/ui-smoke/site.py, and the other
 // children move too — the round trip can't land on the exact
 // pre-override reading, so
 // this compares with a generous threshold, same idiom as the boiler
@@ -1473,7 +1473,7 @@ await page.evaluate(async () => {
 // instead of reporting which UI step stopped working. `.catch` turns
 // each one back into a FAIL line — the same idiom the panel-cache
 // section uses.
-const chargerId = 1004; // the starter site's charger
+const chargerId = 1004; // the smoke site's charger
 await page.evaluate(async (id) => {
   const { topology } = await import("/assets/topology.js");
   topology.select([id]);
@@ -1595,7 +1595,7 @@ await page.evaluate(async () => {
 // and the import section's (99401-99406). Connected the way the demo
 // wires a branch meter: a new meter hangs off the site's main meter
 // (2), the boiler hangs off that meter. Added with one PUT of the
-// starter site's spec.
+// smoke site's spec.
 const BOILER_ID = 9901;
 const BOILER_METER_ID = 9902;
 const putSpec = (change) =>
@@ -1870,7 +1870,7 @@ const entryOff = await waitFor(async () => {
 check("e2e: sampling continues while values are off", entryOff && Number.isFinite(entryOff.p) && entryOff.ts > tsAtOff && lastHistTs(entryOff) > tsAtOff, JSON.stringify(entryOff));
 // Batteries never emit active_power_w, so a populated hist here can
 // only come from the dc_power_w branch of histMetric — id 1000 is
-// bat-1000 in the starter site.
+// bat-1000 in the smoke site.
 const batteryTsAtOff = (await liveEntry(1000))?.ts ?? -Infinity;
 const batteryEntryOff = await waitFor(async () => {
   const e = await liveEntry(1000);
@@ -1934,8 +1934,8 @@ await page.evaluate(() => localStorage.removeItem("macrocosim-topology-live"));
 // ── e2e: weather panel ──────────────────────────────────────────────
 // Runs LAST: the weather this section installs (and the sunrise/sunset
 // override below) persists on the site for the rest of the run.
-// The starter site's PV (id 200) has a sunlight set in its spec, which
-// examples/starter_site.py moves every second, so its power does not
+// The smoke site's PV (id 200) has a sunlight set in its spec, which
+// tools/ui-smoke/site.py moves every second, so its power does not
 // follow the weather — assert the panel's own site-% readout, not
 // inverter power.
 // A first answer that fails says why, rather than "loading weather…".
@@ -1957,7 +1957,7 @@ check("e2e: a weather panel whose first answer fails says why", weatherUnavailab
 // Opened again, the panel asks at once rather than at its next poll.
 await page.click("#weather-btn");
 await page.click("#weather-btn");
-// starter_site.py installs no weather — the site starts with none,
+// tools/ui-smoke/site.py installs no weather — the site starts with none,
 // so the panel opens on its empty state.
 await waitFor(async () => (await page.locator("#weather-create").count()) > 0, 10000);
 await page.click("#weather-create");
@@ -2941,7 +2941,7 @@ await waitFor(async () => page.evaluate(() => document.body.dataset.mgView === "
 // Compact is the default; the density chip switches to comfortable,
 // which sets larger text and a taller top bar, and back. The old stored
 // value "normal" reads as comfortable.
-// The checks from here on drive the starter site's topology directly.
+// The checks from here on drive the smoke site's topology directly.
 async function openDemoTopology(pg = page) {
   await pg.goto(`${BASE}/#microgrids/2200/topology`, { waitUntil: "networkidle" });
   await waitFor(
@@ -4163,7 +4163,7 @@ check(
 // leave the selection alone after Delete on a focused button,
 // Backspace after a click on an inspector fold header, or Backspace,
 // Ctrl+X and Ctrl+A after a click on the inspector's drag strip.
-const chpId = 1006; // the starter site's CHP
+const chpId = 1006; // the smoke site's CHP
 const nodeCount = async () => (await getModels()).length;
 const selectedIds = () =>
   page.evaluate(async () => (await import("/assets/topology.js")).topology.selectedIds());
