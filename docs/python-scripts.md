@@ -141,9 +141,9 @@ may update any microgrid.
 
 *   **A new id** is created.
 *   **The same spec as the loaded one** changes nothing: no rebuild, so the app
-    under test keeps its gRPC streams and setpoints, and every knob keeps the
-    value the last run left, health and modes included. Reset what the run needs
-    at its start, or unload the microgrid first.
+    you are testing keeps its gRPC streams and setpoints, and every knob keeps
+    the value the last run left, health and modes included. Reset what the run
+    needs at its start, or unload the microgrid first.
 *   **A changed spec** rebuilds the microgrid in place, as a UI edit does: its
     gRPC server, physics and UI keep running, and each component keeps its state
     when the new spec has a component with the same id and an equal spec. The
@@ -196,8 +196,9 @@ that holds it. To avoid this, declare all the script's microgrids in one call,
 no longer declare; or give their components explicit ids.
 
 Give an explicit id to every component whose state should survive an edit of the
-topology, and to every component the app under test addresses: batteries, EV
-chargers and steam boilers above all. The examples give every component one.
+topology, and to every component the app you are testing addresses: batteries,
+EV chargers and steam boilers above all. The example scripts give every
+component one.
 
 Two scripts that both leave ids out number from 1000 each, so the second one's
 declaration is refused, naming the microgrid that holds the ids: give the
@@ -411,7 +412,7 @@ Two things behave differently:
 | `scenario-event` | `Recording.event(kind, payload)` |
 | `define-scenario`, `at`, `drive-*`, `ems`, `random-outage`, `scenario-elapsed`, `scenario-running-p`, `scenario-end-after-s` | an async function with `asyncio.sleep`, loops and `random` |
 | `scenario-expect`, `check` | `signal.expect(matcher, timeout=..., hold_for=...)` |
-| `set-active-power`, `set-reactive-power` | dropped: setpoints come from the app under test over gRPC |
+| `set-active-power`, `set-reactive-power` | dropped: setpoints come from the app you are testing over gRPC |
 | `augment-active-bounds`, `augment-reactive-bounds` | dropped from scripts; available over gRPC |
 | `component-active-power`, `component-reactive-power`, `component-bound-lower`, `component-bound-upper`, `component-reactive-bound-lower`, `component-reactive-bound-upper` | `read()` and `expect` on the component's signals |
 | `every`, `run-with-timer`, `cancel-timers` | asyncio tasks and `asyncio.sleep` |

@@ -8,7 +8,7 @@ import { chromium } from "playwright";
 const BASE = process.env.MACROCOSIM_UI;
 if (!BASE) throw new Error("set MACROCOSIM_UI to a running macrocosim UI, e.g. http://127.0.0.1:8801");
 // The macroctl binary, which gives the setpoints: those come from the app
-// under test over gRPC, never from the UI.
+// being tested over gRPC, never from the UI.
 const MACROCTL = process.env.MACROCTL;
 if (!MACROCTL) throw new Error("set MACROCTL to the macroctl binary, e.g. target/debug/macroctl");
 
@@ -757,7 +757,7 @@ check("e2e: the consumer edge imports", consumer.direction === "import", JSON.st
 check("e2e: the consumer edge is import-coloured", consumer.color === COLORS.import, JSON.stringify(consumer));
 // Magnitude is line width; direction is one of the two flat
 // colours (checked against the palette, not the direction field, so
-// the mapping itself is under test); the structural arrowhead at the
+// the mapping itself is what is tested); the structural arrowhead at the
 // child end is the only arrow, live or not.
 check("e2e: live widths within [1.5, 6]", liveEdges.every((e) => e.width >= 1.5 && e.width <= 6), JSON.stringify(liveEdges));
 check("e2e: live edges take their direction's colour", liveEdges.every((e) => e.color === (e.direction === "import" ? COLORS.import : COLORS.export)), JSON.stringify(liveEdges));
@@ -893,7 +893,7 @@ await page.evaluate(async () => { const { topology } = await import("/assets/top
 // no power through it has no power factor to show. Command it (the
 // setpoint expires on its own, so re-runs start from the same
 // state) and wait for the ramp to reach the live overlay.
-// An active-power setpoint on the starter site, as the app under test
+// An active-power setpoint on the smoke site, as the app being tested
 // gives one: over gRPC, through macroctl. True when macroctl exits 0.
 const setActivePower = (id, w) =>
   new Promise((resolve) => {

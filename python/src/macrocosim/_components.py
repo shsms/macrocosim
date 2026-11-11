@@ -3,8 +3,8 @@
 Internal; imports `_enums`, `_signals`, `_spec` and `_units`, and `_session` for
 typing only. Every live class has its `id`, the three write-only fault knobs and
 its operational mode; the rest are the signals its category publishes or
-accepts, and an EV charger's plug. A test only observes what the app under test
-commands: there are no setpoint calls here.
+accepts, and an EV charger's plug. A test only observes what the app being
+tested commands: there are no setpoint calls here.
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ class Component:
 
     @property
     def telemetry_mode(self) -> Knob[TelemetryMode]:
-        """Write-only. Changes the telemetry the app under test receives over
+        """Write-only. Changes the telemetry the app being tested receives over
         gRPC.
 
         This test's reads of the component do not see the change, because they
@@ -201,7 +201,7 @@ class Battery(Component):
 
 
 class BatteryInverter(Component):
-    """A battery inverter. Its power is what the app under test commands."""
+    """A battery inverter. Its power is what the app being tested commands."""
 
     def __init__(self, session: _Session, component_id: int):
         super().__init__(session, component_id)
@@ -243,7 +243,7 @@ class Chp(Component):
 
 class EvCharger(Component):
     """An EV charger. Its power is what the plugged car draws, within the limit
-    the app under test commands."""
+    the app being tested commands."""
 
     def __init__(self, session: _Session, component_id: int):
         super().__init__(session, component_id)
@@ -304,7 +304,7 @@ class EvCharger(Component):
 
 
 class SteamBoiler(Component):
-    """A hybrid gas and electric steam boiler. The app under test commands its
+    """A hybrid gas and electric steam boiler. The app being tested commands its
     electric power; the gas burner holds the pressure at its target."""
 
     def __init__(self, session: _Session, component_id: int):

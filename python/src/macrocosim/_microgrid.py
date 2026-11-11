@@ -148,7 +148,7 @@ class Microgrid:
 
     @property
     def grpc_url(self) -> str:
-        """The Microgrid API address for the app under test
+        """The Microgrid API address for the app being tested
         (``grpc://host:port``). Raises `LaunchError` when the microgrid's gRPC
         server was not running when this client attached: it was still starting
         or moving to a new port, or it failed to start or ended, in which case

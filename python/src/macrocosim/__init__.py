@@ -1,7 +1,7 @@
 """Integration-testing client for the macrocosim microgrid simulator.
 
 Describe a microgrid with the ``make_*`` constructors, start a private simulator
-with `launch`, point the app under test at ``microgrid.grpc_url``, then change
+with `launch`, point the app being tested at ``microgrid.grpc_url``, then change
 the simulated world and `expect` what it measures. Quantities are
 `frequenz-quantities <https://pypi.org/project/frequenz-quantities/>`_ types;
 durations are `datetime.timedelta`.

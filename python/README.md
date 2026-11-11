@@ -3,11 +3,11 @@
 An integration-testing client for
 [macrocosim](https://github.com/shsms/macrocosim), a microgrid simulator that
 serves the gRPC Microgrid API. A test describes a microgrid, starts a private
-simulator for it, points the app under test at the simulator's gRPC address,
-then changes the simulated world (loads, state of charge, sunlight, faults) and
-waits for what the simulator measures.
+simulator for it, points the app you are testing at the simulator's gRPC
+address, then changes the simulated world (loads, state of charge, sunlight,
+faults) and waits for what the simulator measures.
 
-The app under test commands the inverters; the test only changes the world
+The app you are testing commands the inverters; the test only changes the world
 around it and observes.
 
 The same client runs site scripts: plain programs that connect to a running
@@ -55,8 +55,8 @@ async def test_grid_power_follows_the_load() -> None:
 
 The test describes a microgrid, starts a simulator for it, changes the load and
 waits for the grid connection point to measure it. Leaving the `async with`
-block stops the simulator. A real test also starts the app under test, pointed
-at `microgrid.grpc_url`.
+block stops the simulator. A real test also starts the app you are testing,
+pointed at `microgrid.grpc_url`.
 
 The test needs pytest-asyncio's auto mode, in `pyproject.toml`. Without it,
 pytest fails every `async def` test with "async def functions are not natively

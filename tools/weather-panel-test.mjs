@@ -6,7 +6,7 @@
 // siblings (routing.js reaches the whole SPA graph). So rather than a
 // DOM shim, the import lines are swapped for local stubs (zone.js,
 // theme.js and html.js, which are DOM-free, for the real modules) and
-// the internals under test are re-exported, and the result is imported
+// the internals being tested are re-exported, and the result is imported
 // as a data: URL. Nothing inside the functions is touched: this reads
 // the real source, and a rename here fails loudly rather than silently
 // testing a copy. The field helpers look their inputs up by id, so a

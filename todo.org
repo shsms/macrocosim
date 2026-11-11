@@ -423,7 +423,7 @@ frames, alarm bits).
 Ship macrocosim as a standalone binary (and Docker image) so a downstream
 app's CI can spin it up as a high-fidelity fake microgrid, drive a scenario,
 and gate on the result — exercising the app end-to-end through the real
-frequenz gRPC API rather than a hand-rolled mock. The app under test runs as a
+frequenz gRPC API rather than a hand-rolled mock. The app being tested runs as a
 separate process talking gRPC; macrocosim drives the environment and records
 the assertions (=expect= in a pytest test or a script's =run=; see
 =docs/e2e-testing.md=).
@@ -491,10 +491,10 @@ resets all journals, and the report endpoint reads the current site — so two
 scenarios can't run concurrently on two microgrids in one process, and
 multi-microgrid assertions all land in one site's report. Scope a scenario (and
 its journal/report) to a single microgrid so independent cases — or several apps
-under test — can run in parallel inside one macrocosim. Enables the in-process
+being tested — can run in parallel inside one macrocosim. Enables the in-process
 multi-microgrid option D6 sets aside; until then, CI-job parallelism covers it.
 
-*** TODO D8. Deterministic clock-sync with the app under test          :testing:
+*** TODO D8. Deterministic clock-sync with the app being tested        :testing:
 
 E2E with an external app is necessarily real-time + wall-clock (the app is a
 black box on its own clock), so checks must assert settled-state invariants with

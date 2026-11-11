@@ -120,7 +120,7 @@ async def animate(microgrid: mc.Microgrid) -> None:
 
 
 async def plug_car(microgrid: mc.Microgrid) -> None:
-    """Plug a car at 35 % into the charger. It idles until the app under test
+    """Plug a car at 35 % into the charger. It idles until the app being tested
     commands it."""
     try:
         await microgrid[EV_CHARGER].plug("sedan", soc=pct(35))
