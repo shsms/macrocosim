@@ -197,12 +197,14 @@ environment over the HTTP API. Reimplementation of microsim.
   clock, owned by the gateway and expired on the physics tick
 - `src/bin/macrocosim.rs` — headless server
 - `src/bin/macroctl.rs` — clap-based client CLI
-- `examples/starter_site.py` — the demo world as a Python script (`python
-  examples/starter_site.py` against a running server): `MICROGRID`, the
-  animation, a `main` that declares and animates it, and the seven scenarios as
-  async functions; `examples/scenario_driving.py` imports it for a 30-minute
-  recorded stress run. `python/pyproject.toml` puts `examples/` on ty's and
-  ruff's first-party paths, since the scripts import each other
+- `examples/` — short Python scripts, one feature each, in `assets/`, `faults/`
+  and `sites/`, and pytest files in `testing/` (index in `examples/README.md`).
+  Each script declares its own microgrid with explicit ids, distinct from every
+  other script's and the smoke site's, so they can all run against one
+  simulator; `python/tests/test_examples.py` builds their specs and checks the
+  ids. The tests in `testing/` launch their own simulators
+- `tools/ui-smoke/site.py` — the UI smoke's fixture: microgrid 2200 and the
+  animation `live-topology.mjs` relies on; change it together with the smoke
 - `python/` — the `macrocosim` Python package: the spec dataclasses (`_spec.py`,
   where each `make_*` constructor is its dataclass), the knob handles
   (`_components.py`, `_signals.py`), recording, `launch`, `connect` and its
@@ -390,7 +392,7 @@ cargo build
 cargo test
 cd python && uv sync && cd ..
 cargo run --bin macrocosim -- --state-dir /tmp/mc --python python/.venv/bin/python
-python/.venv/bin/python examples/starter_site.py   # in another terminal
+python/.venv/bin/python examples/assets/ev_charging.py   # in another terminal
 cargo run --bin macroctl -- info
 cargo run --bin macroctl -- tree
 cargo run --bin macroctl -- stream 1001 --samples 5
@@ -576,8 +578,7 @@ so construction + validation stay identical.
    needs its own trait, an accessor on `SimulatedComponent`, and a row
    in the capability table test.
 3. The Python client's knob (`python/src/macrocosim/_signals.py`,
-   `_components.py`), and a line in `examples/starter_site.py` if the
-   demo should show it.
+   `_components.py`), and an example in `examples/` if it is worth showing.
 
 ## EV chargers
 

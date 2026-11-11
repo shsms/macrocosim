@@ -116,13 +116,13 @@ jobs:
       # which would defeat `--no-install-project` above and kick off
       # the maturin build after all.
       - name: Ruff lint
-        run: uv run --no-sync ruff check src tests examples ../examples ../tools/write-rate.py ../tools/ui-smoke/site.py
+        run: uv run --no-sync ruff check src tests ../examples ../tools/write-rate.py ../tools/ui-smoke/site.py
 
       - name: Ruff format
-        run: uv run --no-sync ruff format --check src tests examples ../examples ../tools/write-rate.py ../tools/ui-smoke/site.py
+        run: uv run --no-sync ruff format --check src tests ../examples ../tools/write-rate.py ../tools/ui-smoke/site.py
 
       - name: Type check (ty, all rules as errors)
-        run: uv run --no-sync ty check --error all src examples ../examples ../tools/write-rate.py ../tools/ui-smoke/site.py
+        run: uv run --no-sync ty check --error all src ../examples ../tools/write-rate.py ../tools/ui-smoke/site.py
 
   # Run the Python test suite: the unit tests and the live tests that
   # boot a real server, on Python 3.13 (the dev pin in
@@ -188,12 +188,12 @@ jobs:
           MACROCOSIM_REQUIRE_LIVE: "1"
         run: uv run --no-sync pytest -q
 
-      # The README's first test and the demo, run as a user would.
-      - name: pytest examples/pytest_demo
-        run: uv run --no-sync pytest -q examples/pytest_demo
+      # The README's first test and the testing examples, run as a user would.
+      - name: pytest examples/testing
+        run: uv run --no-sync pytest -q ../examples/testing
 
-  # Live browser smokes: boots the binary and runs the starter site's
-  # Python script against it (`make ui-e2e`, the same target AGENTS.md gives for
+  # Live browser smokes: boots the binary and runs the smoke's site
+  # (tools/ui-smoke/site.py) against it (`make ui-e2e`, the same target AGENTS.md gives for
   # running the tools/ui-smoke/ scripts by hand) and drives the
   # real SPA with Playwright/Chromium — inspector knobs, dialogs, the
   # metrics panel, hover cards and the steam-boiler round trip end to

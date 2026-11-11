@@ -68,7 +68,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 ```
 
-The file is in [`examples/pytest_demo/`](examples/pytest_demo/), which CI runs.
+The file is
+[`examples/testing/test_first.py`](../examples/testing/test_first.py), which CI
+runs.
 
 ## Topology specs
 
@@ -256,9 +258,9 @@ async def test_grid_power_holds(launch_microgrid: LaunchMicrogrid) -> None:
     ...
 ```
 
-The simulators stop when the test ends. A fixture that also starts the app under
-test is the natural next step; that part depends on the app. The full example is
-[`examples/pytest_demo/test_demo.py`](examples/pytest_demo/test_demo.py).
+The simulators stop when the test ends. A fixture that also starts the app you
+are testing is the natural next step; that part depends on the app. The full
+example is [`examples/testing/test_demo.py`](../examples/testing/test_demo.py).
 
 ## Loads that change over time
 
@@ -384,12 +386,13 @@ To start a private simulator from the REPL instead:
 
 The package is [uv](https://docs.astral.sh/uv/)-native; the build backend is
 maturin, so `uv sync` compiles the binaries from the repository's Rust crate
-(needs the Rust toolchain and `git submodule update --init`).
+(needs the Rust toolchain, `protoc` and `git submodule update --init
+--recursive`).
 
 ```sh
 uv sync                       # venv from uv.lock; builds the binaries
 uv run pytest                 # the suite; ruff and ty also via `uv run`
-uv run pytest examples/pytest_demo
+uv run pytest ../examples/testing
 ```
 
 Point the tests at a local build instead of the wheel's binary with

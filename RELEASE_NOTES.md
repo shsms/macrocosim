@@ -73,7 +73,7 @@ Old field names are not accepted. A request body with an unknown field answers 4
 
 ### Example world
 
-The Lisp examples are gone. The starter site is now the script [`examples/starter_site.py`](examples/starter_site.py), with its microgrid named "Starter site" and its seven scenarios as async functions; [`examples/scenario_driving.py`](examples/scenario_driving.py) runs a recorded stress run against it.
+The Lisp examples are gone. [`examples/`](examples/README.md) holds short Python scripts, one feature each: assets (battery, EV charging, PV and weather, CHP and steam boiler), testing an app with pytest and recordings, fault injection, and sites and the grid. Each script declares its own microgrid, so several can run against one simulator. `python/examples/` is gone too: its pytest demo is now in [`examples/testing/`](examples/testing/). The 0.1 Lisp demo world (`berlin-demo.lisp`, `scenario-driving.lisp`) has no direct replacement.
 
 ### macroctl
 

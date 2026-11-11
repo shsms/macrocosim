@@ -21,5 +21,6 @@ enterprise.lisp
 /node_modules
 .worktrees/
 
-# Bytecode of the example scripts, which import each other.
-/examples/__pycache__/
+# Bytecode of the example scripts, their tests and the smoke's site.
+/examples/**/__pycache__/
+/tools/ui-smoke/__pycache__/

@@ -36,17 +36,17 @@ The simulator exposes three surfaces:
 cargo build
 cd python && uv sync && cd ..       # the Python client scripts import
 cargo run --bin macrocosim -- --python python/.venv/bin/python
-python/.venv/bin/python examples/starter_site.py      # in another terminal
+python/.venv/bin/python examples/assets/ev_charging.py   # in another terminal
 ```
 
 The binary boots bare: UI up, no microgrids. A script is a separate Python
-program that connects to it and declares its microgrids:
-`examples/starter_site.py` declares a demo microgrid, animates its environment,
-and defines seven starter scenarios. Run it again after an edit; the microgrid
-stays loaded between runs, and an unchanged spec leaves it as it is. Microgrids
-can also be made in the UI. `--topology topology.json` boots microgrids from a
-topology document; that is how the Python client's `launch` starts a simulator
-for a test.
+program that connects to it and declares its microgrids.
+[`examples/`](examples/README.md) has short scripts, one feature each: assets,
+testing an app, faults, and sites and the grid. Run a script again after an
+edit; the microgrid stays loaded between runs, and an unchanged spec leaves it
+as it is. Microgrids can also be made in the UI. `--topology topology.json`
+boots microgrids from a topology document; that is how the Python client's
+`launch` starts a simulator for a test.
 
 Recordings are written under `--state-dir`, which defaults to the directory the
 server was started from. A `.lisp` argument, or a state directory that still
@@ -89,11 +89,11 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-A scenario is an async function: stress events (load spikes, cloud
-cover, outages, silent components) wrapped in a recording, which
-measures peak grid power, battery charge and discharge, SoC statistics
-and 15-minute averages. [`examples/scenario_driving.py`](examples/scenario_driving.py)
-is a 30-minute sample.
+A scenario is an async function: stress events (load spikes, cloud cover,
+outages, silent components) wrapped in a recording, which measures peak grid
+power, battery charge and discharge, SoC statistics and 15-minute averages.
+[`examples/testing/test_recording.py`](examples/testing/test_recording.py)
+records a load step and checks the report.
 
 [`docs/python-scripts.md`](docs/python-scripts.md) covers the script shape, what
 a re-run keeps, recording, attaching a terminal with `macrocosim.connect`, and

@@ -41,20 +41,14 @@ python-source = "src"
 [tool.ruff]
 line-length = 90
 target-version = "py311"
-# First-party code, for sorting imports: the package and the repository's
-# example scripts, which import each other.
-src = [".", "src", "../examples"]
+# First-party code, for sorting imports.
+src = [".", "src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
-[tool.ty.environment]
-# The repository's example scripts import each other: Python puts a script's
-# own directory on the import path.
-extra-paths = ["../examples"]
-
 [tool.pytest.ini_options]
-# The suite only; CI runs examples/pytest_demo separately.
+# The suite only; CI runs ../examples/testing separately.
 testpaths = ["tests"]
 # The async tests and fixtures; auto mode runs `async def test_*` without a
 # per-test marker.

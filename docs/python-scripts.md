@@ -8,9 +8,8 @@ same `macrocosim` client as a pytest test, so code moves freely between the two.
 
 This page describes the script shape, what a re-run keeps, recording, and how to
 port a Lisp site file. The client itself is described in the [Python
-README](../python/README.md). Two complete scripts are in
-[`examples/`](../examples/): [`starter_site.py`](../examples/starter_site.py)
-and [`scenario_driving.py`](../examples/scenario_driving.py).
+README](../python/README.md). Short scripts, one feature each, are in
+[`examples/`](../examples/README.md).
 
 ## Requirements
 
@@ -122,8 +121,7 @@ not list, another package version) raises `Rejected` with the simulator's
 reason; an invalid spec raises `ServerError`.
 
 The script's own directory comes first on the import path, as for any Python
-program, so it can import helper modules beside it; `scenario_driving.py`
-imports `starter_site.py` this way.
+program, so it can import helper modules beside it.
 
 The script's output stays in its own terminal. A script that stops, crashes or
 is killed leaves its microgrids loaded and serving gRPC, with every knob at the
@@ -247,9 +245,9 @@ async def consumer_load(plant: mc.Microgrid) -> None:
 
 A scenario is an async function that takes the microgrid. Each knob holds the
 last value written, by any client, so a scenario that drives a knob the
-animation also writes pauses that animation itself; `starter_site.py` does it
-with a small `holding(...)` context manager the animation loops check. A
-scenario puts back every knob it changed, in a `finally`:
+animation also writes pauses that animation itself, for example with a flag or
+an `asyncio.Event` that the animation loop checks. A scenario puts back every
+knob it changed, in a `finally`:
 
 ```python
 async def off_grid_island(plant: mc.Microgrid) -> mc.RecordingReport:
