@@ -661,7 +661,19 @@ pub(crate) mod tests {
         assert!(v.error.unwrap().contains(&port.to_string()));
         let slot = rt.loopbacks().read().get(&42).cloned().unwrap();
         drop(holder);
-        let addr = rt.start(42).await.unwrap().unwrap();
+        // A child process another test starts holds a copy of every open socket
+        // until it runs its program, the holder's too, so the port can stay
+        // taken for a moment after the drop.
+        let mut tries = 0;
+        let addr = loop {
+            match rt.start(42).await {
+                Err(StartError::Bind { .. }) if tries < 50 => {
+                    tries += 1;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                other => break other.unwrap().unwrap(),
+            }
+        };
         assert_eq!(addr, SocketAddr::new(V6, port));
         // The restart keeps the first start's loopback slot.
         assert!(Arc::ptr_eq(&slot, &rt.loopbacks().read()[&42]));
