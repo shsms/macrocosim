@@ -148,6 +148,17 @@ struct ApiConnection {
     destination_electrical_component_id: ApiId,
 }
 
+/// What [`lift`] makes of one export component.
+enum Lifted {
+    Component(ImportedComponent),
+    /// An inverter the simulator has no model for that may leave with the
+    /// components under it, lifted as a battery inverter (see
+    /// [`InverterTree`]).
+    Tree(ImportedComponent, InverterKind),
+    /// A component the simulator has no model for, and why.
+    NoModel(String),
+}
+
 /// One component lifted out of the export: the spec type of its
 /// simulated twin plus the fields the export pins.
 #[derive(Debug)]
@@ -199,6 +210,72 @@ impl ImportedComponent {
 pub struct SiteImport {
     pub components: Vec<ImportedComponent>,
     pub connections: Vec<(u64, u64)>,
+    /// The components left out under [`Unsupported::Skip`], with why, in export
+    /// order.
+    pub skipped: Vec<(u64, String)>,
+    /// The inverters left out under [`Unsupported::Skip`] with the components
+    /// under them, in export order.
+    pub inverter_trees: Vec<InverterTree>,
+}
+
+/// The kind of inverter an [`InverterTree`] holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InverterKind {
+    /// A hybrid inverter, which the simulator cannot model yet.
+    Hybrid,
+    /// An inverter of no type over a battery: the battery is its child, or only
+    /// components the simulator has no model for are in between.
+    Unspecified,
+}
+
+impl InverterKind {
+    /// How a note names an inverter of this kind.
+    pub fn label(self) -> &'static str {
+        match self {
+            InverterKind::Hybrid => "hybrid inverter",
+            InverterKind::Unspecified => "inverter of no type",
+        }
+    }
+
+    /// The proto's name for the inverter type, without its prefix.
+    fn token(self) -> &'static str {
+        match self {
+            InverterKind::Hybrid => "HYBRID",
+            InverterKind::Unspecified => "UNSPECIFIED",
+        }
+    }
+}
+
+/// An inverter left out under [`Unsupported::Skip`] with the components under
+/// it that no kept component leads to: a hybrid inverter, or an inverter of no
+/// type over a battery. Splicing it out would put its batteries under
+/// a meter. Both are in [`SiteImport::skipped`] too.
+#[derive(Debug)]
+pub struct InverterTree {
+    /// The inverter's id.
+    pub inverter: u64,
+    pub kind: InverterKind,
+    /// The components the inverter is directly under that the import keeps,
+    /// in connection order.
+    pub parents: Vec<u64>,
+    /// The inverter, as a battery inverter, and the components under it,
+    /// children before parents. A tree: each component keeps one connection,
+    /// from the parent a breadth-first walk from the inverter reaches it from
+    /// first.
+    pub spec: crate::spec::MicrogridSpec,
+}
+
+/// What [`parse_with`] does with a component the simulator has no model for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unsupported {
+    /// Refuse the whole import.
+    Refuse,
+    /// Leave the component out, and connect each of its parents to each of its
+    /// children, so the components on either side stay connected. A hybrid
+    /// inverter, and an inverter of no type over a battery, is left
+    /// out with the components that only such inverters lead to (see
+    /// [`InverterTree`]): a battery belongs under an inverter, not a meter.
+    Skip,
 }
 
 /// Strips the first matching prefix, so both the current
@@ -287,17 +364,22 @@ fn storage_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>) {
     }
 }
 
-/// Lifts one export component into the spec type + fields of its
-/// simulated twin. Unsupported categories are a hard error: silently
-/// skipping one would import a topology that looks complete but has
-/// holes where the export had components.
-fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
-    let id = c.id.parse()?;
+/// Why the simulator cannot model an inverter of type `kind`.
+fn no_inverter_model(kind: &str) -> String {
+    format!("cannot simulate an inverter of type {kind} (only battery and PV inverters exist here)")
+}
+
+/// Lifts export component `id` into the spec type + fields of its simulated
+/// twin, or says why the simulator has none. An operational mode the import
+/// does not know is an error, except on a hybrid inverter or an inverter of no
+/// type, which is lifted without it: the import keeps neither.
+fn lift(c: &ApiComponent, id: u64) -> Result<Lifted, String> {
     let suffix = strip_prefixes(
         &c.category,
         &["ELECTRICAL_COMPONENT_CATEGORY_", "COMPONENT_CATEGORY_"],
     );
     let mut kwargs: Vec<(&'static str, Value)> = Vec::new();
+    let mut tree = None;
     if let Some(name) = c.name.as_deref().filter(|n| !n.is_empty()) {
         kwargs.push(("name", Value::Text(name.to_string())));
     }
@@ -327,13 +409,19 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
             match inverter_type {
                 "BATTERY" => "battery_inverter",
                 "PV" | "SOLAR" => "solar_inverter",
+                "HYBRID" => {
+                    tree = Some(InverterKind::Hybrid);
+                    "battery_inverter"
+                }
+                "UNSPECIFIED" => {
+                    tree = Some(InverterKind::Unspecified);
+                    "battery_inverter"
+                }
                 other => {
                     // The simulator has to pick a concrete inverter
-                    // model; UNSPECIFIED and HYBRID have none.
-                    return Err(format!(
-                        "component {id}: cannot simulate an inverter of type {other} \
-                         (only battery and PV inverters exist here)"
-                    ));
+                    // model; a type number the protos do not define has
+                    // none.
+                    return Ok(Lifted::NoModel(no_inverter_model(other)));
                 }
             }
         }
@@ -361,34 +449,69 @@ fn lift(c: &ApiComponent) -> Result<ImportedComponent, String> {
         "POWER_TRANSFORMER" => "power_transformer",
         "BREAKER" => "breaker",
         other => {
-            return Err(format!("component {id}: cannot simulate category {other}"));
+            return Ok(Lifted::NoModel(format!("cannot simulate category {other}")));
         }
     };
-    mode_kwargs(c, &mut kwargs).map_err(|e| format!("component {id}: {e}"))?;
-    Ok(ImportedComponent { id, kind, kwargs })
+    let mode = mode_kwargs(c, &mut kwargs);
+    let lifted = ImportedComponent { id, kind, kwargs };
+    if let Some(kind) = tree {
+        // Not simulated either way: one with a mode the import does not know
+        // goes without it.
+        return Ok(Lifted::Tree(lifted, kind));
+    }
+    mode.map_err(|e| format!("component {id}: {e}"))?;
+    Ok(Lifted::Component(lifted))
 }
 
-/// Parses the two uploaded files into components and connections.
-/// Errors name the component so a 4000-line export stays debuggable.
+/// Parses the two uploaded files into components and connections. The import
+/// is refused when a component has no model in the simulator: silently skipping
+/// one would import a topology that looks complete but has holes where the
+/// export had components. Errors name the component so a 4000-line export
+/// stays debuggable.
 pub fn parse(
     components: ComponentsFile,
     connections: Option<ConnectionsFile>,
 ) -> Result<SiteImport, String> {
+    parse_with(components, connections, Unsupported::Refuse)
+}
+
+/// [`parse`], with `unsupported` saying what to do with a component the
+/// simulator has no model for.
+pub fn parse_with(
+    components: ComponentsFile,
+    connections: Option<ConnectionsFile>,
+    unsupported: Unsupported,
+) -> Result<SiteImport, String> {
     if components.electrical_components.is_empty() {
         return Err("the export has no components".to_string());
     }
-    let mut seen_ids = std::collections::BTreeSet::new();
-    let components = components
-        .electrical_components
-        .iter()
-        .map(|c| {
-            let lifted = lift(c)?;
-            if !seen_ids.insert(lifted.id) {
-                return Err(format!("component id {} appears twice", lifted.id));
+    // Each id's position in the export.
+    let mut position_of = std::collections::BTreeMap::new();
+    let mut kept = Vec::new();
+    let mut trees = Vec::new();
+    let mut skipped = Vec::new();
+    for (i, c) in components.electrical_components.iter().enumerate() {
+        let id = c.id.parse()?;
+        if position_of.insert(id, i).is_some() {
+            return Err(format!("component id {id} appears twice"));
+        }
+        let why = match lift(c, id)? {
+            Lifted::Component(c) => {
+                kept.push(c);
+                continue;
             }
-            Ok(lifted)
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+            Lifted::Tree(c, kind) if unsupported == Unsupported::Skip => {
+                trees.push((c, kind));
+                continue;
+            }
+            Lifted::Tree(_, kind) => no_inverter_model(kind.token()),
+            Lifted::NoModel(why) => why,
+        };
+        match unsupported {
+            Unsupported::Refuse => return Err(format!("component {id}: {why}")),
+            Unsupported::Skip => skipped.push((id, why)),
+        }
+    }
     // Exports sometimes repeat a connection row; keep the first copy.
     let mut edges = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
@@ -400,7 +523,7 @@ pub fn parse(
             c.source_electrical_component_id.parse()?,
             c.destination_electrical_component_id.parse()?,
         );
-        if !seen_ids.contains(&edge.0) || !seen_ids.contains(&edge.1) {
+        if !position_of.contains_key(&edge.0) || !position_of.contains_key(&edge.1) {
             return Err(format!(
                 "connection {} → {} references a component the export does not carry",
                 edge.0, edge.1
@@ -422,13 +545,164 @@ pub fn parse(
             "the connections contain a cycle (reachable through {src} → {dst})"
         ));
     }
-    Ok(SiteImport {
-        components,
+    // An inverter of no type with no battery under it is spliced out like any
+    // other component with no model. A battery counts as under it when only
+    // components with no model are in between.
+    let batteries: std::collections::BTreeSet<u64> = kept
+        .iter()
+        .filter(|c| c.kind == "battery")
+        .map(|c| c.id)
+        .collect();
+    let no_model: std::collections::BTreeSet<u64> = skipped.iter().map(|(id, _)| *id).collect();
+    let through = splice(&edges, &no_model);
+    let (trees, spliced): (Vec<_>, Vec<_>) = trees.into_iter().partition(|(c, kind)| {
+        *kind == InverterKind::Hybrid
+            || through
+                .iter()
+                .any(|&(p, child)| p == c.id && batteries.contains(&child))
+    });
+    for (c, kind) in spliced {
+        skipped.push((c.id, no_inverter_model(kind.token())));
+    }
+    if !skipped.is_empty() {
+        let skipped_ids: std::collections::BTreeSet<u64> =
+            skipped.iter().map(|(id, _)| *id).collect();
+        edges = splice(&edges, &skipped_ids);
+    }
+    let mut import = SiteImport {
+        components: kept,
         connections: edges,
-    })
+        skipped,
+        inverter_trees: Vec::new(),
+    };
+    if !trees.is_empty() {
+        import.carve_out(trees)?;
+    }
+    import.skipped.sort_by_key(|(id, _)| position_of[id]);
+    if import.components.is_empty() {
+        return Err("the export has no component the simulator can model".to_string());
+    }
+    Ok(import)
+}
+
+/// `edges` without the components in `skipped`: each edge from a kept component
+/// into `skipped` is replaced by edges to the kept components it reached
+/// through `skipped` alone. The edges keep their order, and a spliced edge that
+/// is already there is not added again. `edges` has no cycles.
+fn splice(edges: &[(u64, u64)], skipped: &std::collections::BTreeSet<u64>) -> Vec<(u64, u64)> {
+    let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+    for &(parent, child) in edges {
+        children.entry(parent).or_default().push(child);
+    }
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for &(parent, child) in edges {
+        if skipped.contains(&parent) {
+            continue;
+        }
+        let mut stack = vec![child];
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(id) = stack.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if !skipped.contains(&id) {
+                if seen.insert((parent, id)) {
+                    out.push((parent, id));
+                }
+                continue;
+            }
+            // Reversed, so the children come off the stack in their own order.
+            stack.extend(children.get(&id).into_iter().flatten().rev());
+        }
+    }
+    out
 }
 
 impl SiteImport {
+    /// Takes the inverters in `trees` and the kept components that only they
+    /// lead to out of the topology, into [`Self::inverter_trees`] and
+    /// [`Self::skipped`]. A component under two of them goes with the first
+    /// one.
+    fn carve_out(&mut self, trees: Vec<(ImportedComponent, InverterKind)>) -> Result<(), String> {
+        use std::collections::BTreeSet;
+        let mut parents: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+        for &(parent, child) in &self.connections {
+            parents.entry(child).or_default().push(parent);
+            children.entry(parent).or_default().push(child);
+        }
+        let children_of = |id: &u64| children.get(id).into_iter().flatten().copied();
+        let inverters: Vec<(u64, InverterKind)> = trees.iter().map(|(c, k)| (c.id, *k)).collect();
+        // The components only these inverters lead to: one whose parents are
+        // all out goes out too, checked again each time a parent goes out.
+        let mut out: BTreeSet<u64> = inverters.iter().map(|&(id, _)| id).collect();
+        let mut stack: Vec<u64> = inverters
+            .iter()
+            .flat_map(|(id, _)| children_of(id))
+            .collect();
+        while let Some(id) = stack.pop() {
+            if !out.contains(&id) && parents[&id].iter().all(|p| out.contains(p)) {
+                out.insert(id);
+                stack.extend(children_of(&id));
+            }
+        }
+        let (mut carved, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.components)
+            .into_iter()
+            .partition(|c| out.contains(&c.id));
+        self.components = kept;
+        carved.extend(trees.into_iter().map(|(c, _)| c));
+        let mut taken: BTreeSet<u64> = inverters.iter().map(|&(id, _)| id).collect();
+        for &(inverter, kind) in &inverters {
+            // Breadth first, so each component hangs from the first parent
+            // that reaches it.
+            let mut ids = vec![inverter];
+            let mut edges = Vec::new();
+            let mut next = 0;
+            while let Some(&parent) = ids.get(next) {
+                next += 1;
+                for child in children_of(&parent) {
+                    if out.contains(&child) && taken.insert(child) {
+                        ids.push(child);
+                        edges.push((parent, child));
+                    }
+                }
+            }
+            let (mine, rest): (Vec<_>, Vec<_>) =
+                carved.into_iter().partition(|c| ids.contains(&c.id));
+            carved = rest;
+            let tree = SiteImport {
+                components: mine,
+                connections: edges,
+                skipped: Vec::new(),
+                inverter_trees: Vec::new(),
+            };
+            self.skipped
+                .push((inverter, no_inverter_model(kind.token())));
+            for id in &ids[1..] {
+                self.skipped
+                    .push((*id, format!("under {} {inverter}", kind.label())));
+            }
+            self.inverter_trees.push(InverterTree {
+                inverter,
+                kind,
+                parents: parents
+                    .get(&inverter)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|p| !out.contains(p))
+                    .collect(),
+                spec: tree
+                    .spec()
+                    .map_err(|e| format!("{} {inverter}: {e}", kind.label()))?,
+            });
+        }
+        self.connections
+            .retain(|(p, c)| !out.contains(p) && !out.contains(c));
+        Ok(())
+    }
+
     /// The order the components must be built in, and the number of
     /// walk steps it took to work that out (for
     /// `spec_walks_shared_subtrees_once`).
@@ -600,6 +874,254 @@ mod tests {
         let err = parse(untyped, None).unwrap_err();
         assert!(err.contains("component 7"));
         assert!(err.contains("UNSPECIFIED"));
+    }
+
+    /// A connections file with `edges`.
+    fn connections_of(edges: &[(u64, u64)]) -> ConnectionsFile {
+        let edges: Vec<serde_json::Value> = edges
+            .iter()
+            .map(|(a, b)| {
+                serde_json::json!({
+                    "sourceElectricalComponentId": a.to_string(),
+                    "destinationElectricalComponentId": b.to_string(),
+                })
+            })
+            .collect();
+        serde_json::from_value(serde_json::json!({"electricalComponentConnections": edges}))
+            .unwrap()
+    }
+
+    /// A made-up chain: grid 1 → meter 2 → precharger 3 → converter 4 → battery
+    /// 5, with an HVAC 6 under the meter.
+    fn chain_with_unsupported() -> (ComponentsFile, ConnectionsFile) {
+        let components = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"},
+                {"id": "2", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+                {"id": "3", "category": "ELECTRICAL_COMPONENT_CATEGORY_PRECHARGER"},
+                {"id": "4", "category": "ELECTRICAL_COMPONENT_CATEGORY_CONVERTER"},
+                {"id": "5", "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY"},
+                {"id": "6", "category": "ELECTRICAL_COMPONENT_CATEGORY_HVAC"}
+            ]}"#,
+        )
+        .unwrap();
+        let connections = connections_of(&[(1, 2), (2, 3), (3, 4), (4, 5), (2, 6)]);
+        (components, connections)
+    }
+
+    /// Skipping leaves the unsupported components out, names each with why, and
+    /// connects across a run of them.
+    #[test]
+    fn skip_splices_across_unsupported_components() {
+        let (components, connections) = chain_with_unsupported();
+        let import = parse_with(components, Some(connections), Unsupported::Skip).unwrap();
+        let ids: Vec<u64> = import.components.iter().map(|c| c.id).collect();
+        assert_eq!(ids, vec![1, 2, 5]);
+        assert_eq!(import.connections, vec![(1, 2), (2, 5)]);
+        let skipped: Vec<u64> = import.skipped.iter().map(|(id, _)| *id).collect();
+        assert_eq!(skipped, vec![3, 4, 6]);
+        assert!(
+            import.skipped[0].1.contains("PRECHARGER"),
+            "{:?}",
+            import.skipped
+        );
+        import.spec().unwrap();
+    }
+
+    /// Hybrid inverter 3 leaves with battery 4 and meter 8, which only
+    /// hybrid inverters lead to; battery 6, which battery inverter 5 also
+    /// leads to, stays. Battery 4 hangs from 3 alone in the tree, and goes
+    /// with 3, not with hybrid inverter 9, which comes later.
+    #[test]
+    fn skip_carves_out_a_hybrid_inverter_with_its_batteries() {
+        let components: ComponentsFile = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"},
+                {"id": "2", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+                {"id": "3", "name": "hybrid", "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER",
+                 "categorySpecificInfo": {"inverter": {"type": "INVERTER_TYPE_HYBRID"}},
+                 "metricConfigBounds": [
+                   {"metric": "METRIC_AC_POWER_ACTIVE", "configBounds": {"lower": -5000, "upper": 5000}}
+                 ]},
+                {"id": "4", "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY"},
+                {"id": "5", "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER",
+                 "categorySpecificInfo": {"inverter": {"type": "INVERTER_TYPE_BATTERY"}}},
+                {"id": "6", "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY"},
+                {"id": "7", "category": "999"},
+                {"id": "8", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+                {"id": "9", "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER",
+                 "categorySpecificInfo": {"inverter": {"type": "INVERTER_TYPE_HYBRID"}}}
+            ]}"#,
+        )
+        .unwrap();
+        let edges = [
+            (1, 2),
+            (2, 3),
+            (3, 4),
+            (3, 8),
+            (8, 4),
+            (2, 5),
+            (5, 6),
+            (3, 6),
+            (2, 7),
+            (2, 9),
+            (9, 4),
+        ];
+        let import =
+            parse_with(components, Some(connections_of(&edges)), Unsupported::Skip).unwrap();
+        let ids: Vec<u64> = import.components.iter().map(|c| c.id).collect();
+        assert_eq!(ids, vec![1, 2, 5, 6]);
+        assert_eq!(import.connections, vec![(1, 2), (2, 5), (5, 6)]);
+        assert_eq!(
+            import.skipped,
+            vec![
+                (3, no_inverter_model("HYBRID")),
+                (4, "under hybrid inverter 3".to_string()),
+                (7, "cannot simulate category 999".to_string()),
+                (8, "under hybrid inverter 3".to_string()),
+                (9, no_inverter_model("HYBRID")),
+            ]
+        );
+        let [first, second] = &import.inverter_trees[..] else {
+            panic!("{:?}", import.inverter_trees);
+        };
+        assert_eq!((first.inverter, &first.parents[..]), (3, &[2][..]));
+        assert_eq!(first.spec.connections, vec![(3, 4), (3, 8)]);
+        let inverter = first.spec.components.iter().find(|c| c.id() == Some(3));
+        assert_eq!(
+            serde_json::to_value(inverter).unwrap(),
+            serde_json::json!({"type": "battery_inverter", "id": 3, "name": "hybrid",
+                               "rated_lower_w": -5000.0, "rated_upper_w": 5000.0})
+        );
+        assert_eq!((second.inverter, &second.parents[..]), (9, &[2][..]));
+        assert_eq!(second.spec.components.len(), 1);
+    }
+
+    /// A hybrid inverter is refused under Refuse. Under Skip, one with an
+    /// operational mode the import does not know still leaves with its tree,
+    /// without the mode.
+    #[test]
+    fn a_hybrid_inverter_with_an_unknown_mode_goes_without_it() {
+        let hybrid = |mode: &str| -> ComponentsFile {
+            serde_json::from_str(&format!(
+                r#"{{"electricalComponents": [
+                    {{"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"}},
+                    {{"id": "3", "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER",
+                      "categorySpecificInfo": {{"inverter": {{"type": "INVERTER_TYPE_HYBRID"}}}},
+                      "operationalMode": "{mode}"}},
+                    {{"id": "4", "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY"}}
+                ]}}"#
+            ))
+            .unwrap()
+        };
+        let err = parse(hybrid("99"), None).unwrap_err();
+        assert!(
+            err.contains("component 3: cannot simulate an inverter of type HYBRID"),
+            "{err}"
+        );
+        let edges = connections_of(&[(1, 3), (3, 4)]);
+        let import = parse_with(hybrid("99"), Some(edges), Unsupported::Skip).unwrap();
+        let ids: Vec<u64> = import.components.iter().map(|c| c.id).collect();
+        assert_eq!(ids, vec![1]);
+        let [tree] = &import.inverter_trees[..] else {
+            panic!("{:?}", import.inverter_trees);
+        };
+        assert_eq!(tree.spec.connections, vec![(3, 4)]);
+        let inverter = tree.spec.components.iter().find(|c| c.id() == Some(3));
+        assert_eq!(
+            serde_json::to_value(inverter).unwrap(),
+            serde_json::json!({"type": "battery_inverter", "id": 3})
+        );
+    }
+
+    /// An inverter of no type with a battery under it leaves with the battery,
+    /// like a hybrid inverter, also when a precharger is in between; one with
+    /// no battery under it is spliced out.
+    #[test]
+    fn skip_carves_out_an_inverter_of_no_type_only_over_a_battery() {
+        let components: ComponentsFile = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_GRID_CONNECTION_POINT"},
+                {"id": "2", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+                {"id": "3", "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER"},
+                {"id": "4", "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY"},
+                {"id": "5", "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER"},
+                {"id": "6", "category": "ELECTRICAL_COMPONENT_CATEGORY_METER"},
+                {"id": "7", "category": "ELECTRICAL_COMPONENT_CATEGORY_INVERTER"},
+                {"id": "8", "category": "ELECTRICAL_COMPONENT_CATEGORY_PRECHARGER"},
+                {"id": "9", "category": "ELECTRICAL_COMPONENT_CATEGORY_BATTERY"}
+            ]}"#,
+        )
+        .unwrap();
+        let edges = connections_of(&[
+            (1, 2),
+            (2, 3),
+            (3, 4),
+            (2, 5),
+            (5, 6),
+            (2, 7),
+            (7, 8),
+            (8, 9),
+        ]);
+        let import = parse_with(components, Some(edges), Unsupported::Skip).unwrap();
+        let ids: Vec<u64> = import.components.iter().map(|c| c.id).collect();
+        assert_eq!(ids, vec![1, 2, 6]);
+        assert_eq!(import.connections, vec![(1, 2), (2, 6)]);
+        assert_eq!(
+            import.skipped,
+            vec![
+                (3, no_inverter_model("UNSPECIFIED")),
+                (4, "under inverter of no type 3".to_string()),
+                (5, no_inverter_model("UNSPECIFIED")),
+                (7, no_inverter_model("UNSPECIFIED")),
+                (8, "cannot simulate category PRECHARGER".to_string()),
+                (9, "under inverter of no type 7".to_string()),
+            ]
+        );
+        let [tree, behind_precharger] = &import.inverter_trees[..] else {
+            panic!("{:?}", import.inverter_trees);
+        };
+        assert_eq!(
+            (tree.inverter, tree.kind, &tree.parents[..]),
+            (3, InverterKind::Unspecified, &[2][..])
+        );
+        assert_eq!(tree.spec.connections, vec![(3, 4)]);
+        assert_eq!(behind_precharger.inverter, 7);
+        assert_eq!(behind_precharger.spec.connections, vec![(7, 9)]);
+    }
+
+    #[test]
+    fn refuse_is_the_default() {
+        let (components, connections) = chain_with_unsupported();
+        let err = parse(components, Some(connections)).unwrap_err();
+        assert!(
+            err.contains("component 3: cannot simulate category PRECHARGER"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn splice_joins_every_parent_to_every_child_once() {
+        // 1 and 2 over the left-out 9, which is over 3 and 4; 1 also has 3
+        // directly.
+        let gone = [9].into_iter().collect();
+        let edges = [(1, 9), (2, 9), (9, 3), (9, 4), (1, 3)];
+        assert_eq!(splice(&edges, &gone), vec![(1, 3), (1, 4), (2, 3), (2, 4)]);
+    }
+
+    #[test]
+    fn skip_still_needs_one_component_it_can_model() {
+        let hvac: ComponentsFile = serde_json::from_str(
+            r#"{"electricalComponents": [
+                {"id": "1", "category": "ELECTRICAL_COMPONENT_CATEGORY_HVAC"}
+            ]}"#,
+        )
+        .unwrap();
+        let err = parse_with(hvac, None, Unsupported::Skip).unwrap_err();
+        assert!(
+            err.contains("no component the simulator can model"),
+            "{err}"
+        );
     }
 
     #[test]
