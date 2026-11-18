@@ -16,7 +16,7 @@ use macrocosim::proto::assets::{
     platform_assets_service_client::PlatformAssetsServiceClient,
 };
 use macrocosim::proto::common::microgrid::electrical_components as ec;
-use macrocosim::spec::ComponentSpec;
+use macrocosim::spec::{ComponentSpec, TopologyDoc};
 
 const TINY_TOPOLOGY: &str = r#"{
   "id": 7,
@@ -463,6 +463,69 @@ async fn the_fetch_signs_its_calls() {
     assert_eq!(fetched.spec.id, Some(7));
 }
 
+/// Runs `macroctl` with `args`, the Assets API at `url` and made-up
+/// credentials in the environment.
+fn macroctl(url: &str, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_macroctl"))
+        .args(args)
+        .env("ASSETS_API_URL", url)
+        .env("ASSETS_API_AUTH_KEY", "key")
+        .env("ASSETS_API_SIGN_SECRET", "secret")
+        .output()
+        .expect("macroctl runs")
+}
+
+/// `macroctl from-assets` against the simulator's own Assets API: the
+/// credentials from the environment, the document with --json, the module
+/// otherwise, and the simulator's `--microgrid-id` refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn macroctl_from_assets_writes_the_microgrid() {
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
+    let url = s.assets_url.replace("http://", "grpc://") + "?ssl=false";
+    let macroctl = |args: &[&str]| macroctl(&url, args);
+    let out = tokio::task::block_in_place(|| macroctl(&["--json", "from-assets", "7"]));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc = TopologyDoc::from_json(&String::from_utf8(out.stdout).unwrap()).unwrap();
+    assert_eq!(doc.microgrids[0].id, Some(7));
+    assert_eq!(doc.microgrids[0].components.len(), 4);
+
+    let out =
+        tokio::task::block_in_place(|| macroctl(&["--microgrid-id", "7", "from-assets", "7"]));
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("not --microgrid-id"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let Some(python) = venv_python() else { return };
+    let module = s.dir().join("site.py");
+    let args = [
+        "from-assets",
+        "7",
+        "--python",
+        python.to_str().unwrap(),
+        "-o",
+        module.to_str().unwrap(),
+    ];
+    let out = tokio::task::block_in_place(|| macroctl(&args));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = std::fs::read_to_string(&module).unwrap();
+    assert!(
+        text.contains("MICROGRID = mc.make_microgrid(\n    id=7,"),
+        "{text}"
+    );
+    assert!(text.contains("mc.make_battery_inverter("), "{text}");
+}
+
 /// A hybrid inverter and its battery come out commented, in the successors of
 /// the meter above them.
 #[tokio::test(flavor = "multi_thread")]
@@ -506,4 +569,202 @@ async fn a_hybrid_inverter_is_written_commented_out() {
         "{text}"
     );
     assert!(text.contains("#         mc.make_battery(id=4),"), "{text}");
+}
+
+/// An Assets API that answers for microgrid 42 with a made-up site: a
+/// hybrid inverter over a battery, an HVAC and a retired meter under the
+/// grid connection point's meter.
+struct CannedAssets;
+
+#[tonic::async_trait]
+impl macrocosim::proto::assets::platform_assets_service_server::PlatformAssetsService
+    for CannedAssets
+{
+    async fn get_microgrid(
+        &self,
+        _: tonic::Request<GetMicrogridRequest>,
+    ) -> Result<tonic::Response<macrocosim::proto::assets::GetMicrogridResponse>, tonic::Status>
+    {
+        Ok(tonic::Response::new(
+            macrocosim::proto::assets::GetMicrogridResponse {
+                microgrid: Some(macrocosim::proto::common::microgrid::Microgrid {
+                    id: 42,
+                    name: "made-up site".into(),
+                    ..Default::default()
+                }),
+            },
+        ))
+    }
+
+    async fn list_microgrid_electrical_components(
+        &self,
+        _: tonic::Request<ListMicrogridElectricalComponentsRequest>,
+    ) -> Result<
+        tonic::Response<macrocosim::proto::assets::ListMicrogridElectricalComponentsResponse>,
+        tonic::Status,
+    > {
+        use macrocosim::proto::common::microgrid::Lifetime;
+        use macrocosim::proto::common::microgrid::electrical_components::ElectricalComponentCategory as C;
+        let mut retired = component(6, C::Meter);
+        retired.operational_lifetime = Some(Lifetime {
+            start_timestamp: None,
+            end_timestamp: Some(prost_types::Timestamp {
+                seconds: 1,
+                nanos: 0,
+            }),
+        });
+        Ok(tonic::Response::new(
+            macrocosim::proto::assets::ListMicrogridElectricalComponentsResponse {
+                microgrid_id: 42,
+                components: vec![
+                    component(1, C::GridConnectionPoint),
+                    component(2, C::Meter),
+                    hybrid(3),
+                    component(4, C::Battery),
+                    component(5, C::Hvac),
+                    retired,
+                ],
+            },
+        ))
+    }
+
+    async fn list_microgrid_electrical_component_connections(
+        &self,
+        _: tonic::Request<ListMicrogridElectricalComponentConnectionsRequest>,
+    ) -> Result<
+        tonic::Response<
+            macrocosim::proto::assets::ListMicrogridElectricalComponentConnectionsResponse,
+        >,
+        tonic::Status,
+    > {
+        let connections = connections(&[(1, 2), (2, 3), (3, 4), (2, 5), (1, 6)]);
+        Ok(tonic::Response::new(
+            macrocosim::proto::assets::ListMicrogridElectricalComponentConnectionsResponse {
+                microgrid_id: 42,
+                connections,
+            },
+        ))
+    }
+
+    async fn list_microgrids(
+        &self,
+        _: tonic::Request<ListMicrogridsRequest>,
+    ) -> Result<tonic::Response<macrocosim::proto::assets::ListMicrogridsResponse>, tonic::Status>
+    {
+        Err(tonic::Status::unimplemented("not canned"))
+    }
+
+    async fn list_gridpools(
+        &self,
+        _: tonic::Request<macrocosim::proto::assets::ListGridpoolsRequest>,
+    ) -> Result<tonic::Response<macrocosim::proto::assets::ListGridpoolsResponse>, tonic::Status>
+    {
+        Err(tonic::Status::unimplemented("not canned"))
+    }
+
+    async fn list_gridpool_energy_schedules(
+        &self,
+        _: tonic::Request<macrocosim::proto::assets::ListGridpoolEnergySchedulesRequest>,
+    ) -> Result<
+        tonic::Response<macrocosim::proto::assets::ListGridpoolEnergySchedulesResponse>,
+        tonic::Status,
+    > {
+        Err(tonic::Status::unimplemented("not canned"))
+    }
+
+    async fn list_market_topology_relations(
+        &self,
+        _: tonic::Request<macrocosim::proto::assets::ListMarketTopologyRelationsRequest>,
+    ) -> Result<
+        tonic::Response<macrocosim::proto::assets::ListMarketTopologyRelationsResponse>,
+        tonic::Status,
+    > {
+        Err(tonic::Status::unimplemented("not canned"))
+    }
+
+    async fn list_microgrid_sensors(
+        &self,
+        _: tonic::Request<ListMicrogridSensorsRequest>,
+    ) -> Result<
+        tonic::Response<macrocosim::proto::assets::ListMicrogridSensorsResponse>,
+        tonic::Status,
+    > {
+        Err(tonic::Status::unimplemented("not canned"))
+    }
+}
+
+/// `macroctl from-assets` on a site with components it leaves out: the notes
+/// on stderr, the hybrid inverter commented out in the module and absent from
+/// the document, and the Python check skipped with --json.
+#[tokio::test(flavor = "multi_thread")]
+async fn macroctl_from_assets_notes_what_it_leaves_out() {
+    use macrocosim::proto::assets::platform_assets_service_server::PlatformAssetsServiceServer;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("grpc://{}?ssl=false", listener.local_addr().unwrap());
+    tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(PlatformAssetsServiceServer::new(CannedAssets))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let macroctl = |args: &[&str]| macroctl(&url, args);
+    let out = tokio::task::block_in_place(|| {
+        macroctl(&[
+            "--json",
+            "from-assets",
+            "42",
+            "--python",
+            "/nonexistent/python",
+        ])
+    });
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    for note in [
+        "note: component 6 is retired; left out",
+        "note: component 3: cannot simulate an inverter of type HYBRID (only battery and PV \
+         inverters exist here); left out",
+        "note: component 4: under hybrid inverter 3; left out",
+        "note: component 5: cannot simulate category HVAC; left out",
+    ] {
+        assert!(stderr.contains(note), "{note:?} not in {stderr}");
+    }
+    let doc = TopologyDoc::from_json(&String::from_utf8(out.stdout).unwrap()).unwrap();
+    let mut ids: Vec<u64> = doc.microgrids[0]
+        .components
+        .iter()
+        .filter_map(|c| c.id())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, vec![1, 2]);
+
+    let module = dir.path().join("site.py");
+    let missing = ["from-assets", "42", "--python", "/nonexistent/python", "-o"];
+    let out = tokio::task::block_in_place(|| {
+        macroctl(&[&missing[..], &[module.to_str().unwrap()]].concat())
+    });
+    assert!(!out.status.success());
+    assert!(!module.exists());
+
+    let Some(python) = venv_python() else { return };
+    let args = [
+        "from-assets",
+        "42",
+        "--python",
+        python.to_str().unwrap(),
+        "-o",
+        module.to_str().unwrap(),
+    ];
+    let out = tokio::task::block_in_place(|| macroctl(&args));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "note: hybrid inverter 3 and the components that go with it are written commented \
+             out under component 2"
+        ),
+        "{stderr}"
+    );
+    let text = std::fs::read_to_string(&module).unwrap();
+    assert!(text.contains("# mc.make_hybrid_inverter("), "{text}");
+    assert!(text.contains("name='made-up site'"), "{text}");
 }

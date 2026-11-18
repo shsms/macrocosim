@@ -20,12 +20,18 @@
 //!   macroctl set-reactive-power 1001 3000 --lifetime-s 30
 //!   macroctl augment-bounds 1001 --lower-w -15000 --upper-w 15000 --lifetime-s 60
 //!   macroctl augment-reactive-bounds 1001 --lower-var -3000 --upper-var 3000 --lifetime-s 60
+//!
+//! Assets API command (no simulator; the API's URL, key and secret from --url /
+//! --auth-key / --sign-secret or $ASSETS_API_URL / $ASSETS_API_AUTH_KEY /
+//! $ASSETS_API_SIGN_SECRET):
+//!   macroctl from-assets 42 -o site_42.py
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use tonic::transport::Channel;
 
+use macrocosim::assets_client::sign::Credentials;
 use macrocosim::proto::common::metrics::Metric;
 use macrocosim::proto::common::microgrid::electrical_components::{
     ElectricalComponent, ElectricalComponentCategory,
@@ -43,7 +49,9 @@ use macrocosim::proto::microgrid::{
     ListElectricalComponentsRequest, PowerType, ReceiveElectricalComponentTelemetryStreamRequest,
     SetElectricalComponentPowerRequest,
 };
+use macrocosim::python::Interpreter;
 use macrocosim::sim::dispatch::{json_to_struct, parse_target, struct_to_json, target_to_string};
+use macrocosim::spec::{SCHEMA_VERSION, TopologyDoc};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -211,6 +219,49 @@ enum Cmd {
         #[arg(long = "interval-s", value_parser = parse_secs, default_value = "1")]
         interval: std::time::Duration,
     },
+
+    /// Fetch a microgrid from an Assets API and write a Python module that
+    /// declares it, as the UI's "Save as .py" does. With --json, write its
+    /// topology document instead. Talks to no simulator.
+    ///
+    /// The module keeps the API's microgrid and component ids. Components and
+    /// connections outside their operational lifetime are left out. So are
+    /// components the simulator has no model for; each of their parents is
+    /// connected to each of their children. A microgrid with more than one grid
+    /// connection point is refused, and a component not under the grid
+    /// connection point is left out.
+    ///
+    /// A hybrid inverter, and an inverter of no type over a battery, are left
+    /// out with the components only such inverters lead to. The module
+    /// (not --json) carries them commented out under the first of the
+    /// inverter's parents that is left and can have components under it; one
+    /// with no such parent is not written. stderr names every component left
+    /// out, and why.
+    FromAssets {
+        /// The microgrid's id in the Assets API. The global --microgrid-id is
+        /// refused here.
+        #[arg(value_name = "MICROGRID_ID")]
+        id: u64,
+        /// The Assets API, as `grpc://host[:port][?ssl=false]`.
+        #[arg(long, env = "ASSETS_API_URL", hide_env_values = true)]
+        url: String,
+        /// The API key.
+        #[arg(long, env = "ASSETS_API_AUTH_KEY", hide_env_values = true)]
+        auth_key: String,
+        /// The key's signing secret. A flag shows to every user in `ps`; the
+        /// environment variable shows only to you and root.
+        #[arg(long, env = "ASSETS_API_SIGN_SECRET", hide_env_values = true)]
+        sign_secret: String,
+        /// Write the module to this file instead of stdout.
+        #[arg(long, short)]
+        output: Option<std::path::PathBuf>,
+        /// The Python to write the module with: 3.11 or later, with the
+        /// macrocosim package of this binary's version. Default:
+        /// $MACROCOSIM_PYTHON, a python next to this binary, then python3 or
+        /// python on PATH. Not used with --json.
+        #[arg(long)]
+        python: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -335,6 +386,22 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             run_dashboard(&cli.ui_addr, cli.microgrid_id, tail, interval).await
         }
         Cmd::Pool { cmd } => run_pool(cmd, &cli.ui_addr, cli.microgrid_id, cli.json).await,
+        Cmd::FromAssets {
+            id,
+            url,
+            auth_key,
+            sign_secret,
+            output,
+            python,
+        } => {
+            if cli.microgrid_id.is_some() {
+                return Err("from-assets takes the Assets API's microgrid id as its \
+                            argument, not --microgrid-id"
+                    .into());
+            }
+            let creds = Credentials::new(auth_key, sign_secret)?;
+            run_from_assets(&url, creds, id, output, python, cli.json).await
+        }
         // Everything else talks the Microgrid gRPC API: connect
         // once, then dispatch.
         cmd => {
@@ -364,6 +431,62 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+}
+
+/// `macroctl from-assets`: fetch microgrid `id`, note what was left out on
+/// stderr, and write its module (or with `json`, its topology document) to
+/// `output` or stdout.
+async fn run_from_assets(
+    url: &str,
+    creds: Credentials,
+    id: u64,
+    output: Option<std::path::PathBuf>,
+    python: Option<std::path::PathBuf>,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let interpreter = Interpreter::default();
+    if let Some(path) = python {
+        interpreter.set_override(path);
+    }
+    let resolve = async {
+        if json {
+            Ok(None)
+        } else {
+            interpreter.resolve().await.map(Some)
+        }
+    };
+    // The interpreter is checked during the fetch, so a missing one fails at
+    // once.
+    let fetch = macrocosim::assets_client::fetch(url, creds, id);
+    let (fetched, python) = tokio::try_join!(fetch, resolve)?;
+    for note in &fetched.left_out {
+        eprintln!("note: {note}");
+    }
+    let text = match python {
+        None => {
+            let doc = TopologyDoc {
+                schema_version: SCHEMA_VERSION,
+                microgrids: vec![fetched.spec],
+            };
+            serde_json::to_string_pretty(&doc)? + "\n"
+        }
+        Some(python) => {
+            let (input, notes) = fetched.module_input();
+            let text = macrocosim::python::write_module(&python, &input)
+                .await
+                .map_err(|e| format!("the export failed: {e}"))?;
+            for note in notes {
+                eprintln!("note: {note}");
+            }
+            text
+        }
+    };
+    match output {
+        Some(path) => std::fs::write(&path, text)
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?,
+        None => print!("{text}"),
+    }
+    Ok(())
 }
 
 /// A clap value parser for a non-negative, finite number of seconds.

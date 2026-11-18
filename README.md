@@ -117,6 +117,7 @@ macroctl dashboard --tail                                      # one-line/sec pu
 macroctl dispatch list                                         # dispatch API CRUD
 macroctl dispatch create <type> battery --duration-s 3600
 macroctl --microgrid-id 2 info                                 # pick another microgrid
+macroctl from-assets 42 -o site_42.py                          # a site from an Assets API
 ```
 
 `--microgrid-id` selects the microgrid for the gRPC commands,
@@ -129,6 +130,56 @@ ask it for the microgrid's address unless `--addr` alone is given,
 and `dispatch` asks it for the lowest microgrid id when
 `--microgrid-id` is not given. `--json` swaps any human table for the
 raw JSON.
+
+`from-assets MICROGRID_ID` talks to an Assets API instead of a simulator. It
+fetches the microgrid's components and connections, and writes a Python module
+that declares the microgrid, as *Save as .py* does. The module goes to stdout,
+or to the `-o` file. With `--json` it writes the topology document instead, and
+needs no Python. `MICROGRID_ID` is the Assets API's id; the global
+`--microgrid-id` is refused here.
+
+The API's URL, key and signing secret come from `--url`, `--auth-key` and
+`--sign-secret`, or from `$ASSETS_API_URL`, `$ASSETS_API_AUTH_KEY` and
+`$ASSETS_API_SIGN_SECRET`. Prefer the environment variables, and set them
+without typing the secret at the prompt, for example by sourcing a file only
+you can read: a flag shows to every user in `ps`, and what you type can land in
+the shell's history.
+
+The URL is `grpc://host[:port]`, and the port defaults to 443. `?ssl=false` is
+for a plaintext server, such as the simulator's own: it sends the key
+unencrypted.
+
+The module keeps the API's microgrid and component ids, and the fields the site
+import keeps: names, rated bounds, battery capacity and SoC bounds, the fuse
+current and operational modes.
+
+Components outside their operational lifetime are left out, with their
+connections, and so are connections outside their own. A module has exactly one
+root, the grid connection point: a microgrid with more than one is refused. A
+component that is not under the grid connection point, over the connections
+that are left, is left out too.
+
+Components the simulator has no model for are left out, such as a precharger or
+an HVAC. Each parent of one of these is connected to each of its children, or,
+when a child is left out too, to that child's children.
+
+A hybrid inverter, and an inverter of no type over a battery, are left out with
+the components only such inverters lead to, such as their batteries. An
+inverter of no type is over a battery when the battery is its child, or when
+only components the simulator has no model for are in between. A component
+under two of these inverters goes with the first.
+
+The module writes them as commented-out lines. Uncomment a hybrid inverter once
+the simulator can model one. An inverter of no type is written as a battery
+inverter: uncomment it once you know it is one.
+
+They go in the `successors` of the first of the inverter's parents, in the API's
+connection order, that is left and can have components under it: the grid
+connection point, a meter, a breaker, a power transformer or a battery inverter.
+An inverter with no such parent is not written, and `--json` carries none of
+them.
+
+stderr names every component left out, and why.
 
 Recordings and scenarios run inside the script (see
 [`docs/python-scripts.md`](docs/python-scripts.md)); macroctl has no

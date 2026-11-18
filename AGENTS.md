@@ -45,7 +45,8 @@ environment over the HTTP API. Reimplementation of microsim.
   check is kept for the engine's life; a failed one runs again on the next
   export. `write_module` pipes a topology document into `python -P -m
   macrocosim.export`: the `.py` export (`GET /api/mg/{mg}/spec.py`) runs it on
-  the stored spec, one export at a time
+  the stored spec, one export at a time, and `macroctl from-assets` on the
+  fetched one
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback), its
   started / failed status, and the handles of the tasks it started:
@@ -209,7 +210,8 @@ environment over the HTTP API. Reimplementation of microsim.
 - `src/timeout_tracker.rs` — request-lifetime deadlines on the site
   clock, owned by the gateway and expired on the physics tick
 - `src/bin/macrocosim.rs` — headless server
-- `src/bin/macroctl.rs` — clap-based client CLI
+- `src/bin/macroctl.rs` — clap-based client CLI; `from-assets` talks to an
+  Assets API, not a simulator, and writes the microgrid as the `.py` export does
 - `examples/` — short Python scripts, one feature each, in `assets/`, `faults/`
   and `sites/`, and pytest files in `testing/` (index in `examples/README.md`).
   Each script declares its own microgrid with explicit ids, distinct from every
