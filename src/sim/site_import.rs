@@ -28,6 +28,9 @@
 //! - `categorySpecificInfo.battery.type` (chemistry) is dropped: the
 //!   simulator's battery carries no chemistry yet.
 //!
+//! [`ComponentsFile::from_protos`] and [`ConnectionsFile::from_protos`] build
+//! the same files from the Assets API's messages.
+//!
 //! Wind turbines, power transformers and breakers import as marker
 //! components (see [`crate::sim::marker`]): present in the topology,
 //! no physics. Steam boilers carry their electric rating —
@@ -36,6 +39,9 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
+
+use crate::proto::common::metrics::Metric;
+use crate::proto::common::microgrid::electrical_components as ec;
 
 /// The `components.json` shape: `{"electricalComponents": [...]}`.
 #[derive(Deserialize)]
@@ -157,6 +163,100 @@ enum Lifted {
     Tree(ImportedComponent, InverterKind),
     /// A component the simulator has no model for, and why.
     NoModel(String),
+}
+
+impl ComponentsFile {
+    /// The file a site export (the JSON the UI imports) of `components` would
+    /// hold. Tokens are the protos' own names. A number the protos do not
+    /// define becomes that bare number: [`parse_with`] treats an unknown
+    /// category or inverter type as a component it has no model for, refuses an
+    /// unknown operational mode on a component it keeps, and ignores an
+    /// unknown metric.
+    pub fn from_protos(components: &[ec::ElectricalComponent]) -> Self {
+        Self {
+            electrical_components: components.iter().map(ApiComponent::from_proto).collect(),
+        }
+    }
+}
+
+impl ConnectionsFile {
+    /// The file a site export of `connections` would hold.
+    pub fn from_protos(connections: &[ec::ElectricalComponentConnection]) -> Self {
+        Self {
+            electrical_component_connections: connections
+                .iter()
+                .map(|c| ApiConnection {
+                    source_electrical_component_id: ApiId::Number(c.source_electrical_component_id),
+                    destination_electrical_component_id: ApiId::Number(
+                        c.destination_electrical_component_id,
+                    ),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// An enum's proto name, or the number when the proto defines none.
+fn enum_name<E: TryFrom<i32>>(value: i32, name: impl Fn(&E) -> &'static str) -> String {
+    E::try_from(value).map_or_else(|_| value.to_string(), |e| name(&e).to_string())
+}
+
+/// `value` as the decimal an export writes for it: the shortest one that reads
+/// back as the same `f32`, so 92.3 stays 92.3 and does not become
+/// 92.30000305175781.
+fn shortest_decimal(value: f32) -> f64 {
+    value
+        .to_string()
+        .parse()
+        .expect("an f32 prints as a number")
+}
+
+impl ApiComponent {
+    fn from_proto(pb: &ec::ElectricalComponent) -> Self {
+        use ec::electrical_component_category_specific_info::Kind;
+        let kind = pb
+            .category_specific_info
+            .as_ref()
+            .and_then(|i| i.kind.as_ref());
+        let category_specific_info = match kind {
+            Some(Kind::Inverter(i)) => Some(CategoryInfo {
+                inverter: Some(TypedInfo {
+                    r#type: Some(enum_name(i.r#type, ec::InverterType::as_str_name)),
+                }),
+                grid_connection_point: None,
+            }),
+            // An unset fuse current reads 0.
+            Some(Kind::GridConnectionPoint(g)) => Some(CategoryInfo {
+                inverter: None,
+                grid_connection_point: Some(GridInfo {
+                    rated_fuse_current: Some(g.rated_fuse_current).filter(|&a| a > 0),
+                }),
+            }),
+            // The import reads nothing else from these.
+            Some(Kind::Battery(_) | Kind::EvCharger(_) | Kind::PowerTransformer(_)) | None => None,
+        };
+        Self {
+            id: ApiId::Number(pb.id),
+            name: Some(pb.name.clone()),
+            category: enum_name(pb.category, ec::ElectricalComponentCategory::as_str_name),
+            category_specific_info,
+            metric_config_bounds: pb
+                .metric_config_bounds
+                .iter()
+                .map(|b| MetricConfigBounds {
+                    metric: Some(enum_name(b.metric, Metric::as_str_name)),
+                    config_bounds: b.config_bounds.as_ref().map(|b| Bounds {
+                        lower: b.lower.map(shortest_decimal),
+                        upper: b.upper.map(shortest_decimal),
+                    }),
+                })
+                .collect(),
+            operational_mode: Some(enum_name(
+                pb.operational_mode,
+                ec::ElectricalComponentOperationalMode::as_str_name,
+            )),
+        }
+    }
 }
 
 /// One component lifted out of the export: the spec type of its
@@ -1122,6 +1222,105 @@ mod tests {
             err.contains("no component the simulator can model"),
             "{err}"
         );
+    }
+
+    /// The files built from the protos import as an export of the same
+    /// components would: a mode spelled as common v0.8.11 spells it, a category
+    /// number the protos do not define, an `f32` bound as its shortest decimal,
+    /// and an unset fuse current left out.
+    #[test]
+    fn protos_import_as_their_export() {
+        use crate::proto::common::metrics::Bounds as PbBounds;
+        use ec::electrical_component_category_specific_info::Kind;
+        let info = |kind| Some(ec::ElectricalComponentCategorySpecificInfo { kind: Some(kind) });
+        let components = [
+            ec::ElectricalComponent {
+                id: 1,
+                name: "grid".into(),
+                category: ec::ElectricalComponentCategory::GridConnectionPoint as i32,
+                category_specific_info: info(Kind::GridConnectionPoint(ec::GridConnectionPoint {
+                    rated_fuse_current: 63,
+                })),
+                ..Default::default()
+            },
+            ec::ElectricalComponent {
+                id: 2,
+                category: ec::ElectricalComponentCategory::Inverter as i32,
+                category_specific_info: info(Kind::Inverter(ec::Inverter {
+                    r#type: ec::InverterType::Pv as i32,
+                })),
+                metric_config_bounds: vec![ec::MetricConfigBounds {
+                    metric: Metric::AcPowerActive as i32,
+                    config_bounds: Some(PbBounds {
+                        lower: Some(-8000.0),
+                        upper: Some(0.0),
+                    }),
+                }],
+                operational_mode: ec::ElectricalComponentOperationalMode::TelemetryOnly as i32,
+                ..Default::default()
+            },
+            ec::ElectricalComponent {
+                id: 3,
+                category: 999,
+                ..Default::default()
+            },
+            ec::ElectricalComponent {
+                id: 4,
+                category: ec::ElectricalComponentCategory::Battery as i32,
+                metric_config_bounds: vec![ec::MetricConfigBounds {
+                    metric: Metric::BatterySocPct as i32,
+                    config_bounds: Some(PbBounds {
+                        lower: Some(10.0),
+                        upper: Some(92.3),
+                    }),
+                }],
+                ..Default::default()
+            },
+            ec::ElectricalComponent {
+                id: 5,
+                category: ec::ElectricalComponentCategory::GridConnectionPoint as i32,
+                category_specific_info: info(Kind::GridConnectionPoint(ec::GridConnectionPoint {
+                    rated_fuse_current: 0,
+                })),
+                ..Default::default()
+            },
+        ];
+        let connections = [(1, 2), (1, 3)].map(|(a, b)| ec::ElectricalComponentConnection {
+            source_electrical_component_id: a,
+            destination_electrical_component_id: b,
+            ..Default::default()
+        });
+        let import = parse_with(
+            ComponentsFile::from_protos(&components),
+            Some(ConnectionsFile::from_protos(&connections)),
+            Unsupported::Skip,
+        )
+        .unwrap();
+        assert_eq!(
+            component(&import, 1),
+            serde_json::json!({"type": "grid_connection_point", "id": 1, "name": "grid",
+                               "rated_fuse_current_a": 63})
+        );
+        assert_eq!(
+            component(&import, 2),
+            serde_json::json!({"type": "solar_inverter", "id": 2,
+                               "rated_lower_w": -8000.0, "rated_upper_w": 0.0,
+                               "operational_mode": "telemetry_only"})
+        );
+        assert_eq!(
+            component(&import, 4),
+            serde_json::json!({"type": "battery", "id": 4,
+                               "soc_lower_pct": 10.0, "soc_upper_pct": 92.3})
+        );
+        assert_eq!(
+            component(&import, 5),
+            serde_json::json!({"type": "grid_connection_point", "id": 5})
+        );
+        assert_eq!(
+            import.skipped,
+            vec![(3, "cannot simulate category 999".to_string())]
+        );
+        assert_eq!(import.connections, vec![(1, 2)]);
     }
 
     #[test]
