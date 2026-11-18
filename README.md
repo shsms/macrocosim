@@ -16,7 +16,7 @@ The simulator exposes three surfaces:
   Downstream apps written against the production API talk to
   macrocosim the same way they'd talk to a real microgrid.
   Two enterprise-wide services ride alongside on their own
-  sockets: `PlatformAssets` (`[::1]:9900`) and the
+  sockets: `PlatformAssetsService` (`[::1]:9900`) and the
   `MicrogridDispatchService` store-and-serve dispatch API
   (`[::1]:8900`), each keyed by `microgrid_id` per request.
 - **Web UI** (`http://127.0.0.1:8801`) — multi-microgrid SPA.
@@ -60,7 +60,8 @@ The proto roots ([frequenz-api-microgrid](https://github.com/frequenz-floss/freq
 frequenz-api-assets, frequenz-api-dispatch) are vendored as git
 submodules under `submodules/` — run `git submodule update --init --recursive`
 once after cloning. `MACROCOSIM_PROTO_ROOT` overrides the microgrid
-proto root for downstream packagers with a private mirror.
+proto root for downstream packagers with a private mirror; frequenz-api-common
+still comes from the assets submodule.
 
 ## Scripting
 

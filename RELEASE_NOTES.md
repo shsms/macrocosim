@@ -24,6 +24,7 @@ The Python client is rewritten around one async API. Every number carries its un
 ### Rust library
 
 - The `macrocosim` Rust library is not a supported API: it serves the binaries and their tests, and the crate is not published to crates.io. Its `lisp`, `sim::axis`, `sim::clock` and `sim::scenarios` modules are gone.
+- The `proto` re-exports follow the vendored protos: `proto::assets` is now `platformassets::v1alpha1`, and `ElectricalComponentOperationalMode::TelemtryOnly` is `TelemetryOnly`.
 
 ### HTTP routes
 
@@ -88,6 +89,12 @@ The Lisp examples are gone. [`examples/`](examples/README.md) holds short Python
 - `dispatch list`, `get`, `create`, `pause`, `resume` and `delete` no longer take the microgrid id as an argument. Use the global `--microgrid-id N`, for example `macroctl --microgrid-id 2 dispatch list`. Without it, the lowest microgrid id is used.
 - `--addr` no longer defaults to `http://[::1]:8800`. Without it, the gRPC commands ask the UI server (`--ui-addr`) for the address of the microgrid's gRPC server. Pass `--addr` to name a server directly.
 - Printed tables still scale to kW and kWh. They print the unit of electrical metrics, SoC and humidity; ratios (power factor, THD), temperature, wind, pressure, irradiance and an unspecified metric print none. `list` labels its columns `rated_lower_w` and `rated_upper_w`, and `stream` has a unit column.
+
+### Assets API
+
+- The Assets API server on `[::1]:9900` serves `frequenz.api.platformassets.v1alpha1.PlatformAssetsService` (frequenz-api-assets v0.4.0), as the production Assets API does. It was `frequenz.api.assets.v1.PlatformAssets` (v0.1.0), which clients can no longer reach. Move your app to a client built on frequenz-api-assets v0.4.0 or later, and put the `List*` request filters in their `filter` message.
+- `MACROCOSIM_PROTO_ROOT` now overrides only the microgrid proto and its google protos: frequenz-api-common always comes from the assets submodule (v0.8.11). A private mirror that brought its own frequenz-api-common needs one compatible with v0.8.11.
+- The server also answers `ListMicrogrids`. `ListGridpools` and `ListMarketTopologyRelations` answer with empty lists, `ListGridpoolEnergySchedules` with NOT_FOUND, and `ListMicrogridSensors` with an empty list for a known microgrid: the simulator has no gridpools, market relations or sensors.
 
 ### Python
 

@@ -1,7 +1,7 @@
 # End-to-end testing your app against macrocosim in CI
 
 Macrocosim is a high-fidelity stand-in for a real microgrid: it speaks the
-production Frequenz gRPC API (`Microgrid`, `PlatformAssets`,
+production Frequenz gRPC API (`Microgrid`, `PlatformAssetsService`,
 `MicrogridDispatchService`) and runs real component physics, while Python code
 drives the environment (load, PV, faults) and checks the result. That makes it
 a drop-in environment for a downstream control app's integration tests: your

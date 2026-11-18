@@ -33,7 +33,7 @@ use macrocosim::spec::TopologyDoc;
 use macrocosim::{
     assets_server::AssetsServer,
     engine::{Engine, Metadata},
-    proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer,
+    proto::assets::platform_assets_service_server::PlatformAssetsServiceServer as AssetsGrpcServer,
     sim::MicrogridSite,
     ui,
 };
@@ -135,7 +135,7 @@ impl TestServer {
             let _ = ui::serve_with_listener(ui_listener, ui_engine, ui_runtimes, ui_python).await;
         }));
 
-        // PlatformAssets has its own port, as in the binary.
+        // PlatformAssetsService has its own port, as in the binary.
         let assets_listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind assets port");

@@ -14,17 +14,38 @@ use crate::{
             Bounds, Metric, MetricSample, MetricValueVariant, SimpleMetricValue,
             metric_value_variant,
         },
-        microgrid::electrical_components::{
-            Battery, BatteryType, ElectricalComponent, ElectricalComponentCategory,
-            ElectricalComponentCategorySpecificInfo, ElectricalComponentOperationalMode,
-            ElectricalComponentStateCode, ElectricalComponentStateSnapshot,
-            ElectricalComponentTelemetry, EvCharger, EvChargerType, GridConnectionPoint, Inverter,
-            InverterType, MetricConfigBounds, electrical_component_category_specific_info::Kind,
+        microgrid::{
+            Microgrid, MicrogridStatus,
+            electrical_components::{
+                Battery, BatteryType, ElectricalComponent, ElectricalComponentCategory,
+                ElectricalComponentCategorySpecificInfo, ElectricalComponentOperationalMode,
+                ElectricalComponentStateCode, ElectricalComponentStateSnapshot,
+                ElectricalComponentTelemetry, EvCharger, EvChargerType, GridConnectionPoint,
+                Inverter, InverterType, MetricConfigBounds,
+                electrical_component_category_specific_info::Kind,
+            },
         },
     },
     proto::microgrid::ReceiveElectricalComponentTelemetryStreamResponse,
     sim::{Category, MicrogridSite, OperationalMode, SimulatedComponent, Telemetry},
 };
+
+/// Microgrid `id` as the Microgrid and Assets APIs report it: active, created
+/// now, and named `Microgrid {id}` when `name` is empty.
+pub fn make_microgrid_proto(id: u64, name: &str, enterprise_id: u64) -> Microgrid {
+    Microgrid {
+        id,
+        enterprise_id,
+        name: if name.is_empty() {
+            format!("Microgrid {id}")
+        } else {
+            name.to_owned()
+        },
+        status: MicrogridStatus::Active as i32,
+        create_timestamp: Some(Timestamp::from(std::time::SystemTime::now())),
+        ..Default::default()
+    }
+}
 
 /// The one chrono→proto Timestamp conversion. The nanos cast is
 /// subtle enough (`timestamp_subsec_nanos` is u32, proto wants i32)
@@ -68,8 +89,7 @@ fn operational_mode_to_proto(m: OperationalMode) -> ElectricalComponentOperation
     match m {
         OperationalMode::Unspecified => ElectricalComponentOperationalMode::Unspecified,
         OperationalMode::Inactive => ElectricalComponentOperationalMode::Inactive,
-        // "Telemtry" is the upstream proto's own spelling.
-        OperationalMode::TelemetryOnly => ElectricalComponentOperationalMode::TelemtryOnly,
+        OperationalMode::TelemetryOnly => ElectricalComponentOperationalMode::TelemetryOnly,
         OperationalMode::ControlOnly => ElectricalComponentOperationalMode::ControlOnly,
         OperationalMode::ControlAndTelemetry => {
             ElectricalComponentOperationalMode::ControlAndTelemetry

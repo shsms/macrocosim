@@ -255,9 +255,9 @@ fn mode_kwargs(c: &ApiComponent, out: &mut Vec<(&'static str, Value)>) -> Result
             "COMPONENT_OPERATIONAL_MODE_",
         ],
     );
-    // The API token is the mode's name in SCREAMING_SNAKE_CASE,
-    // except that the proto spells the telemetry-only mode
-    // `TELEMTRY_ONLY`.
+    // The API token is the mode's name in SCREAMING_SNAKE_CASE;
+    // frequenz-api-common v0.8.3 and older spell the telemetry-only mode
+    // `TELEMTRY_ONLY`, as older exports do.
     let name = match suffix {
         "TELEMTRY_ONLY" => "telemetry_only".to_string(),
         other => other.to_lowercase(),

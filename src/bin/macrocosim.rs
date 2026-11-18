@@ -13,7 +13,7 @@ use macrocosim::{
     assets_server::AssetsServer,
     dispatch_server::DispatchServer,
     engine::{Engine, Metadata},
-    proto::assets::platform_assets_server::PlatformAssetsServer as AssetsGrpcServer,
+    proto::assets::platform_assets_service_server::PlatformAssetsServiceServer as AssetsGrpcServer,
     proto::dispatch::microgrid_dispatch_service_server::MicrogridDispatchServiceServer as DispatchGrpcServer,
     runtime::{MicrogridRuntimes, RuntimeOptions, RuntimeStatus},
     sim::sim_clock::NowSource,
@@ -46,7 +46,7 @@ struct Args {
     #[arg(long, value_name = "ID")]
     enterprise_id: Option<u64>,
 
-    /// Address of the PlatformAssets gRPC server (default
+    /// Address of the PlatformAssetsService gRPC server (default
     /// `[::1]:9900`).
     #[arg(long, value_name = "ADDR")]
     assets_addr: Option<SocketAddr>,
@@ -365,7 +365,7 @@ async fn serve() {
     if eph {
         assets_addr.set_port(0);
     }
-    let (assets_listener, assets_addr) = bind_or_exit(assets_addr, "PlatformAssets").await;
+    let (assets_listener, assets_addr) = bind_or_exit(assets_addr, "PlatformAssetsService").await;
     let mut dispatch_addr: SocketAddr = engine.dispatch_socket_addr().parse().unwrap_or_else(|e| {
         log::error!("invalid dispatch socket addr: {e}");
         std::process::exit(1);
@@ -375,7 +375,7 @@ async fn serve() {
     }
     let (dispatch_listener, dispatch_addr) = bind_or_exit(dispatch_addr, "MicrogridDispatch").await;
 
-    // Critical long-running tasks (UI, PlatformAssets and dispatch
+    // Critical long-running tasks (UI, PlatformAssetsService and dispatch
     // servers) go into one JoinSet: any of them exiting means the
     // process is limping with a dead surface, so main notices the
     // FIRST exit and shuts the whole binary down instead of serving
@@ -395,9 +395,9 @@ async fn serve() {
         "UI server"
     });
 
-    // PlatformAssets — its own listener, reachable regardless of which
+    // PlatformAssetsService — its own listener, reachable regardless of which
     // microgrid the client picks.
-    log::info!("PlatformAssets gRPC listening on {assets_addr}");
+    log::info!("PlatformAssetsService gRPC listening on {assets_addr}");
     let engine_for_assets = engine.clone();
     tasks.spawn(async move {
         if let Err(e) = Server::builder()
@@ -405,9 +405,9 @@ async fn serve() {
             .serve_with_incoming(TcpListenerStream::new(assets_listener))
             .await
         {
-            log::error!("PlatformAssets gRPC server exited: {e}");
+            log::error!("PlatformAssetsService gRPC server exited: {e}");
         }
-        "PlatformAssets gRPC server"
+        "PlatformAssetsService gRPC server"
     });
     // The single (enterprise-wide) MicrogridDispatchService — its own
     // listener, one service fronting every microgrid (keyed by the

@@ -189,7 +189,10 @@ environment over the HTTP API. Reimplementation of microsim.
   `ui-e2e` job in `.github/workflows/ci.yml` does the same on pushes to main and
   PRs targeting main.
 - `src/server.rs` — `Microgrid` gRPC service
-- `src/assets_server.rs` — `PlatformAssets` gRPC service (shared port)
+- `src/assets_server.rs` — `PlatformAssetsService` gRPC service
+  (`platformassets.v1alpha1`, shared port); the enterprise has no gridpools,
+  market relations or sensors, so those lists are empty and a gridpool's
+  energy schedules are NOT_FOUND
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
   (store-and-serve dispatch API; CRUD + stream over `sim::dispatch`)
 - `src/proto.rs` + `src/proto_conv.rs` — proto include + `Telemetry` →
@@ -518,7 +521,7 @@ document exits the binary. `--enterprise-id`, `--assets-addr`,
 `--dispatch-addr`, `--request-lifetime SECONDS` and `--augment-lifetime SECONDS`
 set the enterprise settings.
 
-`PlatformAssets` and `MicrogridDispatchService` each bind a single
+`PlatformAssetsService` and `MicrogridDispatchService` each bind a single
 shared listener (they're enterprise-wide, keyed by `microgrid_id` per
 request): assets on `[::1]:9900`, dispatch on `[::1]:8900`. Override
 with `--assets-addr` / `--dispatch-addr`.
@@ -534,8 +537,12 @@ so construction + validation stay identical.
 
 - Proto roots are vendored under `submodules/`:
   - `submodules/frequenz-api-microgrid` (pinned at v0.18.1) — override
-    with `MACROCOSIM_PROTO_ROOT` for a private mirror.
-  - `submodules/frequenz-api-assets` (pinned at v0.1.0).
+    with `MACROCOSIM_PROTO_ROOT` for a private mirror (which brings its
+    google protos, not its frequenz-api-common).
+  - `submodules/frequenz-api-assets` (pinned at v0.4.0) — its
+    frequenz-api-common (v0.8.11) is the one common root every proto builds
+    against. Microgrid v1alpha18 pins v0.8.3; v0.8.11 keeps its wire format,
+    adds messages and fixes the spelling of `TELEMTRY_ONLY`.
   - `submodules/frequenz-api-dispatch` (pinned at v1.0.0) — dispatch
     v1; imports the same vendored common v1alpha8, so no common of
     its own.

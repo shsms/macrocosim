@@ -24,7 +24,7 @@ pub(crate) fn reserved_ports_of(m: &Metadata) -> Vec<u16> {
 #[derive(Debug, Clone)]
 pub struct Metadata {
     pub enterprise_id: u64,
-    /// Address the PlatformAssets gRPC service binds to. Independent
+    /// Address the PlatformAssetsService gRPC service binds to. Independent
     /// of any microgrid's `grpc_port` so a sibling service (assets /
     /// reporting / future API surfaces) doesn't fight a microgrid for
     /// its socket. Set by `--assets-addr`.

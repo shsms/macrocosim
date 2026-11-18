@@ -416,7 +416,7 @@
           <li>The <em>Microgrids</em> button in the top bar, or <kbd>1</kbd>, opens a card grid of every registered microgrid: the ones scripts declared, plus any added via the <em>+ New microgrid</em> card or <code>POST /api/microgrids</code>. The last-selected microgrid persists in <code>localStorage</code>; a refresh restores it.</li>
           <li>The <em>⇪ Import site…</em> card creates a microgrid from a microgrid API site export: pick <code>components.json</code> and <code>connections.json</code> together (connections optional). Rated power bounds, battery capacity, SoC range and the grid's rated fuse current all carry over into the simulation.</li>
           <li>Clicking a card drills into that microgrid's Topology + Dispatches sub-tabs. The <em>← Microgrids</em> button in the header returns to the list.</li>
-          <li>Each microgrid runs its own Microgrid gRPC server on <code>[::1]:&lt;port&gt;</code> (default 8800, 8810, 8820, …). PlatformAssets runs on a single shared port (default 9900).</li>
+          <li>Each microgrid runs its own Microgrid gRPC server on <code>[::1]:&lt;port&gt;</code> (default 8800, 8810, 8820, …). PlatformAssetsService runs on a single shared port (default 9900).</li>
           <li>Component ids are <em>globally unique</em> across the enterprise — copying a selection from one microgrid and pasting into another (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>V</kbd>) re-creates the structure with fresh ids.</li>
         </ul>
         <h4>Aggregations</h4>

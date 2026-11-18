@@ -1,6 +1,7 @@
-// Both proto APIs are vendored under macrocosim's own `submodules/`.
+// The proto APIs are vendored under macrocosim's own `submodules/`.
 // The override env var lets a downstream packager point at a private
-// mirror of the microgrid proto without editing build.rs.
+// mirror of the microgrid proto without editing build.rs; frequenz-api-common
+// still comes from the assets submodule.
 use std::path::PathBuf;
 
 fn main() -> Result<(), std::io::Error> {
@@ -12,14 +13,19 @@ fn main() -> Result<(), std::io::Error> {
 
     let microgrid_proto =
         microgrid_root.join("proto/frequenz/api/microgrid/v1alpha18/microgrid.proto");
-    let assets_proto = assets_root.join("proto/frequenz/api/assets/v1/assets.proto");
+    let assets_proto =
+        assets_root.join("proto/frequenz/api/platformassets/v1alpha1/platformassets.proto");
     // dispatch v1 imports frequenz-api-common v1alpha8 (electrical_components,
-    // pagination, streaming/event, types/interval) — the same common root the
-    // microgrid proto pulls in, so it needs no vendored common of its own.
+    // pagination, streaming/event, types/interval) — the common root below
+    // covers it, so it needs no vendored common of its own.
     let dispatch_proto = dispatch_root.join("proto/frequenz/api/dispatch/v1/dispatch.proto");
-    // Both microgrid v1alpha18 and assets v1 import the same
-    // frequenz-api-common (v0.8.0); we pick microgrid's vendored copy.
-    let common_proto_root = microgrid_root.join("submodules/frequenz-api-common/proto");
+    // Microgrid v1alpha18 pins frequenz-api-common v0.8.3 and platformassets
+    // v1alpha1 pins v0.8.11. v0.8.11 keeps v0.8.3's wire format: it adds
+    // messages, some of which platformassets imports, and renames
+    // ELECTRICAL_COMPONENT_OPERATIONAL_MODE_TELEMTRY_ONLY to
+    // ..._TELEMETRY_ONLY. So common is generated once, from the assets
+    // submodule's copy.
+    let common_proto_root = assets_root.join("submodules/frequenz-api-common/proto");
     let google_proto_root = microgrid_root.join("submodules/api-common-protos");
 
     println!("cargo:rerun-if-env-changed=MACROCOSIM_PROTO_ROOT");

@@ -8,7 +8,6 @@
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
-use prost_types::Timestamp;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -50,7 +49,6 @@ fn resolve_lifetime(
 }
 
 use crate::proto::common::microgrid::electrical_components::ElectricalComponentConnection;
-use crate::proto::common::microgrid::{Microgrid, MicrogridStatus};
 use crate::proto::microgrid::{
     AckElectricalComponentErrorRequest, AugmentElectricalComponentBoundsRequest,
     AugmentElectricalComponentBoundsResponse, GetMicrogridResponse,
@@ -63,7 +61,7 @@ use crate::proto::microgrid::{
     SetElectricalComponentPowerRequestStatus, SetElectricalComponentPowerResponse,
     StartElectricalComponentRequest, StopElectricalComponentRequest, microgrid_server,
 };
-use crate::proto_conv::{make_component_proto, telemetry_to_proto};
+use crate::proto_conv::{make_component_proto, make_microgrid_proto, telemetry_to_proto};
 use crate::sim::gateway::{GatewayError, Mode};
 use crate::sim::runtime::{CommandMode, Health, TelemetryMode};
 use crate::sim::setpoints::{SetpointEvent, SetpointKind, SetpointOutcome};
@@ -285,26 +283,20 @@ impl microgrid_server::Microgrid for MicrogridServer {
         // The MicrogridInfo response reports *this server's*
         // microgrid id. The display name comes from the registry
         // entry so each per-port server returns the right label.
-        let enterprise_id = self.engine.metadata().enterprise_id;
-        let registry_name = self
+        let name = self
             .engine
             .microgrids()
             .lock()
             .get(&self.microgrid_id)
-            .map(|e| e.def.name.clone());
-        let name = registry_name
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| format!("Microgrid {}", self.microgrid_id));
-        let now = Some(Timestamp::from(SystemTime::now()));
+            .map(|e| e.def.name.clone())
+            .unwrap_or_default();
+        let enterprise_id = self.engine.metadata().enterprise_id;
         Ok(tonic::Response::new(GetMicrogridResponse {
-            microgrid: Some(Microgrid {
-                id: self.microgrid_id,
+            microgrid: Some(make_microgrid_proto(
+                self.microgrid_id,
+                &name,
                 enterprise_id,
-                name,
-                status: MicrogridStatus::Active as i32,
-                create_timestamp: now,
-                ..Default::default()
-            }),
+            )),
         }))
     }
 
