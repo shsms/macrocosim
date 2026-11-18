@@ -11,11 +11,25 @@ the simulator showed. Every string is written with `repr`, so a name cannot
 break out of its literal. A component under two parents is written once, as a
 variable, before the microgrid.
 
+The document may also carry ``commented``: a list of entries, each a tree of
+components the simulator cannot model as they are. Each entry is written as
+commented-out lines in its parent's ``successors``, so that uncommenting it puts
+it in place. The module imports what those lines need.
+
+Each entry is an object with ``parent`` (the id of a component of the microgrid
+that takes successors), ``kind`` (``hybrid_inverter`` or
+``inverter_of_no_type``), and ``components`` and ``connections`` as in a
+microgrid. They form one tree, each component under one parent. Its root is
+written with the kind's constructor, such as ``make_hybrid_inverter``, and with
+the fields of its own ``type``. Its ids are not in the microgrid or in another
+entry.
+
 Imports `_topology`, `_spec`, `_units` and `_errors`.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import sys
 from datetime import timedelta
@@ -24,8 +38,8 @@ from typing import Any
 
 from ._errors import SpecError
 from ._spec import ComponentSpec, MicrogridSpec, _field_kinds, children
-from ._topology import specs_from_doc
-from ._units import UNITS, to_wire
+from ._topology import microgrid_from_value, specs_from_doc
+from ._units import UNITS, is_int_like, to_wire
 
 INDENT = "    "
 
@@ -37,6 +51,8 @@ class _Writer:
         self.quantities: set[str] = set()
         self.timedelta = False
         self.shared: dict[ComponentSpec[Any], str] = {}
+        # The commented-out lines written in a component's successors, by id.
+        self.commented_lines: dict[int, list[list[str]]] = {}
         parents: dict[ComponentSpec[Any], int] = {}
         for spec in mg._order:
             for child in children(spec):
@@ -66,8 +82,15 @@ class _Writer:
             return repr(value)
         raise SpecError(f"cannot write {value!r} ({kind.__name__}) as Python")
 
-    def component(self, mg: MicrogridSpec, spec: ComponentSpec[Any], depth: int) -> str:
-        """`spec` as a ``make_*`` call, its successors nested."""
+    def component(
+        self,
+        mg: MicrogridSpec,
+        spec: ComponentSpec[Any],
+        depth: int,
+        constructor: str | None = None,
+    ) -> str:
+        """`spec` as a ``make_*`` call (or a `constructor` call), its successors
+        nested."""
         args = [f"id={mg._ids[spec]!r}"]
         for name in _field_kinds(type(spec)):
             value = getattr(spec, name)
@@ -75,8 +98,9 @@ class _Writer:
                 continue
             args.append(f"{name}={self.value(value)}")
         kids = children(spec)
-        head = f"mc.make_{spec._type}("
-        if not kids:
+        blocks = self.commented_lines.get(mg._ids[spec], [])
+        head = f"mc.{constructor or 'make_' + spec._type}("
+        if not kids and not blocks:
             return head + ", ".join(args) + ")"
         pad = INDENT * (depth + 1)
         inner = INDENT * (depth + 2)
@@ -85,6 +109,8 @@ class _Writer:
         lines.append(f"{pad}successors=[")
         for child in kids:
             lines.append(f"{inner}{self.reference(mg, child, depth + 2)},")
+        for block in blocks:
+            lines += [f"{inner}# {line}" for line in block]
         lines.append(f"{pad}],")
         lines.append(f"{INDENT * depth})")
         return "\n".join(lines)
@@ -155,13 +181,110 @@ if __name__ == "__main__":
 """The end of every exported module: declare ``MICROGRID`` when run."""
 
 
-def to_python(specs: list[MicrogridSpec]) -> str:
+# Each kind of commented entry's constructor, and the note written above it.
+_KINDS = {
+    "hybrid_inverter": ("make_hybrid_inverter", "Needs a hybrid inverter model:"),
+    "inverter_of_no_type": (
+        "make_battery_inverter",
+        "Needs an inverter type; written as a battery inverter:",
+    ),
+}
+
+
+def _commented_lines(
+    writer: _Writer, entry: Any, used: set[int]
+) -> tuple[int, list[str]]:
+    """One ``commented`` entry as its parent's id and its lines, not yet
+    commented out. The imports its values need go to `writer`. Its ids are added
+    to `used`; one already there raises `SpecError`."""
+    keys = {"parent", "kind", "components", "connections"}
+    if not isinstance(entry, dict) or set(entry) != keys:
+        raise SpecError(f"a commented entry must be an object with keys {sorted(keys)}")
+    parent, kind = entry["parent"], entry["kind"]
+    if not isinstance(parent, int) or isinstance(parent, bool):
+        raise SpecError(f"a commented entry's parent must be an id, not {parent!r}")
+    if not isinstance(kind, str) or kind not in _KINDS:
+        raise SpecError(f"{kind!r} is not a kind of commented entry: {sorted(_KINDS)}")
+    constructor, note = _KINDS[kind]
+    components, connections = entry["components"], entry["connections"]
+    if not isinstance(components, list) or not isinstance(connections, list):
+        raise SpecError("a commented entry's components and connections must be lists")
+    # A component with no id is left to the stand-in microgrid to refuse.
+    ids = [c["id"] for c in components if isinstance(c, dict) and "id" in c]
+    for pair in connections:
+        if not (
+            isinstance(pair, list)
+            and len(pair) == 2
+            and all(is_int_like(x) for x in pair)
+        ):
+            raise SpecError(
+                f"a commented entry's connection must be [parent, child], not {pair!r}"
+            )
+        for end in pair:
+            if end not in ids:
+                raise SpecError(
+                    f"a commented entry's connection {pair!r} names component {end}, "
+                    "which is not in the entry"
+                )
+    under = [child for _, child in connections]
+    # A repeated id counts once here; the stand-in microgrid refuses it.
+    tops = [i for k, i in enumerate(ids) if i not in under and i not in ids[:k]]
+    if len(tops) != 1 or len(under) != len(set(under)):
+        raise SpecError(
+            "a commented entry must be one tree, each component under one parent"
+        )
+    # The tree under a stand-in grid connection point, so it reads as a
+    # microgrid.
+    grid = next(i for i in itertools.count(1) if i not in ids)
+    mg = microgrid_from_value(
+        {
+            "components": [
+                {"type": "grid_connection_point", "id": grid},
+                *components,
+            ],
+            "connections": [*connections, [grid, tops[0]]],
+        },
+        label=f"the commented entry under {parent}",
+    )
+    tree_ids = set(mg._ids.values()) - {grid}
+    if tree_ids & used:
+        raise SpecError(
+            f"the commented entry under {parent} reuses ids {sorted(tree_ids & used)}"
+        )
+    used |= tree_ids
+    [top] = children(mg.topology)
+    text = writer.component(mg, top, 0, constructor)
+    return parent, [note, *f"{text},".split("\n")]
+
+
+def to_python(specs: list[MicrogridSpec], commented: Any = None) -> str:
     """The text of a module whose ``MICROGRID`` builds the one microgrid of
-    `specs`, and whose ``main`` declares it. More or fewer than one raises
-    `SpecError`: the export writes one microgrid per file."""
+    `specs`, and whose ``main`` declares it. Each `commented` entry (see the
+    module docs) is written as commented-out lines under its parent. More or
+    fewer than one microgrid raises `SpecError`: the export writes one microgrid
+    per file."""
     if len(specs) != 1:
         raise SpecError(f"the export writes one microgrid per file, not {len(specs)}")
-    return _Writer(specs[0]).module()
+    writer = _Writer(specs[0])
+    if commented is not None:
+        if not isinstance(commented, list):
+            raise SpecError("commented must be a list")
+        by_id = {cid: spec for spec, cid in specs[0]._ids.items()}
+        used = set(by_id)
+        for entry in commented:
+            parent, lines = _commented_lines(writer, entry, used)
+            spec = by_id.get(parent)
+            if spec is None:
+                raise SpecError(
+                    f"a commented entry's parent {parent} is not in the microgrid"
+                )
+            if "successors" not in _field_kinds(type(spec)):
+                raise SpecError(
+                    f"a commented entry's parent {parent} is a {spec._type}, which "
+                    "takes no successors"
+                )
+            writer.commented_lines.setdefault(parent, []).append(lines)
+    return writer.module()
 
 
 def main() -> int:
@@ -169,8 +292,9 @@ def main() -> int:
     try:
         # Bytes in and out: the simulator writes and reads UTF-8, whatever the
         # locale's encoding is.
-        specs = specs_from_doc(json.load(sys.stdin.buffer))
-        text = to_python(specs)
+        doc = json.load(sys.stdin.buffer)
+        commented = doc.pop("commented", None) if isinstance(doc, dict) else None
+        text = to_python(specs_from_doc(doc), commented)
     except (SpecError, json.JSONDecodeError) as exc:
         print(f"macrocosim.export: {exc}", file=sys.stderr)
         return 1

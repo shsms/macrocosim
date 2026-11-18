@@ -79,7 +79,8 @@ impl Interpreter {
 }
 
 /// The Python module `python -m macrocosim.export` on `python` writes for
-/// `input`, a topology document, or why that failed or took longer than
+/// `input`, a topology document that may also carry `commented` entries (see
+/// `macrocosim.export`), or why that failed or took longer than
 /// [`WRITE_MODULE_TIMEOUT`].
 pub async fn write_module(python: &Path, input: &impl serde::Serialize) -> Result<String, String> {
     let input = serde_json::to_vec(input).map_err(|e| e.to_string())?;

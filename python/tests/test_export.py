@@ -195,3 +195,178 @@ def test_a_bad_document_exits_1_with_the_reason() -> None:
     assert out.returncode == 1
     assert out.stdout == ""
     assert "the root must be exactly one grid connection point" in out.stderr
+
+
+def _with_hybrid() -> dict[str, Any]:
+    """A microgrid, grid 1 → meter 2, with a hybrid inverter commented out
+    under the meter."""
+    return {
+        "schema_version": 1,
+        "microgrids": [
+            {
+                "id": 7,
+                "components": [
+                    {"type": "grid_connection_point", "id": 1},
+                    {"type": "meter", "id": 2},
+                ],
+                "connections": [[1, 2]],
+            }
+        ],
+        "commented": [
+            {
+                "parent": 2,
+                "kind": "hybrid_inverter",
+                "components": [
+                    {"type": "battery", "id": 31, "capacity_wh": 10000.0},
+                    {
+                        "type": "battery_inverter",
+                        "id": 30,
+                        "name": "hybrid 1",
+                        "rated_lower_w": -5000.0,
+                        "rated_upper_w": 5000.0,
+                    },
+                ],
+                "connections": [[30, 31]],
+            }
+        ],
+    }
+
+
+def _export(doc: dict[str, Any]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-P", "-m", "macrocosim.export"],
+        input=json.dumps(doc),
+        capture_output=True,
+        text=True,
+    )
+
+
+def _uncommented(text: str, constructor: str) -> str:
+    """`text` with its commented-out components put back, their root written
+    with `constructor`."""
+    lines = []
+    for line in text.split("\n"):
+        body = line.lstrip()
+        indent = line[: len(line) - len(body)]
+        if body.startswith("# Needs"):
+            continue
+        if body.startswith("# "):
+            line = indent + body[2:].replace("mc.make_hybrid_inverter(", constructor)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def test_commented_components_are_written_in_their_parents_successors() -> None:
+    out = _export(_with_hybrid())
+    assert out.returncode == 0, out.stderr
+    assert "        # Needs a hybrid inverter model:\n" in out.stdout
+    assert "        # mc.make_hybrid_inverter(\n" in out.stdout
+    assert "from frequenz.quantities import Energy, Power" in out.stdout
+    # Commented out, they are not part of the microgrid.
+    plain = _with_hybrid()
+    del plain["commented"]
+    assert _doc([_run(out.stdout)]) == _doc(specs_from_doc(plain))
+    # Uncommented, they are in place under the meter.
+    back = _run(_uncommented(out.stdout, "mc.make_battery_inverter("))
+    [mg] = _doc([back])["microgrids"]
+    assert [30, 31] == sorted(c["id"] for c in mg["components"] if c["id"] > 2)
+    assert [2, 30] in mg["connections"] and [30, 31] in mg["connections"]
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "reason"),
+    [
+        ("kind", "make_x(); import os #", "is not a kind of commented entry"),
+        ("kind", ["hybrid_inverter"], "is not a kind of commented entry"),
+        ("parent", 99, "parent 99 is not in the microgrid"),
+        ("parent", True, "must be an id"),
+        ("connections", [], "must be one tree"),
+        ("connections", [[30, 31], [30, 31]], "each component under one parent"),
+        ("connections", [[30, [31]]], "must be [parent, child]"),
+        ("connections", [[30]], "must be [parent, child]"),
+        ("connections", [[1, 31]], "names component 1, which is not in the entry"),
+        (
+            "components",
+            [
+                {"type": "battery_inverter", "id": 30},
+                {"type": "battery", "id": 31},
+                {"type": "battery", "id": 31},
+            ],
+            "the commented entry under 2: component id 31 appears twice",
+        ),
+        (
+            "components",
+            [
+                {"type": "battery_inverter", "id": 30},
+                {"type": "battery", "id": 31},
+                {"type": "battery"},
+            ],
+            "the commented entry under 2: a battery has no id",
+        ),
+        (
+            "components",
+            [
+                {"type": "battery_inverter", "id": 30, "name": 5},
+                {"type": "battery", "id": 31},
+            ],
+            "the commented entry under 2 component 30 name",
+        ),
+        ("components", {"id": 30}, "must be lists"),
+    ],
+)
+def test_a_bad_commented_entry_exits_1_with_the_reason(
+    key: str, value: Any, reason: str
+) -> None:
+    doc = _with_hybrid()
+    doc["commented"][0][key] = value
+    out = _export(doc)
+    assert out.returncode == 1
+    assert out.stdout == ""
+    assert reason in out.stderr
+
+
+def test_a_commented_entry_needs_a_parent_that_takes_successors() -> None:
+    doc = _with_hybrid()
+    doc["microgrids"][0]["components"].append({"type": "chp", "id": 3})
+    doc["microgrids"][0]["connections"].append([1, 3])
+    doc["commented"][0]["parent"] = 3
+    out = _export(doc)
+    assert out.returncode == 1
+    assert "parent 3 is a chp, which takes no successors" in out.stderr
+
+
+@pytest.mark.parametrize("commented", [{}, [1], [{"parent": 2}]])
+def test_bad_commented_lists_exit_1(commented: Any) -> None:
+    doc = _with_hybrid()
+    doc["commented"] = commented
+    out = _export(doc)
+    assert out.returncode == 1
+    assert out.stderr.startswith("macrocosim.export: "), out.stderr
+
+
+def test_a_commented_entry_may_not_reuse_an_id() -> None:
+    doc = _with_hybrid()
+    doc["commented"][0]["components"][0]["id"] = 2
+    doc["commented"][0]["connections"] = [[30, 2]]
+    out = _export(doc)
+    assert out.returncode == 1
+    assert "the commented entry under 2 reuses ids [2]" in out.stderr
+
+
+def test_two_commented_entries_may_not_share_ids() -> None:
+    doc = _with_hybrid()
+    doc["commented"].append(doc["commented"][0])
+    out = _export(doc)
+    assert out.returncode == 1
+    assert "the commented entry under 2 reuses ids [30, 31]" in out.stderr
+
+
+def test_an_inverter_of_no_type_is_written_as_a_battery_inverter() -> None:
+    doc = _with_hybrid()
+    doc["commented"][0]["kind"] = "inverter_of_no_type"
+    out = _export(doc)
+    assert out.returncode == 0, out.stderr
+    assert (
+        "        # Needs an inverter type; written as a battery inverter:\n" in out.stdout
+    )
+    assert "        # mc.make_battery_inverter(\n" in out.stdout

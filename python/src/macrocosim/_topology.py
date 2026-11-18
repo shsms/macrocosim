@@ -101,11 +101,13 @@ def specs_from_doc(doc: Any) -> list[MicrogridSpec]:
     return [microgrid_from_value(mg) for mg in microgrids]
 
 
-def microgrid_from_value(data: Any) -> MicrogridSpec:
-    """One microgrid of a topology document as a `MicrogridSpec`."""
+def microgrid_from_value(data: Any, label: str | None = None) -> MicrogridSpec:
+    """One microgrid of a topology document as a `MicrogridSpec`. Errors name it
+    by `label`, or by default as ``microgrid ID``."""
     if not isinstance(data, dict):
         raise SpecError("each microgrid must be a JSON object")
-    label = f"microgrid {data.get('id', '(no id)')}"
+    if label is None:
+        label = f"microgrid {data.get('id', '(no id)')}"
     extra = set(data) - _MICROGRID_KEYS
     if extra:
         raise SpecError(f"{label}: unknown keys {sorted(extra)}")
