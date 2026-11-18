@@ -407,6 +407,25 @@ macro_rules! each_variant {
 }
 
 impl ComponentSpec {
+    /// Whether a Python script can write components under this one: whether
+    /// the Python client's spec of this type takes successors. The topology
+    /// document itself puts no such limit on connections.
+    pub fn takes_successors(&self) -> bool {
+        match self {
+            ComponentSpec::GridConnectionPoint(_)
+            | ComponentSpec::Meter(_)
+            | ComponentSpec::BatteryInverter(_)
+            | ComponentSpec::PowerTransformer(_)
+            | ComponentSpec::Breaker(_) => true,
+            ComponentSpec::Battery(_)
+            | ComponentSpec::SolarInverter(_)
+            | ComponentSpec::Chp(_)
+            | ComponentSpec::EvCharger(_)
+            | ComponentSpec::SteamBoiler(_)
+            | ComponentSpec::WindTurbine(_) => false,
+        }
+    }
+
     pub fn id(&self) -> Option<u64> {
         each_variant!(self, s => s.id)
     }

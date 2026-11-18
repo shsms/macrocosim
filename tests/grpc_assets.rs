@@ -1,11 +1,13 @@
 //! gRPC integration tests for the assets API surface
-//! (`frequenz.api.platformassets.v1alpha1.PlatformAssetsService`). Each
-//! test spawns a fresh `TestServer` and exercises the assets RPCs
-//! against the same topology the microgrid tests use.
+//! (`frequenz.api.platformassets.v1alpha1.PlatformAssetsService`), and the
+//! Assets API client (`assets_client`) read against it. Each test spawns a
+//! fresh `TestServer` and exercises the assets RPCs against the same topology
+//! the microgrid tests use.
 
 mod common;
 
-use common::TestServer;
+use common::{TestServer, venv_python};
+use macrocosim::assets_client::{self, sign::Credentials};
 use macrocosim::proto::assets::{
     GetMicrogridRequest, ListMicrogridElectricalComponentConnectionsRequest,
     ListMicrogridElectricalComponentsRequest, ListMicrogridSensorsRequest, ListMicrogridsRequest,
@@ -13,6 +15,8 @@ use macrocosim::proto::assets::{
     list_microgrids_request::MicrogridsFilter,
     platform_assets_service_client::PlatformAssetsServiceClient,
 };
+use macrocosim::proto::common::microgrid::electrical_components as ec;
+use macrocosim::spec::ComponentSpec;
 
 const TINY_TOPOLOGY: &str = r#"{
   "id": 7,
@@ -24,6 +28,38 @@ const TINY_TOPOLOGY: &str = r#"{
   ],
   "connections": [[4, 3], [2, 4], [1, 2]]
 }"#;
+
+fn component(id: u64, category: ec::ElectricalComponentCategory) -> ec::ElectricalComponent {
+    ec::ElectricalComponent {
+        id,
+        category: category as i32,
+        ..Default::default()
+    }
+}
+
+fn hybrid(id: u64) -> ec::ElectricalComponent {
+    ec::ElectricalComponent {
+        category_specific_info: Some(ec::ElectricalComponentCategorySpecificInfo {
+            kind: Some(
+                ec::electrical_component_category_specific_info::Kind::Inverter(ec::Inverter {
+                    r#type: ec::InverterType::Hybrid as i32,
+                }),
+            ),
+        }),
+        ..component(id, ec::ElectricalComponentCategory::Inverter)
+    }
+}
+
+fn connections(pairs: &[(u64, u64)]) -> Vec<ec::ElectricalComponentConnection> {
+    pairs
+        .iter()
+        .map(|&(a, b)| ec::ElectricalComponentConnection {
+            source_electrical_component_id: a,
+            destination_electrical_component_id: b,
+            ..Default::default()
+        })
+        .collect()
+}
 
 async fn connect(s: &TestServer) -> PlatformAssetsServiceClient<tonic::transport::Channel> {
     PlatformAssetsServiceClient::connect(s.assets_url.clone())
@@ -299,4 +335,175 @@ async fn list_sensors_is_empty_and_rejects_wrong_id() {
         .await
         .expect_err("wrong id should be rejected");
     assert_eq!(err.code(), tonic::Code::NotFound, "got {err:?}");
+}
+
+/// The Assets API client reads the simulator's own Assets API back into a spec
+/// with the same ids, types, rated bounds and connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fetch_reads_a_microgrid_back() {
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
+    let url = s.assets_url.replace("http://", "grpc://") + "?ssl=false";
+    let creds = Credentials::new("key", "secret").unwrap();
+    let fetched = assets_client::fetch(&url, creds, 7)
+        .await
+        .expect("fetch ok");
+    assert!(fetched.left_out.is_empty(), "{:?}", fetched.left_out);
+    let spec = fetched.spec;
+    assert_eq!(spec.id, Some(7));
+    assert_eq!(spec.name.as_deref(), Some("default"));
+    let mut types: Vec<(u64, &str)> = spec
+        .components
+        .iter()
+        .map(|c| (c.id().unwrap(), c.type_name()))
+        .collect();
+    types.sort();
+    assert_eq!(
+        types,
+        vec![
+            (1, "grid_connection_point"),
+            (2, "meter"),
+            (3, "battery"),
+            (4, "battery_inverter"),
+        ]
+    );
+    let inverter = spec
+        .components
+        .iter()
+        .find_map(|c| match c {
+            ComponentSpec::BatteryInverter(i) => Some(i),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (inverter.rated_lower_w, inverter.rated_upper_w),
+        (Some(-5000.0), Some(5000.0))
+    );
+    let mut edges = spec.connections.clone();
+    edges.sort();
+    assert_eq!(edges, vec![(1, 2), (2, 4), (4, 3)]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fetch_names_a_missing_microgrid() {
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
+    let url = s.assets_url.replace("http://", "grpc://") + "?ssl=false";
+    let creds = Credentials::new("key", "secret").unwrap();
+    let err = assets_client::fetch(&url, creds, 999).await.unwrap_err();
+    assert!(err.contains("NotFound") && err.contains("999"), "{err}");
+}
+
+/// A refused connection names the operating system's reason, not only tonic's
+/// "transport error".
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fetch_names_why_it_could_not_connect() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let url = format!("grpc://127.0.0.1:{port}?ssl=false");
+    let creds = Credentials::new("key", "secret").unwrap();
+    let err = assets_client::fetch(&url, creds, 7).await.unwrap_err();
+    assert!(err.contains("Connection refused"), "{err}");
+}
+
+/// A server that takes the connection and never answers fails the fetch
+/// when its time is up.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fetch_gives_up_on_a_silent_server() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("grpc://{}?ssl=false", listener.local_addr().unwrap());
+    let held = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            sockets.push(socket);
+        }
+    });
+    let creds = Credentials::new("key", "secret").unwrap();
+    let timeout = std::time::Duration::from_millis(300);
+    let err = assets_client::fetch_within(&url, creds, 7, timeout)
+        .await
+        .unwrap_err();
+    assert!(err.contains("no complete answer within 300ms"), "{err}");
+    held.abort();
+}
+
+/// The fetch's calls carry the signing metadata on the wire: a server that
+/// refuses calls without it still answers.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fetch_signs_its_calls() {
+    use macrocosim::assets_server::AssetsServer;
+    use macrocosim::proto::assets::platform_assets_service_server::PlatformAssetsServiceServer;
+    let s = TestServer::start_mg(TINY_TOPOLOGY).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let signed = |req: tonic::Request<()>| {
+        let md = req.metadata();
+        if ["key", "ts", "nonce", "sig"]
+            .iter()
+            .all(|k| md.get(*k).is_some())
+        {
+            Ok(req)
+        } else {
+            Err(tonic::Status::unauthenticated("unsigned"))
+        }
+    };
+    let server =
+        PlatformAssetsServiceServer::with_interceptor(AssetsServer::new(s.engine.clone()), signed);
+    tokio::spawn(
+        tonic::transport::Server::builder()
+            .add_service(server)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+    );
+    let url = format!("grpc://{addr}?ssl=false");
+    let creds = Credentials::new("key", "secret").unwrap();
+    let fetched = assets_client::fetch(&url, creds, 7)
+        .await
+        .expect("fetch ok");
+    assert_eq!(fetched.spec.id, Some(7));
+}
+
+/// A hybrid inverter and its battery come out commented, in the successors of
+/// the meter above them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hybrid_inverter_is_written_commented_out() {
+    use macrocosim::proto::common::microgrid::Microgrid;
+    use macrocosim::proto::common::microgrid::electrical_components::ElectricalComponentCategory as C;
+    let Some(python) = venv_python() else { return };
+    let components = [
+        component(1, C::GridConnectionPoint),
+        component(2, C::Meter),
+        hybrid(3),
+        component(4, C::Battery),
+    ];
+    let connections = connections(&[(1, 2), (2, 3), (3, 4)]);
+    let microgrid = Microgrid {
+        id: 7,
+        ..Default::default()
+    };
+    let fetched = assets_client::spec_of(
+        &microgrid,
+        &components,
+        &connections,
+        std::time::SystemTime::now(),
+    )
+    .unwrap();
+    let (input, notes) = fetched.module_input();
+    assert_eq!(
+        notes,
+        vec![
+            "hybrid inverter 3 and the components that go with it are written commented out \
+             under component 2"
+        ]
+    );
+    let text = macrocosim::python::write_module(&python, &input)
+        .await
+        .unwrap();
+    assert!(
+        text.contains(
+            "            mc.make_meter(\n                id=2,\n                successors=[\n                    # Needs a hybrid inverter model:\n                    # mc.make_hybrid_inverter(\n                    #     id=3,\n"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("#         mc.make_battery(id=4),"), "{text}");
 }

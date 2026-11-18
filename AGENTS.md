@@ -194,6 +194,14 @@ environment over the HTTP API. Reimplementation of microsim.
   (`platformassets.v1alpha1`, shared port); the enterprise has no gridpools,
   market relations or sensors, so those lists are empty and a gridpool's
   energy schedules are NOT_FOUND
+- `src/assets_client.rs` — the Assets API client: `fetch` reads one microgrid
+  over signed calls (`assets_client/sign.rs`, the services' HMAC scheme;
+  `assets_client/endpoint.rs`, `grpc://host[:port][?ssl=]` URLs) and `spec_of`
+  makes a spec of it with the site import, leaving out components outside their
+  operational lifetime or cut off from the one grid connection point and, with
+  `site_import::Unsupported::Skip`, the ones the simulator has no model for (a
+  hybrid inverter, or an inverter of no type over a battery, with what only
+  such inverters lead to, as an `InverterTree`)
 - `src/dispatch_server.rs` — `MicrogridDispatchService` gRPC service
   (store-and-serve dispatch API; CRUD + stream over `sim::dispatch`)
 - `src/proto.rs` + `src/proto_conv.rs` — proto include + `Telemetry` →

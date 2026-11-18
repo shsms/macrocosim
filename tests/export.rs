@@ -120,3 +120,34 @@ async fn exports_run_one_at_a_time() {
         "{statuses:?}"
     );
 }
+
+/// `ComponentSpec::takes_successors` agrees with the Python client's specs,
+/// whose `successors` field it stands for.
+#[test]
+fn takes_successors_matches_the_python_specs() {
+    let Some(python) = venv_python() else { return };
+    let out = std::process::Command::new(python)
+        .args(["-I", "-c"])
+        .arg(
+            "import json, macrocosim._spec as s\n\
+             print(json.dumps({c._type: 'successors' in s._field_kinds(c) \
+             for c in vars(s).values() if isinstance(c, type) \
+             and issubclass(c, s.ComponentSpec) and c is not s.ComponentSpec}))",
+        )
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let python: std::collections::BTreeMap<String, bool> =
+        serde_json::from_slice(&out.stdout).unwrap();
+    let doc = TopologyDoc::from_json(EVERY_CATEGORY).unwrap();
+    let rust: std::collections::BTreeMap<String, bool> = doc.microgrids[0]
+        .components
+        .iter()
+        .map(|c| (c.type_name().to_string(), c.takes_successors()))
+        .collect();
+    assert_eq!(rust, python);
+}

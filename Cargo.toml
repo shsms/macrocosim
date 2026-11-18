@@ -8,7 +8,9 @@ publish = false
 
 [dependencies]
 tonic-prost = "0.14"
-tonic = "0.14.0"
+# TLS for the Assets API client (src/assets_client/endpoint.rs), unless the URL
+# turns ssl off.
+tonic = { version = "0.14.0", features = ["tls-ring", "tls-native-roots"] }
 prost = "0.14.0"
 prost-types = "0.14.0"
 # `process` and `io-util` run the `.py` export's Python (src/python.rs,
@@ -42,6 +44,10 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 # schema it writes.
 schemars = "~1.2"
 rust-embed = "8"
+# Request signing for the Assets API client (src/assets_client/sign.rs).
+base64 = "0.22"
+hmac = "0.13"
+sha2 = "0.11"
 # macroctl reads the UI server's HTTP surface to find a microgrid's gRPC
 # server and for its pool and dashboard readouts.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

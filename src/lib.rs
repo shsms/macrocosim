@@ -1,3 +1,4 @@
+pub mod assets_client;
 pub mod assets_server;
 pub mod dispatch_server;
 pub mod engine;
