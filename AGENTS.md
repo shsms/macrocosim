@@ -43,8 +43,9 @@ environment over the HTTP API. Reimplementation of microsim.
   (`--python`, `$MACROCOSIM_PYTHON`, beside the binary, `PATH`) and checks it:
   3.11 or later with the `macrocosim` package of the binary's version. A passed
   check is kept for the engine's life; a failed one runs again on the next
-  export. The `.py` export (`GET /api/mg/{mg}/spec.py`) pipes the stored spec
-  into `python -P -m macrocosim.export`, one export at a time
+  export. `write_module` pipes a topology document into `python -P -m
+  macrocosim.export`: the `.py` export (`GET /api/mg/{mg}/spec.py`) runs it on
+  the stored spec, one export at a time
 - `src/runtime.rs` — `MicrogridRuntimes`: the one startup path per
   microgrid (physics, history, gRPC server, UI loopback), its
   started / failed status, and the handles of the tasks it started:

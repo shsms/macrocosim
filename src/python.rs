@@ -1,7 +1,7 @@
-//! Finding the Python interpreter the `.py` export runs on,
-//! and checking it: Python 3.11 or later, with the `macrocosim`
-//! package of the binary's own version. A passed check is kept for
-//! the life of the engine; a failed one runs again on the next use,
+//! Finding the Python interpreter the `.py` export runs on, checking it, and
+//! running the export ([`write_module`]). The check: Python 3.11 or later, with
+//! the `macrocosim` package of the binary's own version. A passed check is kept
+//! for the life of the `Interpreter`; a failed one runs again on the next use,
 //! so installing the package fixes the export without a restart.
 //!
 //! The first match wins: `--python`, then `$MACROCOSIM_PYTHON`, then
@@ -11,9 +11,11 @@
 //! the next one, which would hide a misconfigured setup.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use tokio::io::AsyncWriteExt;
 
 use crate::version::VERSION;
 
@@ -22,6 +24,9 @@ pub const MIN_PYTHON: (u32, u32) = (3, 11);
 
 /// How long the check may take before it counts as failed.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long `python -m macrocosim.export` may take.
+pub const WRITE_MODULE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The Python source the check runs. It prints the interpreter's
 /// version on the first line, then the `macrocosim` package's version
@@ -71,6 +76,43 @@ impl Interpreter {
         *checked = Some(path.clone());
         Ok(path)
     }
+}
+
+/// The Python module `python -m macrocosim.export` on `python` writes for
+/// `input`, a topology document, or why that failed or took longer than
+/// [`WRITE_MODULE_TIMEOUT`].
+pub async fn write_module(python: &Path, input: &impl serde::Serialize) -> Result<String, String> {
+    let input = serde_json::to_vec(input).map_err(|e| e.to_string())?;
+    let mut child = tokio::process::Command::new(python)
+        .args(["-P", "-m", "macrocosim.export"])
+        // Its error message in UTF-8 too, whatever the locale.
+        .env("PYTHONUTF8", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("{} does not run: {e}", python.display()))?;
+    let mut stdin = child.stdin.take().expect("piped above");
+    let run = async move {
+        // A write error means the child exited early; its stderr says why.
+        let _ = stdin.write_all(&input).await;
+        drop(stdin);
+        child.wait_with_output().await
+    };
+    let out = match tokio::time::timeout(WRITE_MODULE_TIMEOUT, run).await {
+        Err(_) => return Err(format!("no answer within {WRITE_MODULE_TIMEOUT:?}")),
+        Ok(Err(e)) => return Err(e.to_string()),
+        Ok(Ok(out)) => out,
+    };
+    if !out.status.success() {
+        return Err(format!(
+            "{}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    String::from_utf8(out.stdout).map_err(|e| e.to_string())
 }
 
 /// The message an export answers with when there is no usable
