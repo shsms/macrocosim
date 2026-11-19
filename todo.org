@@ -253,6 +253,49 @@ JS-vs-Rust schema drift.
 
 Why deferred: hardcoded JS works fine for the current category count.
 
+*** TODO E3. Drop the JSON site import                              :ui:rust:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-18 Mi 13:30]
+:END:
+
+=macroctl from-assets= reads a site straight from the Assets API. The UI's
+JSON upload (=POST /api/microgrids/import=, the import dialog) reads
+=operationalLifetime= nowhere, so it imports retired components, and it
+refuses every component the simulator cannot model. Drop the upload and its
+dialog, and point users at =from-assets=.
+
+*** TODO E4. Leave out a component with an unknown operational mode     :rust:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-19 Do 09:39]
+:END:
+
+=macroctl from-assets= fails the whole fetch when a component it keeps has an
+operational mode the import does not know, such as a value added to the proto
+later. Leave that component out with a note on stderr instead, as it does for
+components the simulator has no model for. Hybrid inverters and inverters of no
+type already go without their mode.
+
+*** TODO E5. Let a CHP have components under it                  :rust:python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-19 Do 09:39]
+:END:
+
+=make_chp= takes no =successors=, so a site with a component under a CHP cannot
+be written as a module, and =macroctl from-assets= fails on it. An inverter tree
+under a CHP and a kept meter goes under the meter; one under only a CHP is not
+written. Decide whether a CHP takes successors, or whether the import moves its
+children up to the CHP's parent.
+
+*** TODO E6. Model hybrid inverters                     :fidelity:rust:python:
+:LOGBOOK:
+- State "TODO"       from              [2026-11-19 Do 09:39]
+:END:
+
+=macroctl from-assets= writes each hybrid inverter, with the batteries and other
+components only it leads to, as commented-out lines under its parent. Once the
+simulator models a hybrid inverter (=make_hybrid_inverter=: battery and PV on
+one DC bus), the import can keep them, and those lines can be uncommented.
+
 ** P. Physics realism upgrades
 
 The electrical layer is deliberately behavioral (no power flow, no
